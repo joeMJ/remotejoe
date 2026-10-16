@@ -1,0 +1,21 @@
+[package]
+name = "remotejoe-supervisor"
+description = "Start, Überwachung und Neustart der Worker-Prozesse"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_supervisor"
+
+[[bin]]
+name = "rj-test-worker"
+path = "src/bin/rj-test-worker.rs"
+
+[dependencies]
+remotejoe-ipc = { path = "../ipc" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
