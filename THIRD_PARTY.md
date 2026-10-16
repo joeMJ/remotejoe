@@ -74,6 +74,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | data-encoding | 2.11.1 | MIT |
 | delegate | 0.13.5 | MIT OR Apache-2.0 |
 | der | 0.8.2 | Apache-2.0 OR MIT |
+| des | 0.8.1 | MIT OR Apache-2.0 |
 | des | 0.9.0 | MIT OR Apache-2.0 |
 | digest | 0.10.7 | MIT OR Apache-2.0 |
 | digest | 0.11.3 | MIT OR Apache-2.0 |
@@ -192,6 +193,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | rfc6979 | 0.6.0 | Apache-2.0 OR MIT |
+| ring | 0.17.14 | Apache-2.0 AND ISC |
 | rsa | 0.10.0-rc.18 | MIT OR Apache-2.0 |
 | russh | 0.64.1 | Apache-2.0 |
 | russh-cryptovec | 0.62.0 | Apache-2.0 |
@@ -201,6 +203,9 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustix-openpty | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
+| rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 |
+| rustls-webpki | 0.103.15 | ISC |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 |
 | salsa20 | 0.11.0 | MIT OR Apache-2.0 |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 |
@@ -254,6 +259,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | universal-hash | 0.5.1 | MIT OR Apache-2.0 |
 | universal-hash | 0.6.1 | MIT OR Apache-2.0 |
 | untrusted | 0.7.1 | ISC |
+| untrusted | 0.9.0 | ISC |
 | uuid | 1.28.0 | Apache-2.0 OR MIT |
 | version_check | 0.9.5 | MIT/Apache-2.0 |
 | vte | 0.15.0 | Apache-2.0 OR MIT |
@@ -273,6 +279,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | windows-numerics | 0.3.1 | MIT OR Apache-2.0 |
 | windows-result | 0.4.1 | MIT OR Apache-2.0 |
 | windows-strings | 0.5.1 | MIT OR Apache-2.0 |
+| windows-sys | 0.52.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.59.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 |
 | windows-targets | 0.52.6 | MIT OR Apache-2.0 |

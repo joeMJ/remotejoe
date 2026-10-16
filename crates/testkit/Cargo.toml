@@ -12,6 +12,7 @@ name = "rj_testkit"
 
 [dependencies]
 tempfile.workspace = true
+des = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

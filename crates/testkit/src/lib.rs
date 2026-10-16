@@ -7,6 +7,7 @@
 pub mod shadow;
 pub mod sshd;
 pub mod xrdp;
+pub mod xvnc;
 
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
