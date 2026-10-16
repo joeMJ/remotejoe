@@ -1,0 +1,541 @@
+//! Datenmodell des Index.
+//!
+//! Der Index beschreibt Struktur und Einstellungen (Ordner, Ziele, Tunnel,
+//! SNMP-Geräte, Aufgaben, Makros, Ansichten). Geheimnisse liegen nie im Index,
+//! sondern in der KDBX; der Index verweist per UUID auf KDBX-Einträge.
+
+use std::collections::BTreeMap;
+use std::fmt;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use uuid::Uuid;
+
+/// Aktuelle Schema-Version des Index.
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// Name des Zugangsdatensatzes, wenn das Ziel keinen nennt.
+pub const DEFAULT_CREDENTIAL: &str = "default";
+
+/// Gesamter Index.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Index {
+    pub schema_version: u32,
+    /// Revisionszähler; wird bei jedem Speichern erhöht.
+    #[serde(default)]
+    pub revision: u64,
+    pub root: Folder,
+    #[serde(default)]
+    pub tunnels: Vec<TunnelDef>,
+    #[serde(default)]
+    pub snmp_devices: Vec<SnmpDevice>,
+    #[serde(default)]
+    pub tasks: Vec<TaskDef>,
+    #[serde(default)]
+    pub macros: Vec<MacroDef>,
+    #[serde(default)]
+    pub views: Vec<View>,
+}
+
+impl Default for Index {
+    fn default() -> Self {
+        Index {
+            schema_version: SCHEMA_VERSION,
+            revision: 0,
+            root: Folder::new("Wurzel"),
+            tunnels: Vec::new(),
+            snmp_devices: Vec::new(),
+            tasks: Vec::new(),
+            macros: Vec::new(),
+            views: Vec::new(),
+        }
+    }
+}
+
+/// Ordner im Baum. Die Reihenfolge der Kinder ist fest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Folder {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Settings::is_empty")]
+    pub settings: Settings,
+    #[serde(default)]
+    pub children: Vec<Node>,
+}
+
+impl Folder {
+    pub fn new(name: impl Into<String>) -> Self {
+        Folder {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            settings: Settings::default(),
+            children: Vec::new(),
+        }
+    }
+}
+
+/// Knoten im Baum.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Node {
+    Folder(Folder),
+    Target(Target),
+}
+
+impl Node {
+    pub fn id(&self) -> Uuid {
+        match self {
+            Node::Folder(f) => f.id,
+            Node::Target(t) => t.id,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Node::Folder(f) => &f.name,
+            Node::Target(t) => &t.name,
+        }
+    }
+
+    pub fn settings(&self) -> &Settings {
+        match self {
+            Node::Folder(f) => &f.settings,
+            Node::Target(t) => &t.settings,
+        }
+    }
+}
+
+/// Protokoll eines Ziels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocol {
+    Rdp,
+    Ssh,
+    Vnc,
+    Web,
+    Proxmox,
+    Hyperv,
+    Psrp,
+}
+
+impl Protocol {
+    pub fn default_port(self) -> u16 {
+        match self {
+            Protocol::Rdp | Protocol::Hyperv => 3389,
+            Protocol::Ssh => 22,
+            Protocol::Vnc => 5900,
+            Protocol::Web => 443,
+            Protocol::Proxmox => 8006,
+            Protocol::Psrp => 5986,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Protocol::Rdp => "rdp",
+            Protocol::Ssh => "ssh",
+            Protocol::Vnc => "vnc",
+            Protocol::Web => "web",
+            Protocol::Proxmox => "proxmox",
+            Protocol::Hyperv => "hyperv",
+            Protocol::Psrp => "psrp",
+        }
+    }
+}
+
+/// Ziel einer Verbindung.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Target {
+    pub id: Uuid,
+    pub name: String,
+    pub protocol: Protocol,
+    pub host: String,
+    /// Fehlt der Port, gilt der Standardport des Protokolls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "ProtocolOptions::is_none")]
+    pub options: ProtocolOptions,
+    /// Name des benötigten Zugangsdatensatzes; sonst `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    #[serde(default, skip_serializing_if = "Settings::is_empty")]
+    pub settings: Settings,
+}
+
+impl Target {
+    pub fn new(name: impl Into<String>, protocol: Protocol, host: impl Into<String>) -> Self {
+        Target {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            protocol,
+            host: host.into(),
+            port: None,
+            options: ProtocolOptions::None,
+            credential: None,
+            settings: Settings::default(),
+        }
+    }
+
+    pub fn effective_port(&self) -> u16 {
+        self.port.unwrap_or_else(|| self.protocol.default_port())
+    }
+
+    pub fn credential_name(&self) -> &str {
+        self.credential.as_deref().unwrap_or(DEFAULT_CREDENTIAL)
+    }
+}
+
+/// Protokollspezifische Optionen.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ProtocolOptions {
+    #[default]
+    None,
+    Rdp(RdpOptions),
+    Ssh(SshOptions),
+    Vnc(VncOptions),
+    Web(WebOptions),
+}
+
+impl ProtocolOptions {
+    pub fn is_none(&self) -> bool {
+        matches!(self, ProtocolOptions::None)
+    }
+}
+
+/// Richtung der Zwischenablage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardDirection {
+    Off,
+    HostToTarget,
+    TargetToHost,
+    #[default]
+    Both,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RdpOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default)]
+    pub clipboard: ClipboardDirection,
+    /// Größenlimit der Zwischenablage in Bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipboard_limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyboard_layout: Option<String>,
+    #[serde(default)]
+    pub ignore_certificate: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SshOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub term: Option<String>,
+    /// OSC 52: Schreiben der lokalen Zwischenablage durch das Ziel.
+    #[serde(default = "yes")]
+    pub osc52_write: bool,
+    /// OSC 52: Lesen der lokalen Zwischenablage (fragt nach).
+    #[serde(default)]
+    pub osc52_read: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keepalive_secs: Option<u32>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VncOptions {
+    #[serde(default)]
+    pub clipboard: ClipboardDirection,
+    #[serde(default)]
+    pub view_only: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WebOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submit_selector: Option<String>,
+    #[serde(default)]
+    pub ignore_certificate: bool,
+}
+
+/// Verweis auf einen KDBX-Eintrag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialRef {
+    /// UUID des KDBX-Eintrags.
+    pub entry: Uuid,
+    /// Zuletzt bekannter Titel des Eintrags (für Meldungen).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_title: Option<String>,
+}
+
+/// Überschreibbare Felder eines Zugangsdatensatzes. Das Kennwort gehört
+/// ausdrücklich nicht dazu.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+}
+
+impl FieldOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.username.is_none() && self.domain.is_none()
+    }
+}
+
+/// Tunnel-Einstellung an Ordner oder Ziel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TunnelSetting {
+    /// Vererbten Tunnel abschalten.
+    None,
+    /// Tunnel aus der Tunnelliste des Index.
+    Use(Uuid),
+}
+
+impl Serialize for TunnelSetting {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            TunnelSetting::None => s.serialize_str("none"),
+            TunnelSetting::Use(id) => s.serialize_str(&id.to_string()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TunnelSetting {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        if s == "none" {
+            Ok(TunnelSetting::None)
+        } else {
+            Uuid::parse_str(&s)
+                .map(TunnelSetting::Use)
+                .map_err(|_| serde::de::Error::custom(format!("ungültiger Tunnelverweis: {s}")))
+        }
+    }
+}
+
+/// Transport für PowerShell-Remoting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum PsrpTransport {
+    Winrm {
+        #[serde(default = "yes")]
+        https: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        auth: WinrmAuth,
+        /// Zertifikatsprüfung; abschalten nur mit Warnung.
+        #[serde(default = "yes")]
+        verify_certificate: bool,
+    },
+    Ssh {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WinrmAuth {
+    Kerberos,
+    Ntlm,
+    Basic,
+}
+
+/// SNMP-Zuordnung: Gerät aus der Geräteliste des Index oder abgeschaltet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", tag = "type", content = "device")]
+pub enum SnmpSetting {
+    None,
+    Device(Uuid),
+}
+
+/// Vererbbare Einstellungen an Ordner oder Ziel.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Settings {
+    /// Benannte Zugangsdatensätze (Name → KDBX-Eintrag).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub credentials: BTreeMap<String, CredentialRef>,
+    /// Überschriebene Felder je Zugangsdatensatz-Name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, FieldOverrides>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tunnel: Option<TunnelSetting>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psrp_transport: Option<PsrpTransport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snmp: Option<SnmpSetting>,
+}
+
+impl Settings {
+    pub fn is_empty(&self) -> bool {
+        self.credentials.is_empty()
+            && self.overrides.is_empty()
+            && self.tunnel.is_none()
+            && self.psrp_transport.is_none()
+            && self.snmp.is_none()
+    }
+}
+
+/// Tunneldefinition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TunnelDef {
+    pub id: Uuid,
+    pub name: String,
+    pub kind: TunnelKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum TunnelKind {
+    /// SSH-Tunnel über eine oder mehrere Stufen (Sprungserver der Reihe nach).
+    Ssh { hops: Vec<SshHop> },
+    /// WireGuard im Benutzerbereich; Konfiguration als Anhang eines KDBX-Eintrags.
+    Wireguard { config_entry: CredentialRef },
+    /// Vorhandener Systemtunnel: es wird nur die Erreichbarkeit geprüft.
+    System { probe_host: String, probe_port: u16 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshHop {
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// Zugangsdatensatz-Name für diese Stufe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+}
+
+/// SNMP-Gerät.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpDevice {
+    pub id: Uuid,
+    pub name: String,
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    pub version: SnmpVersion,
+    /// KDBX-Eintrag mit Community bzw. v3-Benutzer und Schlüsseln.
+    pub credential: CredentialRef,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interfaces: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SnmpVersion {
+    V2c,
+    V3,
+}
+
+/// Aufgabe (z. B. Aktualisierungen).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskDef {
+    pub id: Uuid,
+    pub name: String,
+    /// Kennung der eingebauten Aufgabe oder `script`.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, String>,
+}
+
+/// Makro: Folge von Schritten.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MacroDef {
+    pub id: Uuid,
+    pub name: String,
+    pub steps: Vec<serde_json::Value>,
+}
+
+/// Ansicht: benannte Auswahl von Zielen; ein Ziel darf in mehreren Ansichten stehen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct View {
+    pub id: Uuid,
+    pub name: String,
+    pub targets: Vec<Uuid>,
+}
+
+impl fmt::Display for Protocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Index {
+    /// Sucht einen Knoten und liefert den Pfad von der Wurzel (ohne Wurzel)
+    /// bis einschließlich des Knotens.
+    pub fn path_to(&self, id: Uuid) -> Option<Vec<&Node>> {
+        fn walk<'a>(f: &'a Folder, id: Uuid, path: &mut Vec<&'a Node>) -> bool {
+            for n in &f.children {
+                path.push(n);
+                if n.id() == id {
+                    return true;
+                }
+                if let Node::Folder(sub) = n {
+                    if walk(sub, id, path) {
+                        return true;
+                    }
+                }
+                path.pop();
+            }
+            false
+        }
+        let mut path = Vec::new();
+        walk(&self.root, id, &mut path).then_some(path)
+    }
+
+    /// Ruft `f` für jedes Ziel in Baumreihenfolge auf.
+    pub fn for_each_target<'a>(&'a self, mut f: impl FnMut(&'a Target)) {
+        fn walk<'a>(folder: &'a Folder, f: &mut impl FnMut(&'a Target)) {
+            for n in &folder.children {
+                match n {
+                    Node::Folder(sub) => walk(sub, f),
+                    Node::Target(t) => f(t),
+                }
+            }
+        }
+        walk(&self.root, &mut f);
+    }
+
+    /// Ruft `f` für jede Einstellungsgruppe (Wurzel, Ordner, Ziele) auf.
+    pub fn for_each_settings<'a>(&'a self, mut f: impl FnMut(&'a Settings)) {
+        fn walk<'a>(folder: &'a Folder, f: &mut impl FnMut(&'a Settings)) {
+            f(&folder.settings);
+            for n in &folder.children {
+                match n {
+                    Node::Folder(sub) => walk(sub, f),
+                    Node::Target(t) => f(&t.settings),
+                }
+            }
+        }
+        walk(&self.root, &mut f);
+    }
+
+    /// Alle KDBX-UUIDs, auf die der Index verweist.
+    pub fn referenced_entries(&self) -> std::collections::BTreeSet<Uuid> {
+        let mut out = std::collections::BTreeSet::new();
+        self.for_each_settings(|s| out.extend(s.credentials.values().map(|c| c.entry)));
+        for t in &self.tunnels {
+            if let TunnelKind::Wireguard { config_entry } = &t.kind {
+                out.insert(config_entry.entry);
+            }
+        }
+        for d in &self.snmp_devices {
+            out.insert(d.credential.entry);
+        }
+        out
+    }
+}
