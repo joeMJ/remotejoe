@@ -4,7 +4,9 @@
 //! geben dann einen Hinweis aus und gelten nicht als gegen die echte
 //! Gegenstelle bestanden.
 
+pub mod shadow;
 pub mod sshd;
+pub mod xrdp;
 
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;

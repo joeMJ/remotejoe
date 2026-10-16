@@ -1,0 +1,336 @@
+//! RDP-Worker: ein Prozess je Sitzung.
+
+#[cfg(rj_no_freerdp)]
+fn main() {
+    eprintln!("Dieser RDP-Worker wurde ohne FreeRDP gebaut.");
+    std::process::exit(2);
+}
+
+#[cfg(not(rj_no_freerdp))]
+fn main() {
+    imp::main()
+}
+
+#[cfg(not(rj_no_freerdp))]
+mod imp {
+    use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use rj_core::{ClipboardDirection, Secret};
+    use rj_ipc::shm::FrameBufferWriter;
+    use rj_ipc::worker::{Sender, WorkerLink};
+    use rj_ipc::*;
+    use rj_rdp::keymap::mouse;
+    use rj_rdp::session::*;
+    use serde::Deserialize;
+
+    /// Optionen aus dem Index (JSON), ergänzt um Verbindungsdetails.
+    #[derive(Debug, Default, Deserialize)]
+    #[serde(default)]
+    struct Options {
+        clipboard: Option<ClipboardDirection>,
+        clipboard_limit: Option<u64>,
+        ignore_certificate: bool,
+        security: Security,
+        keyboard_layout: Option<String>,
+        config_path: Option<String>,
+        clipboard_audit: bool,
+    }
+
+    fn layout_id(s: &str) -> u32 {
+        match s {
+            "de" | "de-DE" => 0x0407,
+            "de-CH" => 0x0807,
+            "de-AT" => 0x0C07,
+            "en-US" | "us" => 0x0409,
+            "en-GB" | "gb" => 0x0809,
+            "fr" | "fr-FR" => 0x040C,
+            _ => u32::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0x0407),
+        }
+    }
+
+    pub fn main() {
+        // FreeRDP-Protokoll: nur Warnungen und Fehler.
+        if std::env::var_os("WLOG_LEVEL").is_none() {
+            std::env::set_var("WLOG_LEVEL", "WARN");
+        }
+        let mut link = match WorkerLink::stdio("rdp", Duration::from_secs(2)) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("Kanal nicht verfügbar: {e}");
+                std::process::exit(2);
+            }
+        };
+        let out = link.sender.clone();
+        let (msg_tx, msg_rx) = mpsc::channel::<ToWorker>();
+        let (ans_tx, ans_rx) = mpsc::channel::<(u32, bool)>();
+        std::thread::spawn(move || loop {
+            match link.recv() {
+                Ok(ToWorker::Answer { question, accept }) => {
+                    let _ = ans_tx.send((question, accept));
+                }
+                Ok(m) => {
+                    if msg_tx.send(m).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    let _ = msg_tx.send(ToWorker::Shutdown);
+                    break;
+                }
+            }
+        });
+        run(out, msg_rx, Arc::new(Mutex::new(ans_rx)));
+    }
+
+    struct Worker {
+        out: Sender,
+        answers: Arc<Mutex<Receiver<(u32, bool)>>>,
+        session: Option<RdpSession>,
+        fb: Option<FrameBufferWriter>,
+        serial: u64,
+        last: Option<(ConnectRequest, CredentialPayload)>,
+        connected_at: Option<Instant>,
+        clip_notice_sent: bool,
+    }
+
+    impl Worker {
+        fn send(&self, m: FromWorker) {
+            let _ = self.out.send(&m);
+        }
+
+        fn connect(&mut self, req: ConnectRequest, cred: CredentialPayload) {
+            self.send(FromWorker::State(SessionState::Connecting));
+            let opts: Options = serde_json::from_str(&req.options_json).unwrap_or_default();
+            let out = self.out.clone();
+            let answers = self.answers.clone();
+            let next = Arc::new(Mutex::new(1u32));
+            let session = RdpSession::new(move |c: &CertInfo| {
+                let mut n = next.lock().unwrap_or_else(|e| e.into_inner());
+                let id = *n;
+                *n += 1;
+                let text = match &c.old_fingerprint {
+                    Some(_) => format!("WARNUNG: Das Zertifikat von {}:{} hat sich geändert.", c.host, c.port),
+                    None => format!("Das Zertifikat von {}:{} ist nicht vertrauenswürdig oder unbekannt.", c.host, c.port),
+                };
+                let mut detail = format!("Inhaber: {}\nAussteller: {}\nFingerabdruck: {}", c.subject, c.issuer, c.fingerprint);
+                if let Some(old) = &c.old_fingerprint {
+                    detail.push_str(&format!("\nbisher: {old}"));
+                }
+                let _ = out.send(&FromWorker::Question { id, text, detail });
+                let rx = answers.lock().unwrap_or_else(|e| e.into_inner());
+                let deadline = Instant::now() + Duration::from_secs(300);
+                loop {
+                    match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                        Ok((q, accept)) if q == id => {
+                            return if accept { CertDecision::Accept } else { CertDecision::Reject };
+                        }
+                        Ok(_) => continue,
+                        Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return CertDecision::Reject,
+                    }
+                }
+            });
+            let mut session = match session {
+                Ok(s) => s,
+                Err(e) => return self.send(FromWorker::State(SessionState::Failed { reason: e.to_string() })),
+            };
+            session.audit = opts.clipboard_audit;
+            let params = RdpParams {
+                host: req.host.clone(),
+                port: req.port,
+                username: cred.username.clone(),
+                domain: cred.domain.clone(),
+                password: Secret::from_bytes(cred.password.0.clone()),
+                width: req.width.max(200),
+                height: req.height.max(200),
+                security: opts.security,
+                ignore_certificate: opts.ignore_certificate,
+                clipboard: opts.clipboard.unwrap_or_default(),
+                clipboard_limit: opts.clipboard_limit.unwrap_or(16 * 1024 * 1024),
+                keyboard_layout: opts.keyboard_layout.as_deref().map(layout_id).unwrap_or(0x0407),
+                config_path: opts.config_path.clone().or_else(|| rj_core::config::data_dir().map(|d| d.join("freerdp").display().to_string())),
+                timeout_ms: req.connect_timeout_secs.max(1) * 1000,
+            };
+            if params.ignore_certificate {
+                self.send(FromWorker::Notice("Zertifikatsprüfung ist für dieses Ziel abgeschaltet.".into()));
+            }
+            match session.connect(&params) {
+                Ok(()) => {
+                    self.session = Some(session);
+                    self.connected_at = Some(Instant::now());
+                    self.clip_notice_sent = params.clipboard == ClipboardDirection::Off;
+                    self.last = Some((req, cred));
+                    self.send(FromWorker::State(SessionState::Connected));
+                }
+                Err(e) => self.send(FromWorker::State(SessionState::Failed { reason: e.to_string() })),
+            }
+        }
+
+        fn handle(&mut self, m: ToWorker, pending: &mut (Option<ConnectRequest>, Option<CredentialPayload>)) -> bool {
+            match m {
+                ToWorker::Connect(r) => {
+                    if let Some(s) = self.session.as_mut() {
+                        s.disconnect();
+                    }
+                    self.session = None;
+                    pending.0 = Some(r);
+                }
+                ToWorker::Credentials(c) => pending.1 = Some(c),
+                ToWorker::Shutdown => {
+                    if let Some(s) = self.session.as_mut() {
+                        s.disconnect();
+                    }
+                    return false;
+                }
+                ToWorker::Ping => self.send(FromWorker::Pong),
+                ToWorker::Answer { .. } | ToWorker::Custom(_) => {}
+                ToWorker::Input(ev) => {
+                    let Some(s) = self.session.as_mut() else { return true };
+                    match ev {
+                        InputEvent::Text(t) => s.send_text(&t),
+                        InputEvent::Key { keysym, down } => {
+                            if !s.send_key(keysym, down) && down {
+                                if let Some(c) = char::from_u32(keysym).filter(|c| !c.is_control()) {
+                                    s.send_text(&c.to_string());
+                                }
+                            }
+                        }
+                        InputEvent::Bytes(_) => {}
+                        InputEvent::MouseMove { x, y } => s.send_mouse(mouse::MOVE, x.max(0) as u16, y.max(0) as u16),
+                        InputEvent::MouseButton { x, y, button, down } => {
+                            let (x, y) = (x.max(0) as u16, y.max(0) as u16);
+                            let flags = match button {
+                                MouseButton::Left => mouse::BUTTON1,
+                                MouseButton::Right => mouse::BUTTON2,
+                                MouseButton::Middle => mouse::BUTTON3,
+                                MouseButton::WheelUp => mouse::WHEEL | 0x0078,
+                                MouseButton::WheelDown => mouse::WHEEL | mouse::WHEEL_NEGATIVE | 0x0088,
+                            };
+                            let is_wheel = matches!(button, MouseButton::WheelUp | MouseButton::WheelDown);
+                            if is_wheel {
+                                if down {
+                                    s.send_mouse(flags, x, y);
+                                }
+                            } else {
+                                s.send_mouse(flags | if down { mouse::DOWN } else { 0 }, x, y);
+                            }
+                        }
+                    }
+                }
+                ToWorker::Resize { width, height } => {
+                    let handled = self.session.as_mut().is_some_and(|s| s.resize(width, height));
+                    if !handled {
+                        if let Some((mut req, cred)) = self.last.clone() {
+                            self.send(FromWorker::Notice("Die Gegenstelle unterstützt keine Größenänderung im laufenden Betrieb; es wird neu verbunden.".into()));
+                            req.width = width;
+                            req.height = height;
+                            if let Some(s) = self.session.as_mut() {
+                                s.disconnect();
+                            }
+                            self.session = None;
+                            self.fb = None;
+                            self.connect(req, cred);
+                        }
+                    }
+                }
+                ToWorker::Clipboard(data) => {
+                    let Some(s) = self.session.as_mut() else { return true };
+                    let r = match data {
+                        ClipData::Text(t) => s.offer_text(&t),
+                        ClipData::Files(files) => s.offer_files(files.into_iter().map(|f| (f.name, f.data)).collect()),
+                    };
+                    if let Err(e) = r {
+                        self.send(FromWorker::Notice(e.to_string()));
+                    }
+                }
+            }
+            if self.session.is_none() && pending.0.is_some() && pending.1.is_some() {
+                let (r, c) = (pending.0.take().unwrap(), pending.1.take().unwrap());
+                self.connect(r, c);
+            }
+            true
+        }
+
+        fn frame(&mut self, x: u32, y: u32, w: u32, h: u32) {
+            let Some(s) = self.session.as_ref() else { return };
+            let fb = &mut self.fb;
+            let out = &self.out;
+            let mut new_fb = None;
+            s.with_frame(|buf, width, height| {
+                if fb.as_ref().is_none_or(|f| f.width != width || f.height != height) {
+                    match FrameBufferWriter::create(width, height) {
+                        Ok(f) => {
+                            new_fb = Some(f.path().display().to_string());
+                            *fb = Some(f);
+                        }
+                        Err(e) => {
+                            let _ = out.send(&FromWorker::Log(format!("Bildspeicher nicht anlegbar: {e}")));
+                            return;
+                        }
+                    }
+                }
+                if let Some(f) = fb.as_mut() {
+                    let stride = width as usize * 4;
+                    let start = y as usize * stride + x as usize * 4;
+                    f.blit(x, y, w, h, &buf[start..], stride);
+                }
+            });
+            let Some(f) = self.fb.as_ref() else { return };
+            if let Some(path) = new_fb {
+                self.send(FromWorker::SharedFrame { path, width: f.width, height: f.height });
+            }
+            self.serial += 1;
+            self.send(FromWorker::Frame(FrameUpdate { width: f.width, height: f.height, x, y, w, h, serial: self.serial }));
+        }
+    }
+
+    fn run(out: Sender, rx: Receiver<ToWorker>, answers: Arc<Mutex<Receiver<(u32, bool)>>>) {
+        let mut w = Worker { out, answers, session: None, fb: None, serial: 0, last: None, connected_at: None, clip_notice_sent: false };
+        let mut pending = (None, None);
+        let mut events = Vec::new();
+        loop {
+            // Nachrichten des Hauptprozesses.
+            let first = if w.session.is_some() { rx.try_recv().ok() } else { rx.recv_timeout(Duration::from_millis(100)).ok() };
+            let mut next = first;
+            while let Some(m) = next {
+                if !w.handle(m, &mut pending) {
+                    return;
+                }
+                next = rx.try_recv().ok();
+            }
+            let Some(s) = w.session.as_mut() else { continue };
+            events.clear();
+            let alive = s.poll(20, &mut events);
+            for ev in events.drain(..) {
+                match ev {
+                    RdpEvent::Frame { x, y, w: fw, h } => w.frame(x, y, fw, h),
+                    RdpEvent::Resized { .. } => {}
+                    RdpEvent::ClipReady => {}
+                    RdpEvent::ClipText(t) => w.send(FromWorker::Clipboard(ClipData::Text(t))),
+                    RdpEvent::ClipFiles(files) => w.send(FromWorker::Clipboard(ClipData::Files(
+                        files.into_iter().filter(|(d, _)| !d.is_dir).map(|(d, data)| ClipFile { name: d.name, data }).collect(),
+                    ))),
+                    RdpEvent::Notice(n) => w.send(FromWorker::Notice(n)),
+                    RdpEvent::Log(l) => {
+                        if !l.is_empty() {
+                            w.send(FromWorker::Log(l));
+                        }
+                    }
+                }
+            }
+            if !w.clip_notice_sent && w.connected_at.is_some_and(|t| t.elapsed() > Duration::from_secs(10)) {
+                w.clip_notice_sent = true;
+                if !w.session.as_ref().is_some_and(|s| s.clipboard_ready()) {
+                    w.send(FromWorker::Notice("Die Gegenstelle gibt die Zwischenablage nicht frei.".into()));
+                }
+            }
+            if !alive {
+                w.session = None;
+                w.fb = None;
+                w.connected_at = None;
+                w.send(FromWorker::State(SessionState::Disconnected { reason: "Verbindung getrennt".into() }));
+            }
+        }
+    }
+}

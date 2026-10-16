@@ -25,6 +25,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | base64 | 0.23.1 | MIT OR Apache-2.0 |
 | base64ct | 1.8.3 | Apache-2.0 OR MIT |
 | bcrypt-pbkdf | 0.11.0 | MIT OR Apache-2.0 |
+| bindgen | 0.72.1 | BSD-3-Clause |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 |
 | blake2 | 0.11.0 | MIT OR Apache-2.0 |
 | blake2b_simd | 1.0.5 | MIT |
@@ -38,6 +39,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | bytes | 1.12.1 | MIT |
 | cbc | 0.2.1 | MIT OR Apache-2.0 |
 | cc | 1.8.0 | MIT OR Apache-2.0 |
+| cexpr | 0.6.0 | Apache-2.0/MIT |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 |
 | cfg_aliases | 0.2.2 | MIT |
 | chacha20 | 0.10.2 | MIT OR Apache-2.0 |
@@ -46,6 +48,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | chrono | 0.4.45 | MIT OR Apache-2.0 |
 | cipher | 0.4.4 | MIT OR Apache-2.0 |
 | cipher | 0.5.2 | MIT OR Apache-2.0 |
+| clang-sys | 1.9.1 | Apache-2.0 |
 | cmake | 0.1.58 | MIT OR Apache-2.0 |
 | cmov | 0.5.4 | Apache-2.0 OR MIT |
 | cobs | 0.3.0 | MIT OR Apache-2.0 |
@@ -78,6 +81,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | ecdsa | 0.17.0 | Apache-2.0 OR MIT |
 | ed25519 | 3.0.0 | Apache-2.0 OR MIT |
 | ed25519-dalek | 3.0.0 | BSD-3-Clause |
+| either | 1.19.0 | MIT OR Apache-2.0 |
 | elliptic-curve | 0.14.1 | Apache-2.0 OR MIT |
 | embedded-io | 0.4.0 | MIT OR Apache-2.0 |
 | embedded-io | 0.6.1 | MIT OR Apache-2.0 |
@@ -104,6 +108,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | getrandom | 0.2.17 | MIT OR Apache-2.0 |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 |
 | ghash | 0.6.0 | Apache-2.0 OR MIT |
+| glob | 0.3.4 | MIT OR Apache-2.0 |
 | group | 0.14.0 | MIT/Apache-2.0 |
 | hash32 | 0.2.1 | MIT OR Apache-2.0 |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 |
@@ -122,6 +127,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | indexmap | 2.14.2 | Apache-2.0 OR MIT |
 | inout | 0.1.4 | MIT OR Apache-2.0 |
 | inout | 0.2.4 | MIT OR Apache-2.0 |
+| itertools | 0.13.0 | MIT OR Apache-2.0 |
 | itoa | 1.0.18 | MIT OR Apache-2.0 |
 | jobserver | 0.1.35 | MIT OR Apache-2.0 |
 | js-sys | 0.3.106 | MIT OR Apache-2.0 |
@@ -129,18 +135,22 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | keepass | 0.15.2 | MIT |
 | kem | 0.3.0 | Apache-2.0 OR MIT |
 | libc | 0.2.190 | MIT OR Apache-2.0 |
+| libloading | 0.8.9 | ISC |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.34 | MIT OR Apache-2.0 |
+| md4 | 0.10.2 | MIT OR Apache-2.0 |
 | md5 | 0.8.1 | Apache-2.0 OR MIT |
 | memchr | 2.8.3 | Unlicense OR MIT |
 | memmap2 | 0.9.11 | MIT OR Apache-2.0 |
+| minimal-lexical | 0.2.1 | MIT/Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | mio | 1.2.4 | MIT |
 | miow | 0.6.1 | MIT OR Apache-2.0 |
 | ml-kem | 0.3.2 | Apache-2.0 OR MIT |
 | module-lattice | 0.2.3 | Apache-2.0 OR MIT |
 | nix | 0.31.3 | MIT |
+| nom | 7.1.3 | MIT |
 | num-bigint | 0.5.1 | MIT OR Apache-2.0 |
 | num-integer | 0.1.47 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
@@ -167,6 +177,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | poly1305 | 0.9.1 | Apache-2.0 OR MIT |
 | polyval | 0.7.3 | Apache-2.0 OR MIT |
 | postcard | 1.1.3 | MIT OR Apache-2.0 |
+| prettyplease | 0.2.37 | MIT OR Apache-2.0 |
 | primefield | 0.14.0 | Apache-2.0 OR MIT |
 | primeorder | 0.14.0 | Apache-2.0 OR MIT |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
@@ -186,6 +197,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | russh-cryptovec | 0.62.0 | Apache-2.0 |
 | russh-util | 0.52.0 | Apache-2.0 |
 | rust-argon2 | 3.0.0 | MIT/Apache-2.0 |
+| rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustix-openpty | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
@@ -207,6 +219,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | sha2 | 0.11.1 | MIT OR Apache-2.0 |
 | sha3 | 0.11.0 | MIT OR Apache-2.0 |
 | sha3 | 0.12.0 | MIT OR Apache-2.0 |
+| shlex | 1.3.0 | MIT OR Apache-2.0 |
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
 | signal-hook | 0.4.5 | MIT OR Apache-2.0 |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 |

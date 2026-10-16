@@ -3,7 +3,7 @@
 //! Die Standardausgabe gehört ausschließlich dem Kanal; Worker schreiben
 //! Meldungen nur auf die Standardfehlerausgabe.
 
-use std::io::{Stdin, Stdout};
+use std::io::{Stdin, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -15,7 +15,7 @@ use crate::PROTOCOL_VERSION;
 /// Sendeseite; kann zwischen Fäden geteilt werden.
 #[derive(Clone)]
 pub struct Sender {
-    inner: Arc<Mutex<FrameWriter<Stdout>>>,
+    inner: Arc<Mutex<FrameWriter<Box<dyn Write + Send>>>>,
 }
 
 impl Sender {
@@ -32,8 +32,12 @@ pub struct WorkerLink {
 
 impl WorkerLink {
     /// Öffnet den Kanal, meldet sich an und startet den Herzschlag.
+    ///
+    /// Unter Unix wird der Kanal auf eine Kopie der Standardausgabe gelegt und
+    /// die Standardausgabe selbst auf die Fehlerausgabe umgeleitet. So können
+    /// Ausgaben eingebundener Bibliotheken den Kanal nicht stören.
     pub fn stdio(kind: &str, heartbeat: Duration) -> Result<WorkerLink, IpcError> {
-        let sender = Sender { inner: Arc::new(Mutex::new(FrameWriter::new(std::io::stdout()))) };
+        let sender = Sender { inner: Arc::new(Mutex::new(FrameWriter::new(protected_stdout()?))) };
         sender.send(&FromWorker::Hello {
             pid: std::process::id(),
             kind: kind.to_string(),
@@ -60,4 +64,26 @@ impl WorkerLink {
     pub fn recv(&mut self) -> Result<ToWorker, IpcError> {
         self.receiver.recv().map(|(_, m)| m)
     }
+}
+
+#[cfg(unix)]
+fn protected_stdout() -> Result<Box<dyn Write + Send>, IpcError> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: dup/dup2 auf die Standardkanäle des eigenen Prozesses.
+    unsafe {
+        let fd = libc::dup(1);
+        if fd < 0 {
+            return Err(IpcError::Io(std::io::Error::last_os_error()));
+        }
+        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        if libc::dup2(2, 1) < 0 {
+            return Err(IpcError::Io(std::io::Error::last_os_error()));
+        }
+        Ok(Box::new(std::fs::File::from_raw_fd(fd)))
+    }
+}
+
+#[cfg(not(unix))]
+fn protected_stdout() -> Result<Box<dyn Write + Send>, IpcError> {
+    Ok(Box::new(std::io::stdout()))
 }

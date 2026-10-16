@@ -126,7 +126,7 @@ impl Drop for Sshd {
 }
 
 /// Alle Nachfahren eines Prozesses (Linux, über /proc).
-fn descendants(root: u32) -> Vec<u32> {
+pub(crate) fn descendants(root: u32) -> Vec<u32> {
     let mut parents: Vec<(u32, u32)> = Vec::new();
     if let Ok(rd) = fs::read_dir("/proc") {
         for e in rd.flatten() {
@@ -151,7 +151,7 @@ fn descendants(root: u32) -> Vec<u32> {
     out
 }
 
-fn set_mode(p: &Path, mode: u32) {
+pub(crate) fn set_mode(p: &Path, mode: u32) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -171,7 +171,7 @@ fn keygen(path: &Path, kind: &str) -> Result<(), Skip> {
 }
 
 /// Legt den Testbenutzer an (einmalig) und setzt Kennwort und sudo-Recht.
-fn ensure_user() -> Result<(), Skip> {
+pub fn ensure_user() -> Result<(), Skip> {
     static ONCE: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
     let mut done = ONCE.lock().unwrap_or_else(|e| e.into_inner());
     if *done {

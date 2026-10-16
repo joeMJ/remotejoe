@@ -20,3 +20,6 @@ memmap2 = "0.9"
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
