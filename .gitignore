@@ -1,0 +1,6 @@
+tools/publish-*.sh
+# Bau
+target/
+build/
+*.kdbx
+*.bak
