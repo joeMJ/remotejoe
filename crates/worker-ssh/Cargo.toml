@@ -1,0 +1,33 @@
+[package]
+name = "remotejoe-worker-ssh"
+description = "SSH-Worker mit Terminal-Zustandsmaschine"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_ssh"
+
+[dependencies]
+remotejoe-core = { path = "../core" }
+remotejoe-ipc = { path = "../ipc" }
+remotejoe-tasks = { path = "../tasks" }
+russh = "0.64"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
+alacritty_terminal = "0.26"
+base64 = "0.22"
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+remotejoe-testkit = { path = "../testkit" }
+remotejoe-supervisor = { path = "../supervisor" }
+tempfile.workspace = true
+
+[[bin]]
+name = "rj-worker-ssh"
+path = "src/main.rs"

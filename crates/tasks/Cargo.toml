@@ -1,0 +1,18 @@
+[package]
+name = "remotejoe-tasks"
+description = "Aufgaben (Aktualisierungen) und Makro-Engine"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_tasks"
+
+[dependencies]
+remotejoe-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+regex = "1"

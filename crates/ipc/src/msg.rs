@@ -21,6 +21,9 @@ pub struct CredentialPayload {
     pub username: String,
     pub domain: Option<String>,
     pub password: SecretBytes,
+    /// Privater Schlüssel (z. B. OpenSSH-Format aus einem KDBX-Anhang).
+    #[serde(default)]
+    pub private_key: Option<SecretBytes>,
 }
 
 /// Verbindungsauftrag an einen Worker.

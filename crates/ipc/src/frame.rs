@@ -110,6 +110,7 @@ mod tests {
             username: "admin".into(),
             domain: Some("EXAMPLE".into()),
             password: SecretBytes(b"Kennwo\xcc\x88rt".to_vec()),
+            private_key: None,
         }))
         .unwrap();
         w.send(9, &ToWorker::Clipboard(ClipData::Text("Grüße\r\n🚀\t".into()))).unwrap();
