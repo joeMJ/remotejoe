@@ -480,6 +480,8 @@ private:
 	QCheckBox* m_system;
 	QSpinBox* m_size;
 	QSpinBox* m_scrollback;
+	QCheckBox* m_copyOnSelect;
+	QCheckBox* m_confirmPaste;
 	QComboBox* m_scheme;
 	QLineEdit* m_hex[4];
 	QLabel* m_swatch[4];

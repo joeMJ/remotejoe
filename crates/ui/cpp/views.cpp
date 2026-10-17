@@ -20,7 +20,9 @@
 #include <QtCore/QPointer>
 #include <QtCore/QTimer>
 #include <QtWidgets/QHBoxLayout>
+#include <QtWidgets/QCheckBox>
 #include <QtWidgets/QMenu>
+#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QVBoxLayout>
 
@@ -33,6 +35,7 @@ FrameView::FrameView(RjBackend* backend, std::uint64_t session, QWidget* parent)
 {
 	setFocusPolicy(Qt::StrongFocus);
 	setMouseTracking(true);
+	setCursor(Qt::ArrowCursor);
 	setAttribute(Qt::WA_OpaquePaintEvent);
 	setMinimumSize(160, 120);
 	// Größenänderungen des Fensters erst nach einer kurzen Pause weitergeben,
@@ -270,6 +273,7 @@ TerminalView::TerminalView(RjBackend* backend, std::uint64_t session, QWidget* p
 {
 	setFocusPolicy(Qt::StrongFocus);
 	setAttribute(Qt::WA_InputMethodEnabled);
+	setCursor(Qt::IBeamCursor);
 	m_font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
 	m_font.setPointSize(11);
 	QFontMetrics fm(m_font);
@@ -280,10 +284,31 @@ TerminalView::TerminalView(RjBackend* backend, std::uint64_t session, QWidget* p
 	applySettings(QJsonDocument::fromJson(m_backend->terminalSettings().toUtf8()).object());
 }
 
+namespace
+{
+bool s_copyOnSelect = true;
+bool s_confirmPaste = true;
+QPointer<TerminalView> s_activeTerminal;
+} // namespace
+
+TerminalView* TerminalView::active()
+{
+	return s_activeTerminal && s_activeTerminal->isVisible() ? s_activeTerminal.data() : nullptr;
+}
+
+void TerminalView::focusInEvent(QFocusEvent* e)
+{
+	QWidget::focusInEvent(e);
+	s_activeTerminal = this;
+	update();
+}
+
 void TerminalView::applySettings(const QJsonObject& s)
 {
 	if (s.isEmpty())
 		return;
+	s_copyOnSelect = s.value(QStringLiteral("copy_on_select")).toBool(true);
+	s_confirmPaste = s.value(QStringLiteral("confirm_paste")).toBool(true);
 	const QString family = s.value(QStringLiteral("font_family")).toString();
 	QFont f = family.isEmpty() ? QFontDatabase::systemFont(QFontDatabase::FixedFont) : QFont(family);
 	f.setStyleHint(QFont::Monospace);
@@ -457,6 +482,17 @@ void TerminalView::paintEvent(QPaintEvent*)
 void TerminalView::keyPressEvent(QKeyEvent* e)
 {
 	const auto mods = e->modifiers();
+	// Strg+Einfg kopiert, Umschalt+Einfg fügt ein (wie in vielen Terminals und bei PuTTY).
+	if (e->key() == Qt::Key_Insert && mods == Qt::ControlModifier)
+	{
+		copySelection();
+		return;
+	}
+	if (e->key() == Qt::Key_Insert && mods == Qt::ShiftModifier)
+	{
+		pasteClipboard();
+		return;
+	}
 	if ((mods & Qt::ShiftModifier) && !(mods & Qt::ControlModifier) && (e->key() == Qt::Key_PageUp || e->key() == Qt::Key_PageDown) &&
 	    !m_snap.value(QStringLiteral("alt_screen")).toBool())
 	{
@@ -469,14 +505,12 @@ void TerminalView::keyPressEvent(QKeyEvent* e)
 	{
 		if (e->key() == Qt::Key_V)
 		{
-			m_backend->paste(m_session, QGuiApplication::clipboard()->text());
+			pasteClipboard();
 			return;
 		}
 		if (e->key() == Qt::Key_C)
 		{
-			if (m_selStart.x() >= 0)
-				QGuiApplication::clipboard()->setText(m_backend->selectText(
-				  m_session, m_selStart.y(), m_selStart.x(), m_selEnd.y(), m_selEnd.x()));
+			copySelection();
 			return;
 		}
 	}
@@ -493,11 +527,20 @@ void TerminalView::mousePressEvent(QMouseEvent* e)
 	setFocus();
 	if (e->button() == Qt::LeftButton)
 	{
-		m_selStart = m_selEnd = cellAt(e->pos());
+		const QPoint c = cellAt(e->pos());
+		// Dritter Klick kurz nach dem Doppelklick: ganze Zeile.
+		if (m_tripleClock.isValid() && m_tripleClock.elapsed() < QApplication::doubleClickInterval() && c == m_tripleCell)
+		{
+			m_tripleClock.invalidate();
+			m_skipRelease = true;
+			selectLine(c.y());
+			return;
+		}
+		m_selStart = m_selEnd = c;
 		update();
 	}
 	else if (e->button() == Qt::MiddleButton)
-		m_backend->paste(m_session, QGuiApplication::clipboard()->text(QClipboard::Selection));
+		pasteText(QGuiApplication::clipboard()->text(QClipboard::Selection));
 }
 
 void TerminalView::mouseMoveEvent(QMouseEvent* e)
@@ -513,6 +556,12 @@ void TerminalView::mouseReleaseEvent(QMouseEvent* e)
 {
 	if (e->button() != Qt::LeftButton)
 		return;
+	// Nach Doppel- oder Dreifachklick bleibt die dort gesetzte Auswahl stehen.
+	if (m_skipRelease)
+	{
+		m_skipRelease = false;
+		return;
+	}
 	m_selEnd = cellAt(e->pos());
 	if (m_selEnd == m_selStart)
 	{
@@ -520,13 +569,175 @@ void TerminalView::mouseReleaseEvent(QMouseEvent* e)
 		update();
 		return;
 	}
+	finishSelection();
+}
+
+QString TerminalView::selectedText()
+{
+	if (m_selStart.x() < 0)
+		return QString();
 	QPoint a = m_selStart, b = m_selEnd;
 	if (b.y() < a.y() || (b.y() == a.y() && b.x() < a.x()))
 		std::swap(a, b);
-	const QString text = m_backend->selectText(m_session, a.y(), a.x(), b.y(), b.x());
+	return m_backend->selectText(m_session, a.y(), a.x(), b.y(), b.x());
+}
+
+/// Auswahl abgeschlossen: in die X11-Auswahl, auf Wunsch auch in die Zwischenablage.
+void TerminalView::finishSelection()
+{
+	const QString text = selectedText();
+	if (!text.isEmpty())
+	{
+		if (QGuiApplication::clipboard()->supportsSelection())
+			QGuiApplication::clipboard()->setText(text, QClipboard::Selection);
+		if (s_copyOnSelect)
+			QGuiApplication::clipboard()->setText(text);
+	}
+	update();
+}
+
+bool TerminalView::copySelection()
+{
+	const QString text = selectedText();
+	if (text.isEmpty())
+		return false;
+	QGuiApplication::clipboard()->setText(text);
 	if (QGuiApplication::clipboard()->supportsSelection())
 		QGuiApplication::clipboard()->setText(text, QClipboard::Selection);
-	update();
+	return true;
+}
+
+void TerminalView::pasteClipboard()
+{
+	pasteText(QGuiApplication::clipboard()->text());
+}
+
+void TerminalView::pasteText(const QString& text)
+{
+	if (text.isEmpty())
+		return;
+	// Mehrere Zeilen: Zeilenumbrüche wirken wie die Eingabetaste, Befehle laufen sofort los.
+	const int lines = text.trimmed().count(QLatin1Char('\n')) + 1;
+	if (s_confirmPaste && lines > 1)
+	{
+		QMessageBox box(QMessageBox::Question, m_backend->text(QStringLiteral("term.paste.title")),
+		                m_backend->text(QStringLiteral("term.paste.text")).arg(lines), QMessageBox::NoButton, this);
+		auto* ok = box.addButton(m_backend->text(QStringLiteral("term.paste.ok")), QMessageBox::AcceptRole);
+		box.addButton(m_backend->text(QStringLiteral("term.paste.cancel")), QMessageBox::RejectRole);
+		auto* never = new QCheckBox(m_backend->text(QStringLiteral("term.paste.never")), &box);
+		box.setCheckBox(never);
+		box.setDefaultButton(ok);
+		box.exec();
+		if (never->isChecked())
+		{
+			const QJsonObject r = QJsonDocument::fromJson(m_backend->setTerminalSettings(QStringLiteral("{\"confirm_paste\":false}")).toUtf8()).object();
+			applyToAll(r);
+		}
+		if (box.clickedButton() != ok)
+			return;
+	}
+	m_backend->paste(m_session, text);
+}
+
+void TerminalView::selectAll()
+{
+	const int rows = m_snap.value(QStringLiteral("rows")).toInt();
+	const int cols = m_snap.value(QStringLiteral("cols")).toInt();
+	if (rows <= 0 || cols <= 0)
+		return;
+	m_selStart = QPoint(0, 0);
+	m_selEnd = QPoint(cols - 1, rows - 1);
+	finishSelection();
+}
+
+/// Zeichen je Spalte einer Zeile des Bildschirms (breite Zeichen belegen zwei Spalten).
+QStringList TerminalView::rowChars(int row) const
+{
+	QStringList out;
+	const QJsonArray lines = m_snap.value(QStringLiteral("lines")).toArray();
+	if (row < 0 || row >= lines.size())
+		return out;
+	for (const QJsonValue& rv : lines[row].toArray())
+	{
+		const QJsonArray run = rv.toArray();
+		const QString text = run[0].toString();
+		const bool wide = run[3].toInt() & 8;
+		int i = 0;
+		while (i < text.size())
+		{
+			const int len = text.at(i).isHighSurrogate() && i + 1 < text.size() ? 2 : 1;
+			const QString ch = text.mid(i, len);
+			out << ch;
+			if (wide)
+				out << ch;
+			i += len;
+		}
+	}
+	return out;
+}
+
+void TerminalView::selectWordAt(const QPoint& c)
+{
+	const QStringList cols = rowChars(c.y());
+	if (c.x() < 0 || c.x() >= cols.size())
+		return;
+	auto isWord = [](const QString& s) {
+		if (s.isEmpty())
+			return false;
+		const QChar ch = s.at(0);
+		return ch.isLetterOrNumber() || QStringLiteral("_-./~:@%+=?&#").contains(ch);
+	};
+	const bool word = isWord(cols[c.x()]);
+	int a = c.x(), b = c.x();
+	if (word)
+	{
+		while (a > 0 && isWord(cols[a - 1]))
+			--a;
+		while (b + 1 < cols.size() && isWord(cols[b + 1]))
+			++b;
+	}
+	m_selStart = QPoint(a, c.y());
+	m_selEnd = QPoint(b, c.y());
+	finishSelection();
+}
+
+void TerminalView::selectLine(int row)
+{
+	const QStringList cols = rowChars(row);
+	int last = cols.size() - 1;
+	while (last > 0 && cols[last].trimmed().isEmpty())
+		--last;
+	m_selStart = QPoint(0, row);
+	m_selEnd = QPoint(qMax(0, last), row);
+	finishSelection();
+}
+
+void TerminalView::mouseDoubleClickEvent(QMouseEvent* e)
+{
+	if (e->button() != Qt::LeftButton)
+		return;
+	setFocus();
+	const QPoint c = cellAt(e->pos());
+	m_skipRelease = true;
+	selectWordAt(c);
+	m_tripleCell = c;
+	m_tripleClock.start();
+}
+
+void TerminalView::contextMenuEvent(QContextMenuEvent* e)
+{
+	QMenu menu(this);
+	auto* copy = menu.addAction(m_backend->text(QStringLiteral("term.menu.copy")));
+	copy->setEnabled(m_selStart.x() >= 0 && !selectedText().isEmpty());
+	connect(copy, &QAction::triggered, this, [this] { copySelection(); });
+	auto* paste = menu.addAction(m_backend->text(QStringLiteral("term.menu.paste")));
+	paste->setEnabled(!QGuiApplication::clipboard()->text().isEmpty());
+	connect(paste, &QAction::triggered, this, [this] { pasteClipboard(); });
+	menu.addSeparator();
+	auto* all = menu.addAction(m_backend->text(QStringLiteral("term.menu.selectall")));
+	connect(all, &QAction::triggered, this, [this] { selectAll(); });
+	menu.exec(e->globalPos());
+	e->accept();
 }
 
 // ---------- SessionPane ----------

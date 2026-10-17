@@ -40,6 +40,8 @@ public:
 	TitleBar* titleBar() const { return m_titleBar; }
 
 	void applyTheme(bool dark);
+	void copyCredential(const QString& id, const QString& kind);
+	void clipboardClearSettings();
 	/// Fensterlage aus der Konfiguration herstellen (vor dem Zeigen) bzw. beim Beenden merken.
 	void restoreWindowState();
 	void saveWindowState();
@@ -89,6 +91,7 @@ protected:
 	void paintEvent(QPaintEvent*) override;
 	void closeEvent(QCloseEvent*) override;
 	void mouseMoveEvent(QMouseEvent*) override;
+	void updateEdgeCursor(const QPoint& global);
 	void mousePressEvent(QMouseEvent*) override;
 	void changeEvent(QEvent*) override;
 	bool eventFilter(QObject*, QEvent*) override;
@@ -165,6 +168,9 @@ private:
 
 	RjBackend* m_backend;
 	QLineEdit* m_search;
+	bool m_edgeOverride = false;
+	QTimer* m_clipTimer = nullptr;
+	QByteArray m_clipHash;
 	QTreeView* m_tree;
 	class QSplitter* m_split = nullptr;
 	class QLabel* m_emptyLabel = nullptr;

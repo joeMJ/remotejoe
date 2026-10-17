@@ -41,6 +41,16 @@ pub mod qobject {
         fn app_version(self: &RjBackend) -> QString;
         /// Ist eine Schlüsseldatenbank entsperrt (oder läuft die Vorführung)?
         /// Ungespeicherte Änderungen in der Schlüsseldatenbank (Index, Zugangsdaten, Import).
+        /// Benutzername oder Kennwort eines Ziels für die Zwischenablage (JSON mit `text` oder `error`).
+        #[qinvokable]
+        #[cxx_name = "credentialCopy"]
+        fn credential_copy(self: &RjBackend, id: &QString, kind: &QString) -> QString;
+        #[qinvokable]
+        #[cxx_name = "clipboardClearSecs"]
+        fn clipboard_clear_secs(self: &RjBackend) -> i32;
+        #[qinvokable]
+        #[cxx_name = "setClipboardClearSecs"]
+        fn set_clipboard_clear_secs(self: Pin<&mut RjBackend>, secs: i32);
         /// Gemerkte Fensterlage (JSON) lesen bzw. beim Beenden speichern.
         #[qinvokable]
         #[cxx_name = "windowStateJson"]
@@ -255,6 +265,21 @@ impl qobject::RjBackend {
 
     fn app_version(&self) -> QString {
         q(env!("CARGO_PKG_VERSION").to_string())
+    }
+
+    fn credential_copy(&self, id: &QString, kind: &QString) -> QString {
+        let (i, k) = (id.to_string(), kind.to_string());
+        q(self.app().map(|a| a.credential_copy_json(&i, &k)).unwrap_or_else(|| "{\"error\":\"Nicht bereit\"}".into()))
+    }
+
+    fn clipboard_clear_secs(&self) -> i32 {
+        self.app().map(|a| a.clipboard_clear_secs() as i32).unwrap_or(30)
+    }
+
+    fn set_clipboard_clear_secs(self: Pin<&mut Self>, secs: i32) {
+        if let Some(a) = self.app_mut() {
+            a.set_clipboard_clear_secs(secs.max(0) as u32);
+        }
     }
 
     fn window_state_json(&self) -> QString {

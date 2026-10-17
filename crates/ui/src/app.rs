@@ -258,6 +258,8 @@ impl App {
             "font_family": t.font_family.clone().unwrap_or_default(),
             "font_size": t.clamped_size(),
             "scrollback": t.clamped_scrollback(),
+            "copy_on_select": t.copy_on_select,
+            "confirm_paste": t.confirm_paste,
             "scheme": t.scheme,
             "custom": t.has_overrides(),
             "fg": to_hex(e.fg),
@@ -300,6 +302,12 @@ impl App {
                 return json!({ "error": format!("Der Rücklauf muss zwischen {} und {} Zeilen liegen.", termcolors::SCROLLBACK_MIN, termcolors::SCROLLBACK_MAX) }).to_string();
             }
             t.scrollback = n as usize;
+        }
+        if let Some(b) = v.get("copy_on_select").and_then(|x| x.as_bool()) {
+            t.copy_on_select = b;
+        }
+        if let Some(b) = v.get("confirm_paste").and_then(|x| x.as_bool()) {
+            t.confirm_paste = b;
         }
         if let Some(id) = v.get("scheme").and_then(|x| x.as_str()) {
             if termcolors::preset(id).is_none() {
@@ -533,6 +541,49 @@ impl App {
                 let _ = self.config.save(&cp);
             }
         }
+    }
+
+    /// Benutzername oder Kennwort eines Ziels für die Zwischenablage (`kind`: `user` oder `password`).
+    /// Ergebnis als JSON `{ "text", "clear_secs" }` oder `{ "error" }`; der Wert steht nie im Protokoll.
+    pub fn credential_copy_json(&self, id: &str, kind: &str) -> String {
+        let err = |m: &str| json!({ "error": m }).to_string();
+        let Ok(uuid) = Uuid::parse_str(id) else { return err("Ungültiges Ziel") };
+        let Some(t) = self.target(uuid) else { return err("Das ist kein Verbindungsziel") };
+        if self.vault.is_none() {
+            return err("Die Schlüsseldatenbank ist gesperrt");
+        }
+        let r = match resolve_credential(&self.index, uuid) {
+            Ok(CredentialResolution::Found(r)) => r,
+            Ok(CredentialResolution::Ambiguous(_)) => return err("Mehrere Zugangsdaten kommen in Frage. Bitte im Ziel einen Datensatz festlegen."),
+            _ => return err("Für dieses Ziel sind keine Zugangsdaten hinterlegt"),
+        };
+        let p = match self.payload(&r, t.protocol) {
+            Ok(p) => p,
+            Err(e) => return err(&e),
+        };
+        let text = match kind {
+            "user" => p.username.clone(),
+            "password" => String::from_utf8_lossy(&p.password.0).into_owned(),
+            _ => return err("Unbekannte Angabe"),
+        };
+        if text.is_empty() {
+            return err(if kind == "user" { "Kein Benutzername hinterlegt" } else { "Kein Kennwort hinterlegt" });
+        }
+        json!({ "text": text, "clear_secs": self.config.security.clipboard_clear_secs }).to_string()
+    }
+
+    /// Frist für das Löschen eines kopierten Kennworts (Sekunden, 0 = nie); wird gespeichert.
+    pub fn set_clipboard_clear_secs(&mut self, secs: u32) {
+        self.config.security.clipboard_clear_secs = secs.min(3600);
+        if !self.demo {
+            if let Some(cp) = self.config_path.clone() {
+                let _ = self.config.save(&cp);
+            }
+        }
+    }
+
+    pub fn clipboard_clear_secs(&self) -> u32 {
+        self.config.security.clipboard_clear_secs
     }
 
     /// Es gibt Änderungen, die noch nicht in die Datei geschrieben sind.

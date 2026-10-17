@@ -11,7 +11,10 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtGui/QAction>
+#include <QtCore/QCryptographicHash>
+#include <QtCore/QMimeData>
 #include <QtGui/QClipboard>
+#include <QtWidgets/QInputDialog>
 #include <QtGui/QDropEvent>
 #include <QtGui/QCloseEvent>
 #include <QtGui/QFontDatabase>
@@ -714,6 +717,8 @@ void MainWindow::buildMenus()
 		m_undoAction->setEnabled(!label.isEmpty());
 	});
 	editMenu->addSeparator();
+	editMenu->addAction(T(m_backend, "menu.edit.term.copy"), this, [] { if (auto* t = TerminalView::active()) t->copySelection(); });
+	editMenu->addAction(T(m_backend, "menu.edit.term.paste"), this, [] { if (auto* t = TerminalView::active()) t->pasteClipboard(); });
 	editMenu->addAction(T(m_backend, "menu.edit.properties") + QStringLiteral("\tF4"), this, [this] {
 		if (!currentId().isEmpty())
 			openProperties(currentId());
@@ -734,6 +739,7 @@ void MainWindow::buildMenus()
 	editMenu->addAction(T(m_backend, "menu.edit.view.delete"), this, [this] { viewCommand(QStringLiteral("delete")); });
 	QMenu* extras = m_menuBar->addMenu(T(m_backend, "menu.extras"));
 	extras->addAction(T(m_backend, "menu.extras.idle"), this, [this] { idleSettings(); });
+	extras->addAction(T(m_backend, "menu.extras.clipclear"), this, [this] { clipboardClearSettings(); });
 	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] {
 		for (int i = 0; i < m_tabs->count(); ++i)
 			if (qobject_cast<SnmpTab*>(m_tabs->widget(i)))
@@ -1289,6 +1295,59 @@ void MainWindow::guestAction(const QModelIndex& i, const QString& action, bool c
 		statusBar()->showMessage(T(m_backend, "guest.action.sent"), 4000);
 }
 
+/// Benutzername oder Kennwort eines Ziels in die Zwischenablage; ein Kennwort wird nach der
+/// eingestellten Frist wieder gelöscht, aber nur, wenn noch derselbe Inhalt darin steht.
+void MainWindow::copyCredential(const QString& id, const QString& kind)
+{
+	const QJsonObject r = parseObject(m_backend->credentialCopy(id, kind));
+	if (r.contains(QStringLiteral("error")))
+	{
+		statusBar()->showMessage(r.value(QStringLiteral("error")).toString(), 8000);
+		return;
+	}
+	const QString text = r.value(QStringLiteral("text")).toString();
+	const bool password = kind == QLatin1String("password");
+	auto* md = new QMimeData;
+	md->setText(text);
+	if (password)
+		md->setData(QStringLiteral("x-kde-passwordManagerHint"), "secret");
+	QGuiApplication::clipboard()->setMimeData(md);
+	const int secs = r.value(QStringLiteral("clear_secs")).toInt(30);
+	if (!password)
+	{
+		statusBar()->showMessage(T(m_backend, "ctx.copy.user.done"), 5000);
+		return;
+	}
+	if (secs <= 0)
+	{
+		statusBar()->showMessage(T(m_backend, "ctx.copy.password.keep"), 8000);
+		return;
+	}
+	m_clipHash = QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha256);
+	if (!m_clipTimer)
+	{
+		m_clipTimer = new QTimer(this);
+		m_clipTimer->setSingleShot(true);
+		connect(m_clipTimer, &QTimer::timeout, this, [this] {
+			auto* cb = QGuiApplication::clipboard();
+			if (QCryptographicHash::hash(cb->text().toUtf8(), QCryptographicHash::Sha256) == m_clipHash)
+				cb->clear();
+			m_clipHash.clear();
+		});
+	}
+	m_clipTimer->start(secs * 1000);
+	statusBar()->showMessage(T(m_backend, "ctx.copy.password.done").arg(secs), 8000);
+}
+
+void MainWindow::clipboardClearSettings()
+{
+	bool ok = false;
+	const int v = QInputDialog::getInt(this, T(m_backend, "clip.clear.title"), T(m_backend, "clip.clear.text"),
+	                                   m_backend->clipboardClearSecs(), 0, 3600, 5, &ok);
+	if (ok)
+		m_backend->setClipboardClearSecs(v);
+}
+
 void MainWindow::treeContextMenu(const QPoint& pos)
 {
 	const QModelIndex i = m_tree->indexAt(pos);
@@ -1341,6 +1400,13 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 			if (tab && s && m_backend->tileSession(s, tab))
 				rebuildTabs();
 		});
+	}
+	if (!i.data(RoleFolder).toBool())
+	{
+		menu.addSeparator();
+		menu.addAction(T(m_backend, "ctx.copy.user"), this, [this, id] { copyCredential(id, QStringLiteral("user")); });
+		menu.addAction(T(m_backend, "ctx.copy.password"), this, [this, id] { copyCredential(id, QStringLiteral("password")); });
+		menu.addSeparator();
 	}
 	const bool folder = i.data(RoleFolder).toBool();
 	QMenu* addM = menu.addMenu(T(m_backend, "ctx.add"));
@@ -2067,6 +2133,12 @@ bool MainWindow::eventFilter(QObject* o, QEvent* e)
 		}
 	if (m_tree && o == m_tree->viewport() && e->type() == QEvent::Resize)
 		updateEmptyHint();
+	// Zeiger am Fensterrand (Größenänderung): Er wird nur dort umgestellt und sonst sofort zurückgenommen.
+	// Ein am Fenster gesetzter Zeiger würde sonst von allen Kindern geerbt (Terminal, RDP-Bild).
+	if (e->type() == QEvent::MouseMove && o->isWidgetType() && static_cast<QWidget*>(o)->window() == this)
+		updateEdgeCursor(static_cast<QMouseEvent*>(e)->globalPosition().toPoint());
+	else if ((e->type() == QEvent::Leave || e->type() == QEvent::WindowDeactivate) && o == this && m_edgeOverride)
+		updateEdgeCursor(QPoint(-100000, -100000));
 	switch (e->type())
 	{
 	case QEvent::KeyPress:
@@ -2218,10 +2290,26 @@ static Qt::CursorShape cursorFor(Qt::Edges e)
 	return Qt::ArrowCursor;
 }
 
+void MainWindow::updateEdgeCursor(const QPoint& global)
+{
+	const Qt::Edges edges = isMaximized() || isFullScreen() ? Qt::Edges() : edgesAt(this, mapFromGlobal(global));
+	if (edges)
+	{
+		if (m_edgeOverride)
+			QGuiApplication::changeOverrideCursor(QCursor(cursorFor(edges)));
+		else
+			QGuiApplication::setOverrideCursor(QCursor(cursorFor(edges)));
+		m_edgeOverride = true;
+	}
+	else if (m_edgeOverride)
+	{
+		QGuiApplication::restoreOverrideCursor();
+		m_edgeOverride = false;
+	}
+}
+
 void MainWindow::mouseMoveEvent(QMouseEvent* e)
 {
-	const Qt::Edges edges = isMaximized() || isFullScreen() ? Qt::Edges() : edgesAt(this, e->position().toPoint());
-	setCursor(cursorFor(edges));
 	QMainWindow::mouseMoveEvent(e);
 }
 

@@ -2103,6 +2103,10 @@ TerminalSettingsTab::TerminalSettingsTab(RjBackend* backend, QWidget* parent)
 	f->addRow(new QLabel(rjText(backend, "term.font"), this), m_font);
 	f->addRow(new QLabel(rjText(backend, "term.size"), this), m_size);
 	f->addRow(new QLabel(rjText(backend, "term.scrollback"), this), m_scrollback);
+	m_copyOnSelect = new QCheckBox(rjText(backend, "term.copy_on_select"), this);
+	m_confirmPaste = new QCheckBox(rjText(backend, "term.confirm_paste"), this);
+	f->addRow(QString(), m_copyOnSelect);
+	f->addRow(QString(), m_confirmPaste);
 	f->addRow(new QLabel(rjText(backend, "term.scheme"), this), m_scheme);
 	f->addRow(QString(), m_custom);
 	const char* keys[4] = { "fg", "bg", "cursor", "selection" };
@@ -2156,6 +2160,14 @@ TerminalSettingsTab::TerminalSettingsTab(RjBackend* backend, QWidget* parent)
 		if (!m_updating)
 			send({ { QStringLiteral("font_size"), value } });
 	});
+	connect(m_copyOnSelect, &QCheckBox::toggled, this, [this](bool on) {
+		if (!m_updating)
+			send({ { QStringLiteral("copy_on_select"), on } });
+	});
+	connect(m_confirmPaste, &QCheckBox::toggled, this, [this](bool on) {
+		if (!m_updating)
+			send({ { QStringLiteral("confirm_paste"), on } });
+	});
 	connect(m_scrollback, &QSpinBox::editingFinished, this, [this] {
 		if (!m_updating)
 			send({ { QStringLiteral("scrollback"), m_scrollback->value() } });
@@ -2169,6 +2181,8 @@ TerminalSettingsTab::TerminalSettingsTab(RjBackend* backend, QWidget* parent)
 		       { QStringLiteral("font_family"), QString() },
 		       { QStringLiteral("font_size"), 11 },
 		       { QStringLiteral("scrollback"), 10000 },
+		       { QStringLiteral("copy_on_select"), true },
+		       { QStringLiteral("confirm_paste"), true },
 		       { QStringLiteral("fg"), QString() },
 		       { QStringLiteral("bg"), QString() },
 		       { QStringLiteral("cursor"), QString() },
@@ -2201,6 +2215,8 @@ void TerminalSettingsTab::show(const QJsonObject& s)
 	m_font->setCurrentFont(family.isEmpty() ? QFontDatabase::systemFont(QFontDatabase::FixedFont) : QFont(family));
 	m_size->setValue(qRound(s.value(QStringLiteral("font_size")).toDouble(11.0)));
 	m_scrollback->setValue(s.value(QStringLiteral("scrollback")).toInt(10000));
+	m_copyOnSelect->setChecked(s.value(QStringLiteral("copy_on_select")).toBool(true));
+	m_confirmPaste->setChecked(s.value(QStringLiteral("confirm_paste")).toBool(true));
 	m_scheme->setCurrentIndex(qMax(0, m_scheme->findData(s.value(QStringLiteral("scheme")).toString())));
 	m_custom->setVisible(s.value(QStringLiteral("custom")).toBool());
 	const char* keys[4] = { "fg", "bg", "cursor", "selection" };

@@ -83,6 +83,13 @@ public:
 	void applySettings(const QJsonObject& settings);
 	/// Wendet die Einstellungen auf alle offenen Terminals an.
 	static void applyToAll(const QJsonObject& settings);
+	/// Das zuletzt benutzte, sichtbare Terminal (für das Menü Bearbeiten).
+	static TerminalView* active();
+	/// Markierten Text in die Zwischenablage kopieren (liefert, ob etwas markiert war).
+	bool copySelection();
+	/// Zwischenablage einfügen (bei mehreren Zeilen mit Rückfrage, falls eingestellt).
+	void pasteClipboard();
+	void selectAll();
 
 protected:
 	void paintEvent(QPaintEvent*) override;
@@ -90,6 +97,9 @@ protected:
 	void mousePressEvent(QMouseEvent*) override;
 	void mouseMoveEvent(QMouseEvent*) override;
 	void mouseReleaseEvent(QMouseEvent*) override;
+	void mouseDoubleClickEvent(QMouseEvent*) override;
+	void contextMenuEvent(QContextMenuEvent*) override;
+	void focusInEvent(QFocusEvent*) override;
 	void resizeEvent(QResizeEvent*) override;
 	/// Mausrad blättert im Rücklauf (bei less/top: Pfeiltasten); Strg + Mausrad ändert die Schriftgröße.
 	void wheelEvent(QWheelEvent*) override;
@@ -97,6 +107,15 @@ protected:
 
 private:
 	QPoint cellAt(const QPoint& p) const;
+	QString selectedText();
+	void pasteText(const QString& text);
+	QStringList rowChars(int row) const;
+	void selectWordAt(const QPoint& c);
+	void selectLine(int row);
+	void finishSelection();
+	bool m_skipRelease = false;
+	QElapsedTimer m_tripleClock;
+	QPoint m_tripleCell{ -1, -1 };
 	RjBackend* m_backend;
 	std::uint64_t m_session;
 	QJsonObject m_snap;

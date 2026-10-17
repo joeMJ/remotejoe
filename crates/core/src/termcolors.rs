@@ -159,6 +159,10 @@ pub struct TerminalSettings {
     pub selection: Option<String>,
     /// Zeilen im Rücklauf (Mausrad zurückblättern).
     pub scrollback: usize,
+    /// Markierten Text sofort in die Zwischenablage kopieren (wie PuTTY).
+    pub copy_on_select: bool,
+    /// Vor dem Einfügen von mehreren Zeilen nachfragen.
+    pub confirm_paste: bool,
 }
 
 /// Grenzen und Vorgabe des Rücklaufs (Zeilen).
@@ -177,6 +181,8 @@ impl Default for TerminalSettings {
             cursor: None,
             selection: None,
             scrollback: SCROLLBACK_DEFAULT,
+            copy_on_select: true,
+            confirm_paste: true,
         }
     }
 }
@@ -276,5 +282,20 @@ mod tests {
         assert_eq!(s.clamped_size(), FONT_SIZE_MAX);
         s.font_size = f32::NAN;
         assert_eq!(s.clamped_size(), FONT_SIZE_DEFAULT);
+    }
+}
+
+#[cfg(test)]
+mod copy_paste_tests {
+    use super::*;
+
+    #[test]
+    fn copy_and_paste_options_default_on_and_load_from_toml() {
+        let d = TerminalSettings::default();
+        assert!(d.copy_on_select && d.confirm_paste);
+        assert_eq!(d.clamped_scrollback(), SCROLLBACK_DEFAULT);
+        let t: TerminalSettings = toml::from_str("copy_on_select = false\nscrollback = 50").unwrap();
+        assert!(!t.copy_on_select && t.confirm_paste);
+        assert_eq!(t.clamped_scrollback(), SCROLLBACK_MIN, "zu kleiner Wert wird angehoben");
     }
 }

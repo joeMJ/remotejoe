@@ -145,11 +145,13 @@ pub struct SecurityDefaults {
     pub lock_after_idle_mins: u32,
     /// Beim Sperren alle Sitzungen trennen (Vorgabe: verbunden lassen).
     pub disconnect_on_lock: bool,
+    /// Sekunden, nach denen ein kopiertes Kennwort aus der Zwischenablage gelöscht wird; 0 = nie.
+    pub clipboard_clear_secs: u32,
 }
 
 impl Default for SecurityDefaults {
     fn default() -> Self {
-        SecurityDefaults { lock_after_idle_mins: 0, disconnect_on_lock: false }
+        SecurityDefaults { lock_after_idle_mins: 0, disconnect_on_lock: false, clipboard_clear_secs: 30 }
     }
 }
 
