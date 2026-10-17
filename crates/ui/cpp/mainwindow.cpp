@@ -2173,7 +2173,11 @@ void MainWindow::deleteSelected()
 	const QStringList ids = selectedIds();
 	if (ids.isEmpty())
 		return;
-	const QString text = ids.size() == 1 ? T(m_backend, "bar.delete").arg(m_tree->currentIndex().data().toString()) : T(m_backend, "bar.delete.many").arg(ids.size());
+	QString text = ids.size() == 1 ? T(m_backend, "bar.delete").arg(m_tree->currentIndex().data().toString()) : T(m_backend, "bar.delete.many").arg(ids.size());
+	// Offene Sitzungen der betroffenen Ziele (auch in Unterordnern) werden beendet; darauf hinweisen.
+	const QJsonObject preview = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("delete_preview") }, { QStringLiteral("ids"), QJsonArray::fromStringList(ids) } }));
+	if (const int active = preview.value(QStringLiteral("active")).toInt(); active > 0)
+		text += QLatin1Char(' ') + T(m_backend, "bar.delete.sessions").arg(active);
 	m_bar->ask(text, { T(m_backend, "bar.delete.button") }, [this, ids](int i) {
 		if (i != 0)
 			return;
@@ -2184,7 +2188,15 @@ void MainWindow::deleteSelected()
 				m_tabs->removeTab(m_tabs->indexOf(ed));
 				ed->deleteLater();
 			}
-		showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("delete") }, { QStringLiteral("ids"), QJsonArray::fromStringList(ids) } })));
+		const QJsonObject result = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("delete") }, { QStringLiteral("ids"), QJsonArray::fromStringList(ids) } }));
+		// Beendete Sitzungen: Ansichten und Tabs entfernen.
+		const QJsonArray closed = result.value(QStringLiteral("closed_sessions")).toArray();
+		for (const QJsonValue& s : closed)
+			if (auto* p = m_panes.take(std::uint64_t(s.toInteger())))
+				p->deleteLater();
+		showEditResult(result);
+		if (!closed.isEmpty())
+			rebuildTabs();
 		m_tree->setFocus();
 	});
 }

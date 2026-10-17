@@ -365,6 +365,17 @@ impl Manager {
     }
 
     /// Vorführsitzung mit erzeugtem Bild (ohne Worker).
+    /// Testhilfe: verbundene Vorführsitzung für ein bestimmtes Ziel.
+    #[cfg(test)]
+    pub(crate) fn open_demo_for_target(&mut self, target: Uuid, state: &str) -> SessionId {
+        let id = self.open_demo_terminal("test", "", 80, 24);
+        if let Some(x) = self.sessions.get_mut(&id) {
+            x.spec.target = target;
+            x.state = state.to_string();
+        }
+        id
+    }
+
     pub fn open_demo_frame(&mut self, title: &str, w: u32, h: u32, hue: u8) -> SessionId {
         let id = self.next;
         self.next += 1;

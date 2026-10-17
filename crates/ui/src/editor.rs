@@ -5,7 +5,7 @@
 //! weitergegeben (`Vault::set_index`); gespeichert wird über `Vault::save`
 //! mit Sicherungskopie, atomarem Schreiben, Sperre und Konfliktabfrage.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use rj_core::edit::{self, ApplyKind, EditError};
 use rj_core::inherit::{credential_mode, reachable_credential_names, resolve_credential_at, CredentialMode, CredentialResolution, Origin};
@@ -70,6 +70,16 @@ fn ok(v: Value) -> String {
 
 fn id_of(v: &Value, key: &str) -> Option<Uuid> {
     v.get(key).and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok())
+}
+
+/// Zu löschende Knoten: `ids`, sonst `id`.
+fn delete_ids(c: &Value) -> Vec<Uuid> {
+    let ids = ids_of(c, "ids");
+    if ids.is_empty() {
+        id_of(c, "id").into_iter().collect()
+    } else {
+        ids
+    }
 }
 
 fn ids_of(v: &Value, key: &str) -> Vec<Uuid> {
@@ -307,13 +317,32 @@ impl App {
         r
     }
 
+    /// Offene Sitzungen der Ziele unter den Knoten (ein Ziel selbst oder ein Ordner samt Unterbaum).
+    fn sessions_under(&self, ids: &[Uuid]) -> Vec<SessionId> {
+        fn collect(n: &Node, out: &mut HashSet<Uuid>) {
+            match n {
+                Node::Target(t) => {
+                    out.insert(t.id);
+                }
+                Node::Folder(f) => f.children.iter().for_each(|c| collect(c, out)),
+            }
+        }
+        let mut targets = HashSet::new();
+        for id in ids {
+            if let Some(n) = self.index.path_to(*id).and_then(|p| p.last().copied()) {
+                collect(n, &mut targets);
+            }
+        }
+        self.sessions.ids().into_iter().filter(|s| self.sessions.target(*s).is_some_and(|t| targets.contains(&t))).collect()
+    }
+
     fn edit_value(&mut self, c: &Value) -> String {
         let c = c.clone();
         if str_of(&c, "op") == Some("set_view") {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -342,14 +371,29 @@ impl App {
                 let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
                 edit::rename(idx, id, str_of(&c, "name").unwrap_or_default()).map(|_| json!({ "ok": true }))
             }),
-            "delete" => self.simple("Löschen", |idx| {
-                let ids = ids_of(&c, "ids");
-                let ids = if ids.is_empty() { id_of(&c, "id").into_iter().collect() } else { ids };
-                for id in &ids {
-                    edit::delete(idx, *id)?;
-                }
-                Ok(json!({ "deleted": ids.len() }))
-            }),
+            "delete_preview" => {
+                let doomed = self.sessions_under(&delete_ids(&c));
+                let active = doomed.iter().filter(|s| self.sessions.state(**s).is_some_and(|st| !matches!(st, "failed" | "disconnected" | "crashed"))).count();
+                return ok(json!({ "sessions": doomed.len(), "active": active }));
+            }
+            "delete" => {
+                let ids = delete_ids(&c);
+                // Sitzungen der betroffenen Ziele (auch in Unterordnern) merken, bevor sie verschwinden.
+                let doomed = self.sessions_under(&ids);
+                let r = self.simple("Löschen", |idx| {
+                    for id in &ids {
+                        edit::delete(idx, *id)?;
+                    }
+                    Ok(json!({ "deleted": ids.len() }))
+                });
+                r.map(|mut v| {
+                    for s in &doomed {
+                        self.close_session(*s);
+                    }
+                    v["closed_sessions"] = json!(doomed);
+                    v
+                })
+            }
             "favorite" => self.simple("Favorit", |idx| {
                 let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
                 edit::set_favorite(idx, id, c.get("on").and_then(Value::as_bool).unwrap_or(true)).map(|_| json!({ "ok": true }))
@@ -1346,6 +1390,35 @@ mod tests {
         // Löschen lässt den KDBX-Eintrag bestehen: er erscheint unter „Nicht zugeordnet“.
         cmd(&mut app, json!({ "op": "delete", "id": f }));
         assert_eq!(app.vault.as_ref().unwrap().unassigned().len(), 1);
+    }
+
+    #[test]
+    fn delete_closes_sessions_of_deleted_targets() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        let folder = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "Import" }))["id"].as_str().unwrap().to_string();
+        let sub = cmd(&mut app, json!({ "op": "add", "parent": folder, "kind": "folder", "name": "Unter" }))["id"].as_str().unwrap().to_string();
+        let t1 = Uuid::parse_str(cmd(&mut app, json!({ "op": "add", "parent": folder, "kind": "ssh", "name": "a" }))["id"].as_str().unwrap()).unwrap();
+        let t2 = Uuid::parse_str(cmd(&mut app, json!({ "op": "add", "parent": sub, "kind": "ssh", "name": "b" }))["id"].as_str().unwrap()).unwrap();
+        let other = Uuid::parse_str(cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "c" }))["id"].as_str().unwrap()).unwrap();
+        let s1 = app.sessions.open_demo_for_target(t1, "connected");
+        let s2 = app.sessions.open_demo_for_target(t2, "failed");
+        let s3 = app.sessions.open_demo_for_target(other, "connected");
+        // Vorschau zählt auch Unterordner; fehlgeschlagene Sitzungen sind nicht aktiv.
+        let p = cmd(&mut app, json!({ "op": "delete_preview", "ids": [folder] }));
+        assert_eq!((p["sessions"].as_u64(), p["active"].as_u64()), (Some(2), Some(1)), "{p}");
+        let r = cmd(&mut app, json!({ "op": "delete", "ids": [folder] }));
+        let mut closed: Vec<u64> = r["closed_sessions"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+        closed.sort_unstable();
+        assert_eq!(closed, [s1, s2], "{r}");
+        assert_eq!(app.sessions.ids(), [s3], "Sitzung eines anderen Ziels bleibt");
+        // Ein einzelnes Ziel zu löschen beendet nur dessen Sitzung.
+        let r = cmd(&mut app, json!({ "op": "delete", "id": other }));
+        assert_eq!(r["closed_sessions"].as_array().unwrap().len(), 1);
+        assert!(app.sessions.ids().is_empty());
+        // Rückgängig bringt die Ziele zurück, nicht die Sitzungen.
+        cmd(&mut app, json!({ "op": "undo" }));
+        assert!(app.sessions.ids().is_empty());
     }
 
     #[test]

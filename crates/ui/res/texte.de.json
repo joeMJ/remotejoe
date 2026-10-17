@@ -153,6 +153,7 @@
   "bar.delete": "„%1“ löschen? Zugangsdaten bleiben in der Schlüsseldatenbank und erscheinen unter „Nicht zugeordnet“.",
   "bar.delete.many": "%1 Objekte löschen? Zugangsdaten bleiben in der Schlüsseldatenbank und erscheinen unter „Nicht zugeordnet“.",
   "bar.delete.button": "Löschen",
+  "bar.delete.sessions": "Dabei werden %1 offene Sitzungen beendet.",
   "bar.view.new": "Name der neuen Ansicht:",
   "bar.view.rename": "Neuer Name der Ansicht:",
   "bar.view.delete": "Ansicht „%1“ löschen? Die Ziele bleiben erhalten.",
