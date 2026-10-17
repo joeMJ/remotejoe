@@ -111,7 +111,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<ToWorker>, out: rj_ipc::worker::Sen
                     let id = next_q;
                     next_q += 1;
                     pending.insert(id, reply);
-                    send(FromWorker::Question { id, text: q.text(), detail: q.detail() });
+                    send(FromWorker::Question { id, text: q.text(), detail: q.detail(), info: q.info() });
                 }
             }
             res = async { connecting.as_mut().unwrap().await }, if connecting.is_some() => {

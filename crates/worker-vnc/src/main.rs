@@ -69,7 +69,15 @@ fn cert_check(out: Sender, answers: Arc<Mutex<Receiver<(u32, bool)>>>) -> CertCh
         if let Some(o) = &c.old_fingerprint {
             detail.push_str(&format!("\nbisher: {o}"));
         }
-        let _ = out.send(&FromWorker::Question { id, text, detail });
+        let info = rj_ipc::msg::SecurityInfo {
+            kind: "certificate".into(),
+            host: c.host.clone(),
+            port: c.port,
+            key_type: "X.509".into(),
+            fingerprint: c.fingerprint.clone(),
+            previous: c.old_fingerprint.clone(),
+        };
+        let _ = out.send(&FromWorker::Question { id, text, detail, info });
         let rx = answers.lock().unwrap_or_else(|e| e.into_inner());
         let deadline = Instant::now() + Duration::from_secs(300);
         loop {

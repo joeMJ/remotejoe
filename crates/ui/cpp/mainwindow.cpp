@@ -20,16 +20,13 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
-#include <QtWidgets/QDialog>
-#include <QtWidgets/QDialogButtonBox>
+#include <QtCore/QPointer>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QHeaderView>
-#include <QtWidgets/QInputDialog>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QMenuBar>
-#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QStyleFactory>
@@ -206,183 +203,6 @@ protected:
 	}
 };
 
-/// Dialog zur Auswahl eines Zugangsdatensatzes.
-class CredentialDialog : public QDialog
-{
-public:
-	CredentialDialog(RjBackend* b, const QJsonArray& choices, QWidget* parent)
-	  : QDialog(parent)
-	{
-		setWindowTitle(T(b, "dialog.credential.title"));
-		auto* lay = new QVBoxLayout(this);
-		lay->addWidget(new QLabel(T(b, "dialog.credential.text"), this));
-		combo = new QComboBox(this);
-		combo->setMinimumHeight(32);
-		for (const QJsonValue& c : choices)
-		{
-			const QJsonObject o = c.toObject();
-			QString label = o.value(QStringLiteral("name")).toString();
-			const QString title = o.value(QStringLiteral("title")).toString();
-			if (!title.isEmpty())
-				label += QStringLiteral(" (") + title + QLatin1Char(')');
-			combo->addItem(label, o.value(QStringLiteral("name")).toString());
-		}
-		lay->addWidget(combo);
-		remember = new QCheckBox(T(b, "dialog.credential.remember"), this);
-		lay->addWidget(remember);
-		auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-		buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Verbinden"));
-		buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Abbrechen"));
-		connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
-		connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-		lay->addWidget(buttons);
-	}
-	QComboBox* combo;
-	QCheckBox* remember;
-};
-
-/// Patchday: Zustand je Ziel, Fortschritt, Protokoll, Abbruch.
-class PatchdayDialog : public QDialog
-{
-public:
-	PatchdayDialog(RjBackend* b, const QStringList& ids, QWidget* parent)
-	  : QDialog(parent)
-	  , m_backend(b)
-	  , m_ids(ids)
-	{
-		setWindowTitle(QStringLiteral("Patchday"));
-		resize(980, 600);
-		auto* lay = new QVBoxLayout(this);
-		m_table = new QTableWidget(0, 5, this);
-		m_table->setHorizontalHeaderLabels({ QStringLiteral("Ziel"), QStringLiteral("Zustand"), QStringLiteral("Anzahl"), QStringLiteral("Fortschritt"), QString() });
-		m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-		m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-		m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
-		m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-		m_table->verticalHeader()->setDefaultSectionSize(30);
-		m_log = new QPlainTextEdit(this);
-		m_log->setReadOnly(true);
-		m_log->setMaximumHeight(160);
-		auto* buttons = new QDialogButtonBox(this);
-		auto* run = buttons->addButton(QStringLiteral("Ausführen …"), QDialogButtonBox::ActionRole);
-		auto* cancel = buttons->addButton(QStringLiteral("Ziel abbrechen (Entf)"), QDialogButtonBox::ActionRole);
-		buttons->addButton(QDialogButtonBox::Close)->setText(QStringLiteral("Schließen"));
-		lay->addWidget(new QLabel(QStringLiteral("Trockenlauf: Aktualisierungen werden nur aufgelistet. Ausführen erst auf Befehl."), this));
-		lay->addWidget(m_table, 1);
-		lay->addWidget(m_log);
-		lay->addWidget(buttons);
-		connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-		connect(run, &QPushButton::clicked, this, [this] {
-			if (QMessageBox::question(this, windowTitle(), QStringLiteral("Aktualisierungen auf %1 Zielen jetzt installieren?").arg(m_ids.size())) == QMessageBox::Yes)
-				m_backend->startPatchday(QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(m_ids)).toJson(QJsonDocument::Compact)), true);
-		});
-		auto cancelCurrent = [this] {
-			const int r = m_table->currentRow();
-			if (r >= 0)
-				cancelRow(r);
-		};
-		connect(cancel, &QPushButton::clicked, this, cancelCurrent);
-		auto* del = new QShortcut(QKeySequence(Qt::Key_Delete), m_table);
-		del->setContext(Qt::WidgetShortcut);
-		connect(del, &QShortcut::activated, this, cancelCurrent);
-		connect(m_table, &QTableWidget::currentCellChanged, this, [this] {
-			m_version = 0;
-			refresh();
-		});
-		connect(&m_timer, &QTimer::timeout, this, [this] { refresh(); });
-		m_timer.start(250);
-		refresh();
-	}
-
-	/// Längste Dauer eines Neuzeichnens (für die Messung).
-	qint64 maxRefreshMs = 0;
-	int refreshes = 0;
-
-	void cancelRow(int r)
-	{
-		if (auto* it = m_table->item(r, 0))
-			m_backend->cancelPatchTarget(it->data(Qt::UserRole).toString());
-		m_version = 0;
-		refresh();
-	}
-
-	void refresh()
-	{
-		QElapsedTimer t;
-		t.start();
-		const QString selected = m_table->currentRow() >= 0 && m_table->item(m_table->currentRow(), 0) ? m_table->item(m_table->currentRow(), 0)->data(Qt::UserRole).toString() : QString();
-		QJsonObject cmd{ { QStringLiteral("op"), QStringLiteral("patchday") }, { QStringLiteral("since"), double(m_version) } };
-		if (!selected.isEmpty())
-			cmd.insert(QStringLiteral("selected"), selected);
-		const QJsonObject v = QJsonDocument::fromJson(m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact))).toUtf8()).object();
-		if (v.value(QStringLiteral("unchanged")).toBool())
-			return;
-		m_version = qint64(v.value(QStringLiteral("version")).toDouble());
-		const QJsonArray rows = v.value(QStringLiteral("rows")).toArray();
-		if (m_table->rowCount() != rows.size())
-			m_table->setRowCount(rows.size());
-		for (int i = 0; i < rows.size(); ++i)
-		{
-			const QJsonObject r = rows[i].toObject();
-			// Nur geänderte Zellen anfassen: ruhiges Bild auch bei vielen Zielen.
-			auto set = [&](int col, const QString& text) {
-				auto* it = m_table->item(i, col);
-				if (!it)
-				{
-					it = new QTableWidgetItem;
-					m_table->setItem(i, col, it);
-				}
-				if (it->text() != text)
-					it->setText(text);
-				return it;
-			};
-			set(0, r.value(QStringLiteral("name")).toString())->setData(Qt::UserRole, r.value(QStringLiteral("target")).toString());
-			QString state = r.value(QStringLiteral("label")).toString();
-			if (r.value(QStringLiteral("detail")).isString())
-				state += QStringLiteral(": ") + r.value(QStringLiteral("detail")).toString();
-			else if (r.value(QStringLiteral("last")).isString())
-				state += QStringLiteral(" – ") + r.value(QStringLiteral("last")).toString();
-			set(1, state);
-			set(2, r.value(QStringLiteral("count")).isNull() ? QString() : QString::number(r.value(QStringLiteral("count")).toInt()));
-			auto* bar = qobject_cast<QProgressBar*>(m_table->cellWidget(i, 3));
-			if (!bar)
-			{
-				bar = new QProgressBar(m_table);
-				m_table->setCellWidget(i, 3, bar);
-			}
-			if (bar->value() != r.value(QStringLiteral("percent")).toInt())
-				bar->setValue(r.value(QStringLiteral("percent")).toInt());
-			auto* stop = qobject_cast<QPushButton*>(m_table->cellWidget(i, 4));
-			if (!stop)
-			{
-				stop = new QPushButton(QStringLiteral("Abbrechen"), m_table);
-				stop->setAccessibleName(QStringLiteral("Abbrechen: ") + r.value(QStringLiteral("name")).toString());
-				connect(stop, &QPushButton::clicked, this, [this, i] { cancelRow(i); });
-				m_table->setCellWidget(i, 4, stop);
-			}
-			stop->setEnabled(!r.value(QStringLiteral("finished")).toBool());
-			if (r.contains(QStringLiteral("log")))
-			{
-				QStringList log;
-				for (const QJsonValue& l : r.value(QStringLiteral("log")).toArray())
-					log << l.toString();
-				if (m_log->toPlainText() != log.join(QLatin1Char('\n')))
-					m_log->setPlainText(log.join(QLatin1Char('\n')));
-			}
-		}
-		++refreshes;
-		maxRefreshMs = qMax(maxRefreshMs, t.elapsed());
-	}
-
-private:
-	RjBackend* m_backend;
-	QStringList m_ids;
-	QTableWidget* m_table;
-	QPlainTextEdit* m_log;
-	QTimer m_timer;
-	qint64 m_version = 0;
-};
-
 /// Ziel-IDs der Auswahl (Ordner schließen ihre Ziele ein).
 QStringList selectedTargets(QTreeView* tree, QStandardItemModel* model)
 {
@@ -409,16 +229,13 @@ void MainWindow::openPatchday(const QStringList& ids)
 {
 	const QString res = m_backend->startPatchday(QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(ids)).toJson(QJsonDocument::Compact)), false);
 	statusBar()->showMessage(res, 5000);
-	auto* d = new PatchdayDialog(m_backend, ids, this);
-	d->setAttribute(Qt::WA_DeleteOnClose);
-	d->setObjectName(QStringLiteral("patchdayDialog"));
-	d->show();
+	auto* t = new PatchdayTab(m_backend, ids, m_tabs);
+	addToolTab(t, T(m_backend, "patch.title"));
 }
 
 QString MainWindow::patchdayMeasurement() const
 {
-	auto* d = findChild<QDialog*>(QStringLiteral("patchdayDialog"));
-	auto* p = d ? static_cast<PatchdayDialog*>(d) : nullptr;
+	auto* p = findChild<PatchdayTab*>();
 	return p ? QStringLiteral("patchday_neuzeichnen_max_ms=%1\npatchday_neuzeichnen_anzahl=%2\n").arg(p->maxRefreshMs).arg(p->refreshes) : QString();
 }
 
@@ -617,9 +434,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		}
 		if (auto* tt = qobject_cast<ToolTab*>(m_tabs->widget(i)))
 		{
-			tt->wipeSecrets();
-			m_tabs->removeTab(i);
-			tt->deleteLater();
+			closeToolTab(tt);
 			return;
 		}
 		if (auto* ed = qobject_cast<PropertiesTab*>(m_tabs->widget(i)))
@@ -688,19 +503,10 @@ void MainWindow::buildMenus()
 		const QJsonObject r = parseObject(m_backend->importPreview(path));
 		if (r.contains(QStringLiteral("error")))
 		{
-			QMessageBox::warning(this, T(m_backend, "menu.file.import"), r.value(QStringLiteral("error")).toString());
+			m_bar->inform(T(m_backend, "import.failed").arg(r.value(QStringLiteral("error")).toString()));
 			return;
 		}
-		QMessageBox box(QMessageBox::Question, T(m_backend, "menu.file.import"), QStringLiteral("Vorschau des Imports:"), QMessageBox::NoButton, this);
-		box.setInformativeText(r.value(QStringLiteral("summary")).toString());
-		QPushButton* ok = box.addButton(QStringLiteral("Übernehmen"), QMessageBox::AcceptRole);
-		box.addButton(QStringLiteral("Abbrechen"), QMessageBox::RejectRole);
-		box.exec();
-		if (box.clickedButton() == ok)
-		{
-			statusBar()->showMessage(m_backend->importApply(), 8000);
-			reloadTree();
-		}
+		openImport(path, r.value(QStringLiteral("summary")).toString());
 	});
 	file->addAction(T(m_backend, "menu.file.save"), QKeySequence::Save, this, [this] {
 		// Liegt ein geänderter Eigenschaften-Tab vorn, speichert er seine Felder mit.
@@ -803,6 +609,11 @@ void MainWindow::applyTheme(bool dark)
 	  "QPushButton { min-height: 30px; padding: 2px 12px; }"
 	  "QLabel#fieldError, QLabel#dirtyLabel { color: %1; font-weight: bold; }"
 	  "QFrame#actionBar { border: 2px solid %2; border-radius: 4px; }"
+	  "QFrame#securityBar { border: 2px solid %2; border-radius: 4px; }"
+	  "QFrame#securityBar[changed=\"true\"] { border: 3px solid %1; }"
+	  "QFrame#securityBar[changed=\"true\"] QLabel#securityTitle { color: %1; font-weight: bold; }"
+	  "QLabel#securityTitle { font-weight: bold; }"
+	  "QLabel#heading { font-weight: bold; padding: 4px 0; }"
 	  "QFrame#unlockBox { border: 2px solid %2; border-radius: 6px; padding: 12px; }"
 	  "*[rjDirty=\"true\"] { border: 2px solid %2; }")
 	                      .arg(c("warning").name(), c("highlight").name()));
@@ -902,44 +713,117 @@ void MainWindow::handleConnectResult(const QString& id, const QString& json)
 	}
 	if (r.contains(QStringLiteral("ambiguous")))
 	{
-		CredentialDialog d(m_backend, r.value(QStringLiteral("ambiguous")).toArray(), this);
-		if (d.exec() == QDialog::Accepted)
-		{
-			const QSize px = contentSize(false);
-			handleConnectResult(id, m_backend->connectTarget(id, d.combo->currentData().toString(), d.remember->isChecked(), px.width(), px.height()));
-		}
+		chooseCredential(promptTab(id), r.value(QStringLiteral("ambiguous")).toArray());
 		return;
 	}
 	if (r.contains(QStringLiteral("hostkey")))
 	{
 		// Unbekannter Host-Schlüssel eines Sprungservers: nie still annehmen.
 		const QJsonObject h = r.value(QStringLiteral("hostkey")).toObject();
-		QMessageBox box(QMessageBox::Warning, T(m_backend, "app.title"), h.value(QStringLiteral("text")).toString(), QMessageBox::NoButton, this);
-		box.setInformativeText(h.value(QStringLiteral("detail")).toString());
-		QPushButton* yes = box.addButton(T(m_backend, "dialog.question.accept"), QMessageBox::AcceptRole);
-		QPushButton* no = box.addButton(T(m_backend, "dialog.question.reject"), QMessageBox::RejectRole);
-		box.setDefaultButton(no);
-		box.exec();
-		if (box.clickedButton() == yes &&
-		    m_backend->acceptHostKey(h.value(QStringLiteral("host")).toString(), std::uint32_t(h.value(QStringLiteral("port")).toInt()),
-		                             h.value(QStringLiteral("key")).toString()))
-		{
-			const QSize px = contentSize(false);
-			handleConnectResult(id, m_backend->connectTarget(id, QString(), false, px.width(), px.height()));
-		}
+		ConnectPromptTab* tab = promptTab(id);
+		QJsonObject q{ { QStringLiteral("text"), h.value(QStringLiteral("text")) },
+			           { QStringLiteral("detail"), h.value(QStringLiteral("detail")) },
+			           { QStringLiteral("timeout_secs"), m_backend->questionTimeout() },
+			           { QStringLiteral("info"), QJsonObject{ { QStringLiteral("kind"), QStringLiteral("hostkey") },
+			                                                  { QStringLiteral("host"), h.value(QStringLiteral("host")) },
+			                                                  { QStringLiteral("port"), h.value(QStringLiteral("port")) },
+			                                                  { QStringLiteral("key_type"), h.value(QStringLiteral("key_type")) },
+			                                                  { QStringLiteral("fingerprint"), h.value(QStringLiteral("fingerprint")) },
+			                                                  { QStringLiteral("previous"), h.value(QStringLiteral("previous")) } } } };
+		QPointer<ConnectPromptTab> guard(tab);
+		tab->security()->showQuestion(0, q, [this, id, h, guard](bool accept) {
+			if (guard)
+				closeToolTab(guard);
+			if (accept &&
+			    m_backend->acceptHostKey(h.value(QStringLiteral("host")).toString(), std::uint32_t(h.value(QStringLiteral("port")).toInt()),
+			                             h.value(QStringLiteral("key")).toString()))
+			{
+				const QSize px = contentSize(false);
+				handleConnectResult(id, m_backend->connectTarget(id, QString(), false, px.width(), px.height()));
+			}
+		});
 		return;
 	}
 	if (r.contains(QStringLiteral("missing")))
 	{
 		const QJsonObject m = r.value(QStringLiteral("missing")).toObject();
 		QString title = m.value(QStringLiteral("title")).toString();
-		QMessageBox::warning(this, T(m_backend, "missing.credential"),
-		                     QStringLiteral("%1: „%2“\n%3\n\nÜber „Nicht zugeordnet“ kann ein vorhandener Eintrag neu zugeordnet werden.")
-		                       .arg(T(m_backend, "missing.credential"), title.isEmpty() ? m.value(QStringLiteral("name")).toString() : title,
-		                            m.value(QStringLiteral("reason")).toString()));
+		m_bar->inform(T(m_backend, "missing.credential.text")
+		                .arg(T(m_backend, "missing.credential"), title.isEmpty() ? m.value(QStringLiteral("name")).toString() : title,
+		                     m.value(QStringLiteral("reason")).toString()));
 		return;
 	}
-	QMessageBox::warning(this, T(m_backend, "app.title"), r.value(QStringLiteral("error")).toString());
+	m_bar->inform(r.value(QStringLiteral("error")).toString());
+}
+
+ConnectPromptTab* MainWindow::promptTab(const QString& target)
+{
+	for (auto* t : findChildren<ConnectPromptTab*>())
+		if (t->targetId() == target)
+		{
+			m_tabs->setCurrentWidget(t);
+			return t;
+		}
+	QString name = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), target } })).value(QStringLiteral("name")).toString();
+	if (name.isEmpty())
+		name = target;
+	auto* t = new ConnectPromptTab(m_backend, target, name, m_tabs);
+	addToolTab(t, name);
+	return t;
+}
+
+void MainWindow::chooseCredential(ConnectPromptTab* tab, const QJsonArray& choices)
+{
+	QList<QPair<QString, QString>> items;
+	for (const QJsonValue& c : choices)
+	{
+		const QJsonObject o = c.toObject();
+		QString label = o.value(QStringLiteral("name")).toString();
+		const QString title = o.value(QStringLiteral("title")).toString();
+		if (!title.isEmpty())
+			label += QStringLiteral(" (") + title + QLatin1Char(')');
+		items.append({ label, o.value(QStringLiteral("name")).toString() });
+	}
+	const QString id = tab->targetId();
+	QPointer<ConnectPromptTab> guard(tab);
+	tab->setMessage(T(m_backend, "dialog.credential.text"));
+	tab->bar()->choose(T(m_backend, "dialog.credential.title"), items, nullptr, T(m_backend, "dialog.credential.remember"),
+	                   [this, id, guard](const QString& name, bool remember) {
+		                   if (guard)
+			                   closeToolTab(guard);
+		                   const QSize px = contentSize(false);
+		                   handleConnectResult(id, m_backend->connectTarget(id, name, remember, px.width(), px.height()));
+	                   });
+	connect(tab->bar(), &ActionBar::cancelled, tab, [this, guard] {
+		if (guard)
+			closeToolTab(guard);
+	});
+}
+
+void MainWindow::addToolTab(ToolTab* t, const QString& title)
+{
+	connect(t, &ToolTab::indexChanged, this, [this] {
+		reloadTree();
+		reloadViews();
+	});
+	connect(t, &ToolTab::status, this, [this](const QString& m) { statusBar()->showMessage(m, 8000); });
+	connect(t, &ToolTab::closeRequested, this, [this, t] { closeToolTab(t); });
+	m_tabs->setCurrentIndex(m_tabs->addTab(t, title));
+}
+
+void MainWindow::closeToolTab(ToolTab* t)
+{
+	const int i = m_tabs->indexOf(t);
+	if (i < 0)
+		return;
+	m_tabs->removeTab(i);
+	t->wipeSecrets();
+	t->deleteLater();
+}
+
+void MainWindow::openImport(const QString& path, const QString& summary)
+{
+	addToolTab(new ImportTab(m_backend, path, summary, m_tabs), T(m_backend, "import.title"));
 }
 
 void MainWindow::showProperties(const QString& id)
@@ -1007,17 +891,23 @@ void MainWindow::applyGuests(const QString& target, QJsonObject r)
 		// Unbekanntes oder geändertes Zertifikat: nie still annehmen.
 		const QJsonObject c = r.value(QStringLiteral("certificate")).toObject();
 		const bool changed = !c.value(QStringLiteral("old")).isNull() && c.contains(QStringLiteral("old"));
-		QMessageBox box(QMessageBox::Warning, T(m_backend, "app.title"),
-		                T(m_backend, changed ? "guest.cert.changed" : "guest.cert.unknown").arg(c.value(QStringLiteral("host")).toString()), QMessageBox::NoButton, this);
-		box.setInformativeText(QStringLiteral("SHA-256: ") + c.value(QStringLiteral("fingerprint")).toString());
-		QPushButton* yes = box.addButton(T(m_backend, "dialog.question.accept"), QMessageBox::AcceptRole);
-		QPushButton* no = box.addButton(T(m_backend, "dialog.question.reject"), QMessageBox::RejectRole);
-		box.setDefaultButton(no);
-		box.exec();
-		if (box.clickedButton() != yes ||
-		    !m_backend->acceptProxmoxCertificate(c.value(QStringLiteral("host")).toString(), c.value(QStringLiteral("fingerprint")).toString()))
-			return;
-		loadGuests(parent->index());
+		ConnectPromptTab* tab = promptTab(target);
+		QJsonObject q{ { QStringLiteral("text"), T(m_backend, changed ? "guest.cert.changed" : "guest.cert.unknown").arg(c.value(QStringLiteral("host")).toString()) },
+			           { QStringLiteral("timeout_secs"), m_backend->questionTimeout() },
+			           { QStringLiteral("info"), QJsonObject{ { QStringLiteral("kind"), QStringLiteral("certificate") },
+			                                                  { QStringLiteral("host"), c.value(QStringLiteral("host")) },
+			                                                  { QStringLiteral("key_type"), QStringLiteral("X.509") },
+			                                                  { QStringLiteral("fingerprint"), c.value(QStringLiteral("fingerprint")) },
+			                                                  { QStringLiteral("previous"), c.value(QStringLiteral("old")) } } } };
+		QPointer<ConnectPromptTab> guard(tab);
+		const QPersistentModelIndex pidx(parent->index());
+		tab->security()->showQuestion(0, q, [this, c, guard, pidx](bool accept) {
+			if (guard)
+				closeToolTab(guard);
+			if (accept && pidx.isValid() &&
+			    m_backend->acceptProxmoxCertificate(c.value(QStringLiteral("host")).toString(), c.value(QStringLiteral("fingerprint")).toString()))
+				loadGuests(pidx);
+		});
 		return;
 	}
 	parent->removeRows(0, parent->rowCount());
@@ -1055,16 +945,22 @@ void MainWindow::openGuestConsole(const QModelIndex& i)
 	                                                    i.data(RoleConsoleHost).toString(), px.width(), px.height()));
 }
 
-void MainWindow::guestAction(const QModelIndex& i, const QString& action)
+void MainWindow::guestAction(const QModelIndex& i, const QString& action, bool confirmed)
 {
-	if (action == QStringLiteral("stop") &&
-	    QMessageBox::question(this, T(m_backend, "app.title"), T(m_backend, "guest.stop.confirm").arg(i.data(Qt::DisplayRole).toString())) != QMessageBox::Yes)
+	if (action == QStringLiteral("stop") && !confirmed)
+	{
+		const QPersistentModelIndex pi(i);
+		m_bar->ask(T(m_backend, "guest.stop.confirm").arg(i.data(Qt::DisplayRole).toString()), { T(m_backend, "guest.stop.button") }, [this, pi, action](int b) {
+			if (b == 0 && pi.isValid())
+				guestAction(pi, action, true);
+		});
 		return;
+	}
 	const QJsonObject r = parseObject(m_backend->guestAction(i.data(RoleGuestTarget).toString(), i.data(RoleGuest).toString(), action));
 	if (r.contains(QStringLiteral("pending")))
 		updateJobs();
 	else if (r.contains(QStringLiteral("error")))
-		QMessageBox::warning(this, T(m_backend, "app.title"), r.value(QStringLiteral("error")).toString());
+		m_bar->inform(r.value(QStringLiteral("error")).toString());
 	else
 		statusBar()->showMessage(T(m_backend, "guest.action.sent"), 4000);
 }
@@ -1401,13 +1297,24 @@ void MainWindow::handleEvents(const QString& json)
 				m_dirtyTerminals.insert(s);
 			else if (t == QLatin1String("question"))
 			{
-				QMessageBox box(QMessageBox::Warning, T(m_backend, "app.title"), e.value(QStringLiteral("text")).toString(), QMessageBox::NoButton, this);
-				box.setInformativeText(e.value(QStringLiteral("detail")).toString());
-				QPushButton* yes = box.addButton(T(m_backend, "dialog.question.accept"), QMessageBox::AcceptRole);
-				QPushButton* no = box.addButton(T(m_backend, "dialog.question.reject"), QMessageBox::RejectRole);
-				box.setDefaultButton(no);
-				box.exec();
-				m_backend->answer(s, std::uint32_t(e.value(QStringLiteral("q")).toInt()), box.clickedButton() == yes);
+				// Rückfrage als Leiste im Tab der Sitzung; ohne Tab: ablehnen.
+				const auto q = std::uint32_t(e.value(QStringLiteral("q")).toInt());
+				if (p)
+				{
+					for (int i = 0; i < m_tabs->count(); ++i)
+						if (m_tabs->widget(i)->isAncestorOf(p))
+							m_tabs->setCurrentIndex(i);
+					p->security()->showQuestion(int(q), e, [this, s, q](bool accept) { m_backend->answer(s, q, accept); });
+				}
+				else
+					m_backend->answer(s, q, false);
+			}
+			else if (t == QLatin1String("question_closed"))
+			{
+				if (p)
+					p->security()->closeQuestion(e.value(QStringLiteral("q")).toInt(), e.value(QStringLiteral("reason")).toString());
+				if (e.value(QStringLiteral("reason")).toString() == QLatin1String("timeout"))
+					statusBar()->showMessage(T(m_backend, "security.timed_out"), 8000);
 			}
 			else if (t == QLatin1String("notice"))
 			{
@@ -1419,8 +1326,13 @@ void MainWindow::handleEvents(const QString& json)
 				QGuiApplication::clipboard()->setText(e.value(QStringLiteral("text")).toString());
 			else if (t == QLatin1String("clipboard_read_request"))
 			{
-				const bool allow = QMessageBox::question(this, T(m_backend, "app.title"), T(m_backend, "clipboard.read_request")) == QMessageBox::Yes;
-				m_backend->clipboardReadAnswer(s, allow, QGuiApplication::clipboard()->text());
+				// Standard ist Ablehnen; Erlauben nur ausdrücklich.
+				if (p)
+					p->askBar()->ask(T(m_backend, "clipboard.read_request"), { T(m_backend, "clipboard.read_allow") }, [this, s](int b) {
+						m_backend->clipboardReadAnswer(s, b == 0, b == 0 ? QGuiApplication::clipboard()->text() : QString());
+					});
+				else
+					m_backend->clipboardReadAnswer(s, false, QString());
 			}
 			else if (t == QLatin1String("title") && p)
 				p->setToolTip(e.value(QStringLiteral("title")).toString());
@@ -1581,10 +1493,40 @@ void MainWindow::showCredentialChoiceForScreenshot()
 	QJsonArray choices;
 	choices.append(QJsonObject{ { QStringLiteral("name"), QStringLiteral("admin") }, { QStringLiteral("title"), QStringLiteral("Verwaltung Standort Nord") } });
 	choices.append(QJsonObject{ { QStringLiteral("name"), QStringLiteral("user") }, { QStringLiteral("title"), QStringLiteral("Benutzerkonto") } });
-	auto* d = new CredentialDialog(m_backend, choices, this);
-	d->setAttribute(Qt::WA_DeleteOnClose);
-	d->setObjectName(QStringLiteral("credentialDialog"));
-	d->show();
+	PropertiesTab* ed = openFirstTargetProperties();
+	const QString first = ed ? ed->nodeId() : QString();
+	if (ed)
+	{
+		m_tabs->removeTab(m_tabs->indexOf(ed));
+		ed->deleteLater();
+	}
+	ConnectPromptTab* tab = promptTab(first);
+	tab->setObjectName(QStringLiteral("credentialPrompt"));
+	chooseCredential(tab, choices);
+}
+
+QWidget* MainWindow::showHostKeyQuestionForScreenshot(bool changed)
+{
+	if (m_panes.isEmpty())
+		return nullptr;
+	SessionPane* p = m_panes.begin().value();
+	for (int i = 0; i < m_tabs->count(); ++i)
+		if (m_tabs->widget(i)->isAncestorOf(p))
+			m_tabs->setCurrentIndex(i);
+	QJsonObject info{ { QStringLiteral("kind"), QStringLiteral("hostkey") },
+		              { QStringLiteral("host"), QStringLiteral("srv01.example.test") },
+		              { QStringLiteral("port"), 22 },
+		              { QStringLiteral("key_type"), QStringLiteral("ssh-ed25519") },
+		              { QStringLiteral("fingerprint"), QStringLiteral("SHA256:q3e5V0bS3vLz2k8l1cYxN4hG6tJ9mWfQ7rUaPdE0oKs") } };
+	QString text = QStringLiteral("Der Host-Schlüssel von srv01.example.test:22 ist unbekannt. Prüfen Sie den Fingerabdruck, bevor Sie ihn annehmen.");
+	if (changed)
+	{
+		info.insert(QStringLiteral("previous"), QStringLiteral("SHA256:Zm9vYmFyYmF6cXV4ZXhhbXBsZWZpbmdlcnByaW50MDE"));
+		text = QStringLiteral("WARNUNG: Der Host-Schlüssel von srv01.example.test:22 hat sich geändert. Das kann auf einen Angriff hinweisen.");
+	}
+	p->security()->showQuestion(changed ? 2 : 1, QJsonObject{ { QStringLiteral("text"), text }, { QStringLiteral("info"), info }, { QStringLiteral("timeout_secs"), 120 } },
+	                            [](bool) {});
+	return p;
 }
 
 void MainWindow::detachTabAt(int index)
@@ -1780,12 +1722,7 @@ PropertiesTab* MainWindow::openProperties(const QString& id, const QString& cate
 BulkAddTab* MainWindow::openBulkAdd(const QString& parentId)
 {
 	auto* t = new BulkAddTab(m_backend, parentId, m_tabs);
-	connect(t, &ToolTab::indexChanged, this, [this] {
-		reloadTree();
-		reloadViews();
-	});
-	connect(t, &ToolTab::status, this, [this](const QString& m) { statusBar()->showMessage(m, 5000); });
-	m_tabs->setCurrentIndex(m_tabs->addTab(t, T(m_backend, "bulk.title")));
+	addToolTab(t, T(m_backend, "bulk.title"));
 	t->hosts()->setFocus();
 	return t;
 }

@@ -96,6 +96,10 @@ pub mod qobject {
         fn clipboard_read_answer(self: Pin<&mut RjBackend>, session: u64, allow: bool, text: &QString);
         #[qinvokable]
         fn answer(self: Pin<&mut RjBackend>, session: u64, question: u32, accept: bool);
+        /// Frist für Sicherheitsrückfragen in Sekunden.
+        #[qinvokable]
+        #[cxx_name = "questionTimeout"]
+        fn question_timeout(self: &RjBackend) -> i32;
         #[qinvokable]
         #[cxx_name = "terminalJson"]
         fn terminal_json(self: &RjBackend, session: u64) -> QString;
@@ -383,6 +387,10 @@ impl qobject::RjBackend {
         if let Some(a) = self.app_mut() {
             a.sessions.clipboard_read_answer(session, allow, &t);
         }
+    }
+
+    fn question_timeout(&self) -> i32 {
+        self.app().map(|a| a.sessions.question_timeout.as_secs() as i32).unwrap_or(120)
     }
 
     fn answer(self: Pin<&mut Self>, session: u64, question: u32, accept: bool) {

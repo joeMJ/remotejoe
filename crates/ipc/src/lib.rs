@@ -15,4 +15,4 @@ pub use frame::{FrameReader, FrameWriter, IpcError, MAX_FRAME};
 pub use msg::*;
 
 /// Version des Nachrichtenprotokolls; Worker und Hauptprozess müssen übereinstimmen.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;

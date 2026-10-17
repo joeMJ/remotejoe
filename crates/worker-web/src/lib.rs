@@ -240,7 +240,7 @@ pub enum CertDecision {
     /// Ungültig, aber dieser Fingerabdruck wurde für den Host angenommen.
     Accepted,
     /// Rückfrage mit Warnung.
-    Ask { text: String, detail: String },
+    Ask { text: String, detail: String, fingerprint: String, previous: Option<String> },
 }
 
 /// Angenommene Zertifikate je Profil (Host → SHA-256-Fingerabdruck).
@@ -280,10 +280,14 @@ impl AcceptedCerts {
             Some(known) => CertDecision::Ask {
                 text: format!("WARNUNG: Das Zertifikat von {host} hat sich geändert und ist nicht vertrauenswürdig."),
                 detail: format!("Probleme: {}\nFingerabdruck (SHA-256): {fp}\nbisher angenommen: {known}", problems.join(", ")),
+                fingerprint: fp.clone(),
+                previous: Some(known.clone()),
             },
             None => CertDecision::Ask {
                 text: format!("Das Zertifikat von {host} ist nicht vertrauenswürdig."),
                 detail: format!("Probleme: {}\nFingerabdruck (SHA-256): {fp}", problems.join(", ")),
+                fingerprint: fp.clone(),
+                previous: None,
             },
         }
     }

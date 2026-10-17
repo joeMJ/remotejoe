@@ -50,7 +50,11 @@ pub enum UiEvent {
     SharedFrame { s: SessionId, path: String, w: u32, h: u32 },
     Frame { s: SessionId, x: u32, y: u32, w: u32, h: u32 },
     Terminal { s: SessionId },
-    Question { s: SessionId, q: u32, text: String, detail: String },
+    Question { s: SessionId, q: u32, text: String, detail: String, info: rj_ipc::msg::SecurityInfo, timeout_secs: u64 },
+    /// Eine Rückfrage ist erledigt, ohne dass die Oberfläche geantwortet hat
+    /// (`timeout`: abgelehnt nach Zeitüberschreitung, `closed`: Sitzung
+    /// geschlossen, `ended`: Verbindung beendet).
+    QuestionClosed { s: SessionId, q: u32, reason: String },
     Notice { s: SessionId, text: String },
     Clipboard { s: SessionId, text: String },
     ClipboardReadRequest { s: SessionId },
@@ -138,7 +142,14 @@ pub struct Manager {
     next: SessionId,
     reconnect: Reconnect,
     pending: Vec<UiEvent>,
+    /// Offene Sicherheitsrückfragen mit Frist; danach gilt „Ablehnen“.
+    questions: BTreeMap<(SessionId, u32), Instant>,
+    /// Frist für Sicherheitsrückfragen.
+    pub question_timeout: Duration,
 }
+
+/// Vorgabe der Frist für Sicherheitsrückfragen.
+pub const QUESTION_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Programmname des Workers je Protokoll.
 pub fn worker_program(p: Protocol) -> Option<&'static str> {
@@ -176,6 +187,8 @@ impl Manager {
             next: 1,
             reconnect,
             pending: Vec::new(),
+            questions: BTreeMap::new(),
+            question_timeout: QUESTION_TIMEOUT,
         }
     }
 
@@ -220,6 +233,27 @@ impl Manager {
             x.state = state.to_string();
         }
         self.pending.push(UiEvent::State { s, state: state.to_string(), detail });
+        if matches!(state, "failed" | "disconnected" | "crashed") {
+            self.drop_questions(s, false, "ended");
+        }
+    }
+
+    /// Beendet die offenen Rückfragen einer Sitzung; `reject` schickt dem
+    /// Worker ausdrücklich „Ablehnen“.
+    fn drop_questions(&mut self, s: SessionId, reject: bool, reason: &str) {
+        let open: Vec<u32> = self.questions.range((s, 0)..=(s, u32::MAX)).map(|((_, q), _)| *q).collect();
+        for q in open {
+            self.questions.remove(&(s, q));
+            if reject {
+                self.send(s, &ToWorker::Answer { question: q, accept: false });
+            }
+            self.pending.push(UiEvent::QuestionClosed { s, q, reason: reason.into() });
+        }
+    }
+
+    /// Zahl der offenen Sicherheitsrückfragen.
+    pub fn open_questions(&self) -> usize {
+        self.questions.len()
     }
 
     /// Neue Sitzung öffnen (startet den Worker sofort).
@@ -382,6 +416,10 @@ impl Manager {
     }
 
     pub fn answer(&mut self, s: SessionId, q: u32, accept: bool) {
+        // Nach Ablauf der Frist zählt keine Zustimmung mehr.
+        if self.questions.remove(&(s, q)).is_none() {
+            return;
+        }
         self.send(s, &ToWorker::Answer { question: q, accept });
     }
 
@@ -532,6 +570,7 @@ impl Manager {
     }
 
     pub fn close(&mut self, s: SessionId) {
+        self.drop_questions(s, true, "closed");
         self.hold.remove(&s);
         self.resumed.remove(&s);
         self.deferred.remove(&s);
@@ -609,6 +648,13 @@ impl Manager {
         for s in due {
             self.reconnect(s);
         }
+        let now = Instant::now();
+        let expired: Vec<(SessionId, u32)> = self.questions.iter().filter(|(_, t)| **t <= now).map(|(k, _)| *k).collect();
+        for (s, q) in expired {
+            self.questions.remove(&(s, q));
+            self.send(s, &ToWorker::Answer { question: q, accept: false });
+            self.pending.push(UiEvent::QuestionClosed { s, q, reason: "timeout".into() });
+        }
         std::mem::take(&mut self.pending)
     }
 
@@ -676,7 +722,10 @@ impl Manager {
                 let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
                 self.pending.push(UiEvent::Notice { s, text: format!("Dateien in der Zwischenablage empfangen: {}", names.join(", ")) });
             }
-            FromWorker::Question { id, text, detail } => self.pending.push(UiEvent::Question { s, q: id, text, detail }),
+            FromWorker::Question { id, text, detail, info } => {
+                self.questions.insert((s, id), Instant::now() + self.question_timeout);
+                self.pending.push(UiEvent::Question { s, q: id, text, detail, info, timeout_secs: self.question_timeout.as_secs() });
+            }
             FromWorker::Notice(text) => self.pending.push(UiEvent::Notice { s, text }),
             FromWorker::Log(_) | FromWorker::Pong | FromWorker::Hello { .. } | FromWorker::Heartbeat { .. } | FromWorker::Custom(_) => {}
         }

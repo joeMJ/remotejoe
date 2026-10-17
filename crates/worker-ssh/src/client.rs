@@ -71,6 +71,15 @@ struct Handler {
     known: KnownHosts,
     ask: HostKeyAsk,
     server_key: Option<PublicKey>,
+    /// Zeit, die der Benutzer für Rückfragen gebraucht hat; sie zählt nicht
+    /// zum Zeitlimit des Verbindungsaufbaus.
+    asking: Arc<std::sync::Mutex<AskClock>>,
+}
+
+#[derive(Debug, Default)]
+struct AskClock {
+    since: Option<std::time::Instant>,
+    spent: Duration,
 }
 
 impl client::Handler for Handler {
@@ -98,7 +107,14 @@ impl client::Handler for Handler {
         if self.ask.send((q, tx)).is_err() {
             return Ok(false);
         }
+        self.asking.lock().unwrap_or_else(|e| e.into_inner()).since = Some(std::time::Instant::now());
         let accepted = rx.await.unwrap_or(false);
+        {
+            let mut c = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(t) = c.since.take() {
+                c.spent += t.elapsed();
+            }
+        }
         if accepted {
             self.known
                 .remember(&self.host, self.port, &key)
@@ -148,10 +164,31 @@ impl SshConnection {
             nodelay: true,
             ..Default::default()
         });
-        let handler = Handler { host: params.host.clone(), port: params.port, known, ask, server_key: None };
-        let mut handle = tokio::time::timeout(params.connect_timeout, client::connect_stream(config, stream, handler))
-            .await
-            .map_err(|_| SshError::Timeout)?
+        let asking = Arc::new(std::sync::Mutex::new(AskClock::default()));
+        let handler = Handler { host: params.host.clone(), port: params.port, known, ask, server_key: None, asking: asking.clone() };
+        // Zeitlimit ohne die Zeit, in der eine Rückfrage beim Benutzer liegt;
+        // die Frist für die Rückfrage setzt der Hauptprozess.
+        let start = tokio::time::Instant::now();
+        let connecting = client::connect_stream(config, stream, handler);
+        tokio::pin!(connecting);
+        let result = loop {
+            let deadline = {
+                let c = asking.lock().unwrap_or_else(|e| e.into_inner());
+                let d = start + params.connect_timeout + c.spent;
+                // Während einer Rückfrage nur selten nachsehen.
+                if c.since.is_some() { d.max(tokio::time::Instant::now() + Duration::from_secs(1)) } else { d }
+            };
+            tokio::select! {
+                r = &mut connecting => break r,
+                _ = tokio::time::sleep_until(deadline) => {
+                    let c = asking.lock().unwrap_or_else(|e| e.into_inner());
+                    if c.since.is_none() && tokio::time::Instant::now() >= start + params.connect_timeout + c.spent {
+                        return Err(SshError::Timeout);
+                    }
+                }
+            }
+        };
+        let mut handle = result
             .map_err(|e| match e {
                 SshError::Protocol(russh::Error::UnknownKey) => SshError::HostKeyRejected,
                 other => other,

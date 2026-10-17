@@ -252,14 +252,15 @@ mod tls {
                 let known = AcceptedCerts::load(&profile);
                 match known.decide(&host, &der, &problems(flags)) {
                     CertDecision::Valid | CertDecision::Accepted => allow(view, cert, &host, uri),
-                    CertDecision::Ask { text, detail } => {
+                    CertDecision::Ask { text, detail, fingerprint, previous } => {
                         let id = {
                             let mut n = next.borrow_mut();
                             *n += 1;
                             *n
                         };
-                        asks.borrow_mut().insert(id, Ask { view: view.clone(), cert: cert.clone(), host, uri: uri.to_string(), profile: profile.clone() });
-                        let _ = out.send(&FromWorker::Question { id, text, detail });
+                        asks.borrow_mut().insert(id, Ask { view: view.clone(), cert: cert.clone(), host: host.clone(), uri: uri.to_string(), profile: profile.clone() });
+                        let info = rj_ipc::msg::SecurityInfo { kind: "certificate".into(), host: host.clone(), port: 0, key_type: "X.509".into(), fingerprint, previous };
+                        let _ = out.send(&FromWorker::Question { id, text, detail, info });
                         view.load_html("<html><body style='font-family:sans-serif'><h2>Zertifikat nicht vertrauenswürdig</h2><p>Bitte die Rückfrage in remotejoe beantworten.</p></body></html>", None);
                     }
                 }

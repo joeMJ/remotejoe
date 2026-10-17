@@ -1,4 +1,5 @@
 #include "views.h"
+#include "editor.h"
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
@@ -337,8 +338,12 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 	m_reconnect->setVisible(false);
 	m_reconnect->setMinimumHeight(36);
 	connect(m_reconnect, &QPushButton::clicked, this, [this] { m_backend->reconnect(m_session); });
+	m_security = new SecurityBar(backend, this);
+	m_ask = new ActionBar(backend, this);
 	lay->addWidget(m_header);
 	lay->addWidget(m_notice);
+	lay->addWidget(m_security);
+	lay->addWidget(m_ask);
 	lay->addWidget(m_reconnect);
 	if (protocol == QLatin1String("ssh"))
 	{

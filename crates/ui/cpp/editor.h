@@ -39,9 +39,16 @@ public:
 	/// Auswahl aus einer Liste (Anzeige, Wert).
 	void choose(const QString& text, const QList<QPair<QString, QString>>& items, std::function<void(const QString&)> done,
 	            const QString& checkText = QString(), std::function<void(const QString&, bool)> doneCheck = nullptr);
+	/// Hinweis oder Fehlermeldung mit „Schließen“.
+	void inform(const QString& text);
 	void dismiss();
+	QLabel* label() const { return m_label; }
 	QLineEdit* line() const { return m_line; }
 	QComboBox* combo() const { return m_combo; }
+
+signals:
+	/// Mit „Abbrechen“ oder Escape geschlossen.
+	void cancelled();
 
 protected:
 	void keyPressEvent(QKeyEvent*) override;
@@ -56,6 +63,55 @@ private:
 	QList<QPushButton*> m_buttons;
 	QPushButton* m_cancel;
 	std::function<void(int)> m_done;
+};
+
+/// Leiste für Sicherheitsrückfragen (Host-Schlüssel, Zertifikate): voller
+/// Fingerabdruck und Schlüsseltyp, Standard ist Ablehnen, bei geändertem
+/// Schlüssel Warnung mit altem und neuem Fingerabdruck. Annehmen nur durch
+/// ausdrückliche Handlung; ohne Antwort wird nach der Frist abgelehnt.
+class SecurityBar : public QFrame
+{
+	Q_OBJECT
+public:
+	explicit SecurityBar(RjBackend* backend, QWidget* parent = nullptr);
+	/// `q` ist die Kennung der Frage; `e` enthält text, detail, info
+	/// (kind, host, port, key_type, fingerprint, previous) und timeout_secs.
+	void showQuestion(int q, const QJsonObject& e, std::function<void(bool)> done);
+	/// Die Frage wurde anderweitig erledigt (Frist, Sitzung beendet).
+	void closeQuestion(int q, const QString& reason);
+	/// Alle offenen Fragen ablehnen (z. B. beim Schließen des Tabs).
+	void rejectAll();
+	bool isAsking() const { return m_current >= 0; }
+
+signals:
+	/// Frage ohne Antwort beendet (`timeout`, `closed`, `ended`).
+	void closedWithoutAnswer(const QString& reason);
+
+protected:
+	void keyPressEvent(QKeyEvent*) override;
+
+private:
+	struct Pending
+	{
+		int q;
+		QJsonObject e;
+		std::function<void(bool)> done;
+	};
+	void next();
+	void finish(bool accept);
+	void tick();
+	RjBackend* m_backend;
+	QLabel* m_title;
+	QLabel* m_details;
+	QLabel* m_countdown;
+	QCheckBox* m_checked;
+	QPushButton* m_reject;
+	QPushButton* m_accept;
+	QTimer* m_timer;
+	int m_current = -1;
+	int m_left = 0;
+	std::function<void(bool)> m_done;
+	QList<Pending> m_queue;
 };
 
 /// Eigenschaften eines Ordners oder Ziels als Tab.
@@ -206,6 +262,63 @@ signals:
 	/// Der Index hat sich geändert (Baum neu laden).
 	void indexChanged();
 	void status(const QString& text);
+	/// Der Tab ist erledigt und kann geschlossen werden.
+	void closeRequested();
+};
+
+/// Rückfragen beim Verbinden eines Ziels, bevor eine Sitzung besteht
+/// (Auswahl des Zugangsdatensatzes, Host-Schlüssel eines Sprungservers,
+/// Zertifikat eines Hypervisors). Schließen lehnt ab.
+class ConnectPromptTab : public ToolTab
+{
+	Q_OBJECT
+public:
+	ConnectPromptTab(RjBackend* backend, const QString& targetId, const QString& title, QWidget* parent = nullptr);
+	QString targetId() const { return m_target; }
+	QString title() const { return m_title; }
+	ActionBar* bar() const { return m_bar; }
+	SecurityBar* security() const { return m_security; }
+	void setMessage(const QString& text);
+	/// Offene Rückfragen ablehnen.
+	void wipeSecrets() override;
+
+private:
+	QString m_target;
+	QString m_title;
+	QLabel* m_message;
+	ActionBar* m_bar;
+	SecurityBar* m_security;
+};
+
+/// Vorschau eines Imports mit „Übernehmen“ und „Abbrechen“.
+class ImportTab : public ToolTab
+{
+	Q_OBJECT
+public:
+	ImportTab(RjBackend* backend, const QString& path, const QString& summary, QWidget* parent = nullptr);
+};
+
+/// Patchday: Zustand je Ziel, Fortschritt, Protokoll, Abbruch, Ausführen
+/// erst nach Bestätigung in der Leiste.
+class PatchdayTab : public ToolTab
+{
+	Q_OBJECT
+public:
+	PatchdayTab(RjBackend* backend, const QStringList& ids, QWidget* parent = nullptr);
+	void refresh();
+	/// Längste Dauer eines Neuzeichnens (für die Messung).
+	qint64 maxRefreshMs = 0;
+	int refreshes = 0;
+
+private:
+	void cancelRow(int r);
+	RjBackend* m_backend;
+	QStringList m_ids;
+	QTableWidget* m_table;
+	QPlainTextEdit* m_log;
+	ActionBar* m_bar;
+	QTimer* m_timer;
+	qint64 m_version = 0;
 };
 
 /// Mehrere Ziele auf einmal anlegen: ein Host pro Zeile, Namensmuster,

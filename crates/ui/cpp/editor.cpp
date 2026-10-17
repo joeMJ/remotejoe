@@ -5,6 +5,9 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QTimer>
+#include <QtCore/QElapsedTimer>
+#include <QtWidgets/QProgressBar>
+#include <QtWidgets/QStyle>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
@@ -148,6 +151,7 @@ ActionBar::ActionBar(RjBackend* backend, QWidget* parent)
 		hide();
 		if (done)
 			done(-1);
+		emit cancelled();
 	});
 	lay->addWidget(m_cancel);
 	connect(m_line, &QLineEdit::returnPressed, m_buttons[0], &QPushButton::click);
@@ -156,6 +160,7 @@ ActionBar::ActionBar(RjBackend* backend, QWidget* parent)
 
 void ActionBar::reset(const QString& text)
 {
+	m_cancel->setText(rjText(m_backend, "bar.cancel"));
 	m_label->setText(text);
 	m_line->hide();
 	m_combo->hide();
@@ -219,6 +224,14 @@ void ActionBar::choose(const QString& text, const QList<QPair<QString, QString>>
 			done(m_combo->currentData().toString());
 	};
 	m_combo->setFocus();
+}
+
+void ActionBar::inform(const QString& text)
+{
+	reset(text);
+	m_done = nullptr;
+	m_cancel->setText(rjText(m_backend, "bar.close"));
+	m_cancel->setFocus();
 }
 
 void ActionBar::dismiss()
@@ -1841,4 +1854,376 @@ void BulkAddTab::wipeSecrets()
 	QString t = m_password->text();
 	t.fill(QLatin1Char(' '));
 	m_password->clear();
+}
+
+// ---------------------------------------------------------------- SecurityBar
+
+SecurityBar::SecurityBar(RjBackend* backend, QWidget* parent)
+  : QFrame(parent)
+  , m_backend(backend)
+{
+	setObjectName(QStringLiteral("securityBar"));
+	setFrameShape(QFrame::StyledPanel);
+	auto* lay = new QVBoxLayout(this);
+	lay->setContentsMargins(8, 6, 8, 6);
+	m_title = new QLabel(this);
+	m_title->setObjectName(QStringLiteral("securityTitle"));
+	m_title->setWordWrap(true);
+	m_details = new QLabel(this);
+	m_details->setObjectName(QStringLiteral("securityDetails"));
+	m_details->setWordWrap(true);
+	m_details->setTextFormat(Qt::RichText);
+	m_details->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+	m_details->setFocusPolicy(Qt::StrongFocus);
+	m_checked = new QCheckBox(rjText(backend, "security.checked"), this);
+	m_checked->setObjectName(QStringLiteral("securityChecked"));
+	m_countdown = new QLabel(this);
+	auto* buttons = new QHBoxLayout;
+	m_reject = new QPushButton(rjText(backend, "security.reject"), this);
+	m_reject->setObjectName(QStringLiteral("securityReject"));
+	m_reject->setDefault(true);
+	m_reject->setAutoDefault(true);
+	m_accept = new QPushButton(rjText(backend, "security.accept"), this);
+	m_accept->setObjectName(QStringLiteral("securityAccept"));
+	m_accept->setAutoDefault(false);
+	buttons->addWidget(m_countdown, 1);
+	buttons->addWidget(m_accept);
+	buttons->addWidget(m_reject);
+	lay->addWidget(m_title);
+	lay->addWidget(m_details);
+	lay->addWidget(m_checked);
+	lay->addLayout(buttons);
+	m_timer = new QTimer(this);
+	m_timer->setInterval(1000);
+	connect(m_timer, &QTimer::timeout, this, &SecurityBar::tick);
+	connect(m_reject, &QPushButton::clicked, this, [this] { finish(false); });
+	connect(m_accept, &QPushButton::clicked, this, [this] { finish(true); });
+	connect(m_checked, &QCheckBox::toggled, m_accept, &QPushButton::setEnabled);
+	hide();
+}
+
+void SecurityBar::showQuestion(int q, const QJsonObject& e, std::function<void(bool)> done)
+{
+	m_queue.append({ q, e, std::move(done) });
+	if (m_current < 0)
+		next();
+}
+
+void SecurityBar::next()
+{
+	if (m_queue.isEmpty())
+	{
+		m_current = -1;
+		m_timer->stop();
+		hide();
+		return;
+	}
+	const Pending p = m_queue.takeFirst();
+	m_current = p.q;
+	m_done = p.done;
+	const QJsonObject info = p.e.value(QStringLiteral("info")).toObject();
+	const QString previous = info.value(QStringLiteral("previous")).toString();
+	const bool changed = !previous.isEmpty();
+	setProperty("changed", changed);
+	style()->unpolish(this);
+	style()->polish(this);
+	m_title->setText((changed ? QStringLiteral("⚠ ") : QString()) + p.e.value(QStringLiteral("text")).toString());
+	const QString fp = info.value(QStringLiteral("fingerprint")).toString();
+	QString html;
+	auto row = [&](const char* label, const QString& value, bool mono) {
+		html += QStringLiteral("<tr><td style='padding-right:12px'>%1</td><td>%2</td></tr>")
+		          .arg(rjText(m_backend, label).toHtmlEscaped(),
+		               mono ? QStringLiteral("<code>") + value.toHtmlEscaped() + QStringLiteral("</code>") : value.toHtmlEscaped());
+	};
+	if (!fp.isEmpty())
+	{
+		const QString host = info.value(QStringLiteral("host")).toString();
+		const int port = info.value(QStringLiteral("port")).toInt();
+		if (!host.isEmpty())
+			row("security.host", port > 0 ? host + QLatin1Char(':') + QString::number(port) : host, false);
+		row("security.key_type", info.value(QStringLiteral("key_type")).toString(), true);
+		row(changed ? "security.fingerprint.new" : "security.fingerprint", fp, true);
+		if (changed)
+			row("security.fingerprint.old", previous, true);
+		html = QStringLiteral("<table>") + html + QStringLiteral("</table>");
+	}
+	else
+		html = p.e.value(QStringLiteral("detail")).toString().toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+	m_details->setText(html);
+	m_details->setAccessibleDescription(p.e.value(QStringLiteral("detail")).toString());
+	// Geänderter Schlüssel: Annehmen erst nach ausdrücklicher Bestätigung.
+	m_checked->setChecked(false);
+	m_checked->setVisible(changed);
+	m_accept->setEnabled(!changed);
+	m_left = p.e.value(QStringLiteral("timeout_secs")).toInt();
+	tick();
+	if (m_left > 0)
+		m_timer->start();
+	show();
+	m_reject->setFocus();
+}
+
+void SecurityBar::tick()
+{
+	if (m_current < 0)
+		return;
+	if (m_timer->isActive())
+		--m_left;
+	if (m_left <= 0 && m_timer->isActive())
+	{
+		finish(false);
+		return;
+	}
+	m_countdown->setText(m_left > 0 ? rjText(m_backend, "security.countdown").arg(m_left) : QString());
+}
+
+void SecurityBar::finish(bool accept)
+{
+	auto done = m_done;
+	m_done = nullptr;
+	m_current = -1;
+	m_timer->stop();
+	if (done)
+		done(accept);
+	next();
+}
+
+void SecurityBar::closeQuestion(int q, const QString& reason)
+{
+	for (int i = 0; i < m_queue.size(); ++i)
+		if (m_queue[i].q == q)
+		{
+			m_queue.removeAt(i);
+			return;
+		}
+	if (q != m_current)
+		return;
+	m_done = nullptr;
+	m_current = -1;
+	m_timer->stop();
+	emit closedWithoutAnswer(reason);
+	next();
+}
+
+void SecurityBar::rejectAll()
+{
+	while (m_current >= 0)
+		finish(false);
+}
+
+void SecurityBar::keyPressEvent(QKeyEvent* e)
+{
+	if (e->key() == Qt::Key_Escape && m_current >= 0)
+	{
+		finish(false);
+		return;
+	}
+	QFrame::keyPressEvent(e);
+}
+
+// ----------------------------------------------------------- ConnectPromptTab
+
+ConnectPromptTab::ConnectPromptTab(RjBackend* backend, const QString& targetId, const QString& title, QWidget* parent)
+  : ToolTab(parent)
+  , m_target(targetId)
+  , m_title(title)
+{
+	setObjectName(QStringLiteral("connectPromptTab"));
+	auto* lay = new QVBoxLayout(this);
+	auto* head = new QLabel(rjText(backend, "prompt.heading").arg(title), this);
+	head->setObjectName(QStringLiteral("heading"));
+	m_message = new QLabel(this);
+	m_message->setWordWrap(true);
+	m_message->hide();
+	m_bar = new ActionBar(backend, this);
+	m_security = new SecurityBar(backend, this);
+	lay->addWidget(head);
+	lay->addWidget(m_message);
+	lay->addWidget(m_bar);
+	lay->addWidget(m_security);
+	lay->addStretch(1);
+}
+
+void ConnectPromptTab::setMessage(const QString& text)
+{
+	m_message->setText(text);
+	m_message->setVisible(!text.isEmpty());
+}
+
+void ConnectPromptTab::wipeSecrets()
+{
+	m_security->rejectAll();
+	m_bar->dismiss();
+}
+
+// ------------------------------------------------------------------ ImportTab
+
+ImportTab::ImportTab(RjBackend* backend, const QString& path, const QString& summary, QWidget* parent)
+  : ToolTab(parent)
+{
+	setObjectName(QStringLiteral("importTab"));
+	auto* lay = new QVBoxLayout(this);
+	auto* head = new QLabel(rjText(backend, "import.heading").arg(path), this);
+	head->setObjectName(QStringLiteral("heading"));
+	head->setWordWrap(true);
+	auto* text = new QPlainTextEdit(summary, this);
+	text->setObjectName(QStringLiteral("importSummary"));
+	text->setReadOnly(true);
+	text->setAccessibleName(rjText(backend, "import.summary"));
+	auto* buttons = new QHBoxLayout;
+	auto* apply = new QPushButton(rjText(backend, "import.apply"), this);
+	apply->setObjectName(QStringLiteral("importApply"));
+	auto* cancel = new QPushButton(rjText(backend, "bar.cancel"), this);
+	buttons->addStretch(1);
+	buttons->addWidget(apply);
+	buttons->addWidget(cancel);
+	lay->addWidget(head);
+	lay->addWidget(new QLabel(rjText(backend, "import.summary"), this));
+	lay->addWidget(text, 1);
+	lay->addLayout(buttons);
+	connect(apply, &QPushButton::clicked, this, [this, backend] {
+		emit status(backend->importApply());
+		emit indexChanged();
+		emit closeRequested();
+	});
+	connect(cancel, &QPushButton::clicked, this, &ToolTab::closeRequested);
+}
+
+// ---------------------------------------------------------------- PatchdayTab
+
+PatchdayTab::PatchdayTab(RjBackend* backend, const QStringList& ids, QWidget* parent)
+  : ToolTab(parent)
+  , m_backend(backend)
+  , m_ids(ids)
+{
+	setObjectName(QStringLiteral("patchdayTab"));
+	auto* lay = new QVBoxLayout(this);
+	m_table = new QTableWidget(0, 5, this);
+	m_table->setHorizontalHeaderLabels({ rjText(backend, "patch.col.target"), rjText(backend, "patch.col.state"), rjText(backend, "patch.col.count"),
+	                                     rjText(backend, "patch.col.progress"), QString() });
+	m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+	m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+	m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+	m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+	m_table->verticalHeader()->setDefaultSectionSize(30);
+	m_table->setAccessibleName(rjText(backend, "patch.title"));
+	m_log = new QPlainTextEdit(this);
+	m_log->setReadOnly(true);
+	m_log->setMaximumHeight(160);
+	m_log->setAccessibleName(rjText(backend, "patch.log"));
+	m_bar = new ActionBar(backend, this);
+	auto* buttons = new QHBoxLayout;
+	auto* run = new QPushButton(rjText(backend, "patch.run"), this);
+	run->setObjectName(QStringLiteral("patchRun"));
+	auto* cancel = new QPushButton(rjText(backend, "patch.cancel_target"), this);
+	buttons->addStretch(1);
+	buttons->addWidget(run);
+	buttons->addWidget(cancel);
+	auto* hint = new QLabel(rjText(backend, "patch.dry_run"), this);
+	hint->setWordWrap(true);
+	lay->addWidget(hint);
+	lay->addWidget(m_bar);
+	lay->addWidget(m_table, 1);
+	lay->addWidget(m_log);
+	lay->addLayout(buttons);
+	connect(run, &QPushButton::clicked, this, [this] {
+		m_bar->ask(rjText(m_backend, "patch.run.confirm").arg(m_ids.size()), { rjText(m_backend, "patch.run.button") }, [this](int i) {
+			if (i == 0)
+				emit status(m_backend->startPatchday(QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(m_ids)).toJson(QJsonDocument::Compact)), true));
+		});
+	});
+	auto cancelCurrent = [this] {
+		const int r = m_table->currentRow();
+		if (r >= 0)
+			cancelRow(r);
+	};
+	connect(cancel, &QPushButton::clicked, this, cancelCurrent);
+	auto* del = new QShortcut(QKeySequence(Qt::Key_Delete), m_table);
+	del->setContext(Qt::WidgetShortcut);
+	connect(del, &QShortcut::activated, this, cancelCurrent);
+	connect(m_table, &QTableWidget::currentCellChanged, this, [this] {
+		m_version = 0;
+		refresh();
+	});
+	m_timer = new QTimer(this);
+	connect(m_timer, &QTimer::timeout, this, &PatchdayTab::refresh);
+	m_timer->start(250);
+	refresh();
+}
+
+void PatchdayTab::cancelRow(int r)
+{
+	if (auto* it = m_table->item(r, 0))
+		m_backend->cancelPatchTarget(it->data(Qt::UserRole).toString());
+	m_version = 0;
+	refresh();
+}
+
+void PatchdayTab::refresh()
+{
+	QElapsedTimer t;
+	t.start();
+	const QString selected =
+	  m_table->currentRow() >= 0 && m_table->item(m_table->currentRow(), 0) ? m_table->item(m_table->currentRow(), 0)->data(Qt::UserRole).toString() : QString();
+	QJsonObject cmd{ { QStringLiteral("op"), QStringLiteral("patchday") }, { QStringLiteral("since"), double(m_version) } };
+	if (!selected.isEmpty())
+		cmd.insert(QStringLiteral("selected"), selected);
+	const QJsonObject v = parse(m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact))));
+	if (v.value(QStringLiteral("unchanged")).toBool())
+		return;
+	m_version = qint64(v.value(QStringLiteral("version")).toDouble());
+	const QJsonArray rows = v.value(QStringLiteral("rows")).toArray();
+	if (m_table->rowCount() != rows.size())
+		m_table->setRowCount(rows.size());
+	for (int i = 0; i < rows.size(); ++i)
+	{
+		const QJsonObject r = rows[i].toObject();
+		// Nur geänderte Zellen anfassen: ruhiges Bild auch bei vielen Zielen.
+		auto set = [&](int col, const QString& text) {
+			auto* it = m_table->item(i, col);
+			if (!it)
+			{
+				it = new QTableWidgetItem;
+				m_table->setItem(i, col, it);
+			}
+			if (it->text() != text)
+				it->setText(text);
+			return it;
+		};
+		set(0, r.value(QStringLiteral("name")).toString())->setData(Qt::UserRole, r.value(QStringLiteral("target")).toString());
+		QString state = r.value(QStringLiteral("label")).toString();
+		if (r.value(QStringLiteral("detail")).isString())
+			state += QStringLiteral(": ") + r.value(QStringLiteral("detail")).toString();
+		else if (r.value(QStringLiteral("last")).isString())
+			state += QStringLiteral(" – ") + r.value(QStringLiteral("last")).toString();
+		set(1, state);
+		set(2, r.value(QStringLiteral("count")).isNull() ? QString() : QString::number(r.value(QStringLiteral("count")).toInt()));
+		auto* bar = qobject_cast<QProgressBar*>(m_table->cellWidget(i, 3));
+		if (!bar)
+		{
+			bar = new QProgressBar(m_table);
+			m_table->setCellWidget(i, 3, bar);
+		}
+		if (bar->value() != r.value(QStringLiteral("percent")).toInt())
+			bar->setValue(r.value(QStringLiteral("percent")).toInt());
+		auto* stop = qobject_cast<QPushButton*>(m_table->cellWidget(i, 4));
+		if (!stop)
+		{
+			stop = new QPushButton(rjText(m_backend, "bar.cancel"), m_table);
+			stop->setAccessibleName(rjText(m_backend, "bar.cancel") + QStringLiteral(": ") + r.value(QStringLiteral("name")).toString());
+			connect(stop, &QPushButton::clicked, this, [this, i] { cancelRow(i); });
+			m_table->setCellWidget(i, 4, stop);
+		}
+		stop->setEnabled(!r.value(QStringLiteral("finished")).toBool());
+		if (r.contains(QStringLiteral("log")))
+		{
+			QStringList log;
+			for (const QJsonValue& l : r.value(QStringLiteral("log")).toArray())
+				log << l.toString();
+			if (m_log->toPlainText() != log.join(QLatin1Char('\n')))
+				m_log->setPlainText(log.join(QLatin1Char('\n')));
+		}
+	}
+	++refreshes;
+	maxRefreshMs = qMax(maxRefreshMs, t.elapsed());
 }

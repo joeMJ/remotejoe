@@ -14,6 +14,7 @@
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QPlainTextEdit>
+#include <QtWidgets/QPushButton>
 #include <QtWidgets/QTabWidget>
 #include <cstdio>
 
@@ -55,20 +56,50 @@ void screenshots(MainWindow& w, const QString& dir)
 	pump(300);
 	save(&w, dir, QStringLiteral("hypervisor.png"));
 	w.setFilter(QString());
+	// Rückfragen als Leisten und Tabs im Hauptfenster.
+	if (QWidget* p = w.showHostKeyQuestionForScreenshot(false))
+	{
+		pump(300);
+		save(&w, dir, QStringLiteral("hostschluessel-unbekannt.png"));
+		if (auto* r = p->findChild<QPushButton*>(QStringLiteral("securityReject")))
+			r->click();
+	}
+	if (QWidget* p = w.showHostKeyQuestionForScreenshot(true))
+	{
+		pump(300);
+		save(&w, dir, QStringLiteral("hostschluessel-geaendert.png"));
+		if (auto* r = p->findChild<QPushButton*>(QStringLiteral("securityReject")))
+			r->click();
+	}
 	w.showCredentialChoiceForScreenshot();
 	pump(300);
-	save(w.findChild<QWidget*>(QStringLiteral("credentialDialog")), dir, QStringLiteral("dialog-zugangsdaten.png"));
-	if (auto* d = w.findChild<QWidget*>(QStringLiteral("credentialDialog")))
-		d->close();
+	save(&w, dir, QStringLiteral("verbinden-zugangsdaten.png"));
+	if (auto* t = w.findChild<ToolTab*>(QStringLiteral("credentialPrompt")))
+	{
+		w.tabs()->removeTab(w.tabs()->indexOf(t));
+		t->deleteLater();
+	}
+	w.openImport(QStringLiteral("beispiel.rdm"), QStringLiteral("Ordner: 4\nZiele: 37 (RDP 21, SSH 12, Web 4)\nZugangsdaten: 6 (in der KDBX-Gruppe „remotejoe/Import beispiel.rdm“)\n"
+	                                                           "Hinweise:\n– Ziel „srv⟦U+202E⟧gpj.exe“: Schreibrichtungs-Steuerzeichen im Namen (markiert)\n– 2 Ziele ohne Host"));
+	pump(300);
+	if (auto* t = w.findChild<ToolTab*>(QStringLiteral("importTab")))
+	{
+		save(&w, dir, QStringLiteral("import-vorschau.png"));
+		w.tabs()->removeTab(w.tabs()->indexOf(t));
+		t->deleteLater();
+	}
 	w.patchdayForFirstTargets(25);
 	pump(1500);
 	QString patchday;
-	save(w.findChild<QWidget*>(QStringLiteral("patchdayDialog")), dir, QStringLiteral("patchday.png"));
+	save(w.findChild<QWidget*>(QStringLiteral("patchdayTab")), dir, QStringLiteral("patchday.png"));
 	// Lauf über alle 25 Ziele beobachten, dann Messwerte festhalten.
 	pump(6000);
 	patchday = w.patchdayMeasurement();
-	if (auto* d = w.findChild<QWidget*>(QStringLiteral("patchdayDialog")))
-		d->close();
+	if (auto* t = w.findChild<ToolTab*>(QStringLiteral("patchdayTab")))
+	{
+		w.tabs()->removeTab(w.tabs()->indexOf(t));
+		t->deleteLater();
+	}
 	// Bearbeiten: Eigenschaften-Tab, Zugangsdaten-Auswahl, Hinzufügen-Menü, Entsperren.
 	if (PropertiesTab* ed = w.openFirstTargetProperties())
 	{

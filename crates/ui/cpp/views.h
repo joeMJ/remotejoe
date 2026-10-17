@@ -12,6 +12,8 @@
 #include <memory>
 
 class RjBackend;
+class SecurityBar;
+class ActionBar;
 
 /// Bild aus dem geteilten Speicher eines Workers.
 class FrameView : public QWidget
@@ -82,6 +84,10 @@ public:
 	FrameView* frame() const { return m_frame; }
 	TerminalView* terminal() const { return m_terminal; }
 	QWidget* view() const;
+	/// Leiste für Host-Schlüssel- und Zertifikatsrückfragen dieser Sitzung.
+	SecurityBar* security() const { return m_security; }
+	/// Leiste für sonstige Rückfragen (z. B. Lesen der Zwischenablage).
+	ActionBar* askBar() const { return m_ask; }
 	std::uint64_t session() const { return m_session; }
 	QString title() const { return m_title; }
 	QString state() const { return m_state; }
@@ -94,6 +100,8 @@ private:
 	QLabel* m_header;
 	QLabel* m_notice;
 	QPushButton* m_reconnect;
+	SecurityBar* m_security;
+	ActionBar* m_ask;
 	FrameView* m_frame = nullptr;
 	TerminalView* m_terminal = nullptr;
 };

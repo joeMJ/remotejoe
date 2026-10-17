@@ -490,7 +490,11 @@ impl App {
                         if cancelled {
                             return Vec::new();
                         }
-                        let hostkey = q.map(|q| json!({ "host": q.host, "port": q.port, "key": q.key, "text": q.text(), "detail": q.detail() }));
+                        let hostkey = q.map(|q| {
+                            let info = q.info();
+                            json!({ "host": q.host, "port": q.port, "key": q.key, "text": q.text(), "detail": q.detail(),
+                                    "kind": info.kind, "key_type": info.key_type, "fingerprint": info.fingerprint, "previous": info.previous })
+                        });
                         vec![UiEvent::JobFailed { job, error, hostkey }]
                     }
                 })

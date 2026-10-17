@@ -18,6 +18,9 @@ class SessionPane;
 class ActionBar;
 class PropertiesTab;
 class BulkAddTab;
+class ToolTab;
+class ConnectPromptTab;
+class QJsonArray;
 class UnlockOverlay;
 class QComboBox;
 class QMenu;
@@ -36,6 +39,9 @@ public:
 	void expandFirstHypervisor();
 	QWidget* detachedWindow() const;
 	void showCredentialChoiceForScreenshot();
+	/// Für Bildschirmfotos: Host-Schlüssel-Rückfrage in der ersten Sitzung.
+	QWidget* showHostKeyQuestionForScreenshot(bool changed);
+	void openImport(const QString& path, const QString& summary);
 	void detachTabAt(int index);
 	void openPatchday(const QStringList& ids);
 	void patchdayForFirstTargets(int n);
@@ -87,7 +93,12 @@ private:
 	void idleSettings();
 	void handleEvents(const QString& json);
 	void openGuestConsole(const QModelIndex& index);
-	void guestAction(const QModelIndex& index, const QString& action);
+	void guestAction(const QModelIndex& index, const QString& action, bool confirmed = false);
+	/// Tab für Rückfragen beim Verbinden eines Ziels (vorhanden oder neu).
+	ConnectPromptTab* promptTab(const QString& target);
+	void chooseCredential(ConnectPromptTab* tab, const QJsonArray& choices);
+	void addToolTab(ToolTab* t, const QString& title);
+	void closeToolTab(ToolTab* t);
 	void tabContextMenu(QTabWidget* tabs, const QPoint& pos);
 	void buildAddMenu(QMenu* menu, const QString& parentId);
 	QString edit(const QJsonObject& cmd);

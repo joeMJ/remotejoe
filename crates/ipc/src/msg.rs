@@ -15,6 +15,21 @@ impl fmt::Debug for SecretBytes {
     }
 }
 
+/// Angaben zu einer Sicherheitsrückfrage (Host-Schlüssel oder Zertifikat).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityInfo {
+    /// `hostkey` (SSH) oder `certificate` (TLS); leer bei sonstigen Fragen.
+    pub kind: String,
+    pub host: String,
+    pub port: u16,
+    /// Schlüsseltyp, z. B. `ssh-ed25519` oder `X.509`.
+    pub key_type: String,
+    /// Vollständiger Fingerabdruck (SHA-256).
+    pub fingerprint: String,
+    /// Bisher bekannter Fingerabdruck, wenn sich der Schlüssel geändert hat.
+    pub previous: Option<String>,
+}
+
 /// Zugangsdaten für die Dauer des Verbindungsaufbaus.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialPayload {
@@ -128,8 +143,9 @@ pub enum FromWorker {
     /// Terminalausgabe (Rohbytes) für Terminal-Worker.
     Output(Vec<u8>),
     Clipboard(ClipData),
-    /// Rückfrage an den Benutzer (Sicherheitsabfrage).
-    Question { id: u32, text: String, detail: String },
+    /// Rückfrage an den Benutzer (Sicherheitsabfrage). `info` trägt Art,
+    /// Schlüsseltyp und vollständige Fingerabdrücke für die Anzeige.
+    Question { id: u32, text: String, detail: String, info: SecurityInfo },
     /// Hinweis für die Oberfläche (z. B. Zwischenablage gesperrt).
     Notice(String),
     /// Protokolleintrag; nie Kennwörter, Eingaben oder Zwischenablage-Inhalte.

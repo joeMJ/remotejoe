@@ -43,6 +43,21 @@ impl HostKeyQuestion {
         }
     }
 
+    /// Angaben für die Rückfrage-Leiste.
+    pub fn info(&self) -> rj_ipc::msg::SecurityInfo {
+        rj_ipc::msg::SecurityInfo {
+            kind: "hostkey".into(),
+            host: self.host.clone(),
+            port: self.port,
+            key_type: self.algorithm.clone(),
+            fingerprint: self.fingerprint.clone(),
+            previous: match &self.status {
+                HostKeyStatus::Changed { previous_fingerprint } => Some(previous_fingerprint.clone()),
+                _ => None,
+            },
+        }
+    }
+
     pub fn detail(&self) -> String {
         match &self.status {
             HostKeyStatus::Changed { previous_fingerprint } => format!(
