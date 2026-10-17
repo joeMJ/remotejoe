@@ -296,6 +296,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | tracing-attributes | 0.1.31 | MIT |
 | tracing-core | 0.1.36 | MIT |
 | twofish | 0.8.0 | MIT OR Apache-2.0 |
+| typed-path | 0.12.3 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 |
@@ -344,8 +345,10 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | x25519-dalek | 2.0.1 | BSD-3-Clause |
 | zeroize | 1.9.1 | Apache-2.0 OR MIT |
 | zeroize_derive | 1.5.0 | Apache-2.0 OR MIT |
+| zip | 9.0.4 | MIT |
 | zlib-rs | 0.6.8 | Zlib |
 | zmij | 1.0.23 | MIT |
+| zopfli | 0.8.4 | Apache-2.0 |
 
 ## Systembibliotheken (dynamisch gelinkt, nicht mitgeliefert)
 

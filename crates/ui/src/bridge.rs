@@ -60,6 +60,12 @@ pub mod qobject {
         #[cxx_name = "closeSession"]
         fn close_session(self: Pin<&mut RjBackend>, session: u64);
         #[qinvokable]
+        #[cxx_name = "importPreview"]
+        fn import_preview(self: Pin<&mut RjBackend>, path: &QString) -> QString;
+        #[qinvokable]
+        #[cxx_name = "importApply"]
+        fn import_apply(self: Pin<&mut RjBackend>) -> QString;
+        #[qinvokable]
         #[cxx_name = "startPatchday"]
         fn start_patchday(self: Pin<&mut RjBackend>, ids_json: &QString, execute: bool) -> QString;
         #[qinvokable]
@@ -250,6 +256,22 @@ impl qobject::RjBackend {
         if let Some(a) = self.app_mut() {
             a.close_session(session);
         }
+    }
+
+    fn import_preview(self: Pin<&mut Self>, path: &QString) -> QString {
+        let p = path.to_string();
+        q(match self.app_mut().map(|a| a.import_preview(&p)) {
+            Some(Ok(s)) => serde_json::json!({ "summary": s }).to_string(),
+            Some(Err(e)) => serde_json::json!({ "error": e }).to_string(),
+            None => "{}".into(),
+        })
+    }
+
+    fn import_apply(self: Pin<&mut Self>) -> QString {
+        q(match self.app_mut().map(|a| a.import_apply()) {
+            Some(Ok(s)) | Some(Err(s)) => s,
+            None => String::new(),
+        })
     }
 
     fn start_patchday(self: Pin<&mut Self>, ids_json: &QString, execute: bool) -> QString {

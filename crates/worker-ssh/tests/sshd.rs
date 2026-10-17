@@ -102,6 +102,8 @@ fn read_until(rt: &Runtime, shell: &mut Shell, term: &mut Terminal, raw: &mut Ve
 fn wait_bracketed(rt: &Runtime, shell: &mut Shell, term: &mut Terminal, raw: &mut Vec<u8>) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !term.bracketed_paste() && Instant::now() < deadline {
+        // Nur neue Ausgabe durchsuchen; eine ältere Steuerfolge zählt nicht.
+        raw.clear();
         let _ = read_until(rt, shell, term, raw, "\x1b[?2004h", 1);
     }
     assert!(term.bracketed_paste(), "bash schaltet Klammerung beim Einfügen ein");

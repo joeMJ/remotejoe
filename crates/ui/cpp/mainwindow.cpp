@@ -412,6 +412,28 @@ void MainWindow::buildMenus()
 {
 	QMenu* file = menuBar()->addMenu(T(m_backend, "menu.file"));
 	file->addAction(T(m_backend, "menu.file.open"), QKeySequence::Open, this, [this] { unlockDialog(); });
+	file->addAction(T(m_backend, "menu.file.import"), this, [this] {
+		const QString path = QFileDialog::getOpenFileName(this, T(m_backend, "menu.file.import"), QString(),
+		                                                  QStringLiteral("Remote Desktop Manager / Royal TS (*.rdm *.json *.rtsz *.rtsx);;Alle Dateien (*)"));
+		if (path.isEmpty())
+			return;
+		const QJsonObject r = parseObject(m_backend->importPreview(path));
+		if (r.contains(QStringLiteral("error")))
+		{
+			QMessageBox::warning(this, T(m_backend, "menu.file.import"), r.value(QStringLiteral("error")).toString());
+			return;
+		}
+		QMessageBox box(QMessageBox::Question, T(m_backend, "menu.file.import"), QStringLiteral("Vorschau des Imports:"), QMessageBox::NoButton, this);
+		box.setInformativeText(r.value(QStringLiteral("summary")).toString());
+		QPushButton* ok = box.addButton(QStringLiteral("Übernehmen"), QMessageBox::AcceptRole);
+		box.addButton(QStringLiteral("Abbrechen"), QMessageBox::RejectRole);
+		box.exec();
+		if (box.clickedButton() == ok)
+		{
+			statusBar()->showMessage(m_backend->importApply(), 8000);
+			reloadTree();
+		}
+	});
 	file->addAction(T(m_backend, "menu.file.save"), QKeySequence::Save, this, [this] { statusBar()->showMessage(m_backend->save(), 5000); });
 	file->addAction(T(m_backend, "menu.file.lock"), QKeySequence(QStringLiteral("Ctrl+L")), this, [this] {
 		m_backend->lock();

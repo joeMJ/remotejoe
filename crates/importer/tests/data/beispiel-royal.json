@@ -1,0 +1,12 @@
+{
+  "Objects": [
+    { "Type": "RoyalDocument", "ID": "doc", "Name": "Dokument" },
+    { "Type": "RoyalFolder", "ID": "f1", "ParentID": "doc", "Name": "Kunden 🧾", "PositionNr": 1 },
+    { "Type": "RoyalFolder", "ID": "f2", "ParentID": "f1", "Name": "Größere Filiale", "PositionNr": 1 },
+    { "Type": "RoyalCredential", "ID": "c1", "ParentID": "doc", "Name": "Filiale Admin", "UserName": "filadmin", "Domain": "FILIALE", "Password": "Filiale-Kennwort-ö" },
+    { "Type": "RoyalRDSConnection", "ID": "r2", "ParentID": "f2", "Name": "Terminalserver B", "URI": "ts2.example.test", "Port": 3390, "CredentialID": "c1", "PositionNr": 2 },
+    { "Type": "RoyalRDSConnection", "ID": "r1", "ParentID": "f2", "Name": "Terminalserver A", "URI": "ts1.example.test", "CredentialID": "c1", "PositionNr": 1 },
+    { "Type": "RoyalSSHConnection", "ID": "s1", "ParentID": "f1", "Name": "Router", "URI": "192.0.2.1", "CredentialUsername": "netz", "CredentialPassword": "Netz-Kennwort-ü", "PositionNr": 2, "Zusatz": 1 },
+    { "Type": "RoyalTaskConnection", "ID": "t1", "ParentID": "f1", "Name": "Skript" }
+  ]
+}

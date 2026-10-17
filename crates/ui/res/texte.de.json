@@ -43,5 +43,6 @@
   "dialog.properties.title": "Eigenschaften",
   "clipboard.read_request": "Das Ziel möchte die lokale Zwischenablage lesen. Erlauben?",
   "missing.credential": "Zugangsdaten fehlen",
-  "unassigned.title": "Nicht zugeordnet"
+  "unassigned.title": "Nicht zugeordnet",
+  "menu.file.import": "&Importieren (RDM, Royal TS) …"
 }

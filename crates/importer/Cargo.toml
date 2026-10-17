@@ -1,0 +1,25 @@
+[package]
+name = "remotejoe-importer"
+description = "Import aus Remote Desktop Manager und Royal TS"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_importer"
+
+[dependencies]
+remotejoe-core = { path = "../core" }
+remotejoe-kdbx = { path = "../kdbx" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+quick-xml = "0.42"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+zip = { version = "9", default-features = false, features = ["deflate"] }
+tempfile.workspace = true

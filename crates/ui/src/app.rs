@@ -39,6 +39,7 @@ pub struct App {
     hop_question: std::sync::Arc<std::sync::Mutex<Option<HostKeyQuestion>>>,
     session_tunnels: std::collections::HashMap<SessionId, (Uuid, String, u16)>,
     pub patchday: Option<rj_tasks::patchday::Patchday>,
+    import_plan: Option<rj_importer::plan::ImportPlan>,
 }
 
 impl App {
@@ -67,6 +68,7 @@ impl App {
             hop_question,
             session_tunnels: Default::default(),
             patchday: None,
+            import_plan: None,
             sessions: Manager::new(Manager::default_worker_dir(), reconnect),
             config,
             config_path,
@@ -363,6 +365,26 @@ impl App {
 
     pub fn patchday_json(&self) -> String {
         self.patchday.as_ref().map(|p| serde_json::to_string(&p.rows()).unwrap_or_default()).unwrap_or_else(|| "[]".into())
+    }
+
+    /// Importvorschau: liest die Datei und liefert den Bericht (nichts wird geschrieben).
+    pub fn import_preview(&mut self, path: &str) -> Result<String, String> {
+        let doc = rj_importer::read_file(std::path::Path::new(path)).map_err(|e| e.to_string())?;
+        let title = format!("Import {}", std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default());
+        let plan = rj_importer::plan::plan(&doc, &title);
+        let summary = plan.report.summary();
+        self.import_plan = Some(plan);
+        Ok(summary)
+    }
+
+    /// Übernimmt die Vorschau in KDBX und Index (gespeichert wird erst auf Befehl).
+    pub fn import_apply(&mut self) -> Result<String, String> {
+        let plan = self.import_plan.take().ok_or("Keine Importvorschau vorhanden")?;
+        let vault = self.vault.as_mut().ok_or("Zum Import muss die KDBX entsperrt sein")?;
+        let idx = rj_importer::plan::apply(&plan, vault, &self.index).map_err(|e| e.to_string())?;
+        vault.set_index(idx.clone()).map_err(|e| e.to_string())?;
+        self.index = idx;
+        Ok(format!("Import übernommen ({} Ziele) – noch nicht gespeichert", plan.report.targets))
     }
 
     /// Host-Schlüssel eines Sprungservers nach Zustimmung merken.

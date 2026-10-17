@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ArrayOfConnection>
+  <Connection>
+    <ConnectionType>Group</ConnectionType>
+    <Group>Standort Nord</Group>
+    <ID>11111111-0000-0000-0000-000000000001</ID>
+    <Name>Standort Nord</Name>
+  </Connection>
+  <Connection>
+    <ConnectionType>RDPConfigured</ConnectionType>
+    <Group>Standort Nord\Server</Group>
+    <ID>11111111-0000-0000-0000-000000000010</ID>
+    <Name>Dateiserver Süd 🗄</Name>
+    <Url>fs01.example.test</Url>
+    <UserName>admin</UserName>
+    <Domain>EXAMPLE</Domain>
+    <Password>Geheim-Nord-ä1</Password>
+    <RDP><Gateway>gw.example.test</Gateway></RDP>
+    <MeinFeld>unbekannt</MeinFeld>
+  </Connection>
+  <Connection>
+    <ConnectionType>RDPConfigured</ConnectionType>
+    <Group>Standort Nord\Server</Group>
+    <ID>11111111-0000-0000-0000-000000000011</ID>
+    <Name>Druckserver</Name>
+    <Url>ps01.example.test</Url>
+    <UserName>admin</UserName>
+    <Domain>EXAMPLE</Domain>
+    <Password>Geheim-Nord-ä1</Password>
+  </Connection>
+  <Connection>
+    <ConnectionType>SSHShell</ConnectionType>
+    <Group>Standort Nord\Server\Linux</Group>
+    <ID>11111111-0000-0000-0000-000000000012</ID>
+    <Name>web&#x200B;01</Name>
+    <Terminal><Host>192.0.2.21</Host><Port>2222</Port></Terminal>
+    <UserName>admin</UserName>
+    <Domain>EXAMPLE</Domain>
+    <Password>Geheim-Nord-ä1</Password>
+  </Connection>
+  <Connection>
+    <ConnectionType>SSHShell</ConnectionType>
+    <Group>Standort Nord\Server\Linux</Group>
+    <ID>11111111-0000-0000-0000-000000000013</ID>
+    <Name>Druckserver</Name>
+    <Terminal><Host>192.0.2.22</Host></Terminal>
+    <UserName>root</UserName>
+    <Password>Anderes-Kennwort-🚀</Password>
+  </Connection>
+  <Connection>
+    <ConnectionType>Credential</ConnectionType>
+    <ID>22222222-0000-0000-0000-000000000001</ID>
+    <Name>Dienstkonto Süd</Name>
+    <Credentials><UserName>dienst</UserName><Domain>EXAMPLE</Domain><Password>Dienst-Kennwort-ß</Password></Credentials>
+  </Connection>
+  <Connection>
+    <ConnectionType>VNC</ConnectionType>
+    <Group>Standort Süd</Group>
+    <ID>11111111-0000-0000-0000-000000000020</ID>
+    <Name>Kassen&#x202E;txt.exe</Name>
+    <VNC><Host>kasse.example.test</Host><Port>5901</Port></VNC>
+    <CredentialConnectionID>22222222-0000-0000-0000-000000000001</CredentialConnectionID>
+  </Connection>
+  <Connection>
+    <ConnectionType>WebBrowser</ConnectionType>
+    <Group>Standort Süd</Group>
+    <ID>11111111-0000-0000-0000-000000000021</ID>
+    <Name>Firewall-Oberfläche</Name>
+    <WebBrowserUrl>https://fw.example.test</WebBrowserUrl>
+    <UserName>fwadmin</UserName>
+    <SafePassword>QUJDREVGRw==</SafePassword>
+  </Connection>
+  <Connection>
+    <ConnectionType>TeamViewer</ConnectionType>
+    <Group>Standort Süd</Group>
+    <ID>11111111-0000-0000-0000-000000000022</ID>
+    <Name>Fernwartung</Name>
+  </Connection>
+</ArrayOfConnection>

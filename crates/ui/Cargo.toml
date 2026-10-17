@@ -22,6 +22,7 @@ remotejoe-supervisor = { path = "../supervisor" }
 remotejoe-worker-ssh = { path = "../worker-ssh" }
 remotejoe-tunnel = { path = "../tunnel" }
 remotejoe-tasks = { path = "../tasks" }
+remotejoe-importer = { path = "../importer" }
 remotejoe-worker-psrp = { path = "../worker-psrp" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 alacritty_terminal = "0.26"

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RoyalDocument>
+  <RoyalFolder><ID>f1</ID><Name>Außenstelle</Name><PositionNr>1</PositionNr></RoyalFolder>
+  <RoyalVNCConnection><ID>v1</ID><ParentID>f1</ParentID><Name>Anzeige &amp; Kasse</Name><URI>192.0.2.40</URI><Port>5900</Port><CredentialUsername>kasse</CredentialUsername><CredentialPassword>Kasse-Kennwort-€</CredentialPassword></RoyalVNCConnection>
+</RoyalDocument>
