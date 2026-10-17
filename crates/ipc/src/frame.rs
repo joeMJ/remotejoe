@@ -81,14 +81,19 @@ impl<R: Read> FrameReader<R> {
         if len < 4 {
             return Err(IpcError::Closed);
         }
-        self.buf.resize(len as usize, 0);
-        self.inner.read_exact(&mut self.buf).map_err(|e| {
-            if e.kind() == io::ErrorKind::UnexpectedEof {
-                IpcError::Closed
-            } else {
-                e.into()
-            }
-        })?;
+        // Speicher wächst mit den tatsächlich gelesenen Bytes, nicht mit der
+        // angegebenen Länge. Kleine Rahmen (z. B. Zugangsdaten) passen in die
+        // Vorreservierung, damit beim Wachsen keine Kopien liegen bleiben.
+        zeroize::Zeroize::zeroize(&mut self.buf);
+        self.buf.reserve((len as usize).min(1024 * 1024));
+        let read = (&mut self.inner).take(len as u64).read_to_end(&mut self.buf);
+        if read.is_err() || self.buf.len() < len as usize {
+            zeroize::Zeroize::zeroize(&mut self.buf);
+            return match read {
+                Err(e) if e.kind() != io::ErrorKind::UnexpectedEof => Err(e.into()),
+                _ => Err(IpcError::Closed),
+            };
+        }
         let id = u32::from_le_bytes(self.buf[..4].try_into().expect("4 Bytes"));
         let msg = postcard::from_bytes(&self.buf[4..]);
         zeroize::Zeroize::zeroize(&mut self.buf[..]);

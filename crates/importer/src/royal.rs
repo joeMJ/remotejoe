@@ -112,8 +112,15 @@ pub fn read_rtsz(bytes: &[u8]) -> Result<SourceDocument, ImportError> {
         let mut f = z.by_index(i).map_err(|e| ImportError::Format(format!("ZIP: {e}")))?;
         let name = f.name().map(|n| n.to_string()).unwrap_or_default();
         if name.ends_with(".json") || name.ends_with(".rtsx") || !name.contains('.') {
+            if f.size() > crate::MAX_FILE {
+                return Err(ImportError::Format(format!("ZIP: „{name}“ ist entpackt größer als {} MiB", crate::MAX_FILE >> 20)));
+            }
             let mut b = Vec::new();
-            f.read_to_end(&mut b)?;
+            // Angabe im Archiv kann falsch sein: beim Entpacken erneut begrenzen.
+            (&mut f).take(crate::MAX_FILE + 1).read_to_end(&mut b)?;
+            if b.len() as u64 > crate::MAX_FILE {
+                return Err(ImportError::Format(format!("ZIP: „{name}“ ist entpackt größer als {} MiB", crate::MAX_FILE >> 20)));
+            }
             let t = crate::text(&b, &name)?;
             return if t.trim_start().starts_with('<') { read_rtsx(t) } else { read_json(t) };
         }

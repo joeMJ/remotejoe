@@ -11,6 +11,7 @@ publish.workspace = true
 name = "rj_tunnel"
 
 [dependencies]
+zeroize.workspace = true
 remotejoe-core = { path = "../core" }
 remotejoe-worker-ssh = { path = "../worker-ssh" }
 thiserror.workspace = true

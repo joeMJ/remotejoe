@@ -43,6 +43,15 @@ pub struct WgConfig {
     pub listen_port: Option<u16>,
 }
 
+impl Drop for WgConfig {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.private_key);
+        if let Some(p) = self.preshared.as_mut() {
+            zeroize::Zeroize::zeroize(p);
+        }
+    }
+}
+
 impl std::fmt::Debug for WgConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "WgConfig {{ address: {}/{}, endpoint: {:?} }}", self.address, self.prefix, self.endpoint)

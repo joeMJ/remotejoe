@@ -93,7 +93,19 @@ pub struct FrameBufferReader {
 }
 
 impl FrameBufferReader {
+    /// Öffnet einen Bildpuffer. Der Pfad kommt vom Worker und wird deshalb
+    /// geprüft: nur Dateien `remotejoe-*.fb` im Ordner für geteilten Speicher,
+    /// keine symbolischen Verknüpfungen.
     pub fn open(path: &Path, width: u32, height: u32) -> io::Result<Self> {
+        let name_ok = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("remotejoe-") && n.ends_with(".fb") && !n.contains(['/', '\\']));
+        let dir_ok = path.parent() == Some(shm_dir().as_path());
+        let meta = std::fs::symlink_metadata(path)?;
+        if !name_ok || !dir_ok || !meta.file_type().is_file() {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Bildpuffer an unerwartetem Ort"));
+        }
         let f = OpenOptions::new().read(true).open(path)?;
         // SAFETY: nur lesende Abbildung; der Inhalt kann sich während des
         // Lesens ändern, was für Bilddaten unkritisch ist (Teilbild).
@@ -126,5 +138,25 @@ mod tests {
         // Rand wird abgeschnitten.
         w.blit(3, 2, 2, 2, &red, 8);
         assert_eq!(&r.pixels()[(2 * 4 + 3) * 4..], &[0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn reader_rejects_foreign_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = dir.path().join("remotejoe-1-x.fb");
+        std::fs::write(&other, vec![0u8; 64]).unwrap();
+        assert!(FrameBufferReader::open(&other, 2, 2).is_err());
+        let w = FrameBufferWriter::create(2, 2).unwrap();
+        let link = shm_dir().join(format!("remotejoe-link-{}.fb", std::process::id()));
+        let _ = std::fs::remove_file(&link);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(w.path(), &link).unwrap();
+            assert!(FrameBufferReader::open(&link, 2, 2).is_err());
+            let _ = std::fs::remove_file(&link);
+        }
+        assert!(FrameBufferReader::open(w.path(), 2, 2).is_ok());
+        let up = shm_dir().join("..").join(w.path().file_name().unwrap());
+        assert!(FrameBufferReader::open(&up, 2, 2).is_err());
     }
 }

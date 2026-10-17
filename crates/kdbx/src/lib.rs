@@ -214,6 +214,8 @@ pub struct Vault {
     base_index_sha: Option<[u8; 32]>,
     index_dirty: bool,
     ops: Vec<EntryOp>,
+    /// Abgeleiteter Schlüssel der Indexdatei (nur bei `IndexStorage::IndexFile`).
+    index_file_key: Option<index_file::FileKey>,
 }
 
 impl Vault {
@@ -234,6 +236,7 @@ impl Vault {
             base_index_sha: None,
             index_dirty: true,
             ops: Vec::new(),
+            index_file_key: None,
         }
     }
 
@@ -251,8 +254,11 @@ impl Vault {
             base_index_sha: None,
             index_dirty: false,
             ops: Vec::new(),
+            index_file_key: None,
         };
-        match v.load_index_from_storage(&v.db)? {
+        let (loaded, fk) = Self::load_index(storage, &v.path, &v.key, &v.db)?;
+        v.index_file_key = fk;
+        match loaded {
             Some((loaded, sha)) => {
                 v.index = loaded;
                 v.base_index_sha = Some(sha);
@@ -262,10 +268,33 @@ impl Vault {
         Ok(v)
     }
 
-    fn load_index_from_storage(&self, db: &Database) -> Result<Option<(LoadedIndex, [u8; 32])>, VaultError> {
-        match self.storage {
-            IndexStorage::KdbxCustomData => Ok(index_store::read(db)?),
-            IndexStorage::IndexFile => Ok(index_file::read(&index_file::path_for(&self.path), &self.key)?),
+    #[allow(clippy::type_complexity)]
+    fn load_index(
+        storage: IndexStorage,
+        path: &Path,
+        key: &MasterKey,
+        db: &Database,
+    ) -> Result<(Option<(LoadedIndex, [u8; 32])>, Option<index_file::FileKey>), VaultError> {
+        match storage {
+            IndexStorage::KdbxCustomData => Ok((index_store::read(db)?, None)),
+            IndexStorage::IndexFile => match index_file::read(&index_file::path_for(path), key)? {
+                Some(r) => Ok((Some((r.loaded, r.sha)), r.key)),
+                None => Ok((None, None)),
+            },
+        }
+    }
+
+    /// Argon2id-Parameter der Indexdatei: die der KDBX, wenn diese Argon2
+    /// verwendet, sonst die Vorgabe für neue Dateien.
+    fn index_file_params(&self) -> index_file::Argon2Params {
+        match &self.db.config.kdf_config {
+            KdfConfig::Argon2 { iterations, memory, parallelism, .. }
+            | KdfConfig::Argon2id { iterations, memory, parallelism, .. } => index_file::Argon2Params {
+                memory_kib: u32::try_from(memory / 1024).unwrap_or(u32::MAX),
+                iterations: u32::try_from(*iterations).unwrap_or(u32::MAX),
+                parallelism: *parallelism,
+            },
+            _ => index_file::Argon2Params::DEFAULT,
         }
     }
 
@@ -560,7 +589,10 @@ impl Vault {
         if self.disk.is_some() && self.changed_on_disk()? {
             let bytes = fs::read(&self.path)?;
             let mut foreign = Database::parse(&bytes, self.key.to_db_key()?)?;
-            let theirs = self.load_index_from_storage(&foreign)?;
+            let (theirs, theirs_key) = Self::load_index(self.storage, &self.path, &self.key, &foreign)?;
+            if theirs_key.is_some() {
+                self.index_file_key = theirs_key;
+            }
             let theirs_sha = theirs.as_ref().map(|t| t.1);
             let theirs_changed = theirs_sha != self.base_index_sha;
             if theirs_changed {
@@ -611,10 +643,12 @@ impl Vault {
                     }
                 }
                 IndexStorage::IndexFile => {
-                    index_file::write(&index_file::path_for(&self.path), &self.key, &json)?;
+                    let params = self.index_file_params();
+                    index_file::write(&index_file::path_for(&self.path), &self.key, params, &mut self.index_file_key, &json)?;
                     if let Some(t) = &backup_theirs {
                         let p = index_file::path_for(&self.path).with_extension("rjindex-fremd");
-                        index_file::write(&p, &self.key, &rj_core::schema::to_json(t).unwrap_or_default())?;
+                        let mut own_key = None;
+                        index_file::write(&p, &self.key, params, &mut own_key, &rj_core::schema::to_json(t).unwrap_or_default())?;
                     }
                 }
             }

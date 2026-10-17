@@ -25,6 +25,23 @@ pub struct ConnectSpec {
     pub credentials: CredentialPayload,
 }
 
+/// OSC-52-Regel aus den SSH-Optionen des Ziels (`osc52_write`, Vorgabe an;
+/// `osc52_read`, Vorgabe aus).
+fn osc52_policy(options_json: &str) -> Osc52Policy {
+    let o: rj_core::model::SshOptions = serde_json::from_str(options_json).unwrap_or_else(|_| {
+        serde_json::from_str("{}").expect("leere Optionen sind gültig")
+    });
+    Osc52Policy { allow_write: o.osc52_write, allow_read_with_prompt: o.osc52_read }
+}
+
+/// Größenlimit der Zwischenablage aus den Optionen (Vorgabe 16 MiB).
+fn clipboard_limit(options_json: &str) -> u64 {
+    serde_json::from_str::<serde_json::Value>(options_json)
+        .ok()
+        .and_then(|v| v.get("clipboard_limit").and_then(|l| l.as_u64()))
+        .unwrap_or(16 * 1024 * 1024)
+}
+
 /// Ereignis für die Oberfläche.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -160,7 +177,7 @@ impl Manager {
         let id = self.next;
         self.next += 1;
         let term = (spec.protocol == Protocol::Ssh)
-            .then(|| Terminal::new(spec.request.width as usize, spec.request.height as usize, Osc52Policy::default()));
+            .then(|| Terminal::new(spec.request.width as usize, spec.request.height as usize, osc52_policy(&spec.request.options_json)));
         self.sessions.insert(id, Session { spec, worker: None, term, state: String::new(), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None, pid: None });
         self.start(id);
         id
@@ -464,7 +481,17 @@ impl Manager {
                         t.feed(&bytes);
                         for e in t.take_events() {
                             match e {
-                                TermEvent::ClipboardStore(text) => self.pending.push(UiEvent::Clipboard { s, text }),
+                                TermEvent::ClipboardStore(text) => {
+                                    let limit = clipboard_limit(&x.spec.request.options_json);
+                                    if text.len() as u64 <= limit {
+                                        self.pending.push(UiEvent::Clipboard { s, text });
+                                    } else {
+                                        self.pending.push(UiEvent::Notice {
+                                            s,
+                                            text: format!("Zwischenablage vom Ziel verworfen: {} Bytes überschreiten das Limit von {limit} Bytes", text.len()),
+                                        });
+                                    }
+                                }
                                 TermEvent::ClipboardLoad(f) => {
                                     x.osc52_pending.push(f);
                                     self.pending.push(UiEvent::ClipboardReadRequest { s });
@@ -504,6 +531,21 @@ fn demo_spec(title: &str, protocol: Protocol) -> ConnectSpec {
         protocol,
         request: ConnectRequest { host: String::new(), port: 0, width: 80, height: 24, options_json: "{}".into(), connect_timeout_secs: 15, keepalive_secs: 30 },
         credentials: CredentialPayload { username: String::new(), domain: None, password: SecretBytes(Vec::new()), private_key: None },
+    }
+}
+
+#[cfg(test)]
+mod osc52_tests {
+    use super::*;
+
+    #[test]
+    fn policy_follows_target_options() {
+        let p = osc52_policy("{}");
+        assert!(p.allow_write && !p.allow_read_with_prompt);
+        let p = osc52_policy(r#"{"osc52_write":false,"osc52_read":true,"clipboard_limit":5}"#);
+        assert!(!p.allow_write && p.allow_read_with_prompt);
+        assert_eq!(clipboard_limit(r#"{"clipboard_limit":5}"#), 5);
+        assert_eq!(clipboard_limit("kaputt"), 16 * 1024 * 1024);
     }
 }
 

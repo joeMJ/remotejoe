@@ -123,9 +123,14 @@ Standard: Datenbank-`CustomData` der KDBX (Teil des verschlüsselten Inhalts):
 KeePassXC lässt diese Daten beim Speichern unverändert (geprüft mit KeePassXC 2.7.6).
 
 Rückfallebene (in `config.toml` wählbar: `index_storage = "index-file"`): eigene Datei
-`<name>.rjindex` neben der KDBX. Aufbau `RJINDEX1` ‖ Salz (32 Bytes) ‖ Nonce (24 Bytes) ‖
-Chiffrat; XChaCha20-Poly1305, Schlüssel per HKDF-SHA256 aus dem KDBX-Hauptschlüssel
-(Kennwort und Schlüsseldatei), neues Salz bei jedem Schreiben.
+`<name>.rjindex` neben der KDBX. Aufbau `RJINDEX2` ‖ Verfahren (1 Byte, Argon2id) ‖
+Argon2-Version (1 Byte) ‖ Speicher in KiB, Durchläufe, Fäden (je u32) ‖ Salz (32 Bytes) ‖
+Nonce (24 Bytes) ‖ Chiffrat; XChaCha20-Poly1305 mit dem ganzen Kopf als zusätzlichen
+authentisierten Daten. Der Schlüssel wird mit Argon2id aus dem KDBX-Hauptschlüssel (Kennwort
+und Schlüsseldatei) abgeleitet, mit den Argon2-Parametern der KDBX (bei AES-KDF: 64 MiB,
+10 Durchläufe, 2 Fäden). Das Salz gilt je Datei, die Nonce ist bei jedem Schreiben neu.
+Dateien im älteren Format `RJINDEX1` (Schlüssel per HKDF-SHA256) werden gelesen und beim
+nächsten Speichern im neuen Format geschrieben.
 
 ## Schema-Versionen
 

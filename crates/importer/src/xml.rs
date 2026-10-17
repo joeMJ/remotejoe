@@ -47,6 +47,9 @@ pub fn parse(text: &str) -> Result<XmlNode, ImportError> {
         let ev = r.read_event().map_err(|e| ImportError::Format(format!("XML bei Byte {pos}: {e}")))?;
         match ev {
             Event::Start(e) => {
+                if stack.len() > crate::MAX_DEPTH * 4 {
+                    return Err(ImportError::Format(format!("XML bei Byte {pos}: zu tief verschachtelt")));
+                }
                 let name = utf8(e.name().as_ref(), "Elementname", pos)?;
                 let mut attrs = Vec::new();
                 for a in e.attributes().flatten() {

@@ -76,9 +76,19 @@ impl SourceDocument {
     }
 }
 
+/// Größte zulässige Quelldatei bzw. entpackte Archivdatei.
+pub const MAX_FILE: u64 = 64 * 1024 * 1024;
+/// Größte Verschachtelungstiefe von Ordnern beim Import.
+pub const MAX_DEPTH: usize = 64;
+
 /// Liest eine Datei nach Endung.
 pub fn read_file(path: &std::path::Path) -> Result<SourceDocument, ImportError> {
-    let bytes = std::fs::read(path)?;
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?.take(MAX_FILE + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_FILE {
+        return Err(ImportError::Format(format!("Datei ist größer als {} MiB", MAX_FILE >> 20)));
+    }
     let name = path.display().to_string();
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     match ext.as_str() {

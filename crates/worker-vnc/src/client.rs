@@ -153,6 +153,15 @@ fn read_vec(r: &mut (impl Read + ?Sized), n: usize) -> io::Result<Vec<u8>> {
     r.read_exact(&mut v)?;
     Ok(v)
 }
+/// Überspringt `n` Bytes des Stroms.
+fn skip(r: &mut (impl Read + ?Sized), n: u64) -> io::Result<()> {
+    let got = io::copy(&mut Read::take(&mut *r, n), &mut io::sink())?;
+    if got < n {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Verbindung während der Zwischenablage beendet"));
+    }
+    Ok(())
+}
+
 fn read_reason(r: &mut (impl Read + ?Sized)) -> String {
     match read_u32(r) {
         Ok(n) if n < 65536 => read_vec(r, n as usize).map(|v| String::from_utf8_lossy(&v).into_owned()).unwrap_or_default(),
@@ -765,8 +774,14 @@ impl Reader {
         let len = read_u32(&mut self.r)? as i32;
         let allowed = matches!(self.direction, ClipboardDirection::Both | ClipboardDirection::TargetToHost);
         if len >= 0 {
+            if !allowed || len as u32 > self.limit {
+                // Nicht gewünscht oder zu groß: überspringen, ohne den Inhalt
+                // im Speicher anzulegen.
+                skip(&mut self.r, len as u64)?;
+                return Ok(());
+            }
             let data = read_vec(&mut self.r, len as usize)?;
-            if allowed && len as u32 <= self.limit {
+            {
                 let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if !st.extended && !st.latin1_warned {
                     st.latin1_warned = true;

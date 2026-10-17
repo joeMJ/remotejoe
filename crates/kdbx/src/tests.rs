@@ -218,6 +218,31 @@ fn index_file_storage() {
     assert_eq!(r.index().index.referenced_entries().len(), 1);
 }
 
+#[test]
+fn index_file_v1_is_read_and_rewritten_as_argon2id() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut v, path, key) = new_vault(dir.path(), IndexStorage::IndexFile);
+    let id = v.add_credential(data("A", "b", "c")).unwrap();
+    v.set_index(index_with(id, "A").0).unwrap();
+    v.save(None).unwrap();
+    let ip = index_file::path_for(&path);
+    // Datei im alten Format (HKDF) ersetzen.
+    let json = rj_core::schema::to_json(&v.index().index).unwrap();
+    std::fs::write(&ip, index_file::encrypt_v1(&key, &json).unwrap()).unwrap();
+    let mut r = Vault::open(&path, key.clone(), IndexStorage::IndexFile).unwrap();
+    assert_eq!(r.index().index.referenced_entries().len(), 1);
+    let mut idx = r.index().index.clone();
+    idx.root.children.push(Node::Folder(Folder::new("Neu")));
+    r.set_index(idx).unwrap();
+    r.save(None).unwrap();
+    let raw = std::fs::read(&ip).unwrap();
+    assert_eq!(index_file::format_version(&raw), Some(2));
+    // Parameter folgen der KDBX (hier die schwache Testableitung).
+    assert_eq!(u32::from_le_bytes(raw[10..14].try_into().unwrap()), 1024);
+    assert!(Vault::open(&path, key, IndexStorage::IndexFile).is_ok());
+    assert!(index_file::read(&ip, &MasterKey::password("falsch")).is_err());
+}
+
 /// Prüfungen mit `keepassxc-cli`; ohne das Programm werden sie übersprungen.
 mod keepassxc {
     use super::*;

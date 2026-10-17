@@ -169,17 +169,32 @@ pub fn plan(doc: &SourceDocument, title: &str) -> ImportPlan {
         let parent = parent.filter(|p| doc.items.iter().any(|i| matches!(i, SourceItem::Folder { id, .. } if id == p)));
         children.entry(parent).or_default().push((order, Node::Target(t), None));
     }
-    fn attach(f: &mut Folder, key: Option<String>, children: &mut HashMap<Option<String>, Vec<(i64, Node, Option<String>)>>) {
+    type Children = HashMap<Option<String>, Vec<(i64, Node, Option<String>)>>;
+    fn attach(f: &mut Folder, key: Option<String>, children: &mut Children, depth: usize) {
         let mut list = children.remove(&key).unwrap_or_default();
         list.sort_by_key(|(o, _, _)| *o);
         for (_, mut n, id) in list {
             if let (Node::Folder(sub), Some(id)) = (&mut n, id) {
-                attach(sub, Some(id), children);
+                if depth < crate::MAX_DEPTH {
+                    attach(sub, Some(id), children, depth + 1);
+                }
             }
             f.children.push(n);
         }
     }
-    attach(&mut top, None, &mut children);
+    attach(&mut top, None, &mut children, 0);
+    // Übrig sind Objekte, deren Elternverweise einen Kreis bilden oder die zu
+    // tief verschachtelt sind: oben einordnen statt still verlieren.
+    let mut moved = 0;
+    while let Some(k) = children.keys().next().cloned() {
+        moved += children.get(&k).map_or(0, Vec::len);
+        attach(&mut top, k, &mut children, 0);
+    }
+    if moved > 0 {
+        report.warnings.push(format!(
+            "{moved} Objekte mit kreisförmigem oder zu tief verschachteltem Elternverweis wurden oben eingeordnet"
+        ));
+    }
 
     // Doppelte Namen je Ordner melden.
     fn dups(f: &Folder, path: &str, report: &mut ImportReport) {

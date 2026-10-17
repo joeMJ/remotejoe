@@ -108,7 +108,10 @@ impl KnownHosts {
             if a == alg && k == b64 {
                 return HostKeyStatus::Known;
             }
-            if a == alg {
+            // Auch ein bekannter Schlüssel eines anderen Algorithmus gilt als
+            // Änderung: Ein Angreifer könnte sonst mit einem anderen
+            // Schlüsseltyp eine harmlose Erstabfrage auslösen.
+            if a == alg || changed.is_none() {
                 let prev = PublicKey::from_openssh(&format!("{a} {k}"))
                     .map(|p| fingerprint(&p))
                     .unwrap_or_else(|_| "unlesbar".into());
@@ -148,5 +151,30 @@ impl KnownHosts {
         }
         out.push_str(&format!("{id} {alg} {b64}\n"));
         rj_core::fsutil::atomic_write_locked(&self.path, out.as_bytes())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ED: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKyAnCq2Gk7BPfqYFQiNcGYgWfm4W8KibIapJ/jZJJGt";
+    const EC: &str = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBL1MlyS6HseQE+xcGL7FDKQgEp1uooPqOjQP6+WcjwleyCFZ0R/VYlRyAPxTEjsJiPKtURy/j5Wvy0iBdrCEP4Q=";
+
+    #[test]
+    fn other_key_type_counts_as_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let kh = KnownHosts::new(dir.path().join("known_hosts"));
+        let ed = PublicKey::from_openssh(ED).unwrap();
+        let ec = PublicKey::from_openssh(EC).unwrap();
+        assert_eq!(kh.check("srv.example.test", 22, &ed), HostKeyStatus::Unknown);
+        kh.remember("srv.example.test", 22, &ed).unwrap();
+        assert_eq!(kh.check("srv.example.test", 22, &ed), HostKeyStatus::Known);
+        match kh.check("srv.example.test", 22, &ec) {
+            HostKeyStatus::Changed { previous_fingerprint } => assert_eq!(previous_fingerprint, fingerprint(&ed)),
+            s => panic!("erwartet Änderung, erhalten {s:?}"),
+        }
+        // Anderer Port ist ein anderer Host.
+        assert_eq!(kh.check("srv.example.test", 2222, &ec), HostKeyStatus::Unknown);
     }
 }

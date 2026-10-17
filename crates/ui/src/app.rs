@@ -347,10 +347,10 @@ impl App {
                     .iter()
                     .find(|a| a.ends_with(".conf"))
                     .and_then(|a| vault.attachment(c.uuid, a))
-                    .and_then(|s| s.as_str().map(str::to_string))
-                    .or(c.data.notes.clone())
+                    .or_else(|| c.data.notes.as_deref().map(rj_core::Secret::from_str_exact))
                     .ok_or("WireGuard-Konfiguration fehlt (Anhang *.conf oder Notizen)")?;
-                Ok(TunnelSpec::Wireguard { config: rj_tunnel::wireguard::WgConfig::parse(&text).map_err(|e| e.to_string())? })
+                let text = text.as_str().ok_or("WireGuard-Konfiguration ist kein gültiges UTF-8")?;
+                Ok(TunnelSpec::Wireguard { config: rj_tunnel::wireguard::WgConfig::parse(text).map_err(|e| e.to_string())? })
             }
         }
     }
