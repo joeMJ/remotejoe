@@ -140,3 +140,18 @@ fn invalid_utf8_is_reported_with_location() {
     let e = read_file(&p).unwrap_err().to_string();
     assert!(e.contains("Zeile 3"), "{e}");
 }
+
+#[test]
+fn rdm_encrypted_passwords_reported_per_entry_and_in_total() {
+    let doc = read_file(&data("rdm-verschluesselt.rdm")).unwrap();
+    let p = plan(&doc, "Import verschlüsselt");
+    let r = &p.report;
+    assert_eq!(r.encrypted_passwords, 3, "Datensatz, RDP-Block und Terminal-Block; Klartext zählt nicht");
+    let w = r.warnings.join("\n");
+    assert!(w.contains("Konto verschlüsselt") && w.contains("verschlüsselt"), "{w}");
+    assert!(w.contains("RDP mit eigenem Konto"), "{w}");
+    assert!(w.contains("SSH mit eigenem Konto"), "{w}");
+    assert!(!w.contains("SSH im Klartext"), "Klartext-Kennwort ist kein Fund: {w}");
+    let summary = r.summary();
+    assert!(summary.contains("3 Einträge mit verschlüsselt exportiertem Kennwort"), "{summary}");
+}

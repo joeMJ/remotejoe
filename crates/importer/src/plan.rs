@@ -26,6 +26,8 @@ pub struct ImportReport {
     pub skipped: Vec<(String, String)>,
     pub warnings: Vec<String>,
     pub unknown_fields: Vec<(String, usize)>,
+    /// Einträge mit verschlüsselt exportiertem Kennwort (nicht übernommen).
+    pub encrypted_passwords: usize,
 }
 
 impl ImportReport {
@@ -35,6 +37,12 @@ impl ImportReport {
             "{}: {} Ordner, {} Ziele übernommen; {} Zugangsdaten zu {} Einträgen der Schlüsseldatenbank zusammengelegt ({} Verweise).",
             self.format, self.folders, self.targets, self.credentials_in_source, self.credentials_unique, self.references
         );
+        if self.encrypted_passwords > 0 {
+            s.push_str(&format!(
+                "\nKennwörter: {} Einträge mit verschlüsselt exportiertem Kennwort – die Kennwörter wurden NICHT übernommen und müssen in der Schlüsseldatenbank ergänzt werden (oder die Quelle mit Klartext-Kennwörtern neu exportieren).",
+                self.encrypted_passwords
+            ));
+        }
         if !self.skipped.is_empty() {
             s.push_str(&format!("\nÜbersprungen: {}", self.skipped.len()));
             for (n, why) in &self.skipped {
@@ -90,6 +98,7 @@ pub fn plan(doc: &SourceDocument, title: &str) -> ImportPlan {
         skipped: doc.skipped.clone(),
         warnings: doc.warnings.clone(),
         unknown_fields: doc.unknown_fields.clone(),
+        encrypted_passwords: doc.encrypted_passwords,
         ..Default::default()
     };
     let check = |what: &str, name: &str, report: &mut ImportReport| {

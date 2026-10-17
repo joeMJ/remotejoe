@@ -77,12 +77,18 @@ fn connection(doc: &mut SourceDocument, seen: &mut HashSet<String>, f: &Fields, 
         ensure_path(doc, seen, &path, order);
         return;
     }
+    // Kennwort verschlüsselt exportiert: am Eintrag selbst oder in einem der Blöcke.
+    let encrypted = ["", "Credentials", "RDP", "Terminal", "VNC", "PowerShell"].iter().any(|p| (f.sub)(p, "SafePassword").is_some());
     let cred = |prefix: &str| -> Option<SourceCredential> {
         let user = (f.sub)(prefix, "UserName").or_else(|| (f.sub)(prefix, "Username"))?;
         let pw = (f.sub)(prefix, "Password").map(|p| Secret::from_str_exact(&p));
         Some(SourceCredential { username: user, domain: (f.sub)(prefix, "Domain"), password: pw })
     };
     if is_credential(&kind) {
+        if encrypted {
+            doc.encrypted_passwords += 1;
+            doc.warnings.push(format!("Zugangsdatensatz „{name}“: Kennwort in der Quelle verschlüsselt, nicht übernommen"));
+        }
         let c = cred("Credentials").or_else(|| cred(""));
         match c {
             Some(c) => doc.items.push(SourceItem::Credential { id, name, credential: c }),
@@ -108,7 +114,8 @@ fn connection(doc: &mut SourceDocument, seen: &mut HashSet<String>, f: &Fields, 
         .or_else(|| (f.sub)("Terminal", "Port"))
         .or_else(|| (f.sub)("VNC", "Port"))
         .and_then(|p| p.parse().ok());
-    if (f.get)("SafePassword").is_some() {
+    if encrypted {
+        doc.encrypted_passwords += 1;
         doc.warnings.push(format!("„{name}“: Kennwort ist verschlüsselt exportiert und wird nicht übernommen"));
     }
     let parent = ensure_path(doc, seen, &group, order);

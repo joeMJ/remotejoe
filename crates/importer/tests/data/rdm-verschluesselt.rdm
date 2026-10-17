@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RDMExport>
+  <Connection>
+    <ConnectionType>Credential</ConnectionType>
+    <Group>Konten</Group>
+    <ID>33333333-0000-0000-0000-000000000001</ID>
+    <Name>Konto verschlüsselt</Name>
+    <Credentials><UserName>dienst</UserName><SafePassword>QUJDREVGRw==</SafePassword></Credentials>
+  </Connection>
+  <Connection>
+    <ConnectionType>RDPConfigured</ConnectionType>
+    <Group>Ziele</Group>
+    <ID>33333333-0000-0000-0000-000000000002</ID>
+    <Name>RDP mit eigenem Konto</Name>
+    <Url>rdp.example.test</Url>
+    <RDP><UserName>admin</UserName><SafePassword>QUJDREVGRw==</SafePassword></RDP>
+  </Connection>
+  <Connection>
+    <ConnectionType>SSHShell</ConnectionType>
+    <Group>Ziele</Group>
+    <ID>33333333-0000-0000-0000-000000000003</ID>
+    <Name>SSH mit eigenem Konto</Name>
+    <Terminal><Host>ssh.example.test</Host><UserName>root</UserName><SafePassword>QUJDREVGRw==</SafePassword></Terminal>
+  </Connection>
+  <Connection>
+    <ConnectionType>SSHShell</ConnectionType>
+    <Group>Ziele</Group>
+    <ID>33333333-0000-0000-0000-000000000004</ID>
+    <Name>SSH im Klartext</Name>
+    <Terminal><Host>klar.example.test</Host><UserName>joe</UserName><Password>geheim-test</Password></Terminal>
+  </Connection>
+</RDMExport>

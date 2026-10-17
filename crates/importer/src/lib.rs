@@ -65,6 +65,8 @@ pub struct SourceDocument {
     /// Unbekannte Felder (Feldname, Anzahl).
     pub unknown_fields: Vec<(String, usize)>,
     pub warnings: Vec<String>,
+    /// Einträge, deren Kennwort verschlüsselt exportiert wurde und nicht übernommen werden kann.
+    pub encrypted_passwords: usize,
 }
 
 impl SourceDocument {
