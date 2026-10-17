@@ -5,6 +5,7 @@
 //! Übernahme in Index und KDBX. Kennwörter wandern nur in die KDBX.
 
 pub mod csv;
+pub mod export;
 pub mod plan;
 pub mod rdm;
 pub mod royal;
@@ -20,6 +21,10 @@ pub enum ImportError {
     Encoding(String),
     #[error("Format: {0}")]
     Format(String),
+    #[error("Die Datei ist mit einem Kennwort geschützt (verschlüsseltes ZIP).")]
+    PasswordNeeded,
+    #[error("Das Kennwort für das ZIP stimmt nicht.")]
+    PasswordWrong,
 }
 
 /// Zugangsdaten aus der Quelle.
@@ -31,7 +36,7 @@ pub struct SourceCredential {
 }
 
 /// Eintrag aus der Quelle (Ordner oder Verbindung).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SourceItem {
     Folder {
         id: String,
@@ -51,6 +56,8 @@ pub enum SourceItem {
         credential: Option<SourceCredential>,
         /// Verweis auf einen Zugangsdatensatz der Quelle.
         credential_ref: Option<String>,
+        /// Protokolloptionen, wenn die Quelle sie mitbringt (remotejoe-Export).
+        options: Option<rj_core::ProtocolOptions>,
     },
     /// Eigenständiger Zugangsdatensatz der Quelle.
     Credential { id: String, name: String, credential: SourceCredential },
@@ -88,6 +95,11 @@ pub const MAX_DEPTH: usize = 64;
 
 /// Liest eine Datei nach Endung.
 pub fn read_file(path: &std::path::Path) -> Result<SourceDocument, ImportError> {
+    read_file_with_password(path, None)
+}
+
+/// Wie `read_file`; `password` entschlüsselt ein ZIP mit AES (remotejoe-Export).
+pub fn read_file_with_password(path: &std::path::Path, password: Option<&str>) -> Result<SourceDocument, ImportError> {
     use std::io::Read;
     let mut bytes = Vec::new();
     std::fs::File::open(path)?.take(MAX_FILE + 1).read_to_end(&mut bytes)?;
@@ -100,7 +112,15 @@ pub fn read_file(path: &std::path::Path) -> Result<SourceDocument, ImportError> 
         "rtsz" => royal::read_rtsz(&bytes),
         "rtsx" => royal::read_rtsx(text(&bytes, &name)?),
         "csv" => csv::read_csv(text(&bytes, &name)?),
-        "json" => rdm::read_json(text(&bytes, &name)?),
+        "zip" => export::read_zip(&bytes, password),
+        "json" => {
+            let t = text(&bytes, &name)?;
+            if export::is_export(t) {
+                export::read_json(t)
+            } else {
+                rdm::read_json(t)
+            }
+        }
         _ => rdm::read_xml(text(&bytes, &name)?),
     }
 }

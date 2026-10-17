@@ -101,6 +101,11 @@ Entfernt Programm, Starter und Symbole. Dein Ordner `~/remotejoe` (Einstellungen
   Anmeldeinformationsverwaltung). Danach entsperrt der Programmstart damit; nach „Sperren“ oder Leerlauf ist das
   Kennwort wieder nötig. Wer das Benutzerkonto entsperrt hat, kommt so an die Datenbank. Entfernen: Datei →
   „Gemerktes Hauptkennwort aus dem Schlüsselbund entfernen“.
+- **Export (Datei → Exportieren …):** Ordner, Ziele und Optionen als **JSON** (remotejoe, wieder importierbar) oder als
+  **CSV im Stil von RDM**, für den ganzen Baum oder die Auswahl. Benutzername und Domäne gehören dazu, Kennwörter nur
+  auf Wunsch; JSON mit Kennwörtern gibt es nur in einem **verschlüsselten ZIP** (AES-256, öffnen mit 7-Zip oder
+  WinZip), das Kennwort dafür vergibst du beim Export. Die Datei ist nur für dein Konto lesbar. Der Import liest
+  JSON, CSV und ZIP und fragt bei einem verschlüsselten ZIP nach dem Kennwort.
 - **Zugangsdaten kopieren:** Im Kontextmenü eines Ziels „Benutzernamen kopieren“ und „Kennwort kopieren“
   (Eintrag als „geheim“ markiert, die Zwischenablage wird nach 30 s geleert; Frist unter Extras).
 - **Eigene Titelleiste** mit Logo, Name und Version, **Darstellung** (System hell/dunkel oder eigene
@@ -152,7 +157,7 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
    Vorlage. Das neue Objekt öffnet seinen **Eigenschaften-Tab** (später über F4, Alt+Eingabe oder das Kontextmenü „Eigenschaften“; der Doppelklick auf ein Ziel verbindet):
    Allgemein, Verbindung, Zugangsdaten, Tunnel, Aufgaben und Makros, Zwischenablage,
    Organisation, Übergeordneter Ordner; **Speichern** im Tab.
-   Oder **Datei → Importieren (RDM, Royal TS) …** mit Vorschau.
+   Oder **Datei → Importieren (RDM, Royal TS, remotejoe-Export) …** mit Vorschau.
 3. Zugangsdaten je Ordner oder Ziel: keine, vom übergeordneten Ordner, Benutzername und
    Kennwort direkt (neuer Eintrag in der Gruppe `remotejoe` der Schlüsseldatenbank), vorhandener Datensatz oder
    Datensatz nach Name. Der Tab zeigt, woher der wirksame Wert kommt.

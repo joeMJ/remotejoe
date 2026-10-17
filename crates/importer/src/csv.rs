@@ -173,7 +173,7 @@ pub fn read_csv(text: &str) -> Result<SourceDocument, ImportError> {
         };
         let parent = ensure_path(&mut doc, &mut seen, &get("group"), &mut order);
         order += 1;
-        doc.items.push(SourceItem::Connection { id, parent, name, order, protocol: p, host, port: get("port").parse().ok(), credential, credential_ref: None });
+        doc.items.push(SourceItem::Connection { id, parent, name, order, protocol: p, host, port: get("port").parse().ok(), credential, credential_ref: None, options: None });
     }
     if passwords > 0 {
         doc.warnings.push(format!(

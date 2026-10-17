@@ -130,6 +130,7 @@ fn connection(doc: &mut SourceDocument, seen: &mut HashSet<String>, f: &Fields, 
         port,
         credential: cred(""),
         credential_ref: (f.get)("CredentialConnectionID"),
+        options: None,
     });
 }
 

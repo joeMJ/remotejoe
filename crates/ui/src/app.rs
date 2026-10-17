@@ -594,6 +594,109 @@ impl App {
         }
     }
 
+    /// Baut den Exportbaum aus dem Index: der ganze Baum oder die gewählten Knoten, mit den
+    /// wirksamen Zugangsdaten je Ziel (Kennwort nur, wenn `passwords`).
+    fn export_nodes(&self, selection: Option<&[Uuid]>, passwords: bool, stats: &mut (usize, usize, usize)) -> Vec<rj_importer::export::ExportNode> {
+        use rj_importer::export::ExportNode;
+        fn conv(app: &App, n: &Node, passwords: bool, stats: &mut (usize, usize, usize)) -> ExportNode {
+            match n {
+                Node::Folder(f) => {
+                    stats.1 += 1;
+                    ExportNode::Folder { name: f.name.clone(), children: f.children.iter().map(|c| conv(app, c, passwords, stats)).collect() }
+                }
+                Node::Target(t) => {
+                    stats.0 += 1;
+                    let (mut username, mut domain, mut password) = (String::new(), None, None);
+                    match resolve_credential(&app.index, t.id) {
+                        Ok(CredentialResolution::Found(r)) => match app.payload(&r, t.protocol) {
+                            Ok(p) => {
+                                username = p.username.clone();
+                                domain = p.domain.clone();
+                                if passwords {
+                                    password = Some(Secret::from_bytes(p.password.0.clone()));
+                                }
+                            }
+                            Err(_) => stats.2 += 1,
+                        },
+                        _ => stats.2 += 1,
+                    }
+                    ExportNode::Target { name: t.name.clone(), protocol: t.protocol, host: t.host.clone(), port: t.port, options: t.options.clone(), username, domain, password }
+                }
+            }
+        }
+        match selection {
+            None => self.index.root.children.iter().map(|c| conv(self, c, passwords, stats)).collect(),
+            Some(ids) => {
+                // Liegt ein gewählter Knoten schon in einem gewählten Ordner, wird er nicht doppelt aufgenommen.
+                let inside_selected = |id: Uuid| self.index.path_to(id).is_some_and(|p| p.iter().rev().skip(1).any(|a| ids.contains(&a.id())));
+                ids.iter().filter(|id| !inside_selected(**id)).filter_map(|id| self.index.path_to(*id).and_then(|p| p.last().map(|n| conv(self, n, passwords, stats)))).collect()
+            }
+        }
+    }
+
+    /// Exportiert Struktur und Ziele als JSON oder CSV, auf Wunsch mit Kennwörtern und als
+    /// verschlüsseltes ZIP (AES-256). Mit Kennwörtern ist beim JSON das ZIP Pflicht.
+    pub fn export_run(&mut self, c: &serde_json::Value) -> Result<serde_json::Value, String> {
+        use std::io::Write;
+        let fmt = c.get("format").and_then(|v| v.as_str()).unwrap_or("json");
+        if fmt != "json" && fmt != "csv" {
+            return Err("Unbekanntes Format".into());
+        }
+        let passwords = c.get("passwords").and_then(|v| v.as_bool()).unwrap_or(false);
+        let zip = c.get("zip").and_then(|v| v.as_bool()).unwrap_or(false);
+        let zip_pw = c.get("zip_password").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if self.vault.is_none() {
+            return Err("Zum Export muss die Schlüsseldatenbank entsperrt sein".into());
+        }
+        if passwords && fmt == "json" && !zip {
+            return Err("Mit Kennwörtern gibt es den JSON-Export nur als verschlüsseltes ZIP".into());
+        }
+        if zip && zip_pw.chars().count() < 8 {
+            return Err("Das Kennwort für das ZIP braucht mindestens 8 Zeichen".into());
+        }
+        let mut path = c.get("path").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        if path.is_empty() {
+            return Err("Bitte eine Zieldatei angeben".into());
+        }
+        let ext = if zip { "zip" } else { fmt };
+        if !path.to_ascii_lowercase().ends_with(&format!(".{ext}")) {
+            path.push('.');
+            path.push_str(ext);
+        }
+        if std::path::Path::new(&path).exists() {
+            return Err(format!("Die Datei „{path}“ gibt es schon; sie wird nicht überschrieben"));
+        }
+        let selection: Option<Vec<Uuid>> = match c.get("scope").and_then(|v| v.as_str()) {
+            Some("selection") => Some(c.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().and_then(|s| Uuid::parse_str(s).ok())).collect()).unwrap_or_default()),
+            _ => None,
+        };
+        if selection.as_ref().is_some_and(|s| s.is_empty()) {
+            return Err("Im Baum ist nichts gewählt".into());
+        }
+        let mut stats = (0usize, 0usize, 0usize);
+        let nodes = self.export_nodes(selection.as_deref(), passwords, &mut stats);
+        let text = if fmt == "json" { rj_importer::export::to_json(&nodes, passwords) } else { rj_importer::export::to_csv(&nodes, passwords) };
+        let bytes: Vec<u8> = if zip {
+            rj_importer::export::encrypted_zip(&format!("remotejoe-export.{fmt}"), text.as_bytes(), &zip_pw).map_err(|e| e.to_string())?
+        } else {
+            text.as_bytes().to_vec()
+        };
+        if let Some(dir) = std::path::Path::new(&path).parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(|e| format!("Ordner: {e}"))?;
+        }
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&path).map_err(|e| format!("Datei: {e}"))?;
+        f.write_all(&bytes).map_err(|e| format!("Datei: {e}"))?;
+        f.sync_all().ok();
+        Ok(json!({ "ok": true, "path": path, "targets": stats.0, "folders": stats.1, "without_credentials": stats.2, "passwords": passwords, "zip": zip }))
+    }
+
     /// Benutzername oder Kennwort eines Ziels für die Zwischenablage (`kind`: `user` oder `password`).
     /// Ergebnis als JSON `{ "text", "clear_secs" }` oder `{ "error" }`; der Wert steht nie im Protokoll.
     pub fn credential_copy_json(&self, id: &str, kind: &str) -> String {
@@ -1144,8 +1247,14 @@ impl App {
     }
 
     /// Importvorschau: liest die Datei und liefert den Bericht (nichts wird geschrieben).
-    pub fn import_preview(&mut self, path: &str) -> Result<(String, serde_json::Value), String> {
-        let doc = rj_importer::read_file(std::path::Path::new(path)).map_err(|e| e.to_string())?;
+    pub fn import_preview(&mut self, path: &str, password: &str) -> Result<(String, serde_json::Value), String> {
+        let pw = (!password.is_empty()).then_some(password);
+        let doc = rj_importer::read_file_with_password(std::path::Path::new(path), pw).map_err(|e| match e {
+            // Kennungen für die Oberfläche: sie fragt das Kennwort des ZIP ab und versucht es erneut.
+            rj_importer::ImportError::PasswordNeeded => "PASSWORD_NEEDED".to_string(),
+            rj_importer::ImportError::PasswordWrong => "PASSWORD_WRONG".to_string(),
+            other => other.to_string(),
+        })?;
         let title = format!("Import {}", std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default());
         let plan = rj_importer::plan::plan(&doc, &title);
         let summary = plan.report.summary();

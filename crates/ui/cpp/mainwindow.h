@@ -162,6 +162,7 @@ private:
 	void updateConnInfo();
 	void openTerminalSettings();
 	void openAppearance();
+	void openExport();
 	/// Schema und Fokusrahmen aus den Einstellungen anwenden.
 	void applyAppearance();
 	void openMacroTab(const QString& id);

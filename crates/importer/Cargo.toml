@@ -1,6 +1,6 @@
 [package]
 name = "remotejoe-importer"
-description = "Import aus Remote Desktop Manager und Royal TS"
+description = "Import aus Remote Desktop Manager und Royal TS, Export als JSON oder CSV"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
@@ -18,8 +18,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 quick-xml = "0.42"
-zip = { version = "9", default-features = false, features = ["deflate"] }
+zeroize.workspace = true
+zip = { version = "9", default-features = false, features = ["deflate", "aes-crypto"] }
 
 [dev-dependencies]
-zip = { version = "9", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate", "aes-crypto"] }
 tempfile.workspace = true

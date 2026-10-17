@@ -134,7 +134,7 @@ pub fn plan(doc: &SourceDocument, title: &str) -> ImportPlan {
                 tmp.folders.insert(id.clone(), (Folder::new(name.clone()), parent.clone(), *order));
                 report.folders += 1;
             }
-            SourceItem::Connection { parent, name, order, protocol, host, port, credential, credential_ref, .. } => {
+            SourceItem::Connection { parent, name, order, protocol, host, port, credential, credential_ref, options, .. } => {
                 check("Ziel", name, &mut report);
                 check("Host von", host, &mut report);
                 let mut t = Target::new(name.clone(), *protocol, host.clone());
@@ -151,6 +151,9 @@ pub fn plan(doc: &SourceDocument, title: &str) -> ImportPlan {
                         }
                         None => report.warnings.push(format!("„{name}“: „{}“ ist keine gültige Web-Adresse (http:// oder https://)", check_name(host).display)),
                     }
+                }
+                if let Some(o) = options {
+                    t.options = o.clone();
                 }
                 let cred = match (credential, credential_ref) {
                     (Some(c), _) if !c.username.is_empty() => {

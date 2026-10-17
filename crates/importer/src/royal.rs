@@ -71,6 +71,7 @@ fn build(doc: &mut SourceDocument, kind: &str, get: &dyn Fn(&str) -> Option<Stri
                     port: get("Port").and_then(|p| p.parse().ok()).filter(|p| *p != 0),
                     credential,
                     credential_ref: get("CredentialID"),
+                    options: None,
                 });
             }
             None => doc.skipped.push((name, format!("Objekttyp „{k}“ wird nicht unterstützt"))),

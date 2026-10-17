@@ -474,6 +474,7 @@ impl App {
                     Err("Aufgabe läuft nicht mehr".into())
                 }
             }
+            "export" => self.export_run(&c),
             "settings" => Ok(json!({
                 "lock_after_idle_mins": self.config.security.lock_after_idle_mins,
                 "disconnect_on_lock": self.config.security.disconnect_on_lock,

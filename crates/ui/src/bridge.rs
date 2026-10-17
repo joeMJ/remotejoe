@@ -105,7 +105,7 @@ pub mod qobject {
         fn detect_fields(self: Pin<&mut RjBackend>, id: &QString, url: &QString, ignore_certificate: bool) -> QString;
         #[qinvokable]
         #[cxx_name = "importPreview"]
-        fn import_preview(self: Pin<&mut RjBackend>, path: &QString) -> QString;
+        fn import_preview(self: Pin<&mut RjBackend>, path: &QString, password: &QString) -> QString;
         #[qinvokable]
         #[cxx_name = "importApply"]
         fn import_apply(self: Pin<&mut RjBackend>) -> QString;
@@ -455,9 +455,9 @@ impl qobject::RjBackend {
         })
     }
 
-    fn import_preview(self: Pin<&mut Self>, path: &QString) -> QString {
-        let p = path.to_string();
-        q(match self.app_mut().map(|a| a.import_preview(&p)) {
+    fn import_preview(self: Pin<&mut Self>, path: &QString, password: &QString) -> QString {
+        let (p, pw) = (path.to_string(), password.to_string());
+        q(match self.app_mut().map(|a| a.import_preview(&p, &pw)) {
             Some(Ok((s, report))) => serde_json::json!({ "summary": s, "report": report }).to_string(),
             Some(Err(e)) => serde_json::json!({ "error": e }).to_string(),
             None => "{}".into(),

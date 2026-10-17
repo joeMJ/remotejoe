@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "titlebar.h"
+#include "exporttab.h"
 #include "appearance.h"
 #include <algorithm>
 
@@ -693,10 +694,22 @@ void MainWindow::buildMenus()
 	file->addAction(T(m_backend, "menu.file.open"), QKeySequence::Open, this, [this] { showUnlock(false); });
 	file->addAction(T(m_backend, "menu.file.import"), this, [this] {
 		const QString path = QFileDialog::getOpenFileName(this, T(m_backend, "menu.file.import"), QString(),
-		                                                  QStringLiteral("Remote Desktop Manager / Royal TS (*.rdm *.json *.csv *.rtsz *.rtsx);;Alle Dateien (*)"));
+		                                                  QStringLiteral("Remote Desktop Manager / Royal TS / remotejoe (*.rdm *.json *.csv *.zip *.rtsz *.rtsx);;Alle Dateien (*)"));
 		if (path.isEmpty())
 			return;
-		const QJsonObject r = parseObject(m_backend->importPreview(path));
+		QString zipPassword;
+		QJsonObject r = parseObject(m_backend->importPreview(path, zipPassword));
+		// Verschlüsseltes ZIP (remotejoe-Export): Kennwort abfragen und erneut versuchen.
+		while (r.value(QStringLiteral("error")).toString().startsWith(QLatin1String("PASSWORD_")))
+		{
+			bool ok = false;
+			const QString text = T(m_backend, r.value(QStringLiteral("error")).toString() == QLatin1String("PASSWORD_WRONG") ? "import.zip.wrong" : "import.zip.needed");
+			zipPassword = QInputDialog::getText(this, T(m_backend, "import.zip.title"), text, QLineEdit::Password, QString(), &ok);
+			if (!ok)
+				return;
+			r = parseObject(m_backend->importPreview(path, zipPassword));
+		}
+		zipPassword.fill(QLatin1Char('0'));
 		if (r.contains(QStringLiteral("error")))
 		{
 			m_bar->inform(T(m_backend, "import.failed").arg(r.value(QStringLiteral("error")).toString()));
@@ -704,6 +717,7 @@ void MainWindow::buildMenus()
 		}
 		openImport(path, r.value(QStringLiteral("report")).toObject(), r.value(QStringLiteral("summary")).toString());
 	});
+	file->addAction(T(m_backend, "menu.file.export"), this, [this] { openExport(); });
 	file->addAction(T(m_backend, "menu.file.save"), QKeySequence::Save, this, [this] {
 		// Liegt ein geänderter Eigenschaften-Tab vorn, speichert er seine Felder mit.
 		if (auto* ed = qobject_cast<PropertiesTab*>(m_tabs->currentWidget()); ed && ed->isDirty())
@@ -1876,6 +1890,19 @@ void MainWindow::applyAppearance()
 	for (auto* w : findChildren<QWidget*>())
 		if (dynamic_cast<FrameView*>(w))
 			w->update();
+}
+
+void MainWindow::openExport()
+{
+	for (int i = 0; i < m_tabs->count(); ++i)
+		if (qobject_cast<ExportTab*>(m_tabs->widget(i)))
+		{
+			m_tabs->setCurrentIndex(i);
+			return;
+		}
+	auto* t = new ExportTab(m_backend, [this] { return selectedIds(); }, m_tabs);
+	connect(t, &ToolTab::status, this, [this](const QString& text) { statusBar()->showMessage(text, 10000); });
+	m_tabs->setCurrentIndex(m_tabs->addTab(t, T(m_backend, "export.title")));
 }
 
 void MainWindow::openAppearance()
