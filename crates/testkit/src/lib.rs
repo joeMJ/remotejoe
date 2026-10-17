@@ -5,6 +5,7 @@
 //! Gegenstelle bestanden.
 
 pub mod shadow;
+pub mod snmpd;
 pub mod sshd;
 pub mod xrdp;
 pub mod xvnc;

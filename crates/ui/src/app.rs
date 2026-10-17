@@ -40,6 +40,10 @@ pub struct App {
     session_tunnels: std::collections::HashMap<SessionId, (Uuid, String, u16)>,
     pub patchday: Option<rj_tasks::patchday::Patchday>,
     import_plan: Option<rj_importer::plan::ImportPlan>,
+    snmp_rx: Option<Receiver<(Uuid, rj_snmp::Light, serde_json::Value)>>,
+    snmp_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Verlauf und Zustand je SNMP-Gerät (für die Eigenschaften).
+    snmp_state: std::collections::HashMap<Uuid, serde_json::Value>,
 }
 
 impl App {
@@ -69,6 +73,9 @@ impl App {
             session_tunnels: Default::default(),
             patchday: None,
             import_plan: None,
+            snmp_rx: None,
+            snmp_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            snmp_state: Default::default(),
             sessions: Manager::new(Manager::default_worker_dir(), reconnect),
             config,
             config_path,
@@ -109,6 +116,7 @@ impl App {
     }
 
     pub fn lock(&mut self) {
+        self.snmp_stop.store(true, std::sync::atomic::Ordering::Relaxed);
         self.vault = None;
         if !self.demo {
             self.index = Index::default();
@@ -155,6 +163,9 @@ impl App {
                 }
                 Ok(CredentialResolution::Ambiguous(list)) => v["credential_choices"] = json!(list.iter().map(|c| c.name.clone()).collect::<Vec<_>>()),
                 _ => {}
+            }
+            if let Ok(Some(dev)) = rj_core::inherit::resolve_snmp(&self.index, id) {
+                v["snmp"] = self.snmp_state.get(&dev).cloned().unwrap_or_else(|| json!({ "light": "grey" }));
             }
             if let Ok(Some((tunnel, _))) = rj_core::inherit::resolve_tunnel(&self.index, id) {
                 v["tunnel"] = json!(self.index.tunnels.iter().find(|t| t.id == tunnel).map(|t| t.name.clone()));
@@ -403,6 +414,11 @@ impl App {
 
     /// Vorführsitzungen für Bildschirmfotos.
     pub fn open_demo_sessions(&mut self) {
+        let mut ids = Vec::new();
+        self.index.for_each_target(|t| ids.push(t.id));
+        for (i, id) in ids.iter().take(40).enumerate() {
+            self.lights.insert(*id, [Light::Green, Light::Green, Light::Yellow, Light::Green, Light::Red, Light::Grey][i % 6]);
+        }
         let sample = "\x1b[1;32mrjtest@srv-01\x1b[0m:\x1b[1;34m~\x1b[0m$ apt list --upgradable\r\n\
             Auflistung… Fertig\r\n\x1b[32mopenssl\x1b[0m/noble-updates 3.0.13-0ubuntu3.5 amd64 [aktualisierbar]\r\n\
             \x1b[32mlibssl3\x1b[0m/noble-updates 3.0.13-0ubuntu3.5 amd64 [aktualisierbar]\r\n\
@@ -435,13 +451,105 @@ impl App {
                         let mut n = 0;
                         self.index.for_each_target(|_| n += 1);
                         self.vault = Some(v);
+                        self.start_snmp();
                         out.push(UiEvent::Unlocked { targets: n });
                     }
                     Err(reason) => out.push(UiEvent::UnlockFailed { reason }),
                 }
             }
         }
+        let mut changed = false;
+        if let Some(rx) = &self.snmp_rx {
+            while let Ok((dev, light, state)) = rx.try_recv() {
+                self.snmp_state.insert(dev, state);
+                let l = match light {
+                    rj_snmp::Light::Grey => Light::Grey,
+                    rj_snmp::Light::Green => Light::Green,
+                    rj_snmp::Light::Yellow => Light::Yellow,
+                    rj_snmp::Light::Red => Light::Red,
+                };
+                // Alle Ziele, die das Gerät erben, und Ordner, die es nennen.
+                let mut ids = Vec::new();
+                self.index.for_each_target(|t| {
+                    if rj_core::inherit::resolve_snmp(&self.index, t.id).ok().flatten() == Some(dev) {
+                        ids.push(t.id);
+                    }
+                });
+                fn folders(f: &rj_core::Folder, dev: Uuid, out: &mut Vec<Uuid>) {
+                    if f.settings.snmp == Some(rj_core::SnmpSetting::Device(dev)) {
+                        out.push(f.id);
+                    }
+                    for c in &f.children {
+                        if let Node::Folder(sub) = c {
+                            folders(sub, dev, out);
+                        }
+                    }
+                }
+                folders(&self.index.root, dev, &mut ids);
+                for id in ids {
+                    if self.lights.insert(id, l) != Some(l) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if changed {
+            out.push(UiEvent::TreeChanged);
+        }
         out
+    }
+
+    /// SNMP-Überwachung aller Geräte im Index (Hintergrund, alle 30 s).
+    pub fn start_snmp(&mut self) {
+        self.snmp_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let Some(vault) = &self.vault else { return };
+        let mut monitors = Vec::new();
+        for d in &self.index.snmp_devices {
+            let Ok(c) = vault.resolve(&d.credential) else { continue };
+            let credentials = match d.version {
+                rj_core::SnmpVersion::V2c => rj_snmp::Credentials::V2c { community: c.data.password.clone() },
+                rj_core::SnmpVersion::V3 => rj_snmp::Credentials::V3 {
+                    user: c.data.username.clone(),
+                    auth: rj_snmp::AuthProto::Sha1,
+                    auth_password: c.data.password.clone(),
+                    privacy: Some((rj_snmp::PrivProto::Aes128, c.data.password.clone())),
+                },
+            };
+            let dev = rj_snmp::Device { host: d.host.clone(), port: d.port.unwrap_or(161), credentials, timeout: Duration::from_secs(3) };
+            monitors.push((d.id, rj_snmp::Monitor::new(dev)));
+        }
+        if monitors.is_empty() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.snmp_rx = Some(rx);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.snmp_stop = stop.clone();
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                for (id, m) in &mut monitors {
+                    let light = m.poll(start.elapsed().as_secs());
+                    let state = json!({
+                        "light": light,
+                        "error": m.last_error,
+                        "cpu": m.cpu.hour.iter().map(|x| x.1).collect::<Vec<_>>(),
+                        "mem": m.mem.hour.iter().map(|x| x.1).collect::<Vec<_>>(),
+                        "in": m.throughput_in.hour.iter().map(|x| x.1).collect::<Vec<_>>(),
+                        "out": m.throughput_out.hour.iter().map(|x| x.1).collect::<Vec<_>>(),
+                    });
+                    if tx.send((*id, light, state)).is_err() {
+                        return;
+                    }
+                }
+                for _ in 0..300 {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        });
     }
 
     pub fn mouse(&mut self, s: SessionId, x: i32, y: i32, button: i32, down: bool) {

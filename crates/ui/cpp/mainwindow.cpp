@@ -12,6 +12,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QKeySequence>
 #include <QtGui/QPainter>
+#include <QtGui/QPainterPath>
 #include <QtGui/QShortcut>
 #include <QtSvg/QSvgRenderer>
 #include <QtWidgets/QApplication>
@@ -132,6 +133,50 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		addNodes(item, n.value(QStringLiteral("children")).toArray());
 	}
 }
+
+/// Kleines Verlaufsdiagramm.
+class Sparkline : public QWidget
+{
+public:
+	Sparkline(const QString& title, const QJsonArray& values, const QString& unit, QWidget* parent)
+	  : QWidget(parent)
+	  , m_title(title)
+	  , m_unit(unit)
+	{
+		for (const QJsonValue& v : values)
+			m_values << v.toDouble();
+		setMinimumSize(260, 56);
+	}
+
+protected:
+	void paintEvent(QPaintEvent*) override
+	{
+		QPainter p(this);
+		p.setRenderHint(QPainter::Antialiasing);
+		p.fillRect(rect(), palette().base());
+		p.setPen(palette().text().color());
+		const QString last = m_values.isEmpty() ? QStringLiteral("–") : QString::number(m_values.last(), 'f', 1) + m_unit;
+		p.drawText(rect().adjusted(4, 2, -4, -2), Qt::AlignTop | Qt::AlignLeft, m_title + QStringLiteral(": ") + last);
+		if (m_values.size() < 2)
+			return;
+		double mx = 1;
+		for (double v : m_values)
+			mx = qMax(mx, v);
+		const QRectF area = QRectF(rect()).adjusted(4, 20, -4, -4);
+		QPainterPath path;
+		for (int i = 0; i < m_values.size(); ++i)
+		{
+			const QPointF pt(area.left() + area.width() * i / (m_values.size() - 1), area.bottom() - area.height() * m_values[i] / mx);
+			i == 0 ? path.moveTo(pt) : path.lineTo(pt);
+		}
+		p.setPen(QPen(palette().highlight().color(), 2));
+		p.drawPath(path);
+	}
+
+private:
+	QString m_title, m_unit;
+	QVector<double> m_values;
+};
 
 /// Dialog zur Auswahl eines Zugangsdatensatzes.
 class CredentialDialog : public QDialog
@@ -503,7 +548,12 @@ void MainWindow::reloadTree()
 	if (!m_search->text().isEmpty())
 		m_tree->expandAll();
 	else
+	{
 		m_tree->expandToDepth(0);
+		// Ersten Ordner mit Zielen aufklappen.
+		if (m_model->rowCount() > 0)
+			m_tree->expand(m_model->index(0, 0, m_model->index(0, 0)));
+	}
 }
 
 int MainWindow::treeRowCount() const
@@ -625,6 +675,17 @@ void MainWindow::showProperties(const QString& id)
 		auto* l = new QLabel(v.isDouble() ? QString::number(v.toInt()) : v.toString(), &d);
 		l->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
 		form->addRow(QString::fromUtf8(k[1]) + QLatin1Char(':'), l);
+	}
+	if (p.contains(QStringLiteral("snmp")))
+	{
+		const QJsonObject s = p.value(QStringLiteral("snmp")).toObject();
+		const QString light = s.value(QStringLiteral("light")).toString();
+		const QString state = light == QLatin1String("green") ? QStringLiteral("grün") : light == QLatin1String("yellow") ? QStringLiteral("gelb") : light == QLatin1String("red") ? QStringLiteral("rot") : QStringLiteral("grau (keine Antwort)");
+		form->addRow(QStringLiteral("SNMP:"), new QLabel(state + (s.value(QStringLiteral("error")).isString() ? QStringLiteral(" – ") + s.value(QStringLiteral("error")).toString() : QString()), &d));
+		form->addRow(new Sparkline(QStringLiteral("CPU"), s.value(QStringLiteral("cpu")).toArray(), QStringLiteral(" %"), &d));
+		form->addRow(new Sparkline(QStringLiteral("Speicher"), s.value(QStringLiteral("mem")).toArray(), QStringLiteral(" %"), &d));
+		form->addRow(new Sparkline(QStringLiteral("Durchsatz ein"), s.value(QStringLiteral("in")).toArray(), QStringLiteral(" bit/s"), &d));
+		form->addRow(new Sparkline(QStringLiteral("Durchsatz aus"), s.value(QStringLiteral("out")).toArray(), QStringLiteral(" bit/s"), &d));
 	}
 	auto* b = new QDialogButtonBox(QDialogButtonBox::Close, &d);
 	b->button(QDialogButtonBox::Close)->setText(QStringLiteral("Schließen"));
@@ -924,6 +985,8 @@ void MainWindow::poll()
 			}
 			else if (t == QLatin1String("title") && p)
 				p->setToolTip(e.value(QStringLiteral("title")).toString());
+			else if (t == QLatin1String("tree_changed"))
+				reloadTree();
 			else if (t == QLatin1String("unlocked"))
 			{
 				reloadTree();

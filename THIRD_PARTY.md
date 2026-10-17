@@ -8,6 +8,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 |
 | aead | 0.5.2 | MIT OR Apache-2.0 |
 | aead | 0.6.1 | MIT OR Apache-2.0 |
+| aes | 0.8.4 | MIT OR Apache-2.0 |
 | aes | 0.9.3 | MIT OR Apache-2.0 |
 | aes-gcm | 0.11.1 | Apache-2.0 OR MIT |
 | aho-corasick | 1.1.5 | Unlicense OR MIT |
@@ -16,6 +17,9 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | anyhow | 1.0.104 | MIT OR Apache-2.0 |
 | argon2 | 0.6.0 | MIT OR Apache-2.0 |
 | arrayvec | 0.7.8 | MIT OR Apache-2.0 |
+| asn1-rs | 0.6.2 | MIT OR Apache-2.0 |
+| asn1-rs-derive | 0.5.1 | MIT OR Apache-2.0 |
+| asn1-rs-impl | 0.2.0 | MIT/Apache-2.0 |
 | atomic-polyfill | 1.0.3 | MIT OR Apache-2.0 |
 | atomic-waker | 1.1.2 | Apache-2.0 OR MIT |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT |
@@ -35,15 +39,18 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 |
 | block-buffer | 0.12.1 | MIT OR Apache-2.0 |
 | block-modes | 0.9.1 | MIT OR Apache-2.0 |
+| block-padding | 0.3.3 | MIT OR Apache-2.0 |
 | block-padding | 0.4.2 | MIT OR Apache-2.0 |
 | blowfish | 0.10.0 | MIT OR Apache-2.0 |
 | boringtun | 0.7.1 | BSD-3-Clause |
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 |
 | byteorder | 1.5.0 | Unlicense OR MIT |
 | bytes | 1.12.1 | MIT |
+| cbc | 0.1.2 | MIT OR Apache-2.0 |
 | cbc | 0.2.1 | MIT OR Apache-2.0 |
 | cc | 1.8.0 | MIT OR Apache-2.0 |
 | cexpr | 0.6.0 | Apache-2.0/MIT |
+| cfb-mode | 0.8.2 | MIT OR Apache-2.0 |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 |
 | cfg_aliases | 0.2.2 | MIT |
 | chacha20 | 0.10.2 | MIT OR Apache-2.0 |
@@ -100,6 +107,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | des | 0.9.0 | MIT OR Apache-2.0 |
 | digest | 0.10.7 | MIT OR Apache-2.0 |
 | digest | 0.11.3 | MIT OR Apache-2.0 |
+| displaydoc | 0.2.7 | MIT OR Apache-2.0 |
 | dunce | 1.0.5 | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | ecdsa | 0.17.0 | Apache-2.0 OR MIT |
 | ed25519 | 3.0.0 | Apache-2.0 OR MIT |
@@ -131,6 +139,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | generic-array | 0.14.7 | MIT |
 | generic-array | 1.4.5 | MIT |
 | getrandom | 0.2.17 | MIT OR Apache-2.0 |
+| getrandom | 0.3.4 | MIT OR Apache-2.0 |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 |
 | ghash | 0.6.0 | Apache-2.0 OR MIT |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
@@ -172,6 +181,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | managed | 0.8.0 | 0BSD |
+| md-5 | 0.10.6 | MIT OR Apache-2.0 |
 | md4 | 0.10.2 | MIT OR Apache-2.0 |
 | md5 | 0.8.1 | Apache-2.0 OR MIT |
 | memchr | 2.8.3 | Unlicense OR MIT |
@@ -211,6 +221,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | polyval | 0.7.3 | Apache-2.0 OR MIT |
 | portable-atomic | 1.15.0 | Apache-2.0 OR MIT |
 | postcard | 1.1.3 | MIT OR Apache-2.0 |
+| ppv-lite86 | 0.2.21 | MIT OR Apache-2.0 |
 | prettyplease | 0.2.37 | MIT OR Apache-2.0 |
 | primefield | 0.14.0 | Apache-2.0 OR MIT |
 | primeorder | 0.14.0 | Apache-2.0 OR MIT |
@@ -218,10 +229,14 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | qt-build-utils | 0.10.0 | MIT OR Apache-2.0 |
 | quick-xml | 0.42.0 | MIT |
 | quote | 1.0.47 | MIT OR Apache-2.0 |
+| r-efi | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | rand | 0.10.3 | MIT OR Apache-2.0 |
+| rand | 0.9.5 | MIT OR Apache-2.0 |
+| rand_chacha | 0.9.0 | MIT OR Apache-2.0 |
 | rand_core | 0.10.1 | MIT OR Apache-2.0 |
 | rand_core | 0.6.4 | MIT OR Apache-2.0 |
+| rand_core | 0.9.5 | MIT OR Apache-2.0 |
 | redox_syscall | 0.5.18 | MIT |
 | regex | 1.13.1 | MIT OR Apache-2.0 |
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 |
@@ -235,6 +250,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | rust-argon2 | 3.0.0 | MIT/Apache-2.0 |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
+| rusticata-macros | 4.1.0 | MIT/Apache-2.0 |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustix-openpty | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
@@ -254,6 +270,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | serde_json | 1.0.154 | MIT OR Apache-2.0 |
 | serde_spanned | 0.6.9 | MIT OR Apache-2.0 |
 | serdect | 0.4.3 | Apache-2.0 OR MIT |
+| sha1 | 0.10.7 | MIT OR Apache-2.0 |
 | sha1 | 0.11.0 | MIT OR Apache-2.0 |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 |
 | sha2 | 0.11.1 | MIT OR Apache-2.0 |
@@ -268,6 +285,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | slab | 0.4.12 | MIT |
 | smallvec | 1.16.3 | MIT OR Apache-2.0 |
 | smoltcp | 0.14.0 | 0BSD |
+| snmp2 | 0.5.2 | MIT OR Apache-2.0 |
 | socket2 | 0.6.5 | MIT OR Apache-2.0 |
 | spin | 0.9.9 | MIT |
 | spki | 0.8.1 | Apache-2.0 OR MIT |
@@ -280,6 +298,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | subtle | 2.6.1 | BSD-3-Clause |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.9 | MIT OR Apache-2.0 |
+| synstructure | 0.13.2 | MIT |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | termcolor | 1.4.1 | Unlicense OR MIT |
 | thiserror | 1.0.69 | MIT OR Apache-2.0 |
@@ -310,6 +329,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | version_check | 0.9.5 | MIT/Apache-2.0 |
 | vte | 0.15.0 | Apache-2.0 OR MIT |
 | wasi | 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| wasip2 | 1.0.4+wasi-0.2.12 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | wasm-bindgen | 0.2.129 | MIT OR Apache-2.0 |
 | wasm-bindgen-futures | 0.4.79 | MIT OR Apache-2.0 |
 | wasm-bindgen-macro | 0.2.129 | MIT OR Apache-2.0 |
@@ -341,8 +361,11 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | windows_x86_64_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
 | windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 |
 | winnow | 0.7.15 | MIT |
+| wit-bindgen | 0.57.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | wnaf | 0.14.1 | Apache-2.0 OR MIT |
 | x25519-dalek | 2.0.1 | BSD-3-Clause |
+| zerocopy | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT |
+| zerocopy-derive | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | zeroize | 1.9.1 | Apache-2.0 OR MIT |
 | zeroize_derive | 1.5.0 | Apache-2.0 OR MIT |
 | zip | 9.0.4 | MIT |

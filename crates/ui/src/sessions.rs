@@ -40,6 +40,8 @@ pub enum UiEvent {
     Title { s: SessionId, title: String },
     Bell { s: SessionId },
     Unlocked { targets: usize },
+    /// Ampeln haben sich geändert; Baum neu zeichnen.
+    TreeChanged,
     UnlockFailed { reason: String },
 }
 
