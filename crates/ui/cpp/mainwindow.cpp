@@ -39,6 +39,13 @@
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QTableWidget>
 #include <QtWidgets/QVBoxLayout>
+#include <QtCore/QAbstractNativeEventFilter>
+#ifdef Q_OS_LINUX
+#include <QtDBus/QDBusConnection>
+#endif
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 QElapsedTimer MainWindow::startClock;
 
@@ -152,6 +159,31 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		}
 	}
 }
+
+#ifdef Q_OS_WIN
+/// Energiestatus-Meldungen des Fensters (Aufwachen aus dem Standby).
+class PowerFilter : public QAbstractNativeEventFilter
+{
+public:
+	explicit PowerFilter(std::function<void()> resumed)
+	  : m_resumed(std::move(resumed))
+	{
+	}
+	bool nativeEventFilter(const QByteArray& type, void* message, qintptr*) override
+	{
+		if (type == "windows_generic_MSG")
+		{
+			const MSG* m = static_cast<const MSG*>(message);
+			if (m->message == WM_POWERBROADCAST && (m->wParam == PBT_APMRESUMEAUTOMATIC || m->wParam == PBT_APMRESUMESUSPEND))
+				m_resumed();
+		}
+		return false;
+	}
+
+private:
+	std::function<void()> m_resumed;
+};
+#endif
 
 /// Baum mit Ziehen und Ablegen: verschoben wird im Index, nicht im Modell.
 class RjTree : public QTreeView
@@ -476,6 +508,40 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		m_backend->unlock(path, pw, keyFile);
 		statusBar()->showMessage(T(m_backend, "status.unlocking"));
 	});
+	// Hintergrundaufgaben in der Statuszeile: Fortschritt und Abbruch.
+	m_jobsBox = new QWidget(this);
+	auto* jl = new QHBoxLayout(m_jobsBox);
+	jl->setContentsMargins(0, 0, 0, 0);
+	auto* busy = new QProgressBar(m_jobsBox);
+	busy->setRange(0, 0);
+	busy->setMaximumWidth(120);
+	busy->setMaximumHeight(16);
+	m_jobsLabel = new QLabel(m_jobsBox);
+	auto* cancelJob = new QPushButton(T(m_backend, "jobs.cancel"), m_jobsBox);
+	cancelJob->setObjectName(QStringLiteral("cancelJob"));
+	connect(cancelJob, &QPushButton::clicked, this, [this] {
+		const QJsonArray jobs = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("jobs") } }).toUtf8()).array();
+		if (!jobs.isEmpty())
+			edit({ { QStringLiteral("op"), QStringLiteral("cancel_job") }, { QStringLiteral("job"), jobs.first().toObject().value(QStringLiteral("id")) } });
+		updateJobs();
+	});
+	jl->addWidget(busy);
+	jl->addWidget(m_jobsLabel);
+	jl->addWidget(cancelJob);
+	statusBar()->addPermanentWidget(m_jobsBox);
+	m_jobsBox->hide();
+	// Leerlauf: Eingaben überall im Programm zählen.
+	m_activityClock.start();
+	qApp->installEventFilter(this);
+#ifdef Q_OS_LINUX
+	QDBusConnection::systemBus().connect(QStringLiteral("org.freedesktop.login1"), QStringLiteral("/org/freedesktop/login1"),
+	                                     QStringLiteral("org.freedesktop.login1.Manager"), QStringLiteral("PrepareForSleep"), this,
+	                                     SLOT(onPrepareForSleep(bool)));
+#endif
+#ifdef Q_OS_WIN
+	static PowerFilter power([this] { systemResumed(); });
+	qApp->installNativeEventFilter(&power);
+#endif
 	connect(m_tree, &QTreeView::expanded, this, [this](const QModelIndex& i) {
 		const QModelIndex first = m_model->index(0, 0, i);
 		if (first.isValid() && first.data(RolePlaceholder).toBool())
@@ -568,11 +634,7 @@ void MainWindow::buildMenus()
 		}
 	});
 	file->addAction(T(m_backend, "menu.file.save"), QKeySequence::Save, this, [this] { saveAll(); });
-	file->addAction(T(m_backend, "menu.file.lock"), QKeySequence(QStringLiteral("Ctrl+L")), this, [this] {
-		m_backend->lock();
-		reloadTree();
-		statusBar()->showMessage(T(m_backend, "status.locked"));
-	});
+	file->addAction(T(m_backend, "menu.file.lock"), QKeySequence(QStringLiteral("Ctrl+L")), this, [this] { lockNow(false); });
 	file->addSeparator();
 	file->addAction(T(m_backend, "menu.file.quit"), QKeySequence::Quit, this, &QWidget::close);
 	QMenu* editMenu = menuBar()->addMenu(T(m_backend, "menu.edit"));
@@ -601,6 +663,8 @@ void MainWindow::buildMenus()
 	editMenu->addAction(T(m_backend, "menu.edit.view.new"), this, [this] { viewCommand(QStringLiteral("new")); });
 	editMenu->addAction(T(m_backend, "menu.edit.view.rename"), this, [this] { viewCommand(QStringLiteral("rename")); });
 	editMenu->addAction(T(m_backend, "menu.edit.view.delete"), this, [this] { viewCommand(QStringLiteral("delete")); });
+	QMenu* extras = menuBar()->addMenu(T(m_backend, "menu.extras"));
+	extras->addAction(T(m_backend, "menu.extras.idle"), this, [this] { idleSettings(); });
 	QMenu* view = menuBar()->addMenu(T(m_backend, "menu.view"));
 	const char* modes[] = { "single", "one_by_two", "two_by_two", "free" };
 	int n = 1;
@@ -723,6 +787,18 @@ void MainWindow::connectSelected(const QString& credential, bool remember)
 void MainWindow::handleConnectResult(const QString& id, const QString& json)
 {
 	const QJsonObject r = parseObject(json);
+	if (r.contains(QStringLiteral("pending")))
+	{
+		// Tunnel oder Konsole wird im Hintergrund aufgebaut.
+		m_jobTargets.insert(qulonglong(r.value(QStringLiteral("pending")).toInteger()), id);
+		updateJobs();
+		return;
+	}
+	if (r.contains(QStringLiteral("certificate")))
+	{
+		statusBar()->showMessage(T(m_backend, "guest.cert.unknown").arg(r.value(QStringLiteral("certificate")).toObject().value(QStringLiteral("host")).toString()), 8000);
+		return;
+	}
 	if (r.contains(QStringLiteral("session")))
 	{
 		rebuildTabs();
@@ -811,10 +887,35 @@ void MainWindow::loadGuests(const QModelIndex& index)
 	if (!parent)
 		return;
 	const QString target = index.data(RoleId).toString();
-	const QString proto = index.data(RoleProtocol).toString();
-	QApplication::setOverrideCursor(Qt::WaitCursor);
-	QJsonObject r = parseObject(m_backend->guestsJson(target));
-	QApplication::restoreOverrideCursor();
+	const QJsonObject r = parseObject(m_backend->guestsJson(target));
+	if (r.contains(QStringLiteral("pending")))
+	{
+		// Abruf läuft im Hintergrund; das Ergebnis kommt als Ereignis.
+		if (parent->rowCount() == 1 && parent->child(0)->data(RolePlaceholder).toBool())
+			parent->child(0)->setText(QStringLiteral("Wird geladen …"));
+		updateJobs();
+		return;
+	}
+	applyGuests(target, r);
+}
+
+void MainWindow::applyGuests(const QString& target, QJsonObject r)
+{
+	QStandardItem* parent = nullptr;
+	std::function<void(const QModelIndex&)> find = [&](const QModelIndex& p) {
+		for (int row = 0; row < m_model->rowCount(p) && !parent; ++row)
+		{
+			const QModelIndex i = m_model->index(row, 0, p);
+			if (i.data(RoleId).toString() == target && !i.data(RoleGuest).isValid())
+				parent = m_model->itemFromIndex(i);
+			else
+				find(i);
+		}
+	};
+	find(QModelIndex());
+	if (!parent)
+		return;
+	const QString proto = parent->data(RoleProtocol).toString();
 	if (r.contains(QStringLiteral("certificate")))
 	{
 		// Unbekanntes oder geändertes Zertifikat: nie still annehmen.
@@ -830,7 +931,8 @@ void MainWindow::loadGuests(const QModelIndex& index)
 		if (box.clickedButton() != yes ||
 		    !m_backend->acceptProxmoxCertificate(c.value(QStringLiteral("host")).toString(), c.value(QStringLiteral("fingerprint")).toString()))
 			return;
-		r = parseObject(m_backend->guestsJson(target));
+		loadGuests(parent->index());
+		return;
 	}
 	parent->removeRows(0, parent->rowCount());
 	if (r.contains(QStringLiteral("error")))
@@ -873,7 +975,9 @@ void MainWindow::guestAction(const QModelIndex& i, const QString& action)
 	    QMessageBox::question(this, T(m_backend, "app.title"), T(m_backend, "guest.stop.confirm").arg(i.data(Qt::DisplayRole).toString())) != QMessageBox::Yes)
 		return;
 	const QJsonObject r = parseObject(m_backend->guestAction(i.data(RoleGuestTarget).toString(), i.data(RoleGuest).toString(), action));
-	if (r.contains(QStringLiteral("error")))
+	if (r.contains(QStringLiteral("pending")))
+		updateJobs();
+	else if (r.contains(QStringLiteral("error")))
 		QMessageBox::warning(this, T(m_backend, "app.title"), r.value(QStringLiteral("error")).toString());
 	else
 		statusBar()->showMessage(T(m_backend, "guest.action.sent"), 4000);
@@ -1179,7 +1283,15 @@ void MainWindow::updateStatus()
 
 void MainWindow::poll()
 {
-	const QString json = m_backend->poll();
+	handleEvents(m_backend->poll());
+	for (const auto s : std::as_const(m_dirtyTerminals))
+		if (auto* p = pane(s); p && p->terminal())
+			p->terminal()->refresh();
+	m_dirtyTerminals.clear();
+}
+
+void MainWindow::handleEvents(const QString& json)
+{
 	if (json.size() > 2)
 	{
 		for (const QJsonValue& v : QJsonDocument::fromJson(json.toUtf8()).array())
@@ -1231,6 +1343,9 @@ void MainWindow::poll()
 			else if (t == QLatin1String("unlocked"))
 			{
 				m_overlay->hide();
+				for (auto& w : m_windows)
+					if (w)
+						w->show();
 				reloadViews();
 				reloadTree();
 				for (auto* ed : findChildren<PropertiesTab*>())
@@ -1248,12 +1363,127 @@ void MainWindow::poll()
 				rebuildTabs();
 				statusBar()->showMessage(T(m_backend, "status.connect_all.done"), 5000);
 			}
+			else if (t == QLatin1String("session_opened"))
+			{
+				m_jobTargets.remove(qulonglong(e.value(QStringLiteral("job")).toInteger()));
+				handleConnectResult(QString(), QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("session"), e.value(QStringLiteral("s")) } }).toJson()));
+			}
+			else if (t == QLatin1String("job_failed"))
+			{
+				const QString target = m_jobTargets.take(qulonglong(e.value(QStringLiteral("job")).toInteger()));
+				QJsonObject r;
+				if (e.value(QStringLiteral("hostkey")).isObject())
+					r.insert(QStringLiteral("hostkey"), e.value(QStringLiteral("hostkey")));
+				else
+					r.insert(QStringLiteral("error"), e.value(QStringLiteral("error")));
+				if (target.isEmpty())
+					statusBar()->showMessage(e.value(QStringLiteral("error")).toString(), 8000);
+				else
+					handleConnectResult(target, QString::fromUtf8(QJsonDocument(r).toJson()));
+			}
+			else if (t == QLatin1String("job_result"))
+			{
+				const QString kind = e.value(QStringLiteral("kind")).toString();
+				const QJsonObject r = parseObject(e.value(QStringLiteral("json")).toString());
+				if (kind == QLatin1String("guests"))
+					applyGuests(e.value(QStringLiteral("target")).toString(), r);
+				else if (r.contains(QStringLiteral("error")))
+					statusBar()->showMessage(T(m_backend, "edit.error").arg(r.value(QStringLiteral("error")).toString()), 8000);
+				else if (kind == QLatin1String("guest_action"))
+					statusBar()->showMessage(T(m_backend, "guest.action.sent"), 4000);
+				else
+					handleConnectResult(e.value(QStringLiteral("target")).toString(), e.value(QStringLiteral("json")).toString());
+			}
+			else if (t == QLatin1String("jobs_changed"))
+				updateJobs();
+			else if (t == QLatin1String("locked"))
+			{
+				lockNow(true);
+				statusBar()->showMessage(T(m_backend, "status.locked.idle"));
+			}
+			else if (t == QLatin1String("resumed"))
+				statusBar()->showMessage(T(m_backend, "status.resumed"), 8000);
 		}
 	}
-	for (const auto s : std::as_const(m_dirtyTerminals))
-		if (auto* p = pane(s); p && p->terminal())
-			p->terminal()->refresh();
-	m_dirtyTerminals.clear();
+}
+
+void MainWindow::updateJobs()
+{
+	const QJsonArray jobs = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("jobs") } }).toUtf8()).array();
+	m_jobsBox->setVisible(!jobs.isEmpty());
+	if (jobs.isEmpty())
+		return;
+	const QJsonObject first = jobs.first().toObject();
+	QString text = T(m_backend, "jobs.running").arg(first.value(QStringLiteral("label")).toString()).arg(first.value(QStringLiteral("secs")).toInt());
+	if (jobs.size() > 1)
+		text += QStringLiteral(" · ") + T(m_backend, "jobs.more").arg(jobs.size());
+	m_jobsLabel->setText(text);
+}
+
+bool MainWindow::eventFilter(QObject* o, QEvent* e)
+{
+	switch (e->type())
+	{
+	case QEvent::KeyPress:
+	case QEvent::MouseButtonPress:
+	case QEvent::Wheel:
+	case QEvent::MouseMove:
+		// Höchstens einmal je Sekunde an den Leerlauf-Zeitgeber melden.
+		if (m_activityClock.elapsed() - m_lastActivity > 1000)
+		{
+			m_lastActivity = m_activityClock.elapsed();
+			m_backend->activity();
+		}
+		break;
+	default:
+		break;
+	}
+	return QMainWindow::eventFilter(o, e);
+}
+
+void MainWindow::onPrepareForSleep(bool sleeping)
+{
+	if (!sleeping)
+		systemResumed();
+}
+
+void MainWindow::systemResumed()
+{
+	handleEvents(m_backend->systemSleep(false));
+}
+
+void MainWindow::lockNow(bool alreadyLocked)
+{
+	if (!alreadyLocked)
+		m_backend->lock();
+	// Abgerissene Fenster zeigen Sitzungsbilder: ebenfalls verbergen.
+	for (auto& w : m_windows)
+		if (w)
+			w->hide();
+	for (auto* ed : findChildren<PropertiesTab*>())
+		ed->wipeSecrets();
+	reloadTree();
+	statusBar()->showMessage(T(m_backend, "status.locked"));
+	showUnlock(true);
+}
+
+void MainWindow::idleSettings()
+{
+	const QJsonObject cur = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("settings") } }));
+	QList<QPair<QString, QString>> items{ { T(m_backend, "idle.off"), QStringLiteral("0") } };
+	for (int m : { 5, 10, 15, 30, 60 })
+		items.append({ T(m_backend, "idle.minutes").arg(m), QString::number(m) });
+	m_bar->choose(T(m_backend, "bar.idle"), items, nullptr, T(m_backend, "bar.idle.disconnect"), [this](const QString& v, bool disconnect) {
+		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") },
+		       { QStringLiteral("lock_after_idle_mins"), v.toInt() },
+		       { QStringLiteral("disconnect_on_lock"), disconnect } });
+		statusBar()->showMessage(T(m_backend, "status.idle").arg(v == QLatin1String("0") ? T(m_backend, "idle.off") : T(m_backend, "idle.minutes").arg(v)), 5000);
+	});
+	const int i = m_bar->combo()->findData(QString::number(cur.value(QStringLiteral("lock_after_idle_mins")).toInt()));
+	if (i >= 0)
+		m_bar->combo()->setCurrentIndex(i);
+	if (auto* c = m_bar->findChild<QCheckBox*>())
+		c->setChecked(cur.value(QStringLiteral("disconnect_on_lock")).toBool());
 }
 
 void MainWindow::showCredentialChoiceForScreenshot()

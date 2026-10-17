@@ -305,7 +305,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("editor") | Some("check_text") | Some("apply_preview")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("editor") | Some("check_text") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -393,6 +393,36 @@ impl App {
                 None => Err("Nichts rückgängig zu machen".into()),
             },
             "undo_label" => Ok(json!({ "label": self.history.last_label() })),
+            "jobs" => Ok(self.jobs.json()),
+            "cancel_job" => {
+                let job = c.get("job").and_then(Value::as_u64).unwrap_or(0);
+                if self.jobs.cancel(job) {
+                    Ok(json!({ "ok": true }))
+                } else {
+                    Err("Aufgabe läuft nicht mehr".into())
+                }
+            }
+            "settings" => Ok(json!({
+                "lock_after_idle_mins": self.config.security.lock_after_idle_mins,
+                "disconnect_on_lock": self.config.security.disconnect_on_lock,
+                "connect_all_parallel": self.config.connection.connect_all_parallel,
+            })),
+            "set_settings" => {
+                if let Some(m) = c.get("lock_after_idle_mins").and_then(Value::as_u64) {
+                    self.config.security.lock_after_idle_mins = m.min(24 * 60) as u32;
+                    self.idle.set_minutes(self.config.security.lock_after_idle_mins, std::time::Instant::now());
+                }
+                if let Some(d) = c.get("disconnect_on_lock").and_then(Value::as_bool) {
+                    self.config.security.disconnect_on_lock = d;
+                }
+                if let Some(n) = c.get("connect_all_parallel").and_then(Value::as_u64) {
+                    self.config.connection.connect_all_parallel = n.clamp(1, 64) as u32;
+                }
+                match &self.config_path {
+                    Some(p) => self.config.save(p).map(|_| json!({ "ok": true })).map_err(|e| e.to_string()),
+                    None => Ok(json!({ "ok": true })),
+                }
+            }
             "save" => return self.save_with(str_of(&c, "choice")),
             "connect_all" => self.op_connect_all(&c),
             "update_task" => self.simple("Aufgabe ändern", |idx| {
@@ -753,14 +783,25 @@ impl App {
     pub(crate) fn stagger_tick(&mut self) {
         let Some(mut st) = self.stagger.take() else { return };
         let (w, h) = self.connect_size;
-        let states: BTreeMap<SessionId, String> = self.sessions.ids().into_iter().map(|s| (s, self.sessions.state(s).unwrap_or_default().to_string())).collect();
+        let mut states: BTreeMap<SessionId, String> = self.sessions.ids().into_iter().map(|s| (s, self.sessions.state(s).unwrap_or_default().to_string())).collect();
+        // Verbindungen über Tunnel laufen erst als Hintergrundaufgabe.
+        for (job, r) in &self.job_results {
+            let st = match r {
+                Ok(s) => states.get(s).cloned().unwrap_or_else(|| "failed".into()),
+                Err(_) => "failed".into(),
+            };
+            states.insert(*job, st);
+        }
+        for job in self.jobs.pending_ids() {
+            states.insert(job, "connecting".into());
+        }
         st.tick(
             |s| states.get(&s).cloned(),
             |t| {
                 let ssh = matches!(edit::node(&self.index, t), Some(Node::Target(x)) if x.protocol == Protocol::Ssh);
                 let (cw, ch) = if ssh { (120, 40) } else { (w, h) };
                 let r: Value = serde_json::from_str(&self.connect(t, None, false, cw, ch)).unwrap_or_default();
-                match r.get("session").and_then(Value::as_u64) {
+                match r.get("session").or_else(|| r.get("pending")).and_then(Value::as_u64) {
                     Some(s) => Ok(s),
                     None => Err(r.get("error").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| r.to_string())),
                 }

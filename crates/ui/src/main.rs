@@ -2,6 +2,9 @@
 //!
 //! Aufruf: `remotejoe [--demo] [--screenshots <ordner>]`
 
+#[global_allocator]
+static ALLOC: rj_ui::alloc::ZeroizingAllocator = rj_ui::alloc::ZeroizingAllocator;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--demo") {

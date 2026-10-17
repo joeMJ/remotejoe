@@ -213,5 +213,19 @@
   "unlock.keyfile": "&Schlüsseldatei (optional)",
   "unlock.button": "&Entsperren",
   "unlock.cancel": "Abbrechen",
-  "unlock.busy": "Wird entsperrt …"
+  "unlock.busy": "Wird entsperrt …",
+  "session.reconnected": "Verbindung neu aufgebaut",
+  "session.locked_reconnect": "Gesperrt: Die Verbindung wird nach dem Entsperren neu aufgebaut.",
+  "menu.extras": "E&xtras",
+  "menu.extras.idle": "Sperre nach &Leerlauf …",
+  "bar.idle": "Sperre nach Leerlauf:",
+  "bar.idle.disconnect": "Sitzungen beim Sperren trennen",
+  "idle.off": "Aus",
+  "idle.minutes": "nach %1 Minuten",
+  "status.idle": "Sperre nach Leerlauf: %1",
+  "jobs.cancel": "Abbrechen",
+  "jobs.running": "%1 (seit %2 s)",
+  "jobs.more": "%1 Hintergrundaufgaben",
+  "status.locked.idle": "Nach Leerlauf gesperrt",
+  "status.resumed": "Aufgewacht: abgebrochene Verbindungen werden neu aufgebaut"
 }

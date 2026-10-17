@@ -33,7 +33,19 @@ pub struct App {
     unlocking: Option<Receiver<Result<Vault, String>>>,
     lights: std::collections::HashMap<Uuid, Light>,
     _rt: tokio::runtime::Runtime,
-    tunnels: TunnelManager,
+    /// Tunnel; aufgebaut wird in Hintergrundaufgaben.
+    pub(crate) tunnels: std::sync::Arc<std::sync::Mutex<TunnelManager>>,
+    /// Freigaben, die warten, weil gerade ein Tunnel aufgebaut wird.
+    deferred_releases: Vec<(Uuid, String, u16)>,
+    /// Hintergrundaufgaben und deren Ergebnis (Sitzung oder Fehler).
+    pub jobs: crate::jobs::Jobs,
+    pub(crate) job_results: std::collections::HashMap<u64, Result<SessionId, String>>,
+    /// Sperre nach Leerlauf und Erkennung des Aufwachens.
+    pub idle: crate::idle::IdleWatch,
+    /// Gesperrt (von Hand oder nach Leerlauf).
+    pub locked: bool,
+    /// Proxmox-Konsolen: Ziel und Gast je Sitzung (zum Neuöffnen).
+    pub(crate) console_sources: std::collections::HashMap<SessionId, (Uuid, String)>,
     known_hosts: KnownHosts,
     /// Zuletzt abgelehnte Rückfrage zu einem Host-Schlüssel eines Sprungservers.
     hop_question: std::sync::Arc<std::sync::Mutex<Option<HostKeyQuestion>>>,
@@ -74,10 +86,17 @@ impl App {
                 let _ = reply.send(false);
             }
         });
-        let tunnels = TunnelManager::new(rt.handle().clone(), known_hosts.clone(), ask);
+        let tunnels = std::sync::Arc::new(std::sync::Mutex::new(TunnelManager::new(rt.handle().clone(), known_hosts.clone(), ask)));
+        let idle = crate::idle::IdleWatch::new(config.security.lock_after_idle_mins, std::time::Instant::now(), std::time::SystemTime::now());
         App {
             _rt: rt,
             tunnels,
+            deferred_releases: Vec::new(),
+            jobs: Default::default(),
+            job_results: Default::default(),
+            idle,
+            locked: false,
+            console_sources: Default::default(),
             known_hosts,
             hop_question,
             session_tunnels: Default::default(),
@@ -131,11 +150,144 @@ impl App {
         }
     }
 
-    pub fn lock(&mut self) {
+    /// Sperren: KDBX-Schlüssel und alle Kennwortpuffer verwerfen
+    /// (überschrieben beim Freigeben). Laufende Sitzungen bleiben verbunden,
+    /// außer `disconnect` ist gesetzt.
+    pub fn lock(&mut self, disconnect: bool) {
         self.snmp_stop.store(true, std::sync::atomic::Ordering::Relaxed);
         self.vault = None;
+        self.unlocking = None;
+        self.import_plan = None;
+        self.history.clear();
+        self.jobs.cancel_all();
+        self.stagger = None;
+        if disconnect {
+            for s in self.sessions.ids() {
+                self.close_session(s);
+            }
+        }
+        self.sessions.lock();
+        self.locked = true;
         if !self.demo {
             self.index = Index::default();
+        }
+    }
+
+    /// Nach dem Entsperren: Zugangsdaten der laufenden Sitzungen wieder
+    /// herstellen (für das Neuverbinden).
+    fn restore_session_credentials(&mut self) {
+        let mut found: std::collections::HashMap<Uuid, Option<CredentialPayload>> = Default::default();
+        let mut ids = Vec::new();
+        self.index.for_each_target(|t| ids.push((t.id, t.protocol)));
+        for (id, proto) in ids {
+            let p = match resolve_credential(&self.index, id) {
+                Ok(CredentialResolution::Found(r)) => self.payload(&r, proto).ok(),
+                _ => None,
+            };
+            found.insert(id, p);
+        }
+        let protocols: std::collections::HashMap<Uuid, Protocol> = {
+            let mut m = std::collections::HashMap::new();
+            self.index.for_each_target(|t| {
+                m.insert(t.id, t.protocol);
+            });
+            m
+        };
+        // Konsolen von Gästen (anderes Protokoll als das Ziel) bleiben unberührt.
+        self.sessions.unlock(|spec| {
+            if protocols.get(&spec.target) != Some(&spec.protocol) {
+                return None;
+            }
+            found.get(&spec.target).cloned().flatten()
+        });
+    }
+
+    /// Eingabe des Benutzers (für die Sperre nach Leerlauf).
+    pub fn activity(&mut self) {
+        self.idle.activity(std::time::Instant::now());
+    }
+
+    /// Aufwachen aus dem Standby (Meldung des Systems oder Sprung der Uhr):
+    /// nie sperren, Leerlauf neu beginnen, abgebrochene Sitzungen sofort neu
+    /// verbinden – Tunnel zuerst.
+    pub fn on_resume(&mut self) -> Vec<UiEvent> {
+        let now = std::time::Instant::now();
+        self.idle.resumed(now, std::time::SystemTime::now());
+        self.sessions.set_resume_window(Some(now + Duration::from_secs(120)));
+        for s in self.sessions.ids() {
+            if matches!(self.sessions.state(s), Some("disconnected") | Some("failed") | Some("crashed")) {
+                self.resume_reconnect(s);
+            }
+        }
+        vec![UiEvent::Resumed]
+    }
+
+    /// Neu verbinden (Benutzer oder Rückstau). Proxmox-Konsolen werden neu
+    /// geöffnet, Tunnel zuerst geprüft und bei Bedarf neu aufgebaut.
+    pub fn reconnect_session(&mut self, s: SessionId) {
+        if self.console_sources.contains_key(&s) {
+            self.reopen_console(s);
+        } else if self.session_tunnels.contains_key(&s) {
+            self.resume_reconnect(s);
+        } else {
+            self.sessions.reconnect(s);
+        }
+    }
+
+    /// Eine Sitzung nach dem Aufwachen neu verbinden; läuft sie über einen
+    /// Tunnel, wird dieser zuerst (im Hintergrund) neu aufgebaut.
+    pub(crate) fn resume_reconnect(&mut self, s: SessionId) {
+        if self.console_sources.contains_key(&s) {
+            self.sessions.mark_resumed(s);
+            self.reopen_console(s);
+            return;
+        }
+        let Some((tid, host, port)) = self.session_tunnels.get(&s).cloned() else {
+            self.sessions.reconnect_resumed(s);
+            return;
+        };
+        let Some(target) = self.sessions.target(s) else { return };
+        let spec = self.index.tunnels.iter().find(|t| t.id == tid).cloned().ok_or_else(|| "Tunnel nicht mehr im Index".to_string()).and_then(|def| self.tunnel_spec(&def, target));
+        let tunnels = self.tunnels.clone();
+        let name = self.index.tunnels.iter().find(|t| t.id == tid).map(|t| t.name.clone()).unwrap_or_default();
+        self.jobs.spawn(format!("Tunnel „{name}“ neu aufbauen"), move |_| {
+            let r: Result<Option<rj_tunnel::Endpoint>, String> = spec.and_then(|spec| {
+                let mut specs = std::collections::HashMap::new();
+                specs.insert(tid, spec);
+                let mut tm = tunnels.lock().unwrap_or_else(|e| e.into_inner());
+                let rebuilt = tm.check(&specs);
+                match rebuilt.into_iter().find(|(id, h, p, _)| *id == tid && *h == host && *p == port) {
+                    Some((_, _, _, Ok(ep))) => Ok(Some(ep)),
+                    Some((_, _, _, Err(e))) => Err(e),
+                    None => Ok(None),
+                }
+            });
+            Box::new(move |app: &mut App, cancelled| {
+                if cancelled {
+                    return Vec::new();
+                }
+                match r {
+                    Ok(ep) => {
+                        if let Some(ep) = ep {
+                            app.sessions.set_endpoint(s, &ep.host, ep.port);
+                        }
+                        if app.sessions.in_resume_window() {
+                            app.sessions.reconnect_resumed(s);
+                        } else {
+                            app.sessions.reconnect(s);
+                        }
+                        Vec::new()
+                    }
+                    Err(e) => vec![UiEvent::Notice { s, text: format!("Tunnel „{name}“: {e}") }],
+                }
+            })
+        });
+    }
+
+    fn release_tunnel(&mut self, id: Uuid, host: String, port: u16) {
+        match self.tunnels.try_lock() {
+            Ok(mut tm) => tm.release(id, &host, port),
+            Err(_) => self.deferred_releases.push((id, host, port)),
         }
     }
 
@@ -299,39 +451,66 @@ impl App {
             },
             credentials: payload,
         };
-        let mut spec = spec;
-        let mut tunnel_use = None;
         if let Some(def) = rj_tunnel::plan(&self.index, target).cloned() {
             let tspec = match self.tunnel_spec(&def, target) {
                 Ok(s) => s,
                 Err(e) => return json!({ "error": format!("Tunnel „{}“: {e}", def.name) }).to_string(),
             };
-            *self.hop_question.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            match self.tunnels.acquire(def.id, &tspec, &t.host, t.effective_port()) {
-                Ok(ep) => {
-                    if t.protocol == Protocol::Ssh {
-                        let mut o: serde_json::Value = serde_json::from_str(&spec.request.options_json).unwrap_or_else(|_| json!({}));
-                        o["host_key_alias"] = json!(format!("{}:{}", t.host, t.effective_port()));
-                        spec.request.options_json = o.to_string();
+            // Tunnelaufbau im Hintergrund; die Oberfläche bleibt bedienbar.
+            let tunnels = self.tunnels.clone();
+            let hq = self.hop_question.clone();
+            let (host, port, proto) = (t.host.clone(), t.effective_port(), t.protocol);
+            let title = rj_core::charset::mark_visible(&t.name, false).into_owned();
+            let job = self.jobs.spawn(format!("Tunnel „{}“ für {}", def.name, title), move |job| {
+                *hq.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                let r = tunnels.lock().unwrap_or_else(|e| e.into_inner()).acquire(def.id, &tspec, &host, port);
+                let q = if r.is_err() { hq.lock().unwrap_or_else(|e| e.into_inner()).take() } else { None };
+                Box::new(move |app: &mut App, cancelled| match r {
+                    Ok(ep) => {
+                        if cancelled {
+                            app.release_tunnel(def.id, host, port);
+                            app.job_results.insert(job, Err("abgebrochen".into()));
+                            return Vec::new();
+                        }
+                        let mut spec = spec;
+                        if proto == Protocol::Ssh {
+                            let mut o: serde_json::Value = serde_json::from_str(&spec.request.options_json).unwrap_or_else(|_| json!({}));
+                            o["host_key_alias"] = json!(format!("{host}:{port}"));
+                            spec.request.options_json = o.to_string();
+                        }
+                        spec.request.host = ep.host;
+                        spec.request.port = ep.port;
+                        let s = app.open_session(spec, Some((def.id, host, port)));
+                        app.job_results.insert(job, Ok(s));
+                        vec![UiEvent::SessionOpened { s, job }]
                     }
-                    spec.request.host = ep.host;
-                    spec.request.port = ep.port;
-                    tunnel_use = Some((def.id, t.host.clone(), t.effective_port()));
-                }
-                Err(e) => {
-                    if let Some(q) = self.hop_question.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                        return json!({ "hostkey": { "host": q.host, "port": q.port, "key": q.key, "text": q.text(), "detail": q.detail() } }).to_string();
+                    Err(e) => {
+                        let error = format!("Tunnel „{}“: {e}", def.name);
+                        app.job_results.insert(job, Err(error.clone()));
+                        if cancelled {
+                            return Vec::new();
+                        }
+                        let hostkey = q.map(|q| json!({ "host": q.host, "port": q.port, "key": q.key, "text": q.text(), "detail": q.detail() }));
+                        vec![UiEvent::JobFailed { job, error, hostkey }]
                     }
-                    return json!({ "error": format!("Tunnel „{}“: {e}", def.name) }).to_string();
-                }
-            }
+                })
+            });
+            return json!({ "pending": job }).to_string();
         }
+        let s = self.open_session(spec, None);
+        json!({ "session": s }).to_string()
+    }
+
+    /// Öffnet eine Sitzung samt Tab; `tunnel` merkt die Tunnelnutzung.
+    pub(crate) fn open_session(&mut self, spec: ConnectSpec, tunnel: Option<(Uuid, String, u16)>) -> SessionId {
+        let title = rj_core::charset::mark_visible(&spec.title, false).into_owned();
         let s = self.sessions.open(spec);
-        if let Some(u) = tunnel_use {
+        self.workspace.open(s, &title);
+        if let Some(u) = tunnel {
+            self.sessions.set_hold(s, true);
             self.session_tunnels.insert(s, u);
         }
-        self.workspace.open(s, &rj_core::charset::mark_visible(&t.name, false));
-        json!({ "session": s }).to_string()
+        s
     }
 
     /// Tunnelbeschreibung mit Zugangsdaten aus der KDBX.
@@ -444,8 +623,9 @@ impl App {
         self.sessions.close(s);
         self.workspace.remove_session(s);
         self.console_bridges.remove(&s);
+        self.console_sources.remove(&s);
         if let Some((id, host, port)) = self.session_tunnels.remove(&s) {
-            self.tunnels.release(id, &host, port);
+            self.release_tunnel(id, host, port);
         }
     }
 
@@ -479,6 +659,41 @@ impl App {
 
     pub fn poll(&mut self) -> Vec<UiEvent> {
         let mut out = self.sessions.poll(Duration::from_millis(0));
+        // Gehaltene Sitzungen (Tunnel, Konsolenbrücke): erst Tunnel bzw. Brücke, dann neu verbinden.
+        for s in self.sessions.take_reconnect_requests() {
+            self.reconnect_session(s);
+        }
+        // Wartende Tunnel-Freigaben.
+        if !self.deferred_releases.is_empty() {
+            if let Ok(mut tm) = self.tunnels.try_lock() {
+                for (id, host, port) in self.deferred_releases.drain(..) {
+                    tm.release(id, &host, port);
+                }
+            }
+        }
+        // Fertige Hintergrundaufgaben.
+        let finished = self.jobs.take_finished();
+        if !finished.is_empty() {
+            for (job, cancelled, cont) in finished {
+                match cont {
+                    Some(c) => out.extend(c(self, cancelled)),
+                    None => {
+                        self.job_results.insert(job, Err("Hintergrundaufgabe abgebrochen".into()));
+                        out.push(UiEvent::JobFailed { job, error: "Hintergrundaufgabe unerwartet beendet".into(), hostkey: None });
+                    }
+                }
+            }
+            out.push(UiEvent::JobsChanged);
+        }
+        // Leerlauf und Aufwachen.
+        match self.idle.tick(std::time::Instant::now(), std::time::SystemTime::now()) {
+            crate::idle::IdleEvent::Lock if !self.locked && (self.vault.is_some() || self.demo) => {
+                self.lock(self.config.security.disconnect_on_lock);
+                out.push(UiEvent::Locked { reason: "idle".into() });
+            }
+            crate::idle::IdleEvent::Resumed => out.extend(self.on_resume()),
+            _ => {}
+        }
         if self.stagger.is_some() {
             self.stagger_tick();
             if self.stagger.is_none() {
@@ -492,9 +707,12 @@ impl App {
                     Ok(v) => {
                         self.index = v.index().index.clone();
                         self.history.clear();
+                        self.locked = false;
+                        self.idle.activity(std::time::Instant::now());
                         let mut n = 0;
                         self.index.for_each_target(|_| n += 1);
                         self.vault = Some(v);
+                        self.restore_session_credentials();
                         self.start_snmp();
                         out.push(UiEvent::Unlocked { targets: n });
                     }
@@ -704,10 +922,35 @@ mod tunnel_tests {
         app.index = idx;
         app.vault = Some(vault);
         let r: serde_json::Value = serde_json::from_str(&app.connect(target, None, false, 80, 24)).unwrap();
-        assert!(r["session"].is_u64(), "{r}");
-        app.close_session(r["session"].as_u64().unwrap());
+        // Tunnelaufbau läuft im Hintergrund; die Sitzung folgt über `poll`.
+        let job = r["pending"].as_u64().unwrap_or_else(|| panic!("{r}"));
+        let start = std::time::Instant::now();
+        let s = loop {
+            let ev = app.poll();
+            if let Some(s) = ev.iter().find_map(|e| match e {
+                UiEvent::SessionOpened { s, job: j } if *j == job => Some(*s),
+                _ => None,
+            }) {
+                break s;
+            }
+            assert!(start.elapsed() < Duration::from_secs(10), "Tunnel nicht aufgebaut");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        app.close_session(s);
         drop(listener);
         let r: serde_json::Value = serde_json::from_str(&app.connect(target, None, false, 80, 24)).unwrap();
-        assert!(r["error"].as_str().unwrap().contains("Tunnel „VPN“"), "{r}");
+        let job = r["pending"].as_u64().unwrap_or_else(|| panic!("{r}"));
+        let start = std::time::Instant::now();
+        let error = loop {
+            if let Some(e) = app.poll().into_iter().find_map(|e| match e {
+                UiEvent::JobFailed { job: j, error, .. } if j == job => Some(error),
+                _ => None,
+            }) {
+                break e;
+            }
+            assert!(start.elapsed() < Duration::from_secs(20), "kein Fehler gemeldet");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(error.contains("Tunnel „VPN“"), "{error}");
     }
 }

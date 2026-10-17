@@ -106,13 +106,15 @@ impl Default for ConnectionDefaults {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecurityDefaults {
-    /// Sperren nach Leerlauf in Minuten; 0 = nie.
+    /// Sperren nach Leerlauf in Minuten; 0 = aus (Vorgabe).
     pub lock_after_idle_mins: u32,
+    /// Beim Sperren alle Sitzungen trennen (Vorgabe: verbunden lassen).
+    pub disconnect_on_lock: bool,
 }
 
 impl Default for SecurityDefaults {
     fn default() -> Self {
-        SecurityDefaults { lock_after_idle_mins: 15 }
+        SecurityDefaults { lock_after_idle_mins: 0, disconnect_on_lock: false }
     }
 }
 

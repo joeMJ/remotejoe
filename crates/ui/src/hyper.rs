@@ -13,7 +13,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::app::App;
-use crate::sessions::ConnectSpec;
+use crate::sessions::{ConnectSpec, UiEvent};
+use crate::workspace::SessionId;
 
 /// Angenommene Proxmox-Zertifikate (Host:Port → SHA-256-Fingerabdruck).
 fn known_path() -> Option<PathBuf> {
@@ -77,23 +78,6 @@ impl App {
         Ok(Ctx { protocol: t.protocol, host: t.host.clone(), port: t.effective_port(), name: t.name.clone(), creds, transport })
     }
 
-    fn proxmox(&self, c: &Ctx, seen: Arc<Mutex<Option<String>>>) -> Result<rj_proxmox::Client, String> {
-        let key = format!("{}:{}", c.host, c.port);
-        let accepted = known().get(&key).cloned();
-        let check: rj_proxmox::CertCheck = Arc::new(move |fp: &str| {
-            *seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(fp.to_string());
-            accepted.as_deref() == Some(fp)
-        });
-        let host = if c.host.contains(':') && !c.host.starts_with('[') { format!("[{}]", c.host) } else { c.host.clone() };
-        rj_proxmox::Client::new(
-            &format!("https://{host}:{}", c.port),
-            proxmox_auth(&c.creds),
-            check,
-            Duration::from_secs(self.config.connection.connect_timeout_secs as u64),
-        )
-        .map_err(|e| e.to_string())
-    }
-
     /// Fehler eines Proxmox-Aufrufs; bei unbekanntem Zertifikat eine Rückfrage.
     fn proxmox_error(c: &Ctx, e: rj_proxmox::ProxmoxError, seen: &Arc<Mutex<Option<String>>>) -> String {
         if let Some(fp) = seen.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -116,7 +100,8 @@ impl App {
     }
 
     /// Gäste eines Hypervisors: `{"guests":[{id,name,state,detail,console}]}`,
-    /// `{"certificate":{…}}` oder `{"error":"…"}`.
+    /// `{"certificate":{…}}`, `{"error":"…"}` oder `{"pending":job}`; das
+    /// Ergebnis einer Hintergrundaufgabe kommt als `JobResult` (Art `guests`).
     pub fn guests_json(&mut self, target: Uuid) -> String {
         if self.demo {
             return json!({ "guests": [
@@ -129,66 +114,22 @@ impl App {
             Ok(c) => c,
             Err(e) => return json!({ "error": e }).to_string(),
         };
-        match c.protocol {
-            Protocol::Proxmox => {
-                let seen = Arc::new(Mutex::new(None));
-                let client = match self.proxmox(&c, seen.clone()) {
-                    Ok(x) => x,
-                    Err(e) => return json!({ "error": e }).to_string(),
-                };
-                match client.guests() {
-                    Ok(list) => {
-                        let g: Vec<_> = list
-                            .iter()
-                            .filter(|g| !g.template)
-                            .map(|g| {
-                                let kind = match g.kind {
-                                    rj_proxmox::GuestKind::Qemu => ("qemu", "VM"),
-                                    rj_proxmox::GuestKind::Lxc => ("lxc", "CT"),
-                                };
-                                json!({
-                                    "id": format!("{}/{}/{}", g.node, kind.0, g.vmid),
-                                    "name": rj_core::charset::mark_visible(&g.name, false),
-                                    "state": g.status,
-                                    "detail": format!("{} · {} {}", g.node, kind.1, g.vmid),
-                                    "console": true,
-                                })
-                            })
-                            .collect();
-                        json!({ "guests": g }).to_string()
-                    }
-                    Err(e) => Self::proxmox_error(&c, e, &seen),
+        let timeout = Duration::from_secs(self.config.connection.connect_timeout_secs as u64);
+        let label = format!("Gäste von {} abrufen", c.name);
+        let job = self.jobs.spawn(label, move |job| {
+            let result = fetch_guests(&c, timeout);
+            Box::new(move |_app: &mut App, cancelled| {
+                if cancelled {
+                    return Vec::new();
                 }
-            }
-            _ => match self.hyperv_session(&c).and_then(|mut s| rj_psrp::hyperv::list(&mut s).map_err(|e| e.to_string())) {
-                Ok(list) => {
-                    let g: Vec<_> = list
-                        .iter()
-                        .map(|v| {
-                            json!({
-                                "id": v.id,
-                                "name": rj_core::charset::mark_visible(&v.name, false),
-                                "state": v.state.to_lowercase(),
-                                "detail": v.console_host().unwrap_or(""),
-                                "console": v.console_host().is_some(),
-                                "console_host": v.console_host(),
-                            })
-                        })
-                        .collect();
-                    json!({ "guests": g }).to_string()
-                }
-                Err(e) => json!({ "error": e }).to_string(),
-            },
-        }
+                vec![UiEvent::JobResult { job, kind: "guests".into(), target: target.to_string(), json: result }]
+            })
+        });
+        json!({ "pending": job }).to_string()
     }
 
-    fn hyperv_session(&self, c: &Ctx) -> Result<rj_psrp::PsSession, String> {
-        let transport = c.transport.clone().unwrap_or(rj_core::PsrpTransport::Winrm { https: true, port: None, auth: rj_core::WinrmAuth::Ntlm, verify_certificate: true });
-        let t = rj_psrp::PsTarget { host: c.host.clone(), username: c.creds.username.clone(), domain: c.creds.domain.clone(), transport };
-        rj_psrp::PsSession::start(&t, &Secret::from_bytes(c.creds.password.0.clone())).map_err(|e| e.to_string())
-    }
-
-    /// Aktion `start`, `shutdown`, `stop` (hart) oder `reboot`.
+    /// Aktion `start`, `shutdown`, `stop` (hart) oder `reboot` im Hintergrund;
+    /// Ergebnis als `JobResult` (Art `guest_action`).
     pub fn guest_action(&mut self, target: Uuid, guest: &str, action: &str) -> String {
         if self.demo {
             return json!({ "ok": true }).to_string();
@@ -197,84 +138,228 @@ impl App {
             Ok(c) => c,
             Err(e) => return json!({ "error": e }).to_string(),
         };
-        let r = match c.protocol {
-            Protocol::Proxmox => {
-                let a = match action {
-                    "start" => rj_proxmox::Action::Start,
-                    "shutdown" => rj_proxmox::Action::Shutdown,
-                    "stop" => rj_proxmox::Action::Stop,
-                    "reboot" => rj_proxmox::Action::Reboot,
-                    _ => return json!({ "error": "unbekannte Aktion" }).to_string(),
-                };
-                let Some(g) = guest_of(guest) else { return json!({ "error": "unbekannter Gast" }).to_string() };
-                let seen = Arc::new(Mutex::new(None));
-                match self.proxmox(&c, seen.clone()).and_then(|cl| cl.action(&g, a).map_err(|e| Self::proxmox_error(&c, e, &seen))) {
-                    Ok(_) => Ok(()),
-                    Err(e) if e.starts_with('{') => return e,
-                    Err(e) => Err(e),
+        let timeout = Duration::from_secs(self.config.connection.connect_timeout_secs as u64);
+        let (guest, action) = (guest.to_string(), action.to_string());
+        let job = self.jobs.spawn(format!("{} – {action}", c.name), move |job| {
+            let result = run_action(&c, &guest, &action, timeout);
+            Box::new(move |_app: &mut App, cancelled| {
+                if cancelled {
+                    return Vec::new();
                 }
-            }
-            _ => {
-                let a = match action {
-                    "start" => rj_psrp::hyperv::HvAction::Start,
-                    "shutdown" => rj_psrp::hyperv::HvAction::Shutdown,
-                    "stop" => rj_psrp::hyperv::HvAction::TurnOff,
-                    "reboot" => rj_psrp::hyperv::HvAction::Restart,
-                    _ => return json!({ "error": "unbekannte Aktion" }).to_string(),
-                };
-                self.hyperv_session(&c).and_then(|mut s| rj_psrp::hyperv::action(&mut s, guest, a).map_err(|e| e.to_string()))
-            }
-        };
-        match r {
-            Ok(()) => json!({ "ok": true }).to_string(),
-            Err(e) => json!({ "error": e }).to_string(),
-        }
+                vec![UiEvent::JobResult { job, kind: "guest_action".into(), target: target.to_string(), json: result }]
+            })
+        });
+        json!({ "pending": job }).to_string()
     }
 
     /// Konsole eines Gasts öffnen; `console_host` (Hyper-V) aus der Liste.
+    /// Proxmox: Konsole wird im Hintergrund geöffnet (`{"pending":job}`).
     pub fn guest_console(&mut self, target: Uuid, guest: &str, title: &str, console_host: &str, width: u32, height: u32) -> String {
         let c = match self.hyper_ctx(target) {
             Ok(c) => c,
             Err(e) => return json!({ "error": e }).to_string(),
         };
         let title = format!("{} – {}", c.name, title);
-        let request = |host: String, port: u16, options: String| ConnectRequest {
-            host,
-            port,
+        let request = ConnectRequest {
+            host: String::new(),
+            port: 0,
             width: width.max(200),
             height: height.max(200),
-            options_json: options,
+            options_json: String::new(),
             connect_timeout_secs: self.config.connection.connect_timeout_secs,
             keepalive_secs: self.config.connection.keepalive_secs,
         };
-        let (spec, bridge) = match c.protocol {
+        match c.protocol {
             Protocol::Proxmox => {
                 let Some(g) = guest_of(guest) else { return json!({ "error": "unbekannter Gast" }).to_string() };
-                let seen = Arc::new(Mutex::new(None));
-                let bridge = match self.proxmox(&c, seen.clone()).and_then(|cl| cl.console(&g).map_err(|e| Self::proxmox_error(&c, e, &seen))) {
-                    Ok(b) => b,
-                    Err(e) if e.starts_with('{') => return e,
-                    Err(e) => return json!({ "error": e }).to_string(),
-                };
-                let creds = CredentialPayload { username: String::new(), domain: None, password: SecretBytes(bridge.password.as_bytes().to_vec()), private_key: None };
                 let opts = json!({ "prefer_tls": false, "clipboard_limit": self.config.connection.clipboard_limit }).to_string();
-                (ConnectSpec { target, title: title.clone(), protocol: Protocol::Vnc, request: request("127.0.0.1".into(), bridge.port, opts), credentials: creds }, Some(bridge))
+                let timeout = Duration::from_secs(self.config.connection.connect_timeout_secs as u64);
+                let guest = guest.to_string();
+                let job = self.jobs.spawn(format!("Konsole {title} öffnen"), move |job| {
+                    let r = open_console(&c, &g, timeout);
+                    Box::new(move |app: &mut App, cancelled| {
+                        let bridge = match r {
+                            Ok(b) if !cancelled => b,
+                            Ok(_) => return Vec::new(),
+                            Err(e) => {
+                                app.job_results.insert(job, Err(e.clone()));
+                                if cancelled {
+                                    return Vec::new();
+                                }
+                                return vec![UiEvent::JobResult { job, kind: "console".into(), target: target.to_string(), json: if e.starts_with('{') { e } else { json!({ "error": e }).to_string() } }];
+                            }
+                        };
+                        let creds = CredentialPayload { username: String::new(), domain: None, password: SecretBytes(bridge.password.as_bytes().to_vec()), private_key: None };
+                        let request = ConnectRequest { host: "127.0.0.1".into(), port: bridge.port, options_json: opts, ..request };
+                        let s = app.open_session(ConnectSpec { target, title, protocol: Protocol::Vnc, request, credentials: creds }, None);
+                        app.console_bridges.insert(s, bridge);
+                        app.console_sources.insert(s, (target, guest));
+                        app.sessions.set_hold(s, true);
+                        app.job_results.insert(job, Ok(s));
+                        vec![UiEvent::SessionOpened { s, job }]
+                    })
+                });
+                json!({ "pending": job }).to_string()
             }
             _ => {
                 if console_host.is_empty() {
                     return json!({ "error": "Der Gast meldet keine Adresse (Integrationsdienste prüfen)" }).to_string();
                 }
                 let opts = json!({ "clipboard_limit": self.config.connection.clipboard_limit }).to_string();
-                (ConnectSpec { target, title: title.clone(), protocol: Protocol::Rdp, request: request(console_host.to_string(), 3389, opts), credentials: c.creds.clone() }, None)
+                let request = ConnectRequest { host: console_host.to_string(), port: 3389, options_json: opts, ..request };
+                let s = self.open_session(ConnectSpec { target, title, protocol: Protocol::Rdp, request, credentials: c.creds.clone() }, None);
+                json!({ "session": s }).to_string()
+            }
+        }
+    }
+
+    /// Proxmox-Konsole neu öffnen (neues Ticket, neue Brücke) und die Sitzung
+    /// damit neu verbinden. Die alte Brücke wird dabei verworfen.
+    pub(crate) fn reopen_console(&mut self, s: SessionId) {
+        let Some((target, guest)) = self.console_sources.get(&s).cloned() else { return };
+        // Alte Brücke sofort schließen: keine Reste, auch wenn das Öffnen scheitert.
+        self.console_bridges.remove(&s);
+        let c = match self.hyper_ctx(target) {
+            Ok(c) => c,
+            Err(e) => {
+                self.sessions.push_notice(s, &format!("Konsole: {e}"));
+                return;
             }
         };
-        let s = self.sessions.open(spec);
-        if let Some(b) = bridge {
-            self.console_bridges.insert(s, b);
-        }
-        self.workspace.open(s, &title);
-        json!({ "session": s }).to_string()
+        let Some(g) = guest_of(&guest) else { return };
+        let timeout = Duration::from_secs(self.config.connection.connect_timeout_secs as u64);
+        self.jobs.spawn(format!("Konsole {} neu öffnen", c.name), move |_| {
+            let r = open_console(&c, &g, timeout);
+            Box::new(move |app: &mut App, cancelled| {
+                if cancelled || !app.console_sources.contains_key(&s) {
+                    return Vec::new();
+                }
+                match r {
+                    Ok(bridge) => {
+                        app.sessions.set_endpoint(s, "127.0.0.1", bridge.port);
+                        app.sessions.set_credentials(s, CredentialPayload { username: String::new(), domain: None, password: SecretBytes(bridge.password.as_bytes().to_vec()), private_key: None });
+                        app.console_bridges.insert(s, bridge);
+                        app.sessions.reconnect(s);
+                        Vec::new()
+                    }
+                    Err(e) => vec![UiEvent::Notice { s, text: format!("Konsole: {}", if e.starts_with('{') { "Zertifikat des Hosts prüfen".to_string() } else { e }) }],
+                }
+            })
+        });
     }
+}
+
+/// Proxmox-Client mit Prüfung des Fingerabdrucks (läuft im Hintergrund).
+fn proxmox_client(c: &Ctx, seen: Arc<Mutex<Option<String>>>, timeout: Duration) -> Result<rj_proxmox::Client, String> {
+    let key = format!("{}:{}", c.host, c.port);
+    let accepted = known().get(&key).cloned();
+    let check: rj_proxmox::CertCheck = Arc::new(move |fp: &str| {
+        *seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(fp.to_string());
+        accepted.as_deref() == Some(fp)
+    });
+    let host = if c.host.contains(':') && !c.host.starts_with('[') { format!("[{}]", c.host) } else { c.host.clone() };
+    rj_proxmox::Client::new(&format!("https://{host}:{}", c.port), proxmox_auth(&c.creds), check, timeout).map_err(|e| e.to_string())
+}
+
+fn open_console(c: &Ctx, g: &rj_proxmox::Guest, timeout: Duration) -> Result<rj_proxmox::ConsoleBridge, String> {
+    let seen = Arc::new(Mutex::new(None));
+    proxmox_client(c, seen.clone(), timeout).and_then(|cl| cl.console(g).map_err(|e| App::proxmox_error(c, e, &seen)))
+}
+
+/// Gäste abrufen (läuft im Hintergrund).
+fn fetch_guests(c: &Ctx, timeout: Duration) -> String {
+    match c.protocol {
+        Protocol::Proxmox => {
+            let seen = Arc::new(Mutex::new(None));
+            let client = match proxmox_client(c, seen.clone(), timeout) {
+                Ok(x) => x,
+                Err(e) => return json!({ "error": e }).to_string(),
+            };
+            match client.guests() {
+                Ok(list) => {
+                    let g: Vec<_> = list
+                        .iter()
+                        .filter(|g| !g.template)
+                        .map(|g| {
+                            let kind = match g.kind {
+                                rj_proxmox::GuestKind::Qemu => ("qemu", "VM"),
+                                rj_proxmox::GuestKind::Lxc => ("lxc", "CT"),
+                            };
+                            json!({
+                                "id": format!("{}/{}/{}", g.node, kind.0, g.vmid),
+                                "name": rj_core::charset::mark_visible(&g.name, false),
+                                "state": g.status,
+                                "detail": format!("{} · {} {}", g.node, kind.1, g.vmid),
+                                "console": true,
+                            })
+                        })
+                        .collect();
+                    json!({ "guests": g }).to_string()
+                }
+                Err(e) => App::proxmox_error(c, e, &seen),
+            }
+        }
+        _ => match hyperv_session(c).and_then(|mut s| rj_psrp::hyperv::list(&mut s).map_err(|e| e.to_string())) {
+            Ok(list) => {
+                let g: Vec<_> = list
+                    .iter()
+                    .map(|v| {
+                        json!({
+                            "id": v.id,
+                            "name": rj_core::charset::mark_visible(&v.name, false),
+                            "state": v.state.to_lowercase(),
+                            "detail": v.console_host().unwrap_or(""),
+                            "console": v.console_host().is_some(),
+                            "console_host": v.console_host(),
+                        })
+                    })
+                    .collect();
+                json!({ "guests": g }).to_string()
+            }
+            Err(e) => json!({ "error": e }).to_string(),
+        },
+    }
+}
+
+fn run_action(c: &Ctx, guest: &str, action: &str, timeout: Duration) -> String {
+    let r = match c.protocol {
+        Protocol::Proxmox => {
+            let a = match action {
+                "start" => rj_proxmox::Action::Start,
+                "shutdown" => rj_proxmox::Action::Shutdown,
+                "stop" => rj_proxmox::Action::Stop,
+                "reboot" => rj_proxmox::Action::Reboot,
+                _ => return json!({ "error": "unbekannte Aktion" }).to_string(),
+            };
+            let Some(g) = guest_of(guest) else { return json!({ "error": "unbekannter Gast" }).to_string() };
+            let seen = Arc::new(Mutex::new(None));
+            match proxmox_client(c, seen.clone(), timeout).and_then(|cl| cl.action(&g, a).map_err(|e| App::proxmox_error(c, e, &seen))) {
+                Ok(_) => Ok(()),
+                Err(e) if e.starts_with('{') => return e,
+                Err(e) => Err(e),
+            }
+        }
+        _ => {
+            let a = match action {
+                "start" => rj_psrp::hyperv::HvAction::Start,
+                "shutdown" => rj_psrp::hyperv::HvAction::Shutdown,
+                "stop" => rj_psrp::hyperv::HvAction::TurnOff,
+                "reboot" => rj_psrp::hyperv::HvAction::Restart,
+                _ => return json!({ "error": "unbekannte Aktion" }).to_string(),
+            };
+            hyperv_session(c).and_then(|mut s| rj_psrp::hyperv::action(&mut s, guest, a).map_err(|e| e.to_string()))
+        }
+    };
+    match r {
+        Ok(()) => json!({ "ok": true }).to_string(),
+        Err(e) => json!({ "error": e }).to_string(),
+    }
+}
+
+fn hyperv_session(c: &Ctx) -> Result<rj_psrp::PsSession, String> {
+    let transport = c.transport.clone().unwrap_or(rj_core::PsrpTransport::Winrm { https: true, port: None, auth: rj_core::WinrmAuth::Ntlm, verify_certificate: true });
+    let t = rj_psrp::PsTarget { host: c.host.clone(), username: c.creds.username.clone(), domain: c.creds.domain.clone(), transport };
+    rj_psrp::PsSession::start(&t, &Secret::from_bytes(c.creds.password.0.clone())).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -62,6 +62,18 @@ pub enum UiEvent {
     /// Ampeln haben sich geändert; Baum neu zeichnen.
     TreeChanged,
     UnlockFailed { reason: String },
+    /// Eine Sitzung aus einer Hintergrundaufgabe wurde geöffnet.
+    SessionOpened { s: SessionId, job: u64 },
+    /// Hintergrundaufgabe fehlgeschlagen (optional mit Rückfrage zum Host-Schlüssel).
+    JobFailed { job: u64, error: String, hostkey: Option<serde_json::Value> },
+    /// Ergebnis eines Abrufs (z. B. Gäste eines Hypervisors) als JSON.
+    JobResult { job: u64, kind: String, target: String, json: String },
+    /// Die Liste der laufenden Hintergrundaufgaben hat sich geändert.
+    JobsChanged,
+    /// Gesperrt (`idle` nach Leerlauf, `manual` von Hand).
+    Locked { reason: String },
+    /// Aufwachen aus dem Standby erkannt.
+    Resumed,
 }
 
 /// Ausschnitt des Terminals für die Darstellung.
@@ -108,6 +120,17 @@ pub struct Reconnect {
 }
 
 pub struct Manager {
+    /// Bis wann nach dem Aufwachen sofort neu verbunden wird.
+    resume_until: Option<Instant>,
+    /// Sitzungen, die nach dem Aufwachen neu verbunden werden (Hinweis im Tab).
+    resumed: std::collections::BTreeSet<SessionId>,
+    /// Sitzungen über einen Tunnel: das Neuverbinden steuert die App (Tunnel zuerst).
+    hold: std::collections::BTreeSet<SessionId>,
+    /// Gesperrt: Zugangsdaten sind gelöscht; Neuverbinden wartet auf das Entsperren.
+    locked: bool,
+    deferred: std::collections::BTreeSet<SessionId>,
+    /// Neuverbindungen gehaltener Sitzungen, die die App ausführt.
+    app_requests: Vec<SessionId>,
     sup: Supervisor,
     sessions: BTreeMap<SessionId, Session>,
     by_worker: HashMap<WorkerId, SessionId>,
@@ -139,7 +162,21 @@ fn exe_name(base: &str) -> String {
 
 impl Manager {
     pub fn new(worker_dir: PathBuf, reconnect: Reconnect) -> Self {
-        Manager { sup: Supervisor::new(), sessions: BTreeMap::new(), by_worker: HashMap::new(), worker_dir, next: 1, reconnect, pending: Vec::new() }
+        Manager {
+            resume_until: None,
+            resumed: Default::default(),
+            hold: Default::default(),
+            locked: false,
+            deferred: Default::default(),
+            app_requests: Vec::new(),
+            sup: Supervisor::new(),
+            sessions: BTreeMap::new(),
+            by_worker: HashMap::new(),
+            worker_dir,
+            next: 1,
+            reconnect,
+            pending: Vec::new(),
+        }
     }
 
     /// Ordner der Worker: neben dem Hauptprogramm.
@@ -385,7 +422,100 @@ impl Manager {
         }
     }
 
+    /// Nach dem Aufwachen: sofort neu verbinden, Rückstau beginnt von vorn.
+    pub fn reconnect_resumed(&mut self, s: SessionId) {
+        if let Some(x) = self.sessions.get_mut(&s) {
+            x.attempts = 0;
+            self.resumed.insert(s);
+        }
+        self.reconnect(s);
+    }
+
+    /// Zeitfenster nach dem Aufwachen, in dem abgebrochene Sitzungen sofort
+    /// neu verbunden werden.
+    pub fn set_resume_window(&mut self, until: Option<Instant>) {
+        self.resume_until = until;
+    }
+
+    pub fn in_resume_window(&self) -> bool {
+        self.resume_until.is_some_and(|t| Instant::now() < t)
+    }
+
+    /// Neuverbindungen, die die App ausführen soll (Tunnel bzw. Brücke zuerst).
+    pub fn take_reconnect_requests(&mut self) -> Vec<SessionId> {
+        std::mem::take(&mut self.app_requests)
+    }
+
+    pub fn is_held(&self, s: SessionId) -> bool {
+        self.hold.contains(&s)
+    }
+
+    /// Hinweis im Tab einer Sitzung.
+    pub fn push_notice(&mut self, s: SessionId, text: &str) {
+        self.pending.push(UiEvent::Notice { s, text: text.to_string() });
+    }
+
+    pub fn set_credentials(&mut self, s: SessionId, c: CredentialPayload) {
+        if let Some(x) = self.sessions.get_mut(&s) {
+            x.spec.credentials = c;
+        }
+    }
+
+    /// Sitzung über einen Tunnel oder eine Brücke: Neuverbinden steuert die App.
+    pub fn set_hold(&mut self, s: SessionId, on: bool) {
+        if on {
+            self.hold.insert(s);
+        } else {
+            self.hold.remove(&s);
+        }
+    }
+
+    pub fn mark_resumed(&mut self, s: SessionId) {
+        self.resumed.insert(s);
+    }
+
+    /// Neuer Endpunkt (z. B. nach neu aufgebautem Tunnel).
+    pub fn set_endpoint(&mut self, s: SessionId, host: &str, port: u16) {
+        if let Some(x) = self.sessions.get_mut(&s) {
+            x.spec.request.host = host.to_string();
+            x.spec.request.port = port;
+        }
+    }
+
+    /// Sperren: Zugangsdaten aller Sitzungen überschreiben; Neuverbinden
+    /// wartet bis zum Entsperren.
+    pub fn lock(&mut self) {
+        self.locked = true;
+        for x in self.sessions.values_mut() {
+            x.spec.credentials = CredentialPayload { username: String::new(), domain: None, password: SecretBytes(Vec::new()), private_key: None };
+        }
+    }
+
+    /// Entsperrt: Zugangsdaten je Sitzung neu setzen (`creds` je Ziel) und
+    /// zurückgestellte Verbindungen aufbauen.
+    pub fn unlock(&mut self, mut creds: impl FnMut(&ConnectSpec) -> Option<CredentialPayload>) {
+        self.locked = false;
+        for x in self.sessions.values_mut() {
+            if let Some(c) = creds(&x.spec) {
+                x.spec.credentials = c;
+            }
+        }
+        for s in std::mem::take(&mut self.deferred) {
+            self.reconnect(s);
+        }
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.locked
+    }
+
     pub fn reconnect(&mut self, s: SessionId) {
+        if self.locked {
+            if self.sessions.contains_key(&s) && self.deferred.insert(s) {
+                self.pending.push(UiEvent::Notice { s, text: crate::texts::text("session.locked_reconnect").to_string() });
+            }
+            return;
+        }
         if let Some(w) = self.worker_of(s) {
             self.by_worker.remove(&w);
             self.sup.forget(w);
@@ -398,6 +528,9 @@ impl Manager {
     }
 
     pub fn close(&mut self, s: SessionId) {
+        self.hold.remove(&s);
+        self.resumed.remove(&s);
+        self.deferred.remove(&s);
         if let Some(w) = self.worker_of(s) {
             self.by_worker.remove(&w);
             self.sup.stop(w);
@@ -407,12 +540,26 @@ impl Manager {
     }
 
     fn schedule_reconnect(&mut self, s: SessionId) {
-        if !self.reconnect.auto {
+        let window = self.in_resume_window();
+        if !self.reconnect.auto && !window {
+            return;
+        }
+        if self.hold.contains(&s) {
+            // Über einen Tunnel oder eine Konsolenbrücke: die App baut erst
+            // Tunnel bzw. Brücke neu auf und verbindet dann.
+            if window {
+                self.resumed.insert(s);
+            }
+            self.app_requests.push(s);
             return;
         }
         let policy = RestartPolicy { enabled: true, base: Duration::from_secs(1), max: self.reconnect.max, stable_after: Duration::from_secs(30) };
         if let Some(x) = self.sessions.get_mut(&s) {
-            let delay = policy.delay(x.attempts);
+            // Erster Versuch nach dem Aufwachen ohne Wartezeit.
+            let delay = if window && x.attempts == 0 { Duration::ZERO } else { policy.delay(x.attempts) };
+            if window {
+                self.resumed.insert(s);
+            }
             x.attempts += 1;
             x.reconnect_at = Some(Instant::now() + delay);
             self.pending.push(UiEvent::Notice { s, text: crate::texts::text("session.reconnect_in").replace("%1", &delay.as_secs().to_string()) });
@@ -470,6 +617,9 @@ impl Manager {
                     SessionState::Connected => {
                         if let Some(x) = self.sessions.get_mut(&s) {
                             x.attempts = 0;
+                        }
+                        if self.resumed.remove(&s) {
+                            self.pending.push(UiEvent::Notice { s, text: crate::texts::text("session.reconnected").to_string() });
                         }
                         ("connected", String::new())
                     }

@@ -1220,6 +1220,16 @@ void PropertiesTab::saveTemplate()
 	});
 }
 
+void PropertiesTab::wipeSecrets()
+{
+	if (m_password)
+	{
+		QString pw = m_password->text();
+		pw.fill(QLatin1Char(' '));
+		m_password->clear();
+	}
+}
+
 void PropertiesTab::requestClose(std::function<void()> close)
 {
 	if (!isDirty())

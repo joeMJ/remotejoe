@@ -55,6 +55,17 @@ public:
 protected:
 	void paintEvent(QPaintEvent*) override;
 	void closeEvent(QCloseEvent*) override;
+	bool eventFilter(QObject*, QEvent*) override;
+
+private slots:
+	/// Meldung von logind (D-Bus): `true` vor dem Standby, `false` nach dem Aufwachen.
+	void onPrepareForSleep(bool sleeping);
+
+public:
+	/// Aufwachen aus dem Standby verarbeiten (Meldung des Systems).
+	void systemResumed();
+	/// Sperren (von Hand oder nach Leerlauf): Abdeckung zeigen, Fenster verbergen.
+	void lockNow(bool alreadyLocked);
 
 private:
 	void buildMenus();
@@ -67,6 +78,10 @@ private:
 	void showProperties(const QString& id);
 	void treeContextMenu(const QPoint& pos);
 	void loadGuests(const QModelIndex& index);
+	void applyGuests(const QString& target, QJsonObject r);
+	void updateJobs();
+	void idleSettings();
+	void handleEvents(const QString& json);
 	void openGuestConsole(const QModelIndex& index);
 	void guestAction(const QModelIndex& index, const QString& action);
 	void tabContextMenu(QTabWidget* tabs, const QPoint& pos);
@@ -110,4 +125,9 @@ private:
 	QComboBox* m_viewBox = nullptr;
 	UnlockOverlay* m_overlay = nullptr;
 	QAction* m_undoAction = nullptr;
+	QWidget* m_jobsBox = nullptr;
+	class QLabel* m_jobsLabel = nullptr;
+	QHash<qulonglong, QString> m_jobTargets;
+	qint64 m_lastActivity = 0;
+	QElapsedTimer m_activityClock;
 };

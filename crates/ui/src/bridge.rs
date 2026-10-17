@@ -110,6 +110,13 @@ pub mod qobject {
         fn unlock(self: Pin<&mut RjBackend>, path: &QString, password: &QString, key_file: &QString);
         #[qinvokable]
         fn lock(self: Pin<&mut RjBackend>);
+        /// Eingabe des Benutzers (Leerlauf-Zeitgeber).
+        #[qinvokable]
+        fn activity(self: Pin<&mut RjBackend>);
+        /// Meldung des Systems: Standby beginnt (`true`) oder ist beendet (`false`).
+        #[qinvokable]
+        #[cxx_name = "systemSleep"]
+        fn system_sleep(self: Pin<&mut RjBackend>, sleeping: bool) -> QString;
         #[qinvokable]
         fn save(self: Pin<&mut RjBackend>) -> QString;
         /// Bearbeitungsbefehl als JSON (siehe `editor.rs`).
@@ -400,7 +407,7 @@ impl qobject::RjBackend {
 
     fn reconnect(self: Pin<&mut Self>, session: u64) {
         if let Some(a) = self.app_mut() {
-            a.sessions.reconnect(session);
+            a.reconnect_session(session);
         }
     }
 
@@ -414,7 +421,8 @@ impl qobject::RjBackend {
 
     fn lock(self: Pin<&mut Self>) {
         if let Some(a) = self.app_mut() {
-            a.lock();
+            let d = a.config.security.disconnect_on_lock;
+            a.lock(d);
         }
     }
 
@@ -429,6 +437,19 @@ impl qobject::RjBackend {
 
     fn kdbx_path(&self) -> QString {
         q(self.app().and_then(|a| a.kdbx_path()).unwrap_or_default())
+    }
+
+    fn activity(self: Pin<&mut Self>) {
+        if let Some(a) = self.app_mut() {
+            a.activity();
+        }
+    }
+
+    fn system_sleep(self: Pin<&mut Self>, sleeping: bool) -> QString {
+        match self.app_mut() {
+            Some(a) if !sleeping => q(serde_json::to_string(&a.on_resume()).unwrap_or_default()),
+            _ => q("[]"),
+        }
     }
 
     fn edit(self: Pin<&mut Self>, cmd: &QString) -> QString {

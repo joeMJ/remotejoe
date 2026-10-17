@@ -70,6 +70,8 @@ public:
 	void selectCategory(const QString& key);
 	void reload();
 	ActionBar* bar() const { return m_bar; }
+	/// Beim Sperren: eingegebene Kennwörter verwerfen.
+	void wipeSecrets();
 
 signals:
 	/// Der Index hat sich geändert (Baum neu laden).
