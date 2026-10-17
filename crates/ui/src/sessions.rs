@@ -42,6 +42,14 @@ fn clipboard_limit(options_json: &str) -> u64 {
         .unwrap_or(16 * 1024 * 1024)
 }
 
+/// Sind Breite **und** Höhe in den Optionen eingetragen, gilt diese Größe fest;
+/// sonst folgt die Bildsitzung der Größe ihres Fensters.
+fn fixed_size(options_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(options_json)
+        .ok()
+        .is_some_and(|v| v.get("width").is_some_and(|x| x.is_u64()) && v.get("height").is_some_and(|x| x.is_u64()))
+}
+
 /// Ereignis für die Oberfläche.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -370,6 +378,12 @@ impl Manager {
     }
 
     pub fn resize(&mut self, s: SessionId, w: u32, h: u32) {
+        if let Some(sess) = self.sessions.get(&s) {
+            // Bild-Sitzungen mit fest eingetragener Breite und Höhe folgen dem Fenster nicht.
+            if sess.term.is_none() && fixed_size(&sess.spec.request.options_json) {
+                return;
+            }
+        }
         if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.term.as_mut()) {
             t.resize(w as usize, h as usize);
         }
@@ -788,5 +802,19 @@ mod tests {
         let s = m.open(demo_spec("x", Protocol::Ssh));
         let ev = m.poll(Duration::from_millis(1));
         assert!(ev.iter().any(|e| matches!(e, UiEvent::State { s: id, state, .. } if *id == s && state == "failed")));
+    }
+}
+
+#[cfg(test)]
+mod fixed_size_tests {
+    use super::fixed_size;
+
+    #[test]
+    fn only_both_values_make_the_size_fixed() {
+        assert!(!fixed_size("{}"));
+        assert!(!fixed_size(r#"{"width":1280}"#));
+        assert!(!fixed_size(r#"{"height":720}"#));
+        assert!(fixed_size(r#"{"width":1280,"height":720}"#));
+        assert!(!fixed_size("kein json"));
     }
 }

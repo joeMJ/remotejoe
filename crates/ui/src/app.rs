@@ -148,8 +148,63 @@ impl App {
             }
             let _ = tx.send(Vault::open(std::path::Path::new(&path), key, storage).map_err(|e| e.to_string()));
         });
-        if let Some(p) = self.config_path.clone() {
-            let _ = p;
+    }
+
+    /// Legt eine neue KDBX an und öffnet sie; das Ergebnis kommt wie beim
+    /// Entsperren über `poll`. Eine vorhandene Datei wird nie überschrieben.
+    /// `make_key_file`: Die Schlüsseldatei unter `key_file` wird neu erzeugt.
+    pub fn create_vault(&mut self, path: String, password: Secret, key_file: Option<String>, make_key_file: bool) {
+        let storage = self.config.index_storage;
+        let (tx, rx) = mpsc::channel();
+        if self.vault.as_ref().is_some_and(|v| v.is_dirty()) {
+            let _ = tx.send(Err("Es gibt ungespeicherte Änderungen. Bitte zuerst speichern (Datei → Speichern).".to_string()));
+            self.unlocking = Some(rx);
+            return;
+        }
+        self.unlocking = Some(rx);
+        std::thread::spawn(move || {
+            let result = (|| -> Result<Vault, String> {
+                if path.trim().is_empty() {
+                    return Err("Bitte eine Datei angeben.".into());
+                }
+                let p = std::path::Path::new(&path);
+                if p.exists() {
+                    return Err(format!("Die Datei „{}“ gibt es schon; sie wird nicht überschrieben.", p.display()));
+                }
+                let kf = key_file.filter(|k| !k.is_empty());
+                if password.as_bytes().is_empty() && kf.is_none() {
+                    return Err("Bitte ein Hauptkennwort oder eine Schlüsseldatei angeben.".into());
+                }
+                if make_key_file && kf.is_none() {
+                    return Err("Der Pfad der neuen Schlüsseldatei fehlt.".into());
+                }
+                if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(dir).map_err(|e| format!("Ordner: {e}"))?;
+                }
+                let mut key = MasterKey { password: Some(password), key_file: None };
+                if let Some(k) = &kf {
+                    let kp = std::path::Path::new(k);
+                    if make_key_file {
+                        rj_kdbx::generate_key_file(kp).map_err(|e| format!("Schlüsseldatei: {e}"))?;
+                    }
+                    key = key.with_key_file(kp).map_err(|e| format!("Schlüsseldatei: {e}"))?;
+                }
+                let mut v = Vault::create(p, key, rj_kdbx::KdfChoice::Argon2idDefault, storage);
+                v.save(None).map_err(|e| e.to_string())?;
+                Ok(v)
+            })();
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Merkt sich den Pfad der geöffneten KDBX in der Konfiguration (nicht im Demomodus).
+    fn remember_kdbx_path(&mut self, path: &std::path::Path) {
+        if self.demo || self.config.kdbx_path.as_deref() == Some(path) {
+            return;
+        }
+        self.config.kdbx_path = Some(path.to_path_buf());
+        if let Some(cp) = self.config_path.clone() {
+            let _ = self.config.save(&cp);
         }
     }
 
@@ -365,7 +420,7 @@ impl App {
     }
 
     fn payload(&self, r: &ResolvedCredential, protocol: Protocol) -> Result<CredentialPayload, String> {
-        let vault = self.vault.as_ref().ok_or("KDBX ist gesperrt")?;
+        let vault = self.vault.as_ref().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
         let c = vault.resolve(&r.reference).map_err(|e| e.to_string())?;
         let (dom, user) = c.split_domain();
         let username = r.overrides.username.clone().unwrap_or_else(|| user.to_string());
@@ -441,7 +496,18 @@ impl App {
                 }
             },
         };
-        let (w, h) = if t.protocol == Protocol::Ssh { (width.clamp(20, 500), height.clamp(5, 300)) } else { (width.max(200), height.max(200)) };
+        // Eingetragene Breite und Höhe (RDP) gelten fest; sonst richtet sich die Sitzung nach dem Fenster.
+        let fixed = match &t.options {
+            ProtocolOptions::Rdp(o) => o.width.zip(o.height),
+            _ => None,
+        };
+        let (w, h) = if t.protocol == Protocol::Ssh {
+            (width.clamp(20, 500), height.clamp(5, 300))
+        } else if let Some((fw, fh)) = fixed {
+            (fw.clamp(200, 8192), fh.clamp(200, 8192))
+        } else {
+            (width.clamp(200, 8192), height.clamp(200, 8192))
+        };
         let spec = ConnectSpec {
             target,
             title: t.name.clone(),
@@ -554,7 +620,7 @@ impl App {
                 Ok(TunnelSpec::Ssh { hops: out })
             }
             rj_core::TunnelKind::Wireguard { config_entry } => {
-                let vault = self.vault.as_ref().ok_or("KDBX ist gesperrt")?;
+                let vault = self.vault.as_ref().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
                 let c = vault.resolve(config_entry).map_err(|e| e.to_string())?;
                 let text = c
                     .attachments
@@ -665,7 +731,7 @@ impl App {
     /// Übernimmt die Vorschau in KDBX und Index (gespeichert wird erst auf Befehl).
     pub fn import_apply(&mut self) -> Result<String, String> {
         let plan = self.import_plan.take().ok_or("Keine Importvorschau vorhanden")?;
-        let vault = self.vault.as_mut().ok_or("Zum Import muss die KDBX entsperrt sein")?;
+        let vault = self.vault.as_mut().ok_or("Zum Import muss die Schlüsseldatenbank entsperrt sein")?;
         let idx = rj_importer::plan::apply(&plan, vault, &self.index).map_err(|e| e.to_string())?;
         vault.set_index(idx.clone()).map_err(|e| e.to_string())?;
         self.index = idx;
@@ -771,7 +837,9 @@ impl App {
                         self.idle.activity(std::time::Instant::now());
                         let mut n = 0;
                         self.index.for_each_target(|_| n += 1);
+                        let kdbx = v.path().to_path_buf();
                         self.vault = Some(v);
+                        self.remember_kdbx_path(&kdbx);
                         self.restore_session_credentials();
                         self.start_snmp();
                         out.push(UiEvent::Unlocked { targets: n });

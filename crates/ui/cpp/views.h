@@ -4,6 +4,8 @@
 #include <QtCore/QFile>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QSize>
+#include <QtCore/QTimer>
 #include <QtGui/QImage>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QPushButton>
@@ -29,6 +31,7 @@ public:
 
 protected:
 	void paintEvent(QPaintEvent*) override;
+	void resizeEvent(QResizeEvent*) override;
 	void mouseMoveEvent(QMouseEvent*) override;
 	void mousePressEvent(QMouseEvent*) override;
 	void mouseReleaseEvent(QMouseEvent*) override;
@@ -41,12 +44,19 @@ protected:
 private:
 	QPoint toRemote(const QPointF& p) const;
 	QRect target() const;
+	/// Meldet nach einer Pause die Größe des Fensters als Wunschauflösung der Sitzung
+	/// (RDP: Anzeige-Steuerkanal oder Neuaufbau, VNC: ExtendedDesktopSize).
+	void requestFit();
 	RjBackend* m_backend;
 	std::uint64_t m_session;
 	void unmap();
 	uchar* m_map = nullptr;
 	std::size_t m_mapLen = 0;
 	QImage m_image;
+	QTimer* m_fitTimer = nullptr;
+	QSize m_requested;
+	QSize m_attached;
+	int m_autoFits = 0;
 };
 
 /// Terminal (Zeichnung aus dem Gitter der Terminal-Zustandsmaschine).

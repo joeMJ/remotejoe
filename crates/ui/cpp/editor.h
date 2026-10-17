@@ -13,6 +13,7 @@ class RjBackend;
 class QButtonGroup;
 class QCheckBox;
 class QComboBox;
+class QFormLayout;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -130,16 +131,21 @@ public:
 	ActionBar* bar() const { return m_bar; }
 	/// Beim Sperren: eingegebene Kennwörter verwerfen.
 	void wipeSecrets();
-	/// Änderungen speichern (Strg+S, wenn der Tab vorn liegt).
+	/// Änderungen speichern (Strg+S, wenn der Tab vorn liegt); der Tab bleibt offen.
 	void saveNow() { save(); }
+	/// Schaltfläche „Speichern“: speichern und bei Erfolg den Tab schließen.
+	void saveAndClose();
 
 signals:
 	/// Der Index hat sich geändert (Baum neu laden).
 	void indexChanged();
+	/// Gespeichert über die Schaltfläche „Speichern“: der Tab kann geschlossen werden.
+	void saveClosed();
 	void titleChanged();
 	void status(const QString& text);
 
 private:
+	bool m_closeAfter = false;
 	void build();
 	QWidget* pageGeneral();
 	QWidget* pageConnection();
@@ -370,10 +376,13 @@ public:
 	explicit UnlockOverlay(RjBackend* backend, QWidget* parent);
 	/// `locked`: Sperre nach Leerlauf oder von Hand – kein Abbrechen möglich.
 	void open(const QString& path, bool locked);
+	/// Neue KDBX anlegen (Datei, Hauptkennwort mit Wiederholung, optional Schlüsseldatei).
+	void openNew();
 	void setBusy(bool busy, const QString& message = QString());
 
 signals:
 	void unlockRequested(const QString& path, const QString& password, const QString& keyFile);
+	void createRequested(const QString& path, const QString& password, const QString& keyFile, bool makeKeyFile);
 
 protected:
 	void paintEvent(QPaintEvent*) override;
@@ -381,10 +390,26 @@ protected:
 
 private:
 	void submit();
+	void setMode(bool create);
+	void browse();
+	void updateStrength();
 	RjBackend* m_backend;
+	bool m_create = false;
+	bool m_locked = false;
+	QLabel* m_title;
+	QLabel* m_hint;
 	QLineEdit* m_path;
 	QLineEdit* m_password;
+	QLineEdit* m_password2;
 	QLineEdit* m_keyFile;
+	QCheckBox* m_makeKey;
+	QLabel* m_strength;
+	QWidget* m_repeatRow;
+	QWidget* m_makeKeyRow;
+	QWidget* m_strengthRow;
+	QFormLayout* m_form;
+	QPushButton* m_browse;
+	QPushButton* m_switch;
 	QPushButton* m_ok;
 	QPushButton* m_cancel;
 	QLabel* m_message;

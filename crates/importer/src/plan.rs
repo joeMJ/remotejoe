@@ -32,7 +32,7 @@ impl ImportReport {
     /// Lesbare Zusammenfassung.
     pub fn summary(&self) -> String {
         let mut s = format!(
-            "{}: {} Ordner, {} Ziele übernommen; {} Zugangsdaten zu {} KDBX-Einträgen zusammengelegt ({} Verweise).",
+            "{}: {} Ordner, {} Ziele übernommen; {} Zugangsdaten zu {} Einträgen der Schlüsseldatenbank zusammengelegt ({} Verweise).",
             self.format, self.folders, self.targets, self.credentials_in_source, self.credentials_unique, self.references
         );
         if !self.skipped.is_empty() {
@@ -218,7 +218,7 @@ pub fn plan(doc: &SourceDocument, title: &str) -> ImportPlan {
     let credentials: Vec<PlannedCredential> = keys.iter().map(|k| PlannedCredential { title: key_data[k].0.clone(), credential: key_data[k].1.clone() }).collect();
     for c in &credentials {
         if c.credential.password.is_none() {
-            report.warnings.push(format!("Zugangsdaten „{}“ ohne Kennwort übernommen – bitte in der KDBX ergänzen", check_name(&c.title).display));
+            report.warnings.push(format!("Zugangsdaten „{}“ ohne Kennwort übernommen – bitte in der Schlüsseldatenbank ergänzen", check_name(&c.title).display));
         }
     }
     report.credentials_unique = credentials.len();

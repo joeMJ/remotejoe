@@ -79,7 +79,7 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.tabs()->removeTab(w.tabs()->indexOf(t));
 		t->deleteLater();
 	}
-	w.openImport(QStringLiteral("beispiel.rdm"), QStringLiteral("Ordner: 4\nZiele: 37 (RDP 21, SSH 12, Web 4)\nZugangsdaten: 6 (in der KDBX-Gruppe „remotejoe/Import beispiel.rdm“)\n"
+	w.openImport(QStringLiteral("beispiel.rdm"), QStringLiteral("Ordner: 4\nZiele: 37 (RDP 21, SSH 12, Web 4)\nZugangsdaten: 6 (in der Gruppe „remotejoe/Import beispiel.rdm“)\n"
 	                                                           "Hinweise:\n– Ziel „srv⟦U+202E⟧gpj.exe“: Schreibrichtungs-Steuerzeichen im Namen (markiert)\n– 2 Ziele ohne Host"));
 	pump(300);
 	if (auto* t = w.findChild<ToolTab*>(QStringLiteral("importTab")))
@@ -133,8 +133,15 @@ void screenshots(MainWindow& w, const QString& dir)
 	w.showUnlock(false);
 	pump(300);
 	save(&w, dir, QStringLiteral("entsperren.png"));
+	w.showNewVault();
+	pump(300);
+	save(&w, dir, QStringLiteral("kdbx-neu.png"));
 	if (auto* o = w.findChild<QWidget*>(QStringLiteral("unlockOverlay")))
 		o->hide();
+	w.showEmptyTreeForScreenshot();
+	pump(300);
+	save(&w, dir, QStringLiteral("leerer-baum.png"));
+	w.setFilter(QString());
 	w.tabs()->setCurrentIndex(0);
 	w.detachTabAt(1);
 	pump(400);

@@ -113,6 +113,9 @@ pub mod qobject {
         #[qinvokable]
         fn unlock(self: Pin<&mut RjBackend>, path: &QString, password: &QString, key_file: &QString);
         #[qinvokable]
+        #[cxx_name = "createVault"]
+        fn create_vault(self: Pin<&mut RjBackend>, path: &QString, password: &QString, key_file: &QString, make_key_file: bool);
+        #[qinvokable]
         fn lock(self: Pin<&mut RjBackend>);
         /// Eingabe des Benutzers (Leerlauf-Zeitgeber).
         #[qinvokable]
@@ -424,6 +427,14 @@ impl qobject::RjBackend {
         let pw = rj_core::Secret::from_str_exact(&password.to_string());
         if let Some(a) = self.app_mut() {
             a.unlock(p, pw, (!k.is_empty()).then_some(k));
+        }
+    }
+
+    fn create_vault(self: Pin<&mut Self>, path: &QString, password: &QString, key_file: &QString, make_key_file: bool) {
+        let (p, k) = (path.to_string(), key_file.to_string());
+        let pw = rj_core::Secret::from_str_exact(&password.to_string());
+        if let Some(a) = self.app_mut() {
+            a.create_vault(p, pw, (!k.is_empty()).then_some(k), make_key_file);
         }
     }
 

@@ -28,6 +28,12 @@ FrameView::FrameView(RjBackend* backend, std::uint64_t session, QWidget* parent)
 	setMouseTracking(true);
 	setAttribute(Qt::WA_OpaquePaintEvent);
 	setMinimumSize(160, 120);
+	// Größenänderungen des Fensters erst nach einer kurzen Pause weitergeben,
+	// damit beim Ziehen nicht bei jedem Pixel neu aufgebaut wird.
+	m_fitTimer = new QTimer(this);
+	m_fitTimer->setSingleShot(true);
+	m_fitTimer->setInterval(400);
+	connect(m_fitTimer, &QTimer::timeout, this, [this] { requestFit(); });
 }
 
 FrameView::~FrameView()
@@ -88,7 +94,41 @@ void FrameView::attach(std::int64_t fd, int w, int h)
 	if (m_map)
 		// BGRA im Speicher entspricht QImage::Format_RGB32 (little endian).
 		m_image = QImage(m_map, w, h, w * 4, QImage::Format_RGB32);
+	// Neue Verbindung oder von der Gegenstelle bestimmte Größe (nicht die Antwort auf
+	// unsere Anfrage): einmal an das Fenster anpassen, höchstens dreimal hintereinander.
+	const QSize now(w, h);
+	const bool ours = m_requested.isValid() && qAbs(now.width() - m_requested.width()) < 8 && qAbs(now.height() - m_requested.height()) < 8;
+	if (m_map && !ours && now != m_attached)
+	{
+		m_requested = QSize();
+		if (m_autoFits < 3)
+		{
+			++m_autoFits;
+			m_fitTimer->start();
+		}
+	}
+	m_attached = now;
 	update();
+}
+
+void FrameView::resizeEvent(QResizeEvent*)
+{
+	m_autoFits = 0;
+	m_fitTimer->start();
+}
+
+void FrameView::requestFit()
+{
+	if (m_image.isNull() || !isVisible() || width() < 200 || height() < 150)
+		return;
+	const int w = qBound(200, width() & ~1, 8192);
+	const int h = qBound(200, height(), 8192);
+	if (qAbs(w - m_image.width()) < 8 && qAbs(h - m_image.height()) < 8)
+		return;
+	if (QSize(w, h) == m_requested)
+		return;
+	m_requested = QSize(w, h);
+	m_backend->resizeSession(m_session, std::uint32_t(w), std::uint32_t(h));
 }
 
 QRect FrameView::target() const

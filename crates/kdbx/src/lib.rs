@@ -30,11 +30,11 @@ pub const GROUP_NAME: &str = "remotejoe";
 pub enum VaultError {
     #[error("Datei: {0}")]
     Io(#[from] std::io::Error),
-    #[error("KDBX konnte nicht geöffnet werden: {0}")]
+    #[error("Die Schlüsseldatenbank konnte nicht geöffnet werden: {0}")]
     Open(#[from] keepass::db::DatabaseOpenError),
-    #[error("KDBX konnte nicht gespeichert werden: {0}")]
+    #[error("Die Schlüsseldatenbank konnte nicht gespeichert werden: {0}")]
     Save(#[from] keepass::db::DatabaseSaveError),
-    #[error("Kennwort ist kein gültiges UTF-8; KDBX-Kennwörter werden als UTF-8 verarbeitet")]
+    #[error("Das Kennwort ist kein gültiges UTF-8; Kennwörter der Schlüsseldatenbank werden als UTF-8 verarbeitet")]
     PasswordEncoding,
     #[error("Eintrag {0} nicht gefunden")]
     NoSuchEntry(Uuid),
@@ -94,6 +94,27 @@ impl MasterKey {
         out.extend_from_slice(&Sha256::digest(self.key_file.as_ref().map(|s| s.as_bytes()).unwrap_or(&[])));
         Secret::from_bytes(out)
     }
+}
+
+/// Erzeugt eine Schlüsseldatei aus 32 Zufallsbytes als 64 Hexzeichen (diese Form
+/// liest KeePass als Schlüsseldatei). Eine vorhandene Datei wird nie überschrieben;
+/// unter Linux ist sie nur für den Besitzer lesbar.
+pub fn generate_key_file(path: &Path) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+    bytes.fill(0);
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    f.write_all(hex.as_bytes())?;
+    f.sync_all()
 }
 
 /// Schlüsselableitung für neue Dateien.
@@ -170,7 +191,7 @@ pub struct EntrySummary {
 
 /// Meldung „Zugangsdaten fehlen“.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("Zugangsdaten fehlen: {}", match .last_title { Some(t) => format!("Eintrag „{t}“ ist in der KDBX nicht mehr vorhanden"), None => format!("Eintrag {} ist in der KDBX nicht vorhanden", .uuid) })]
+#[error("Zugangsdaten fehlen: {}", match .last_title { Some(t) => format!("Eintrag „{t}“ ist in der Schlüsseldatenbank nicht mehr vorhanden"), None => format!("Eintrag {} ist in der Schlüsseldatenbank nicht vorhanden", .uuid) })]
 pub struct MissingCredential {
     pub uuid: Uuid,
     pub last_title: Option<String>,

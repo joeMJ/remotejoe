@@ -4,6 +4,9 @@
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QDir>
+#include <QtCore/QFileInfo>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 #include <QtCore/QElapsedTimer>
 #include <QtWidgets/QProgressBar>
@@ -17,6 +20,7 @@
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QCompleter>
+#include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
@@ -397,7 +401,7 @@ void PropertiesTab::build()
 	auto* saveB = new QPushButton(rjText(m_backend, "edit.save"), this);
 	auto* discardB = new QPushButton(rjText(m_backend, "edit.discard"), this);
 	saveB->setDefault(true);
-	connect(saveB, &QPushButton::clicked, this, &PropertiesTab::save);
+	connect(saveB, &QPushButton::clicked, this, &PropertiesTab::saveAndClose);
 	connect(discardB, &QPushButton::clicked, this, [this] {
 		reload();
 		emit status(rjText(m_backend, "bar.discard"));
@@ -549,8 +553,10 @@ QWidget* PropertiesTab::pageConnection()
 	m_psrp->addItem(rjText(m_backend, "edit.psrp.winrm_http"), QStringLiteral("winrm_http"));
 	m_psrp->addItem(rjText(m_backend, "edit.psrp.ssh"), QStringLiteral("ssh"));
 	m_psrpAuth = new QComboBox(w);
-	for (const char* a : { "kerberos", "ntlm", "basic" })
-		m_psrpAuth->addItem(QString::fromLatin1(a).toUpper(), QString::fromLatin1(a));
+	// Negotiate (NTLM) zuerst: Das ist die Vorgabe und die einzige Wahl für lokale Konten ohne Domäne.
+	m_psrpAuth->addItem(QStringLiteral("NEGOTIATE (NTLM)"), QStringLiteral("ntlm"));
+	m_psrpAuth->addItem(QStringLiteral("KERBEROS"), QStringLiteral("kerberos"));
+	m_psrpAuth->addItem(QStringLiteral("BASIC"), QStringLiteral("basic"));
 	m_psrpPort = new QLineEdit(w);
 	m_psrpVerify = new QCheckBox(rjText(m_backend, "edit.psrp.verify"), w);
 	m_psrpVerify->setChecked(true);
@@ -1137,6 +1143,18 @@ void PropertiesTab::showErrors(const QJsonObject& errors)
 	m_status->setText(rjText(m_backend, "edit.error").arg(errors.value(first).toString()));
 }
 
+void PropertiesTab::saveAndClose()
+{
+	// Ohne Änderungen schließt die Schaltfläche einfach den Tab.
+	if (!isDirty())
+	{
+		emit saveClosed();
+		return;
+	}
+	m_closeAfter = true;
+	save();
+}
+
 void PropertiesTab::save()
 {
 	if (!isDirty())
@@ -1162,6 +1180,7 @@ void PropertiesTab::handleSaveResult(const QJsonObject& r)
 {
 	if (r.contains(QStringLiteral("errors")))
 	{
+		m_closeAfter = false;
 		showErrors(r.value(QStringLiteral("errors")).toObject());
 		return;
 	}
@@ -1181,6 +1200,7 @@ void PropertiesTab::handleSaveResult(const QJsonObject& r)
 	}
 	if (r.contains(QStringLiteral("error")))
 	{
+		m_closeAfter = false;
 		m_status->setText(rjText(m_backend, "edit.error").arg(r.value(QStringLiteral("error")).toString()));
 		emit indexChanged();
 		return;
@@ -1190,6 +1210,11 @@ void PropertiesTab::handleSaveResult(const QJsonObject& r)
 	const QString msg = r.value(QStringLiteral("notice")).toString(rjText(m_backend, "status.saved"));
 	m_status->setText(msg);
 	emit status(msg);
+	if (m_closeAfter)
+	{
+		m_closeAfter = false;
+		emit saveClosed();
+	}
 }
 
 void PropertiesTab::applyToChildren(const QString& kind, const QString& label)
@@ -1441,7 +1466,7 @@ UnlockOverlay::UnlockOverlay(RjBackend* backend, QWidget* parent)
 	auto* box = new QFrame(this);
 	box->setObjectName(QStringLiteral("unlockBox"));
 	box->setFrameShape(QFrame::StyledPanel);
-	box->setMaximumWidth(560);
+	box->setMaximumWidth(620);
 	box->setAutoFillBackground(true);
 	outer->addStretch(1);
 	auto* row = new QHBoxLayout;
@@ -1451,34 +1476,55 @@ UnlockOverlay::UnlockOverlay(RjBackend* backend, QWidget* parent)
 	outer->addLayout(row);
 	outer->addStretch(1);
 	auto* v = new QVBoxLayout(box);
-	auto* title = new QLabel(rjText(backend, "unlock.title"), box);
-	QFont tf = title->font();
+	m_title = new QLabel(rjText(backend, "unlock.title"), box);
+	QFont tf = m_title->font();
 	tf.setPointSizeF(tf.pointSizeF() * 1.4);
 	tf.setBold(true);
-	title->setFont(tf);
-	v->addWidget(title);
-	auto* f = new QFormLayout;
+	m_title->setFont(tf);
+	v->addWidget(m_title);
+	m_hint = new QLabel(box);
+	m_hint->setWordWrap(true);
+	m_hint->hide();
+	v->addWidget(m_hint);
+	m_form = new QFormLayout;
 	auto* fs = new QFileSystemModel(this);
 	fs->setRootPath(QString());
 	m_path = new QLineEdit(box);
 	m_path->setCompleter(new QCompleter(fs, this));
+	m_browse = new QPushButton(rjText(backend, "unlock.browse"), box);
+	auto* pathRow = new QWidget(box);
+	auto* pl = new QHBoxLayout(pathRow);
+	pl->setContentsMargins(0, 0, 0, 0);
+	pl->addWidget(m_path, 1);
+	pl->addWidget(m_browse);
 	m_password = new QLineEdit(box);
 	m_password->setEchoMode(QLineEdit::Password);
+	m_password2 = new QLineEdit(box);
+	m_password2->setEchoMode(QLineEdit::Password);
 	m_keyFile = new QLineEdit(box);
 	m_keyFile->setCompleter(new QCompleter(fs, this));
-	auto add = [&](const char* label, QLineEdit* e) {
+	m_makeKey = new QCheckBox(rjText(backend, "unlock.makekey"), box);
+	m_strength = new QLabel(box);
+	m_strength->setWordWrap(true);
+	auto addRow = [&](const char* label, QWidget* field, QWidget* buddy) {
 		auto* l = new QLabel(rjText(backend, label), box);
-		l->setBuddy(e);
-		f->addRow(l, e);
+		l->setBuddy(buddy);
+		m_form->addRow(l, field);
 	};
-	add("unlock.file", m_path);
-	add("unlock.password", m_password);
-	add("unlock.keyfile", m_keyFile);
-	v->addLayout(f);
+	addRow("unlock.file", pathRow, m_path);
+	addRow("unlock.password", m_password, m_password);
+	addRow("unlock.password2", m_password2, m_password2);
+	addRow("unlock.keyfile", m_keyFile, m_keyFile);
+	m_form->addRow(QString(), m_makeKey);
+	m_form->addRow(QString(), m_strength);
+	v->addLayout(m_form);
 	m_message = new QLabel(box);
 	m_message->setWordWrap(true);
 	v->addWidget(m_message);
 	auto* buttons = new QHBoxLayout;
+	m_switch = new QPushButton(box);
+	m_switch->setFlat(true);
+	buttons->addWidget(m_switch);
 	buttons->addStretch(1);
 	m_cancel = new QPushButton(rjText(backend, "unlock.cancel"), box);
 	m_ok = new QPushButton(rjText(backend, "unlock.button"), box);
@@ -1488,16 +1534,58 @@ UnlockOverlay::UnlockOverlay(RjBackend* backend, QWidget* parent)
 	v->addLayout(buttons);
 	connect(m_ok, &QPushButton::clicked, this, &UnlockOverlay::submit);
 	connect(m_password, &QLineEdit::returnPressed, this, &UnlockOverlay::submit);
+	connect(m_password2, &QLineEdit::returnPressed, this, &UnlockOverlay::submit);
 	connect(m_cancel, &QPushButton::clicked, this, &QWidget::hide);
+	connect(m_browse, &QPushButton::clicked, this, &UnlockOverlay::browse);
+	connect(m_switch, &QPushButton::clicked, this, [this] { setMode(!m_create); });
+	connect(m_password, &QLineEdit::textChanged, this, &UnlockOverlay::updateStrength);
+	connect(m_password2, &QLineEdit::textChanged, this, &UnlockOverlay::updateStrength);
+	connect(m_makeKey, &QCheckBox::toggled, this, [this](bool on) {
+		// Vorschlag für den Ort der neuen Schlüsseldatei: neben der KDBX, Endung .key.
+		if (on && m_keyFile->text().trimmed().isEmpty() && !m_path->text().trimmed().isEmpty())
+		{
+			const QFileInfo fi(m_path->text().trimmed());
+			m_keyFile->setText(fi.dir().filePath(fi.completeBaseName() + QStringLiteral(".key")));
+		}
+	});
+	setMode(false);
 	if (parent)
 		parent->installEventFilter(this);
 	hide();
 }
 
+void UnlockOverlay::setMode(bool create)
+{
+	m_create = create;
+	m_title->setText(rjText(m_backend, create ? "unlock.title.new" : "unlock.title"));
+	m_ok->setText(rjText(m_backend, create ? "unlock.button.new" : "unlock.button"));
+	m_switch->setText(rjText(m_backend, create ? "unlock.switch.open" : "unlock.switch.new"));
+	m_form->setRowVisible(m_password2, create);
+	m_form->setRowVisible(m_makeKey, create);
+	m_form->setRowVisible(m_strength, create);
+	m_keyFile->setPlaceholderText(create ? rjText(m_backend, "unlock.keyfile.hint.new") : QString());
+	m_message->clear();
+	m_password->clear();
+	m_password2->clear();
+	m_makeKey->setChecked(false);
+	m_hint->setText(create ? rjText(m_backend, "unlock.hint.new") : QString());
+	m_hint->setVisible(create);
+	updateStrength();
+}
+
 void UnlockOverlay::open(const QString& path, bool locked)
 {
+	m_locked = locked;
+	setMode(false);
+	m_switch->setVisible(!locked);
 	if (!path.isEmpty())
 		m_path->setText(path);
+	else if (!locked)
+	{
+		// Erster Start ohne bekannte KDBX: Öffnen oder neu anlegen anbieten.
+		m_hint->setText(rjText(m_backend, "unlock.hint.first"));
+		m_hint->show();
+	}
 	m_cancel->setVisible(!locked);
 	m_message->clear();
 	setBusy(false);
@@ -1507,16 +1595,108 @@ void UnlockOverlay::open(const QString& path, bool locked)
 	(m_path->text().isEmpty() ? m_path : m_password)->setFocus();
 }
 
+void UnlockOverlay::openNew()
+{
+	m_locked = false;
+	setMode(true);
+	m_switch->setVisible(true);
+	m_cancel->setVisible(true);
+	if (m_path->text().trimmed().isEmpty() || QFileInfo::exists(m_path->text().trimmed()))
+		m_path->setText(QDir(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)).filePath(QStringLiteral("remotejoe.kdbx")));
+	m_keyFile->clear();
+	setBusy(false);
+	setGeometry(parentWidget()->rect());
+	raise();
+	show();
+	m_password->setFocus();
+}
+
 void UnlockOverlay::setBusy(bool busy, const QString& message)
 {
 	m_ok->setEnabled(!busy);
 	m_password->setEnabled(!busy);
+	m_password2->setEnabled(!busy);
+	m_browse->setEnabled(!busy);
+	m_switch->setEnabled(!busy);
 	if (!message.isEmpty() || !busy)
 		m_message->setText(message);
 }
 
+void UnlockOverlay::browse()
+{
+	const QString start = m_path->text().trimmed().isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) : m_path->text().trimmed();
+	const QString filter = rjText(m_backend, "unlock.filter");
+	if (m_create)
+	{
+		QString f = QFileDialog::getSaveFileName(this, rjText(m_backend, "unlock.browse.new"), start, filter, nullptr, QFileDialog::DontConfirmOverwrite);
+		if (f.isEmpty())
+			return;
+		if (!f.endsWith(QStringLiteral(".kdbx"), Qt::CaseInsensitive))
+			f += QStringLiteral(".kdbx");
+		m_path->setText(f);
+	}
+	else
+	{
+		const QString f = QFileDialog::getOpenFileName(this, rjText(m_backend, "unlock.browse.open"), start, filter);
+		if (!f.isEmpty())
+			m_path->setText(f);
+	}
+}
+
+void UnlockOverlay::updateStrength()
+{
+	if (!m_create)
+		return;
+	const QString p = m_password->text();
+	QString t;
+	if (!p.isEmpty())
+	{
+		if (!m_password2->text().isEmpty() && p != m_password2->text())
+			t = rjText(m_backend, "unlock.err.mismatch");
+		else if (p.size() < 12)
+			t = rjText(m_backend, "unlock.strength.short");
+		else
+			t = rjText(m_backend, "unlock.strength.ok");
+	}
+	m_strength->setText(t);
+}
+
 void UnlockOverlay::submit()
 {
+	if (m_create)
+	{
+		const QString path = m_path->text().trimmed();
+		QString pw = m_password->text();
+		QString pw2 = m_password2->text();
+		QString kf = m_keyFile->text().trimmed();
+		const bool make = m_makeKey->isChecked();
+		auto wipe = [&] {
+			pw.fill(QLatin1Char(' '));
+			pw2.fill(QLatin1Char(' '));
+		};
+		if (path.isEmpty())
+			m_message->setText(rjText(m_backend, "unlock.err.path"));
+		else if (QFileInfo::exists(path))
+			m_message->setText(rjText(m_backend, "unlock.err.exists"));
+		else if (pw != pw2)
+			m_message->setText(rjText(m_backend, "unlock.err.mismatch"));
+		else if (pw.isEmpty() && kf.isEmpty() && !make)
+			m_message->setText(rjText(m_backend, "unlock.err.empty"));
+		else
+		{
+			if (make && kf.isEmpty())
+			{
+				const QFileInfo fi(path);
+				kf = fi.dir().filePath(fi.completeBaseName() + QStringLiteral(".key"));
+			}
+			setBusy(true, rjText(m_backend, "unlock.busy.new"));
+			emit createRequested(path, pw, kf, make);
+			m_password->clear();
+			m_password2->clear();
+		}
+		wipe();
+		return;
+	}
 	QString pw = m_password->text();
 	setBusy(true, rjText(m_backend, "unlock.busy"));
 	emit unlockRequested(m_path->text(), pw, m_keyFile->text());

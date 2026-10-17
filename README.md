@@ -66,16 +66,18 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
 
 ## Bedienung
 
-1. Programm starten: `remotejoe`. Beim ersten Start **Datei → KDBX öffnen …**: Datei,
-   Hauptkennwort und gegebenenfalls Schlüsseldatei in der Abdeckung des Hauptfensters angeben.
+1. Programm starten: `remotejoe`. Beim ersten Start fragt die Abdeckung des Hauptfensters nach der
+   **Schlüsseldatenbank** (eine KeePass-Datei mit Ihren Zugangsdaten): **Vorhandene öffnen** oder **Datei →
+   Neue Schlüsseldatenbank anlegen …** (Datei, Hauptkennwort mit Wiederholung, auf Wunsch eine Schlüsseldatei).
+   Der Pfad wird gemerkt.
 2. Struktur anlegen: im Baum **Hinzufügen** (Kontextmenü, Menü „Bearbeiten“ oder Strg+N):
    Ordner, RDP, SSH, VNC, Web, Proxmox, Hyper-V, PowerShell, Aufgabe, Makro oder aus einer
-   Vorlage. Das neue Objekt öffnet seinen **Eigenschaften-Tab** (auch per Doppelklick oder F4):
+   Vorlage. Das neue Objekt öffnet seinen **Eigenschaften-Tab** (später über F4, Alt+Eingabe oder das Kontextmenü „Eigenschaften“; der Doppelklick auf ein Ziel verbindet):
    Allgemein, Verbindung, Zugangsdaten, Tunnel, Aufgaben und Makros, Zwischenablage,
    Organisation, Übergeordneter Ordner; **Speichern** im Tab.
    Oder **Datei → Importieren (RDM, Royal TS) …** mit Vorschau.
 3. Zugangsdaten je Ordner oder Ziel: keine, vom übergeordneten Ordner, Benutzername und
-   Kennwort direkt (neuer Eintrag in der KDBX-Gruppe `remotejoe`), vorhandener Datensatz oder
+   Kennwort direkt (neuer Eintrag in der Gruppe `remotejoe` der Schlüsseldatenbank), vorhandener Datensatz oder
    Datensatz nach Name. Der Tab zeigt, woher der wirksame Wert kommt.
 4. Verbinden: Eingabetaste auf einem Ziel oder Kontextmenü **Verbinden**; für einen Ordner
    **Alle im Ordner verbinden**. Fehlt ein Eintrag oder kommen mehrere in Frage, fragt das
@@ -94,8 +96,8 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
    Liste bekannter SSH-Host-Schlüssel (`known_hosts`) hat das Format von OpenSSH.
 7. Kontextmenü **Aufgaben → Aktualisierungen prüfen** startet den Patchday für die gewählten
    Ziele (zuerst als Trockenlauf).
-8. **Datei → Speichern** schreibt KDBX und Index (atomar, mit Sicherungskopie `.bak`); hat
-   jemand die KDBX inzwischen geändert, fragt eine Leiste: eigene, fremde oder beide behalten.
+8. **Datei → Speichern** schreibt Schlüsseldatenbank und Index (atomar, mit Sicherungskopie `.bak`); hat
+   jemand die Schlüsseldatenbank inzwischen geändert, fragt eine Leiste: eigene, fremde oder beide behalten.
    **Datei → Sperren** (Strg+L) verwirft Schlüssel und Kennwörter im Speicher; laufende
    Sitzungen bleiben bestehen, ihre Bilder sind verdeckt. **Extras → Sperre nach Leerlauf**
    schaltet das automatische Sperren ein; **Extras → SNMP-Geräte** verwaltet SNMP-Zugänge (v3

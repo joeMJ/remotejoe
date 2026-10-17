@@ -56,6 +56,9 @@ public:
 	QMenu* popupAddMenu();
 	BulkAddTab* openBulkAdd(const QString& parentId);
 	void showUnlock(bool locked);
+	void showNewVault();
+	/// Nur für Bildschirmfotos: leerer Baum mit Hinweis.
+	void showEmptyTreeForScreenshot();
 	QTabWidget* tabs() const { return m_tabs; }
 
 	/// Zeit vom Programmstart bis zum ersten Zeichnen des Fensters.
@@ -123,10 +126,12 @@ private:
 	std::uint64_t currentSession() const;
 	QSize contentSize(bool terminal) const;
 	void updateStatus();
+	void updateEmptyHint();
 
 	RjBackend* m_backend;
 	QLineEdit* m_search;
 	QTreeView* m_tree;
+	QWidget* m_emptyHint = nullptr;
 	QStandardItemModel* m_model;
 	QTabWidget* m_tabs;
 	QTimer m_poll;

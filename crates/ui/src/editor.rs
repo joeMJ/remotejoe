@@ -785,8 +785,8 @@ impl App {
             "named" => CredentialMode::Named(str_of(cred, "name").filter(|n| !n.is_empty()).ok_or("Name des Datensatzes fehlt")?.to_string()),
             "entry" => {
                 let entry = id_of(cred, "entry").ok_or("Kein Eintrag gewählt")?;
-                let vault = self.vault.as_ref().ok_or("KDBX ist gesperrt")?;
-                let title = vault.credential(entry).map(|c| c.data.title).ok_or("Eintrag nicht in der KDBX")?;
+                let vault = self.vault.as_ref().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
+                let title = vault.credential(entry).map(|c| c.data.title).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
                 CredentialMode::Entry { name: name_for_entry, reference: CredentialRef { entry, last_title: Some(title) } }
             }
             "direct" => {
@@ -801,10 +801,10 @@ impl App {
                     Some(CredentialMode::Entry { reference, .. }) => Some(reference.entry),
                     _ => None,
                 };
-                let vault = self.vault.as_mut().ok_or("KDBX ist gesperrt")?;
+                let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
                 let entry = match current.filter(|e| vault.is_own_entry(*e)) {
                     Some(e) => {
-                        let old = vault.credential(e).ok_or("Eintrag nicht in der KDBX")?;
+                        let old = vault.credential(e).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
                         let data = CredentialData { username, password: password.unwrap_or(old.data.password.clone()), ..old.data };
                         vault.update_credential(e, data).map_err(|e| e.to_string())?;
                         e
@@ -837,7 +837,7 @@ impl App {
         let priv_proto: Option<rj_core::SnmpPriv> = c.get("priv_proto").and_then(|v| serde_json::from_value(v.clone()).ok());
         let port = c.get("port").and_then(|p| p.as_u64().or_else(|| p.as_str().and_then(|s| s.parse().ok()))).map(|p| p as u16);
         let existing = id_of(c, "id").and_then(|id| self.index.snmp_devices.iter().find(|d| d.id == id).cloned());
-        let vault = self.vault.as_mut().ok_or("KDBX ist gesperrt")?;
+        let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
         // Kennwörter byte-genau, nie getrimmt.
         let secret = |k: &str| str_of(c, k).filter(|s| !s.is_empty()).map(Secret::from_str_exact);
         let (main_pw, priv_pw) = match version {
@@ -848,7 +848,7 @@ impl App {
         let title = format!("SNMP {name}");
         let entry = match existing.as_ref().map(|d| d.credential.entry).filter(|e| vault.is_own_entry(*e)) {
             Some(e) => {
-                let old = vault.credential(e).ok_or("Eintrag nicht in der KDBX")?;
+                let old = vault.credential(e).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
                 let data = CredentialData { title: title.clone(), username, password: main_pw.unwrap_or(old.data.password.clone()), ..old.data };
                 vault.update_credential(e, data).map_err(|e| e.to_string())?;
                 e

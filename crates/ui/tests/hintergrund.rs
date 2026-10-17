@@ -190,6 +190,8 @@ fn lock_removes_plaintext_passwords_from_memory() {
     }
     entry_pw.zeroize();
     let mut app = App::new(false);
+    // Der Test darf die echte Konfiguration des Benutzers nicht verändern.
+    app.config_path = None;
     // Worker gibt es hier nicht: die Sitzung behält nur ihre Zugangsdaten.
     app.sessions = Manager::new(std::path::PathBuf::from("/nicht/vorhanden"), Reconnect { auto: false, max: Duration::from_secs(60) });
     app.unlock(path.display().to_string(), Secret::from_str_exact(&master_pw), None);

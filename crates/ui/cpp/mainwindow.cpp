@@ -312,6 +312,23 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_tree->setIconSize(QSize(22, 22));
 	m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
 	m_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+	// Hinweis im leeren Baum: sagt, wie man ein erstes Ziel oder einen Ordner anlegt.
+	m_emptyHint = new QWidget(m_tree->viewport());
+	{
+		auto* el = new QVBoxLayout(m_emptyHint);
+		el->setContentsMargins(12, 12, 12, 12);
+		el->addStretch(1);
+		auto* t = new QLabel(T(m_backend, "tree.empty"), m_emptyHint);
+		t->setWordWrap(true);
+		t->setAlignment(Qt::AlignCenter);
+		el->addWidget(t);
+		auto* b = new QPushButton(T(m_backend, "tree.empty.add"), m_emptyHint);
+		el->addWidget(b, 0, Qt::AlignHCenter);
+		el->addStretch(2);
+		connect(b, &QPushButton::clicked, this, [this] { popupAddMenu(); });
+		m_emptyHint->hide();
+		m_tree->viewport()->installEventFilter(this);
+	}
 	m_tree->setAccessibleName(QStringLiteral("Verbindungsbaum"));
 	leftLay->addWidget(m_viewBox);
 	leftLay->addWidget(m_search);
@@ -334,7 +351,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	buildMenus();
 	statusBar()->showMessage(T(m_backend, "status.ready"));
 
-	// Eingabetaste verbindet, Doppelklick öffnet die Eigenschaften.
+	// Eingabetaste und Doppelklick verbinden; die Eigenschaften öffnen F4, Alt+Eingabe und das Kontextmenü.
 	auto treeKey = [this, left](const QKeySequence& k, auto fn) {
 		auto* s = new QShortcut(k, left);
 		s->setContext(Qt::WidgetWithChildrenShortcut);
@@ -356,8 +373,9 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(m_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex& i) {
 		if (i.data(RoleGuest).isValid())
 			openGuestConsole(i);
-		else if (!i.data(RolePlaceholder).toBool())
-			openProperties(i.data(RoleId).toString());
+		else if (!i.data(RolePlaceholder).toBool() && !i.data(RoleFolder).toBool())
+			connectSelected();
+		// Ordner klappen beim Doppelklick wie üblich auf oder zu.
 	});
 	treeKey(QKeySequence(Qt::Key_F4), [this] { if (!currentId().isEmpty()) openProperties(currentId()); });
 	treeKey(QKeySequence(QStringLiteral("Alt+Return")), [this] { if (!currentId().isEmpty()) openProperties(currentId()); });
@@ -379,6 +397,10 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(m_overlay, &UnlockOverlay::unlockRequested, this, [this](const QString& path, const QString& pw, const QString& keyFile) {
 		m_backend->unlock(path, pw, keyFile);
 		statusBar()->showMessage(T(m_backend, "status.unlocking"));
+	});
+	connect(m_overlay, &UnlockOverlay::createRequested, this, [this](const QString& path, const QString& pw, const QString& keyFile, bool makeKey) {
+		m_backend->createVault(path, pw, keyFile, makeKey);
+		statusBar()->showMessage(T(m_backend, "status.creating"));
 	});
 	// Hintergrundaufgaben in der Statuszeile: Fortschritt und Abbruch.
 	m_jobsBox = new QWidget(this);
@@ -494,6 +516,7 @@ MainWindow::~MainWindow() = default;
 void MainWindow::buildMenus()
 {
 	QMenu* file = menuBar()->addMenu(T(m_backend, "menu.file"));
+	file->addAction(T(m_backend, "menu.file.new"), this, [this] { m_overlay->openNew(); });
 	file->addAction(T(m_backend, "menu.file.open"), QKeySequence::Open, this, [this] { showUnlock(false); });
 	file->addAction(T(m_backend, "menu.file.import"), this, [this] {
 		const QString path = QFileDialog::getOpenFileName(this, T(m_backend, "menu.file.import"), QString(),
@@ -615,7 +638,8 @@ void MainWindow::applyTheme(bool dark)
 	  "QLabel#securityTitle { font-weight: bold; }"
 	  "QLabel#heading { font-weight: bold; padding: 4px 0; }"
 	  "QFrame#unlockBox { border: 2px solid %2; border-radius: 6px; padding: 12px; }"
-	  "*[rjDirty=\"true\"] { border: 2px solid %2; }")
+	  "*[rjDirty=\"true\"] { border: 2px solid %2; }"
+	  "QRadioButton[rjDirty=\"true\"], QCheckBox[rjDirty=\"true\"] { border: none; font-weight: bold; color: %2; }")
 	                      .arg(c("warning").name(), c("highlight").name()));
 }
 
@@ -633,6 +657,16 @@ void MainWindow::reloadTree()
 		if (m_model->rowCount() > 0)
 			m_tree->expand(m_model->index(0, 0, m_model->index(0, 0)));
 	}
+	updateEmptyHint();
+}
+
+void MainWindow::updateEmptyHint()
+{
+	if (!m_emptyHint)
+		return;
+	m_emptyHint->setGeometry(m_tree->viewport()->rect());
+	m_emptyHint->setVisible(m_model->rowCount() == 0 && m_search->text().isEmpty());
+	m_emptyHint->raise();
 }
 
 int MainWindow::treeRowCount() const
@@ -969,7 +1003,13 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 {
 	const QModelIndex i = m_tree->indexAt(pos);
 	if (!i.isValid())
+	{
+		// Freie Fläche (auch bei leerem Baum): Hinzufügen auf oberster Ebene anbieten.
+		QMenu empty(this);
+		buildAddMenu(&empty, QString());
+		empty.exec(m_tree->viewport()->mapToGlobal(pos));
 		return;
+	}
 	if (!m_tree->selectionModel()->isSelected(i))
 		m_tree->setCurrentIndex(i);
 	const QString id = i.data(RoleId).toString();
@@ -1081,6 +1121,17 @@ void MainWindow::tabContextMenu(QTabWidget* tabs, const QPoint& pos)
 void MainWindow::showUnlock(bool locked)
 {
 	m_overlay->open(m_backend->kdbxPath(), locked);
+}
+
+void MainWindow::showNewVault()
+{
+	m_overlay->openNew();
+}
+
+void MainWindow::showEmptyTreeForScreenshot()
+{
+	m_model->clear();
+	updateEmptyHint();
 }
 
 SessionPane* MainWindow::pane(std::uint64_t session)
@@ -1426,6 +1477,8 @@ void MainWindow::updateJobs()
 
 bool MainWindow::eventFilter(QObject* o, QEvent* e)
 {
+	if (m_tree && o == m_tree->viewport() && e->type() == QEvent::Resize)
+		updateEmptyHint();
 	switch (e->type())
 	{
 	case QEvent::KeyPress:
@@ -1719,6 +1772,14 @@ PropertiesTab* MainWindow::openProperties(const QString& id, const QString& cate
 				other->reload();
 	});
 	connect(ed, &PropertiesTab::status, this, [this](const QString& t) { statusBar()->showMessage(t, 5000); });
+	connect(ed, &PropertiesTab::saveClosed, this, [this, ed] {
+		const int i = m_tabs->indexOf(ed);
+		if (i >= 0)
+		{
+			m_tabs->removeTab(i);
+			ed->deleteLater();
+		}
+	});
 	m_tabs->setCurrentWidget(ed);
 	if (!category.isEmpty())
 		ed->selectCategory(category);

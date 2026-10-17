@@ -365,3 +365,24 @@ mod keepassxc {
         }
     }
 }
+
+#[test]
+fn created_vault_with_generated_key_file_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let kf = dir.path().join("schluessel.key");
+    generate_key_file(&kf).unwrap();
+    let text = std::fs::read_to_string(&kf).unwrap();
+    assert_eq!(text.len(), 64);
+    assert!(text.chars().all(|c| c.is_ascii_hexdigit()));
+    // Eine vorhandene Schlüsseldatei wird nicht überschrieben.
+    assert!(generate_key_file(&kf).is_err());
+
+    let path = dir.path().join("neu.kdbx");
+    let key = MasterKey::password("Prüf-Kennwort ✓").with_key_file(&kf).unwrap();
+    let mut v = Vault::create(&path, key.clone(), KdfChoice::Weak, IndexStorage::KdbxCustomData);
+    v.save(None).unwrap();
+    assert!(path.exists());
+    // Ohne Schlüsseldatei lässt sich die Datei nicht öffnen, mit ihr schon.
+    assert!(Vault::open(&path, MasterKey::password("Prüf-Kennwort ✓"), IndexStorage::KdbxCustomData).is_err());
+    assert!(Vault::open(&path, key, IndexStorage::KdbxCustomData).is_ok());
+}
