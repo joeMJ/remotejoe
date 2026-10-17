@@ -406,6 +406,25 @@ void MainWindow::handleConnectResult(const QString& id, const QString& json)
 		}
 		return;
 	}
+	if (r.contains(QStringLiteral("hostkey")))
+	{
+		// Unbekannter Host-Schlüssel eines Sprungservers: nie still annehmen.
+		const QJsonObject h = r.value(QStringLiteral("hostkey")).toObject();
+		QMessageBox box(QMessageBox::Warning, T(m_backend, "app.title"), h.value(QStringLiteral("text")).toString(), QMessageBox::NoButton, this);
+		box.setInformativeText(h.value(QStringLiteral("detail")).toString());
+		QPushButton* yes = box.addButton(T(m_backend, "dialog.question.accept"), QMessageBox::AcceptRole);
+		QPushButton* no = box.addButton(T(m_backend, "dialog.question.reject"), QMessageBox::RejectRole);
+		box.setDefaultButton(no);
+		box.exec();
+		if (box.clickedButton() == yes &&
+		    m_backend->acceptHostKey(h.value(QStringLiteral("host")).toString(), std::uint32_t(h.value(QStringLiteral("port")).toInt()),
+		                             h.value(QStringLiteral("key")).toString()))
+		{
+			const QSize px = contentSize(false);
+			handleConnectResult(id, m_backend->connectTarget(id, QString(), false, px.width(), px.height()));
+		}
+		return;
+	}
 	if (r.contains(QStringLiteral("missing")))
 	{
 		const QJsonObject m = r.value(QStringLiteral("missing")).toObject();

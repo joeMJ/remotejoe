@@ -18,6 +18,8 @@ use tokio::sync::{mpsc, oneshot};
 struct Options {
     term: Option<String>,
     known_hosts: Option<String>,
+    /// Ziel hinter einem Tunnel: Host-Schlüssel wird unter diesem Namen (`host:port`) geprüft.
+    host_key_alias: Option<String>,
 }
 
 fn main() {
@@ -167,7 +169,17 @@ async fn establish(
         connect_timeout: Duration::from_secs(r.connect_timeout_secs.max(1) as u64),
         keepalive: Duration::from_secs(r.keepalive_secs.max(1) as u64),
     };
-    let conn = SshConnection::connect(&params, known, ask).await.map_err(|e| e.to_string())?;
+    let conn = match opts.host_key_alias.as_deref().and_then(|a| a.rsplit_once(':')).and_then(|(h, p)| Some((h.to_string(), p.parse::<u16>().ok()?))) {
+        Some((alias_host, alias_port)) => {
+            let stream = tokio::time::timeout(params.connect_timeout, tokio::net::TcpStream::connect((params.host.as_str(), params.port)))
+                .await
+                .map_err(|_| "Zeitüberschreitung beim Verbindungsaufbau".to_string())?
+                .map_err(|e| e.to_string())?;
+            let alias = SshParams { host: alias_host, port: alias_port, ..params.clone() };
+            SshConnection::connect_stream(&alias, stream, known, ask).await.map_err(|e| e.to_string())?
+        }
+        None => SshConnection::connect(&params, known, ask).await.map_err(|e| e.to_string())?,
+    };
     let term = opts.term.unwrap_or_else(|| "xterm-256color".into());
     let shell = conn.open_shell(&term, r.width, r.height).await.map_err(|e| e.to_string())?;
     Ok((conn, shell))

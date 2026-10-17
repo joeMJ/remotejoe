@@ -24,6 +24,8 @@ pub struct HostKeyQuestion {
     pub algorithm: String,
     pub fingerprint: String,
     pub status: HostKeyStatus,
+    /// Schlüssel im OpenSSH-Format (zum Merken nach Zustimmung).
+    pub key: String,
 }
 
 impl HostKeyQuestion {
@@ -117,6 +119,12 @@ impl KnownHosts {
             Some(previous_fingerprint) => HostKeyStatus::Changed { previous_fingerprint },
             None => HostKeyStatus::Unknown,
         }
+    }
+
+    /// Speichert einen Schlüssel im OpenSSH-Format (nach Zustimmung des Benutzers).
+    pub fn remember_openssh(&self, host: &str, port: u16, key: &str) -> std::io::Result<()> {
+        let k = PublicKey::from_openssh(key).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        self.remember(host, port, &k)
     }
 
     /// Speichert den Schlüssel; ein bisheriger Schlüssel desselben

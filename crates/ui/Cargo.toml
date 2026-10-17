@@ -20,6 +20,8 @@ remotejoe-kdbx = { path = "../kdbx" }
 remotejoe-ipc = { path = "../ipc" }
 remotejoe-supervisor = { path = "../supervisor" }
 remotejoe-worker-ssh = { path = "../worker-ssh" }
+remotejoe-tunnel = { path = "../tunnel" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 alacritty_terminal = "0.26"
 serde.workspace = true
 serde_json.workspace = true

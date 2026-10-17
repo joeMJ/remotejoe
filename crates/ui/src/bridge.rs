@@ -60,6 +60,9 @@ pub mod qobject {
         #[cxx_name = "closeSession"]
         fn close_session(self: Pin<&mut RjBackend>, session: u64);
         #[qinvokable]
+        #[cxx_name = "acceptHostKey"]
+        fn accept_host_key(self: &RjBackend, host: &QString, port: u32, key: &QString) -> bool;
+        #[qinvokable]
         #[cxx_name = "keyEvent"]
         fn key_event(self: Pin<&mut RjBackend>, session: u64, key: u32, modifiers: u32, text: &QString, down: bool);
         #[qinvokable]
@@ -236,9 +239,12 @@ impl qobject::RjBackend {
 
     fn close_session(self: Pin<&mut Self>, session: u64) {
         if let Some(a) = self.app_mut() {
-            a.sessions.close(session);
-            a.workspace.remove_session(session);
+            a.close_session(session);
         }
+    }
+
+    fn accept_host_key(&self, host: &QString, port: u32, key: &QString) -> bool {
+        self.app().is_some_and(|a| a.accept_host_key(&host.to_string(), port as u16, &key.to_string()))
     }
 
     fn key_event(self: Pin<&mut Self>, session: u64, key: u32, modifiers: u32, text: &QString, down: bool) {

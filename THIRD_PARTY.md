@@ -27,7 +27,9 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | base64ct | 1.8.3 | Apache-2.0 OR MIT |
 | bcrypt-pbkdf | 0.11.0 | MIT OR Apache-2.0 |
 | bindgen | 0.72.1 | BSD-3-Clause |
+| bitflags | 1.3.2 | MIT/Apache-2.0 |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 |
+| blake2 | 0.10.6 | MIT OR Apache-2.0 |
 | blake2 | 0.11.0 | MIT OR Apache-2.0 |
 | blake2b_simd | 1.0.5 | MIT |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 |
@@ -35,6 +37,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | block-modes | 0.9.1 | MIT OR Apache-2.0 |
 | block-padding | 0.4.2 | MIT OR Apache-2.0 |
 | blowfish | 0.10.0 | MIT OR Apache-2.0 |
+| boringtun | 0.7.1 | BSD-3-Clause |
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 |
 | byteorder | 1.5.0 | Unlicense OR MIT |
 | bytes | 1.12.1 | MIT |
@@ -74,6 +77,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | ctr | 0.10.1 | MIT OR Apache-2.0 |
 | ctutils | 0.4.3 | Apache-2.0 OR MIT |
 | cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
+| curve25519-dalek | 4.1.3 | BSD-3-Clause |
 | curve25519-dalek | 5.0.0 | BSD-3-Clause |
 | curve25519-dalek-derive | 0.1.1 | MIT/Apache-2.0 |
 | cxx | 1.0.205 | MIT OR Apache-2.0 |
@@ -87,6 +91,9 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | cxxbridge-flags | 1.0.205 | MIT OR Apache-2.0 |
 | cxxbridge-macro | 1.0.205 | MIT OR Apache-2.0 |
 | data-encoding | 2.11.1 | MIT |
+| defmt | 1.2.0 | MIT OR Apache-2.0 |
+| defmt-macros | 1.2.0 | MIT OR Apache-2.0 |
+| defmt-parser | 1.1.0 | MIT OR Apache-2.0 |
 | delegate | 0.13.5 | MIT OR Apache-2.0 |
 | der | 0.8.2 | Apache-2.0 OR MIT |
 | des | 0.8.1 | MIT OR Apache-2.0 |
@@ -106,6 +113,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | errno | 0.3.14 | MIT OR Apache-2.0 |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT |
 | ff | 0.14.0 | MIT/Apache-2.0 |
+| fiat-crypto | 0.2.9 | MIT OR Apache-2.0 OR BSD-1-Clause |
 | fiat-crypto | 0.3.0 | MIT OR Apache-2.0 OR BSD-1-Clause |
 | find-msvc-tools | 0.1.14 | MIT OR Apache-2.0 |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
@@ -128,8 +136,10 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | glob | 0.3.4 | MIT OR Apache-2.0 |
 | group | 0.14.0 | MIT/Apache-2.0 |
 | hash32 | 0.2.1 | MIT OR Apache-2.0 |
+| hash32 | 0.3.1 | MIT OR Apache-2.0 |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | heapless | 0.7.17 | MIT OR Apache-2.0 |
+| heapless | 0.9.3 | MIT OR Apache-2.0 |
 | hermit-abi | 0.5.3 | MIT OR Apache-2.0 |
 | hex | 0.4.3 | MIT OR Apache-2.0 |
 | hex-literal | 1.1.0 | MIT OR Apache-2.0 |
@@ -145,6 +155,9 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | indoc | 2.0.8 | MIT OR Apache-2.0 |
 | inout | 0.1.4 | MIT OR Apache-2.0 |
 | inout | 0.2.4 | MIT OR Apache-2.0 |
+| ip_network | 0.4.1 | BSD-2-Clause |
+| ip_network_table | 0.2.0 | BSD-2-Clause |
+| ip_network_table-deps-treebitmap | 0.5.0 | MIT |
 | itertools | 0.13.0 | MIT OR Apache-2.0 |
 | itoa | 1.0.18 | MIT OR Apache-2.0 |
 | jobserver | 0.1.35 | MIT OR Apache-2.0 |
@@ -158,6 +171,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.34 | MIT OR Apache-2.0 |
+| managed | 0.8.0 | 0BSD |
 | md4 | 0.10.2 | MIT OR Apache-2.0 |
 | md5 | 0.8.1 | Apache-2.0 OR MIT |
 | memchr | 2.8.3 | Unlicense OR MIT |
@@ -195,6 +209,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | poly1305 | 0.8.0 | Apache-2.0 OR MIT |
 | poly1305 | 0.9.1 | Apache-2.0 OR MIT |
 | polyval | 0.7.3 | Apache-2.0 OR MIT |
+| portable-atomic | 1.15.0 | Apache-2.0 OR MIT |
 | postcard | 1.1.3 | MIT OR Apache-2.0 |
 | prettyplease | 0.2.37 | MIT OR Apache-2.0 |
 | primefield | 0.14.0 | Apache-2.0 OR MIT |
@@ -252,6 +267,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | simd-adler32 | 0.3.10 | MIT |
 | slab | 0.4.12 | MIT |
 | smallvec | 1.16.3 | MIT OR Apache-2.0 |
+| smoltcp | 0.14.0 | 0BSD |
 | socket2 | 0.6.5 | MIT OR Apache-2.0 |
 | spin | 0.9.9 | MIT |
 | spki | 0.8.1 | Apache-2.0 OR MIT |
@@ -276,6 +292,9 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | toml_datetime | 0.6.11 | MIT OR Apache-2.0 |
 | toml_edit | 0.22.27 | MIT OR Apache-2.0 |
 | toml_write | 0.1.2 | MIT OR Apache-2.0 |
+| tracing | 0.1.44 | MIT |
+| tracing-attributes | 0.1.31 | MIT |
+| tracing-core | 0.1.36 | MIT |
 | twofish | 0.8.0 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 |
@@ -322,6 +341,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 |
 | winnow | 0.7.15 | MIT |
 | wnaf | 0.14.1 | Apache-2.0 OR MIT |
+| x25519-dalek | 2.0.1 | BSD-3-Clause |
 | zeroize | 1.9.1 | Apache-2.0 OR MIT |
 | zeroize_derive | 1.5.0 | Apache-2.0 OR MIT |
 | zlib-rs | 0.6.8 | Zlib |

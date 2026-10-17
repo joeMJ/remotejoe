@@ -13,6 +13,10 @@ use rj_kdbx::{MasterKey, Vault};
 use serde_json::json;
 use uuid::Uuid;
 
+use rj_ssh::client::{Auth, SshParams};
+use rj_ssh::known_hosts::{HostKeyQuestion, KnownHosts};
+use rj_tunnel::{TunnelManager, TunnelSpec};
+
 use crate::sessions::{ConnectSpec, Manager, Reconnect, UiEvent};
 use crate::tree::{self, Light};
 use crate::workspace::{Arrangement, SessionId, Workspace};
@@ -28,6 +32,12 @@ pub struct App {
     pub workspace: Workspace,
     unlocking: Option<Receiver<Result<Vault, String>>>,
     lights: std::collections::HashMap<Uuid, Light>,
+    _rt: tokio::runtime::Runtime,
+    tunnels: TunnelManager,
+    known_hosts: KnownHosts,
+    /// Zuletzt abgelehnte Rückfrage zu einem Host-Schlüssel eines Sprungservers.
+    hop_question: std::sync::Arc<std::sync::Mutex<Option<HostKeyQuestion>>>,
+    session_tunnels: std::collections::HashMap<SessionId, (Uuid, String, u16)>,
 }
 
 impl App {
@@ -35,7 +45,26 @@ impl App {
         let config_path = rj_core::config::default_config_path();
         let config = config_path.as_deref().map(Config::load).and_then(Result::ok).unwrap_or_default();
         let reconnect = Reconnect { auto: config.connection.auto_reconnect, max: Duration::from_secs(config.connection.reconnect_max_secs as u64) };
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("Laufzeit");
+        let known_hosts = KnownHosts::default_location().unwrap_or_else(|| KnownHosts::new(std::env::temp_dir().join("remotejoe-known_hosts")));
+        let hop_question = std::sync::Arc::new(std::sync::Mutex::new(None));
+        // Rückfragen zu Sprungservern: hier ablehnen und merken; die Oberfläche
+        // fragt den Benutzer und versucht es nach Zustimmung erneut.
+        let (ask, mut questions) = tokio::sync::mpsc::unbounded_channel::<(HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>();
+        let hq = hop_question.clone();
+        rt.spawn(async move {
+            while let Some((q, reply)) = questions.recv().await {
+                *hq.lock().unwrap_or_else(|e| e.into_inner()) = Some(q);
+                let _ = reply.send(false);
+            }
+        });
+        let tunnels = TunnelManager::new(rt.handle().clone(), known_hosts.clone(), ask);
         App {
+            _rt: rt,
+            tunnels,
+            known_hosts,
+            hop_question,
+            session_tunnels: Default::default(),
             sessions: Manager::new(Manager::default_worker_dir(), reconnect),
             config,
             config_path,
@@ -219,9 +248,99 @@ impl App {
             },
             credentials: payload,
         };
+        let mut spec = spec;
+        let mut tunnel_use = None;
+        if let Some(def) = rj_tunnel::plan(&self.index, target).cloned() {
+            let tspec = match self.tunnel_spec(&def, target) {
+                Ok(s) => s,
+                Err(e) => return json!({ "error": format!("Tunnel „{}“: {e}", def.name) }).to_string(),
+            };
+            *self.hop_question.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            match self.tunnels.acquire(def.id, &tspec, &t.host, t.effective_port()) {
+                Ok(ep) => {
+                    if t.protocol == Protocol::Ssh {
+                        let mut o: serde_json::Value = serde_json::from_str(&spec.request.options_json).unwrap_or_else(|_| json!({}));
+                        o["host_key_alias"] = json!(format!("{}:{}", t.host, t.effective_port()));
+                        spec.request.options_json = o.to_string();
+                    }
+                    spec.request.host = ep.host;
+                    spec.request.port = ep.port;
+                    tunnel_use = Some((def.id, t.host.clone(), t.effective_port()));
+                }
+                Err(e) => {
+                    if let Some(q) = self.hop_question.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                        return json!({ "hostkey": { "host": q.host, "port": q.port, "key": q.key, "text": q.text(), "detail": q.detail() } }).to_string();
+                    }
+                    return json!({ "error": format!("Tunnel „{}“: {e}", def.name) }).to_string();
+                }
+            }
+        }
         let s = self.sessions.open(spec);
+        if let Some(u) = tunnel_use {
+            self.session_tunnels.insert(s, u);
+        }
         self.workspace.open(s, &rj_core::charset::mark_visible(&t.name, false));
         json!({ "session": s }).to_string()
+    }
+
+    /// Tunnelbeschreibung mit Zugangsdaten aus der KDBX.
+    fn tunnel_spec(&self, def: &rj_core::TunnelDef, target: Uuid) -> Result<TunnelSpec, String> {
+        match &def.kind {
+            rj_core::TunnelKind::System { probe_host, probe_port } => Ok(TunnelSpec::System { probe_host: probe_host.clone(), probe_port: *probe_port }),
+            rj_core::TunnelKind::Ssh { hops } => {
+                let mut out = Vec::new();
+                for hop in hops {
+                    let name = hop.credential.as_deref().unwrap_or(rj_core::DEFAULT_CREDENTIAL);
+                    let r = resolve_credential_named(&self.index, target, name)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| format!("Zugangsdatensatz „{name}“ für {} nicht gefunden", hop.host))?;
+                    let p = self.payload(&r, Protocol::Ssh)?;
+                    let mut auth = Vec::new();
+                    if let Some(k) = &p.private_key {
+                        auth.push(Auth::Key { pem: Secret::from_bytes(k.0.clone()), passphrase: None });
+                    }
+                    let pw = Secret::from_bytes(p.password.0.clone());
+                    auth.push(Auth::Password(pw.clone()));
+                    auth.push(Auth::KeyboardInteractive(pw));
+                    out.push(SshParams {
+                        host: hop.host.clone(),
+                        port: hop.port.unwrap_or(22),
+                        user: p.username,
+                        auth,
+                        connect_timeout: Duration::from_secs(self.config.connection.connect_timeout_secs as u64),
+                        keepalive: Duration::from_secs(self.config.connection.keepalive_secs as u64),
+                    });
+                }
+                Ok(TunnelSpec::Ssh { hops: out })
+            }
+            rj_core::TunnelKind::Wireguard { config_entry } => {
+                let vault = self.vault.as_ref().ok_or("KDBX ist gesperrt")?;
+                let c = vault.resolve(config_entry).map_err(|e| e.to_string())?;
+                let text = c
+                    .attachments
+                    .iter()
+                    .find(|a| a.ends_with(".conf"))
+                    .and_then(|a| vault.attachment(c.uuid, a))
+                    .and_then(|s| s.as_str().map(str::to_string))
+                    .or(c.data.notes.clone())
+                    .ok_or("WireGuard-Konfiguration fehlt (Anhang *.conf oder Notizen)")?;
+                Ok(TunnelSpec::Wireguard { config: rj_tunnel::wireguard::WgConfig::parse(&text).map_err(|e| e.to_string())? })
+            }
+        }
+    }
+
+    /// Host-Schlüssel eines Sprungservers nach Zustimmung merken.
+    pub fn accept_host_key(&self, host: &str, port: u16, key: &str) -> bool {
+        self.known_hosts.remember_openssh(host, port, key).is_ok()
+    }
+
+    /// Sitzung schließen; Tunnel nach der letzten Sitzung abbauen.
+    pub fn close_session(&mut self, s: SessionId) {
+        self.sessions.close(s);
+        self.workspace.remove_session(s);
+        if let Some((id, host, port)) = self.session_tunnels.remove(&s) {
+            self.tunnels.release(id, &host, port);
+        }
     }
 
     /// Vorführsitzungen für Bildschirmfotos.
@@ -343,5 +462,42 @@ mod tests {
         assert_eq!(app.workspace.tabs.len(), 2);
         assert_eq!(app.workspace.tabs[0].sessions.len(), 4);
         assert!(app.tree_json("").len() > 10_000);
+    }
+}
+
+#[cfg(test)]
+mod tunnel_tests {
+    use super::*;
+    use rj_core::{CredentialRef, Folder, TunnelDef, TunnelKind, TunnelSetting};
+    use rj_kdbx::{CredentialData, KdfChoice};
+
+    #[test]
+    fn connect_uses_inherited_system_tunnel() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::create(&dir.path().join("t.kdbx"), MasterKey::password("pw"), KdfChoice::Weak, rj_core::config::IndexStorage::KdbxCustomData);
+        let entry = vault
+            .add_credential(CredentialData { title: "Konto".into(), username: "benutzer".into(), password: Secret::from_str_exact("geheim"), ..Default::default() })
+            .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let probe = listener.local_addr().unwrap().port();
+        let mut idx = Index::default();
+        let tid = Uuid::new_v4();
+        idx.tunnels.push(TunnelDef { id: tid, name: "VPN".into(), kind: TunnelKind::System { probe_host: "127.0.0.1".into(), probe_port: probe } });
+        let mut f = Folder::new("Hinter VPN");
+        f.settings.tunnel = Some(TunnelSetting::Use(tid));
+        f.settings.credentials.insert("default".into(), CredentialRef { entry, last_title: Some("Konto".into()) });
+        let t = Target::new("srv", Protocol::Ssh, "srv.example.test");
+        let target = t.id;
+        f.children.push(Node::Target(t));
+        idx.root.children.push(Node::Folder(f));
+        let mut app = App::new(false);
+        app.index = idx;
+        app.vault = Some(vault);
+        let r: serde_json::Value = serde_json::from_str(&app.connect(target, None, false, 80, 24)).unwrap();
+        assert!(r["session"].is_u64(), "{r}");
+        app.close_session(r["session"].as_u64().unwrap());
+        drop(listener);
+        let r: serde_json::Value = serde_json::from_str(&app.connect(target, None, false, 80, 24)).unwrap();
+        assert!(r["error"].as_str().unwrap().contains("Tunnel „VPN“"), "{r}");
     }
 }

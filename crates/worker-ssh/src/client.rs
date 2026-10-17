@@ -92,6 +92,7 @@ impl client::Handler for Handler {
             algorithm: key.algorithm().to_string(),
             fingerprint: fingerprint(&key),
             status,
+            key: key.to_openssh().unwrap_or_default(),
         };
         let (tx, rx) = oneshot::channel();
         if self.ask.send((q, tx)).is_err() {

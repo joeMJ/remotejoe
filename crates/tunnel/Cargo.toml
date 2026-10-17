@@ -1,0 +1,27 @@
+[package]
+name = "remotejoe-tunnel"
+description = "SSH-Tunnel (auch über Sprungserver) und WireGuard im Benutzerbereich"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_tunnel"
+
+[dependencies]
+remotejoe-core = { path = "../core" }
+remotejoe-worker-ssh = { path = "../worker-ssh" }
+thiserror.workspace = true
+uuid.workspace = true
+base64 = "0.22"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
+boringtun = { version = "0.7", default-features = false }
+getrandom = "0.4"
+smoltcp = { version = "0.14", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp"] }
+
+[dev-dependencies]
+getrandom = "0.4"
+remotejoe-testkit = { path = "../testkit" }
+tempfile.workspace = true
