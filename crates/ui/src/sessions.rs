@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use rj_core::Protocol;
 use rj_ipc::*;
-use rj_ssh::terminal::{Osc52Policy, TermEvent, Terminal};
+use rj_ssh::terminal::{Osc52Policy, Scheme, TermEvent, Terminal};
 use rj_supervisor::{ExitReason, RestartPolicy, Supervisor, SupervisorEvent, WorkerId, WorkerSpec};
 use serde::Serialize;
 use uuid::Uuid;
@@ -88,6 +88,8 @@ pub enum UiEvent {
     Locked { reason: String },
     /// Aufwachen aus dem Standby erkannt.
     Resumed,
+    /// Ein Makro in einer Sitzung ist zu Ende (`ok`) oder fehlgeschlagen.
+    MacroDone { s: SessionId, name: String, ok: bool, message: String },
 }
 
 /// Ausschnitt des Terminals für die Darstellung.
@@ -97,6 +99,10 @@ pub struct TermSnapshot {
     pub rows: usize,
     pub cursor: (usize, usize),
     pub cursor_visible: bool,
+    /// Hintergrund-, Vordergrund- und Cursorfarbe des Schemas (`#rrggbb`).
+    pub bg: String,
+    pub fg: String,
+    pub cursor_color: String,
     /// Je Zeile Läufe gleicher Darstellung: (Text, Vordergrund, Hintergrund, Kennzeichen).
     pub lines: Vec<Vec<(String, String, String, u8)>>,
 }
@@ -106,6 +112,8 @@ struct Session {
     worker: Option<WorkerId>,
     term: Option<Terminal>,
     state: String,
+    /// Seit wann die Verbindung steht (Systemzeit); `None`, solange sie nicht steht.
+    connected_at: Option<std::time::SystemTime>,
     attempts: u32,
     reconnect_at: Option<Instant>,
     osc52_pending: Vec<std::sync::Arc<dyn Fn(&str) -> String + Send + Sync>>,
@@ -144,6 +152,10 @@ pub struct Manager {
     questions: BTreeMap<(SessionId, u32), Instant>,
     /// Frist für Sicherheitsrückfragen.
     pub question_timeout: Duration,
+    /// Farben aller Terminals (auch neuer).
+    scheme: Scheme,
+    /// Abzweig der Terminalausgabe für laufende Makros.
+    macro_taps: HashMap<SessionId, std::sync::mpsc::Sender<Vec<u8>>>,
 }
 
 /// Vorgabe der Frist für Sicherheitsrückfragen.
@@ -187,7 +199,19 @@ impl Manager {
             pending: Vec::new(),
             questions: BTreeMap::new(),
             question_timeout: QUESTION_TIMEOUT,
+            scheme: Scheme::default(),
+            macro_taps: HashMap::new(),
         }
+    }
+
+    /// Setzt das Farbschema aller offenen und künftigen Terminals.
+    pub fn set_scheme(&mut self, scheme: Scheme) {
+        for x in self.sessions.values_mut() {
+            if let Some(t) = x.term.as_mut() {
+                t.set_scheme(scheme.clone());
+            }
+        }
+        self.scheme = scheme;
     }
 
     /// Ordner der Worker: neben dem Hauptprogramm.
@@ -205,6 +229,27 @@ impl Manager {
 
     pub fn protocol(&self, s: SessionId) -> Option<Protocol> {
         self.sessions.get(&s).map(|x| x.spec.protocol)
+    }
+
+    /// Angaben für die Fußzeile: Ziel, Benutzer und Beginn der Verbindung. Enthält nie Kennwörter.
+    pub fn info(&self, s: SessionId) -> Option<serde_json::Value> {
+        let x = self.sessions.get(&s)?;
+        let user = match (&x.spec.credentials.domain, x.spec.credentials.username.as_str()) {
+            (_, "") => String::new(),
+            (Some(d), u) if !d.is_empty() => format!("{d}\\{u}"),
+            (_, u) => u.to_string(),
+        };
+        let since = x.connected_at.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
+        Some(serde_json::json!({
+            "title": x.spec.title,
+            "target": x.spec.target,
+            "protocol": x.spec.protocol.as_str(),
+            "host": x.spec.request.host,
+            "port": x.spec.request.port,
+            "user": user,
+            "state": x.state,
+            "since": since,
+        }))
     }
 
     pub(crate) fn spec(&self, s: SessionId) -> Option<&ConnectSpec> {
@@ -228,6 +273,14 @@ impl Manager {
 
     fn emit_state(&mut self, s: SessionId, state: &str, detail: String) {
         if let Some(x) = self.sessions.get_mut(&s) {
+            // Die Zeit beginnt mit dem Übergang auf „connected“ und endet mit jedem anderen Zustand.
+            if state == "connected" {
+                if x.state != "connected" || x.connected_at.is_none() {
+                    x.connected_at = Some(std::time::SystemTime::now());
+                }
+            } else {
+                x.connected_at = None;
+            }
             x.state = state.to_string();
         }
         self.pending.push(UiEvent::State { s, state: state.to_string(), detail });
@@ -258,9 +311,13 @@ impl Manager {
     pub fn open(&mut self, spec: ConnectSpec) -> SessionId {
         let id = self.next;
         self.next += 1;
-        let term = (spec.protocol == Protocol::Ssh)
-            .then(|| Terminal::new(spec.request.width as usize, spec.request.height as usize, osc52_policy(&spec.request.options_json)));
-        self.sessions.insert(id, Session { spec, worker: None, term, state: String::new(), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None });
+        let scheme = self.scheme.clone();
+        let term = (spec.protocol == Protocol::Ssh).then(|| {
+            let mut t = Terminal::new(spec.request.width as usize, spec.request.height as usize, osc52_policy(&spec.request.options_json));
+            t.set_scheme(scheme);
+            t
+        });
+        self.sessions.insert(id, Session { spec, worker: None, term, state: String::new(), connected_at: None, attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None });
         self.start(id);
         id
     }
@@ -298,9 +355,10 @@ impl Manager {
         let id = self.next;
         self.next += 1;
         let mut term = Terminal::new(cols, rows, Osc52Policy::default());
+        term.set_scheme(self.scheme.clone());
         term.feed(content.as_bytes());
         let spec = demo_spec(title, Protocol::Ssh);
-        self.sessions.insert(id, Session { spec, worker: None, term: Some(term), state: "connected".into(), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None });
+        self.sessions.insert(id, Session { spec, worker: None, term: Some(term), state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None });
         self.pending.push(UiEvent::State { s: id, state: "connected".into(), detail: String::new() });
         self.pending.push(UiEvent::Terminal { s: id });
         id
@@ -329,7 +387,7 @@ impl Manager {
         }
         let fd = fb.share_handle().map(into_raw).unwrap_or(-1);
         let spec = demo_spec(title, Protocol::Rdp);
-        self.sessions.insert(id, Session { spec, worker: None, term: None, state: "connected".into(), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: Some(fb) });
+        self.sessions.insert(id, Session { spec, worker: None, term: None, state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: Some(fb) });
         self.pending.push(UiEvent::State { s: id, state: "connected".into(), detail: String::new() });
         self.pending.push(UiEvent::SharedFrame { s: id, fd, w, h });
         self.pending.push(UiEvent::Frame { s: id, x: 0, y: 0, w, h });
@@ -344,6 +402,36 @@ impl Manager {
         if let Some(w) = self.worker_of(s) {
             let _ = self.sup.send(w, m);
         }
+    }
+
+    /// Rohe Eingabe (z. B. von einem Makro) an das Terminal der Sitzung senden.
+    pub fn send_bytes(&mut self, s: SessionId, bytes: Vec<u8>) {
+        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol == Protocol::Ssh) {
+            self.send(s, &ToWorker::Input(InputEvent::Bytes(bytes)));
+        }
+    }
+
+    /// Ausgabe der Sitzung an ein Makro weitergeben (bis `detach_macro_tap`).
+    pub fn attach_macro_tap(&mut self, s: SessionId, tap: std::sync::mpsc::Sender<Vec<u8>>) {
+        self.macro_taps.insert(s, tap);
+    }
+
+    pub fn detach_macro_tap(&mut self, s: SessionId) {
+        self.macro_taps.remove(&s);
+    }
+
+    /// Sichtbarer Text des Terminals (für den Start eines Makros: Eingabeaufforderung steht schon da).
+    pub fn screen_text(&self, s: SessionId) -> Option<String> {
+        let t = self.sessions.get(&s)?.term.as_ref()?;
+        let lines: Vec<String> = t.screen_text().into_iter().map(|l| l.trim_end().to_string()).collect();
+        let last = lines.iter().rposition(|l| !l.is_empty())?;
+        let first = last.saturating_sub(4);
+        Some(lines[first..=last].join("\n"))
+    }
+
+    /// Zugangsdaten der Sitzung (für Platzhalter in Makros).
+    pub fn credentials(&self, s: SessionId) -> Option<CredentialPayload> {
+        self.sessions.get(&s).map(|x| x.spec.credentials.clone())
     }
 
     /// Taste aus der Oberfläche.
@@ -455,7 +543,8 @@ impl Manager {
             }
             lines.push(runs);
         }
-        Some(TermSnapshot { cols: t.columns(), rows: t.rows(), cursor: t.cursor(), cursor_visible: t.cursor_visible(), lines })
+        let sc = t.scheme();
+        Some(TermSnapshot { cols: t.columns(), rows: t.rows(), cursor: t.cursor(), cursor_visible: t.cursor_visible(), bg: hex(sc.bg), fg: hex(sc.fg), cursor_color: hex(sc.cursor), lines })
     }
 
     pub fn disconnect(&mut self, s: SessionId) {
@@ -691,6 +780,9 @@ impl Manager {
             }
             FromWorker::Frame(f) => self.pending.push(UiEvent::Frame { s, x: f.x, y: f.y, w: f.w, h: f.h }),
             FromWorker::Output(bytes) => {
+                if let Some(tap) = self.macro_taps.get(&s) {
+                    let _ = tap.send(bytes.clone());
+                }
                 let mut replies = Vec::new();
                 if let Some(x) = self.sessions.get_mut(&s) {
                     if let Some(t) = x.term.as_mut() {

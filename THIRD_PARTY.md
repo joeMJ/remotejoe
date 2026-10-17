@@ -556,3 +556,9 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | FreeRDP 3 (libfreerdp3, libfreerdp-client3, libwinpr3) | Apache-2.0 | RDP-Worker |
 | WebKitGTK 4.1, GTK 3 (Linux) | LGPL-2.1 (dynamisch gelinkt) | Web-Worker, Merkmal `webview` |
 | Microsoft Edge WebView2 Runtime (Windows) | Laufzeit von Microsoft, nicht mitgeliefert | Web-Worker, Merkmal `webview` |
+
+## Farbpaletten (in den Quelltext übernommen)
+
+| Palette | Lizenz | Verwendung |
+|---|---|---|
+| Catppuccin (Latte, Frappé, Macchiato, Mocha), <https://github.com/catppuccin/catppuccin> | MIT | Farbschemata des SSH-Terminals (`crates/core/src/termcolors.rs`) |

@@ -14,6 +14,8 @@ class QButtonGroup;
 class QCheckBox;
 class QComboBox;
 class QFormLayout;
+class QFontComboBox;
+class QSpinBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -366,6 +368,84 @@ private:
 	QLabel* m_summary;
 	QPushButton* m_create;
 	QTimer* m_timer;
+};
+
+/// Editor für ein Makro: Name und Schritte (Senden, Warten auf; Auswahlschritte als JSON).
+class MacroTab : public QWidget
+{
+	Q_OBJECT
+public:
+	MacroTab(RjBackend* backend, const QString& id, QWidget* parent = nullptr);
+	QString macroId() const { return m_id; }
+	QString title() const;
+	bool isDirty() const { return m_dirty; }
+
+signals:
+	/// Gespeichert (Schaltfläche „Speichern“): der Tab kann geschlossen werden.
+	void saved();
+	/// Verworfen: der Tab kann geschlossen werden.
+	void discarded();
+	void titleChanged();
+	/// Name oder Inhalt wurden gespeichert (Baum neu laden).
+	void indexChanged();
+
+private:
+	void load();
+	void refreshTable(int select = -1);
+	void showStep(int row);
+	void storeStep();
+	void addStep(const QString& kind);
+	void moveStep(int delta);
+	void removeStep();
+	void markDirty();
+	bool save();
+	QString summary(const QJsonObject& step) const;
+	RjBackend* m_backend;
+	QString m_id;
+	QString m_origName;
+	QJsonArray m_steps;
+	bool m_dirty = false;
+	bool m_loading = false;
+	QLineEdit* m_name;
+	QTableWidget* m_table;
+	QStackedWidget* m_stack;
+	QLineEdit* m_sendText;
+	QCheckBox* m_sendEnter;
+	QComboBox* m_sendInsert;
+	QComboBox* m_waitKind;
+	QLineEdit* m_waitPattern;
+	QSpinBox* m_waitTimeout;
+	QPlainTextEdit* m_waitErrors;
+	QPlainTextEdit* m_json;
+	QLabel* m_jsonError;
+	QLabel* m_linked;
+	QLabel* m_status;
+	QLabel* m_dirtyLabel;
+};
+
+/// Einstellungen des SSH-Terminals: Schrift, Größe und Farben. Änderungen gelten sofort
+/// für alle offenen und neuen Terminals und werden gespeichert.
+class TerminalSettingsTab : public QWidget
+{
+	Q_OBJECT
+public:
+	explicit TerminalSettingsTab(RjBackend* backend, QWidget* parent = nullptr);
+
+private:
+	void send(const QJsonObject& change);
+	void show(const QJsonObject& settings);
+	RjBackend* m_backend;
+	QFontComboBox* m_font;
+	QCheckBox* m_system;
+	QSpinBox* m_size;
+	QComboBox* m_scheme;
+	QLineEdit* m_hex[4];
+	QLabel* m_swatch[4];
+	QLabel* m_custom;
+	QLabel* m_message;
+	QWidget* m_preview;
+	QJsonArray m_schemes;
+	bool m_updating = false;
 };
 
 /// Abdeckung des Hauptfensters zum Entsperren der KDBX.

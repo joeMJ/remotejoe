@@ -6,6 +6,7 @@
 #include <QtCore/QJsonObject>
 #include <QtCore/QPointer>
 #include <QtCore/QTimer>
+#include <QtGui/QColor>
 #include <QtGui/QStandardItemModel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QMainWindow>
@@ -57,6 +58,10 @@ public:
 	BulkAddTab* openBulkAdd(const QString& parentId);
 	void showUnlock(bool locked);
 	void showNewVault();
+	/// Nur für Bildschirmfotos: Beispielmakro anlegen, Fach öffnen, Editor zeigen.
+	void macrosForScreenshot();
+	/// Nur für Bildschirmfotos: Terminal-Einstellungen mit gewähltem Schema öffnen.
+	void terminalSettingsForScreenshot(const QString& scheme);
 	/// Nur für Bildschirmfotos: leerer Baum mit Hinweis.
 	void showEmptyTreeForScreenshot();
 	QTabWidget* tabs() const { return m_tabs; }
@@ -127,14 +132,33 @@ private:
 	QSize contentSize(bool terminal) const;
 	void updateStatus();
 	void updateEmptyHint();
+	void updateConnInfo();
+	void openTerminalSettings();
+	void openMacroTab(const QString& id);
+	void addMacroShelf();
+	void macroContextMenu(const QModelIndex& index, const QPoint& globalPos);
+	void deleteMacro(const QString& id, const QString& name);
 
 	RjBackend* m_backend;
 	QLineEdit* m_search;
 	QTreeView* m_tree;
 	QWidget* m_emptyHint = nullptr;
+	bool m_macroShelfOpen = false;
 	QStandardItemModel* m_model;
 	QTabWidget* m_tabs;
 	QTimer m_poll;
+	// Fußzeile: Verbindungstyp, Ziel, Beginn und Benutzer der vorderen Sitzung.
+	QWidget* m_connInfo = nullptr;
+	class QLabel* m_ciProtoIcon = nullptr;
+	class QLabel* m_ciProto = nullptr;
+	class QLabel* m_ciTargetIcon = nullptr;
+	class QLabel* m_ciTarget = nullptr;
+	class QLabel* m_ciSinceIcon = nullptr;
+	class QLabel* m_ciSince = nullptr;
+	class QLabel* m_ciUserIcon = nullptr;
+	class QLabel* m_ciUser = nullptr;
+	QTimer m_ciTimer;
+	QColor m_ciColor;
 	QTimer m_filterTimer;
 	QHash<std::uint64_t, SessionPane*> m_panes;
 	QHash<std::uint64_t, QPointer<QWidget>> m_windows;

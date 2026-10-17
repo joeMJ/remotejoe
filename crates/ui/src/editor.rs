@@ -491,6 +491,60 @@ impl App {
                     Ok(json!({ "ok": true }))
                 })
             }
+            "macro_list" => Ok(self.macro_list()),
+            "macro_get" => self.macro_get(&c),
+            "macro_new" => self.simple("Makro anlegen", |idx| {
+                let m = MacroDef { id: Uuid::new_v4(), name: "Neues Makro".into(), steps: Vec::new() };
+                let id = m.id;
+                idx.macros.push(m);
+                Ok(json!({ "macro": id }))
+            }),
+            "macro_delete" => self.simple("Makro löschen", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                if !idx.macros.iter().any(|m| m.id == id) {
+                    return Err(EditError::NotFound);
+                }
+                idx.macros.retain(|m| m.id != id);
+                walk_meta(&mut idx.root, &mut |meta| meta.macros.retain(|x| *x != id));
+                Ok(json!({ "ok": true }))
+            }),
+            "macro_duplicate" => self.simple("Makro duplizieren", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                let src = idx.macros.iter().find(|m| m.id == id).cloned().ok_or(EditError::NotFound)?;
+                let copy = MacroDef { id: Uuid::new_v4(), name: format!("{} (Kopie)", src.name), steps: src.steps };
+                let new = copy.id;
+                idx.macros.push(copy);
+                Ok(json!({ "macro": new }))
+            }),
+            "macro_link" | "macro_unlink" => {
+                let add = op == "macro_link";
+                self.simple(if add { "Makro zuordnen" } else { "Zuordnung des Makros aufheben" }, |idx| {
+                    let mid = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                    let node = id_of(&c, "node").ok_or(EditError::NotFound)?;
+                    if !idx.macros.iter().any(|m| m.id == mid) {
+                        return Err(EditError::NotFound);
+                    }
+                    link(idx, node, |meta| {
+                        if add {
+                            if !meta.macros.contains(&mid) {
+                                meta.macros.push(mid);
+                            }
+                        } else {
+                            meta.macros.retain(|x| *x != mid);
+                        }
+                    })?;
+                    Ok(json!({ "ok": true }))
+                })
+            }
+            "session_macros" => Ok(self.session_macros(c.get("session").and_then(Value::as_u64).unwrap_or(0))),
+            "run_macro" => self.run_macro(&c),
+            "cancel_macro" => {
+                let s = c.get("session").and_then(Value::as_u64).unwrap_or(0);
+                for r in self.macro_runs.iter().filter(|r| r.session == s) {
+                    r.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                Ok(json!({ "ok": true }))
+            }
             _ => Err(format!("Unbekannter Befehl „{op}“")),
         };
         match r {
@@ -500,6 +554,100 @@ impl App {
     }
 
     /// Einfache Index-Änderung mit Verlauf.
+    /// Alle Makros mit der Zahl der Ziele und Ordner, denen sie zugeordnet sind.
+    fn macro_list(&self) -> Value {
+        let mut counts: BTreeMap<Uuid, usize> = BTreeMap::new();
+        count_meta(&self.index.root, &mut |meta| {
+            for m in &meta.macros {
+                *counts.entry(*m).or_default() += 1;
+            }
+        });
+        json!(self.index.macros.iter().map(|m| json!({ "id": m.id, "name": m.name, "steps": m.steps.len(), "links": counts.get(&m.id).copied().unwrap_or(0) })).collect::<Vec<_>>())
+    }
+
+    fn macro_get(&self, c: &Value) -> Result<Value, String> {
+        let id = id_of(c, "id").ok_or("Makro fehlt")?;
+        let m = self.index.macros.iter().find(|m| m.id == id).ok_or("Makro nicht gefunden")?;
+        let mut linked = Vec::new();
+        fn walk(f: &rj_core::Folder, id: Uuid, root: bool, out: &mut Vec<Value>) {
+            if f.meta.macros.contains(&id) {
+                out.push(json!({ "id": f.id, "name": if root { "(Wurzel)".to_string() } else { f.name.clone() }, "kind": "folder" }));
+            }
+            for n in &f.children {
+                match n {
+                    Node::Folder(s) => walk(s, id, false, out),
+                    Node::Target(t) if t.meta.macros.contains(&id) => out.push(json!({ "id": t.id, "name": t.name, "kind": "target" })),
+                    Node::Target(_) => {}
+                }
+            }
+        }
+        walk(&self.index.root, id, true, &mut linked);
+        Ok(json!({ "id": m.id, "name": m.name, "steps": m.steps, "linked": linked }))
+    }
+
+    /// Makros, die für eine Sitzung gelten: die des Ziels und der Ordner darüber (geerbt).
+    fn session_macros(&self, s: SessionId) -> Value {
+        let Some(target) = self.sessions.target(s) else { return json!([]) };
+        let mut sources: Vec<(String, &rj_core::Meta)> = Vec::new();
+        if let Some(path) = self.index.path_to(target) {
+            for n in path.iter().rev() {
+                match n {
+                    Node::Target(t) => sources.push((String::new(), &t.meta)),
+                    Node::Folder(f) => sources.push((f.name.clone(), &f.meta)),
+                }
+            }
+        }
+        sources.push(("(Wurzel)".into(), &self.index.root.meta));
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        for (origin, meta) in sources {
+            for id in &meta.macros {
+                if let Some(m) = self.index.macros.iter().find(|m| m.id == *id) {
+                    if seen.insert(m.id) {
+                        out.push(json!({ "id": m.id, "name": m.name, "origin": origin, "steps": m.steps.len() }));
+                    }
+                }
+            }
+        }
+        json!(out)
+    }
+
+    /// Startet ein Makro in einer verbundenen SSH-Sitzung.
+    fn run_macro(&mut self, c: &Value) -> Result<Value, String> {
+        use rj_core::Protocol;
+        let s = c.get("session").and_then(Value::as_u64).ok_or("Sitzung fehlt")?;
+        let mid = id_of(c, "macro").ok_or("Makro fehlt")?;
+        if self.sessions.protocol(s) != Some(Protocol::Ssh) {
+            return Err("Makros laufen zunächst nur in SSH-Sitzungen.".into());
+        }
+        if self.sessions.state(s) != Some("connected") {
+            return Err("Die Sitzung ist nicht verbunden.".into());
+        }
+        if self.macro_runs.iter().any(|r| r.session == s) {
+            return Err("In dieser Sitzung läuft schon ein Makro.".into());
+        }
+        let def = self.index.macros.iter().find(|m| m.id == mid).cloned().ok_or("Makro nicht gefunden")?;
+        if def.steps.is_empty() {
+            return Err("Das Makro hat noch keine Schritte.".into());
+        }
+        let mac: rj_tasks::macros::Macro = serde_json::from_value(json!({ "steps": def.steps })).map_err(|e| format!("Das Makro enthält ungültige Schritte: {e}"))?;
+        let cred = self.sessions.credentials(s).ok_or("Sitzung nicht gefunden")?;
+        let creds = crate::macro_run::Creds {
+            password: (!cred.password.0.is_empty()).then(|| rj_core::Secret::from_bytes(cred.password.0.clone())),
+            username: cred.username.clone(),
+            domain: cred.domain.clone(),
+        };
+        let (tap_tx, tap_rx) = std::sync::mpsc::channel();
+        // Die Eingabeaufforderung steht meist schon da: als „bisherige Ausgabe“ vorlegen.
+        if let Some(text) = self.sessions.screen_text(s) {
+            let _ = tap_tx.send(text.into_bytes());
+        }
+        self.sessions.attach_macro_tap(s, tap_tx);
+        let run = crate::macro_run::spawn(s, def.name.clone(), mac, creds, tap_rx, self.macro_input_tx.clone());
+        self.macro_runs.push(run);
+        Ok(json!({ "started": true, "name": def.name }))
+    }
+
     fn simple(&mut self, label: &str, f: impl FnOnce(&mut Index) -> Result<Value, EditError>) -> Result<Value, String> {
         let before = self.index.clone();
         match f(&mut self.index) {
@@ -984,6 +1132,27 @@ fn x_contains(f: &Folder, id: Uuid) -> bool {
 }
 
 /// Einstellungen und Beschreibung eines Knotens (auch der Wurzel).
+/// Ruft `f` für die Beschreibung der Wurzel, aller Ordner und Ziele auf.
+fn walk_meta(f: &mut rj_core::Folder, g: &mut dyn FnMut(&mut rj_core::Meta)) {
+    g(&mut f.meta);
+    for n in &mut f.children {
+        match n {
+            Node::Folder(s) => walk_meta(s, g),
+            Node::Target(t) => g(&mut t.meta),
+        }
+    }
+}
+
+fn count_meta(f: &rj_core::Folder, g: &mut dyn FnMut(&rj_core::Meta)) {
+    g(&f.meta);
+    for n in &f.children {
+        match n {
+            Node::Folder(s) => count_meta(s, g),
+            Node::Target(t) => g(&t.meta),
+        }
+    }
+}
+
 fn edit_target(index: &mut Index, id: Uuid) -> Option<(&mut rj_core::Settings, &mut rj_core::Meta)> {
     if index.root.id == id {
         return Some((&mut index.root.settings, &mut index.root.meta));
@@ -1226,5 +1395,67 @@ mod tests {
         let mut n = 0;
         st.tick(|_| Some("connected".into()), |t| if t == targets[0] { Err("fehlt".into()) } else { n += 1; Ok(n) });
         assert_eq!(st.results.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod macro_tests {
+    use super::*;
+
+    fn cmd(app: &mut App, v: Value) -> Value {
+        serde_json::from_str(&app.edit(&v.to_string())).unwrap()
+    }
+
+    #[test]
+    fn create_link_list_duplicate_unlink_delete() {
+        let mut app = App::new(true);
+        app.config_path = None;
+        let folder = cmd(&mut app, json!({ "op": "add", "kind": "folder" }))["id"].as_str().unwrap().to_string();
+        let target = cmd(&mut app, json!({ "op": "add", "kind": "ssh", "parent": folder }))["id"].as_str().unwrap().to_string();
+
+        let m = cmd(&mut app, json!({ "op": "macro_new" }))["macro"].as_str().unwrap().to_string();
+        assert_eq!(cmd(&mut app, json!({ "op": "macro_list" }))[0]["links"], 0);
+        cmd(&mut app, json!({ "op": "update_macro", "id": m, "name": "Updates", "steps": [{ "step": "send", "text": "uptime{key:enter}" }] }));
+
+        // Zuordnen an den Ordner und an das Ziel; doppelt zuordnen ändert nichts.
+        assert_eq!(cmd(&mut app, json!({ "op": "macro_link", "id": m, "node": folder }))["ok"], true);
+        cmd(&mut app, json!({ "op": "macro_link", "id": m, "node": folder }));
+        cmd(&mut app, json!({ "op": "macro_link", "id": m, "node": target }));
+        let l = cmd(&mut app, json!({ "op": "macro_list" }));
+        assert_eq!(l[0]["links"], 2);
+        assert_eq!(l[0]["steps"], 1);
+        let g = cmd(&mut app, json!({ "op": "macro_get", "id": m }));
+        assert_eq!(g["name"], "Updates");
+        assert_eq!(g["linked"].as_array().unwrap().len(), 2);
+
+        // Duplizieren: neue ID, ohne Zuordnung.
+        let d = cmd(&mut app, json!({ "op": "macro_duplicate", "id": m }))["macro"].as_str().unwrap().to_string();
+        assert_ne!(d, m);
+        let l = cmd(&mut app, json!({ "op": "macro_list" }));
+        assert_eq!(l.as_array().unwrap().len(), 2);
+        assert_eq!(l[1]["name"], "Updates (Kopie)");
+        assert_eq!(l[1]["links"], 0);
+
+        // Zuordnung aufheben, dann löschen (entfernt auch alle Zuordnungen).
+        cmd(&mut app, json!({ "op": "macro_unlink", "id": m, "node": target }));
+        assert_eq!(cmd(&mut app, json!({ "op": "macro_list" }))[0]["links"], 1);
+        assert_eq!(cmd(&mut app, json!({ "op": "macro_delete", "id": m }))["ok"], true);
+        let l = cmd(&mut app, json!({ "op": "macro_list" }));
+        assert_eq!(l.as_array().unwrap().len(), 1);
+        assert!(cmd(&mut app, json!({ "op": "macro_get", "id": m })).get("error").is_some());
+        assert!(cmd(&mut app, json!({ "op": "macro_delete", "id": m })).get("error").is_some());
+        // Rückgängig stellt das gelöschte Makro samt Zuordnung wieder her.
+        cmd(&mut app, json!({ "op": "undo" }));
+        assert_eq!(cmd(&mut app, json!({ "op": "macro_list" })).as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn run_macro_refuses_without_ssh_session() {
+        let mut app = App::new(true);
+        app.config_path = None;
+        let m = cmd(&mut app, json!({ "op": "macro_new" }))["macro"].as_str().unwrap().to_string();
+        let r = cmd(&mut app, json!({ "op": "run_macro", "session": 99, "macro": m }));
+        assert!(r["error"].as_str().unwrap().contains("SSH"), "{r}");
+        assert_eq!(cmd(&mut app, json!({ "op": "session_macros", "session": 99 })), json!([]));
     }
 }

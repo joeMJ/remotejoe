@@ -40,6 +40,8 @@ pub struct Config {
     pub window: WindowState,
     pub connection: ConnectionDefaults,
     pub security: SecurityDefaults,
+    /// Schrift und Farben des SSH-Terminals.
+    pub terminal: crate::termcolors::TerminalSettings,
 }
 
 impl Default for Config {
@@ -51,6 +53,7 @@ impl Default for Config {
             window: WindowState::default(),
             connection: ConnectionDefaults::default(),
             security: SecurityDefaults::default(),
+            terminal: Default::default(),
         }
     }
 }

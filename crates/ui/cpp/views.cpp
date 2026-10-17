@@ -15,6 +15,13 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
+#include <QtGui/QWheelEvent>
+#include <QtWidgets/QApplication>
+#include <QtCore/QPointer>
+#include <QtCore/QTimer>
+#include <QtWidgets/QHBoxLayout>
+#include <QtWidgets/QMenu>
+#include <QtWidgets/QStyle>
 #include <QtWidgets/QVBoxLayout>
 
 // ---------- FrameView ----------
@@ -252,6 +259,60 @@ TerminalView::TerminalView(RjBackend* backend, std::uint64_t session, QWidget* p
 	m_ch = qMax(1, fm.height());
 	m_ascent = fm.ascent();
 	setMinimumSize(m_cw * 20, m_ch * 5);
+	applySettings(QJsonDocument::fromJson(m_backend->terminalSettings().toUtf8()).object());
+}
+
+void TerminalView::applySettings(const QJsonObject& s)
+{
+	if (s.isEmpty())
+		return;
+	const QString family = s.value(QStringLiteral("font_family")).toString();
+	QFont f = family.isEmpty() ? QFontDatabase::systemFont(QFontDatabase::FixedFont) : QFont(family);
+	f.setStyleHint(QFont::Monospace);
+	f.setFixedPitch(true);
+	f.setPointSizeF(qBound(6.0, s.value(QStringLiteral("font_size")).toDouble(11.0), 40.0));
+	m_font = f;
+	const QFontMetrics fm(m_font);
+	m_cw = qMax(1, fm.horizontalAdvance(QLatin1Char('M')));
+	m_ch = qMax(1, fm.height());
+	m_ascent = fm.ascent();
+	const QColor sel(s.value(QStringLiteral("selection")).toString());
+	m_selection = sel.isValid() ? sel : QColor();
+	setMinimumSize(m_cw * 20, m_ch * 5);
+	// Zellengröße hat sich geändert: Gitter der Sitzung neu bemessen.
+	const QSize c = cells();
+	if (c != m_lastSize)
+	{
+		m_lastSize = c;
+		m_backend->resizeSession(m_session, std::uint32_t(c.width()), std::uint32_t(c.height()));
+	}
+	refresh();
+}
+
+void TerminalView::applyToAll(const QJsonObject& settings)
+{
+	const QList<QWidget*> all = QApplication::allWidgets();
+	for (QWidget* w : all)
+		if (auto* t = dynamic_cast<TerminalView*>(w))
+			t->applySettings(settings);
+}
+
+void TerminalView::wheelEvent(QWheelEvent* e)
+{
+	if (!(e->modifiers() & Qt::ControlModifier))
+	{
+		e->ignore();
+		return;
+	}
+	// Feine Räder liefern Bruchteile: erst bei einer ganzen Raste (120) ändern.
+	m_wheel += e->angleDelta().y();
+	const int steps = m_wheel / 120;
+	if (steps != 0)
+	{
+		m_wheel -= steps * 120;
+		applyToAll(QJsonDocument::fromJson(m_backend->terminalFontStep(steps).toUtf8()).object());
+	}
+	e->accept();
 }
 
 QSize TerminalView::cells() const
@@ -280,7 +341,9 @@ void TerminalView::resizeEvent(QResizeEvent*)
 void TerminalView::paintEvent(QPaintEvent*)
 {
 	QPainter p(this);
-	p.fillRect(rect(), QColor(0, 0, 0));
+	const QColor bgScheme(m_snap.value(QStringLiteral("bg")).toString());
+	const QColor fgScheme(m_snap.value(QStringLiteral("fg")).toString());
+	p.fillRect(rect(), bgScheme.isValid() ? bgScheme : QColor(0, 0, 0));
 	p.setFont(m_font);
 	const QJsonArray lines = m_snap.value(QStringLiteral("lines")).toArray();
 	QPoint a = m_selStart, b = m_selEnd;
@@ -311,8 +374,8 @@ void TerminalView::paintEvent(QPaintEvent*)
 				                 (row > a.y() || (row == a.y() && col >= a.x())) &&
 				                 (row < b.y() || (row == b.y() && col <= b.x()));
 				QRect cell(col * m_cw, row * m_ch, m_cw * span, m_ch);
-				p.fillRect(cell, sel ? palette().highlight().color() : bg);
-				p.setPen(sel ? palette().highlightedText().color() : fg);
+				p.fillRect(cell, sel ? (m_selection.isValid() ? m_selection : palette().highlight().color()) : bg);
+				p.setPen(sel ? (m_selection.isValid() && fgScheme.isValid() ? fgScheme : palette().highlightedText().color()) : fg);
 				p.drawText(cell.x(), cell.y() + m_ascent, ch);
 				col += span;
 				i += len;
@@ -323,11 +386,17 @@ void TerminalView::paintEvent(QPaintEvent*)
 	if (m_snap.value(QStringLiteral("cursor_visible")).toBool() && cur.size() == 2)
 	{
 		QRect c(cur[1].toInt() * m_cw, cur[0].toInt() * m_ch, m_cw, m_ch);
+		QColor cc(m_snap.value(QStringLiteral("cursor_color")).toString());
+		if (!cc.isValid())
+			cc = QColor(229, 229, 229);
 		if (hasFocus())
-			p.fillRect(c, QColor(229, 229, 229, 160));
+		{
+			cc.setAlpha(160);
+			p.fillRect(c, cc);
+		}
 		else
 		{
-			p.setPen(QColor(229, 229, 229));
+			p.setPen(cc);
 			p.drawRect(c.adjusted(0, 0, -1, -1));
 		}
 	}
@@ -425,7 +494,46 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 	connect(m_reconnect, &QPushButton::clicked, this, [this] { m_backend->reconnect(m_session); });
 	m_security = new SecurityBar(backend, this);
 	m_ask = new ActionBar(backend, this);
-	lay->addWidget(m_header);
+	// Kopfzeile: Name und Zustand, bei SSH außerdem die Makro-Schaltflächen.
+	auto* headRow = new QWidget(this);
+	auto* hl = new QHBoxLayout(headRow);
+	hl->setContentsMargins(0, 0, 0, 0);
+	hl->addWidget(m_header, 1);
+	if (protocol == QLatin1String("ssh"))
+	{
+		m_macroState = new QLabel(headRow);
+		m_macroState->hide();
+		m_macroCancel = new QPushButton(backend->text(QStringLiteral("macro.cancel")), headRow);
+		m_macroCancel->hide();
+		m_macroNew = new QPushButton(backend->text(QStringLiteral("macro.new")), headRow);
+		m_macroNew->setToolTip(backend->text(QStringLiteral("macro.tip.new")));
+		m_macroRun = new QPushButton(backend->text(QStringLiteral("macro.run")), headRow);
+		m_macroRun->setToolTip(backend->text(QStringLiteral("macro.tip.run")));
+		auto* menu = new QMenu(m_macroRun);
+		m_macroRun->setMenu(menu);
+		connect(menu, &QMenu::aboutToShow, this, [this] { fillMacroMenu(); });
+		hl->addWidget(m_macroState);
+		hl->addWidget(m_macroCancel);
+		hl->addWidget(m_macroNew);
+		hl->addWidget(m_macroRun);
+		connect(m_macroCancel, &QPushButton::clicked, this, [this] {
+			m_backend->edit(QStringLiteral("{\"op\":\"cancel_macro\",\"session\":%1}").arg(m_session));
+		});
+		connect(m_macroNew, &QPushButton::clicked, this, [this] {
+			// Neues Makro anlegen, diesem Ziel zuordnen und den Editor öffnen.
+			const QJsonObject info = QJsonDocument::fromJson(m_backend->sessionInfo(m_session).toUtf8()).object();
+			const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"macro_new\"}")).toUtf8()).object();
+			const QString id = r.value(QStringLiteral("macro")).toString();
+			if (id.isEmpty())
+				return;
+			const QString target = info.value(QStringLiteral("target")).toString();
+			if (!target.isEmpty())
+				m_backend->edit(QStringLiteral("{\"op\":\"macro_link\",\"id\":\"%1\",\"node\":\"%2\"}").arg(id, target));
+			if (m_openMacro)
+				m_openMacro(id);
+		});
+	}
+	lay->addWidget(headRow);
 	lay->addWidget(m_notice);
 	lay->addWidget(m_security);
 	lay->addWidget(m_ask);
@@ -465,4 +573,55 @@ void SessionPane::setNotice(const QString& text)
 {
 	m_notice->setText(text);
 	m_notice->setVisible(!text.isEmpty());
+}
+
+void SessionPane::fillMacroMenu()
+{
+	QMenu* menu = m_macroRun->menu();
+	menu->clear();
+	const QJsonArray list = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"session_macros\",\"session\":%1}").arg(m_session)).toUtf8()).array();
+	for (const QJsonValue& v : list)
+	{
+		const QJsonObject m = v.toObject();
+		const QString name = m.value(QStringLiteral("name")).toString();
+		const QString origin = m.value(QStringLiteral("origin")).toString();
+		const QString id = m.value(QStringLiteral("id")).toString();
+		const QString text = origin.isEmpty() ? name : m_backend->text(QStringLiteral("macro.run.origin")).arg(name, origin);
+		menu->addAction(text, this, [this, id, name] {
+			const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"run_macro\",\"session\":%1,\"macro\":\"%2\"}").arg(m_session).arg(id)).toUtf8()).object();
+			if (r.contains(QStringLiteral("error")))
+			{
+				setMacroResult(r.value(QStringLiteral("error")).toString(), false);
+				return;
+			}
+			m_macroState->setText(m_backend->text(QStringLiteral("macro.running")).arg(name));
+			m_macroState->show();
+			m_macroCancel->show();
+			m_macroRun->setEnabled(false);
+			if (m_terminal)
+				m_terminal->setFocus();
+		});
+	}
+	if (list.isEmpty())
+		menu->addAction(m_backend->text(QStringLiteral("macro.run.none")))->setEnabled(false);
+}
+
+void SessionPane::setMacroResult(const QString& text, bool ok)
+{
+	if (!m_macroState)
+		return;
+	m_macroState->setText(text);
+	// Fehler in der Warnfarbe, Erfolg in normaler Schrift.
+	m_macroState->setObjectName(ok ? QString() : QStringLiteral("paneNotice"));
+	m_macroState->style()->unpolish(m_macroState);
+	m_macroState->style()->polish(m_macroState);
+	m_macroState->setVisible(!text.isEmpty());
+	m_macroCancel->hide();
+	m_macroRun->setEnabled(true);
+	// Meldung nach einer Weile wieder ausblenden.
+	QPointer<QLabel> label(m_macroState);
+	QTimer::singleShot(20000, this, [label, text] {
+		if (label && label->text() == text)
+			label->hide();
+	});
 }

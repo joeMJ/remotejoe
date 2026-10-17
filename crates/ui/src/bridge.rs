@@ -101,6 +101,21 @@ pub mod qobject {
         #[cxx_name = "questionTimeout"]
         fn question_timeout(self: &RjBackend) -> i32;
         #[qinvokable]
+        #[cxx_name = "terminalSettings"]
+        fn terminal_settings(self: &RjBackend) -> QString;
+        #[qinvokable]
+        #[cxx_name = "terminalSchemes"]
+        fn terminal_schemes(self: &RjBackend) -> QString;
+        #[qinvokable]
+        #[cxx_name = "setTerminalSettings"]
+        fn set_terminal_settings(self: Pin<&mut RjBackend>, change: &QString) -> QString;
+        #[qinvokable]
+        #[cxx_name = "terminalFontStep"]
+        fn terminal_font_step(self: Pin<&mut RjBackend>, delta: i32) -> QString;
+        #[qinvokable]
+        #[cxx_name = "sessionInfo"]
+        fn session_info(self: &RjBackend, session: u64) -> QString;
+        #[qinvokable]
         #[cxx_name = "terminalJson"]
         fn terminal_json(self: &RjBackend, session: u64) -> QString;
         #[qinvokable]
@@ -225,6 +240,27 @@ impl qobject::RjBackend {
             Some(a) => serde_json::to_string(&a.poll()).unwrap_or_else(|_| "[]".into()),
             None => "[]".into(),
         })
+    }
+
+    fn terminal_settings(&self) -> QString {
+        q(self.app().map(|a| a.terminal_settings_json()).unwrap_or_default())
+    }
+
+    fn terminal_schemes(&self) -> QString {
+        q(crate::app::App::terminal_schemes_json())
+    }
+
+    fn set_terminal_settings(self: Pin<&mut Self>, change: &QString) -> QString {
+        let c = change.to_string();
+        q(self.app_mut().map(|a| a.set_terminal_settings(&c)).unwrap_or_default())
+    }
+
+    fn terminal_font_step(self: Pin<&mut Self>, delta: i32) -> QString {
+        q(self.app_mut().map(|a| a.terminal_font_step(delta)).unwrap_or_default())
+    }
+
+    fn session_info(&self, session: u64) -> QString {
+        q(self.app().and_then(|a| a.sessions.info(session)).map(|v| v.to_string()).unwrap_or_else(|| "{}".into()))
     }
 
     fn workspace_json(&self) -> QString {

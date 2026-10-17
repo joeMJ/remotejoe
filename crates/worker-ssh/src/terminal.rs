@@ -113,18 +113,41 @@ pub struct Terminal {
     term: Term<Listener>,
     parser: Processor,
     events: Listener,
+    scheme: Scheme,
 }
 
-/// Standardpalette (xterm).
-fn palette(c: Color, fg: bool, bold: bool) -> Rgb {
-    const BASE: [(u8, u8, u8); 16] = [
-        (0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0), (0, 0, 238), (205, 0, 205), (0, 205, 205), (229, 229, 229),
-        (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0), (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
-    ];
+/// Farben des Terminals: Vordergrund, Hintergrund, Cursor und die 16 ANSI-Farben
+/// (Vorgabe: xterm auf Schwarz).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scheme {
+    pub fg: Rgb,
+    pub bg: Rgb,
+    pub cursor: Rgb,
+    pub ansi: [Rgb; 16],
+}
+
+impl Default for Scheme {
+    fn default() -> Self {
+        const BASE: [(u8, u8, u8); 16] = [
+            (0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0), (0, 0, 238), (205, 0, 205), (0, 205, 205), (229, 229, 229),
+            (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0), (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
+        ];
+        Scheme {
+            fg: Rgb { r: 229, g: 229, b: 229 },
+            bg: Rgb { r: 0, g: 0, b: 0 },
+            cursor: Rgb { r: 229, g: 229, b: 229 },
+            ansi: BASE.map(|(r, g, b)| Rgb { r, g, b }),
+        }
+    }
+}
+
+/// Farbe einer Zelle nach dem Schema (Zeichen 0–15 aus dem Schema, 16–255 wie bei xterm).
+fn palette(c: Color, fg: bool, bold: bool, s: &Scheme) -> Rgb {
     let idx = |i: u8| -> Rgb {
         let i = i as usize;
         let (r, g, b) = if i < 16 {
-            BASE[i]
+            let c = s.ansi[i];
+            (c.r, c.g, c.b)
         } else if i < 232 {
             let i = i - 16;
             let v = |x: usize| if x == 0 { 0 } else { (x * 40 + 55) as u8 };
@@ -139,17 +162,17 @@ fn palette(c: Color, fg: bool, bold: bool) -> Rgb {
         Color::Spec(rgb) => rgb,
         Color::Indexed(i) => idx(if bold && i < 8 { i + 8 } else { i }),
         Color::Named(n) => match n {
-            NamedColor::Foreground | NamedColor::BrightForeground => Rgb { r: 229, g: 229, b: 229 },
-            NamedColor::Background => Rgb { r: 0, g: 0, b: 0 },
-            NamedColor::Cursor => Rgb { r: 229, g: 229, b: 229 },
+            NamedColor::Foreground | NamedColor::BrightForeground => s.fg,
+            NamedColor::Background => s.bg,
+            NamedColor::Cursor => s.cursor,
             n => {
                 let i = n as usize;
                 if i < 16 {
                     idx(if bold && i < 8 { i as u8 + 8 } else { i as u8 })
                 } else if fg {
-                    Rgb { r: 229, g: 229, b: 229 }
+                    s.fg
                 } else {
-                    Rgb { r: 0, g: 0, b: 0 }
+                    s.bg
                 }
             }
         },
@@ -167,7 +190,16 @@ impl Terminal {
         };
         let config = Config { osc52: osc, ..Config::default() };
         let term = Term::new(config, &Size { cols, rows }, events.clone());
-        Terminal { term, parser: Processor::new(), events }
+        Terminal { term, parser: Processor::new(), events, scheme: Scheme::default() }
+    }
+
+    /// Neues Farbschema; gilt für alle Zellen beim nächsten Zeichnen.
+    pub fn set_scheme(&mut self, scheme: Scheme) {
+        self.scheme = scheme;
+    }
+
+    pub fn scheme(&self) -> &Scheme {
+        &self.scheme
     }
 
     /// Verarbeitet Ausgabe des Ziels.
@@ -196,8 +228,8 @@ impl Terminal {
         let bold = c.flags.contains(Flags::BOLD);
         CellView {
             ch: c.c,
-            fg: palette(c.fg, true, bold),
-            bg: palette(c.bg, false, false),
+            fg: palette(c.fg, true, bold, &self.scheme),
+            bg: palette(c.bg, false, false, &self.scheme),
             bold,
             italic: c.flags.contains(Flags::ITALIC),
             underline: c.flags.contains(Flags::UNDERLINE),
@@ -350,5 +382,27 @@ mod tests {
         t.feed(b"\x1b[?2004h");
         assert!(t.bracketed_paste());
         assert_eq!(t.paste_bytes("x\x1b[201~rm -rf\n"), b"\x1b[200~xrm -rf\r\x1b[201~");
+    }
+
+    #[test]
+    fn scheme_changes_named_and_default_colours() {
+        let mut t = Terminal::new(20, 5, Osc52Policy::default());
+        t.feed("\x1b[31mA\x1b[0mB\x1b[38;5;196mC\x1b[38;2;10;20;30mD".as_bytes());
+        // Vorgabe: xterm.
+        assert_eq!(t.cell(0, 0).fg, Rgb { r: 205, g: 0, b: 0 });
+        assert_eq!(t.cell(0, 1).fg, Rgb { r: 229, g: 229, b: 229 });
+        assert_eq!(t.cell(0, 1).bg, Rgb { r: 0, g: 0, b: 0 });
+        let mut s = Scheme::default();
+        s.fg = Rgb { r: 1, g: 2, b: 3 };
+        s.bg = Rgb { r: 9, g: 8, b: 7 };
+        s.ansi[1] = Rgb { r: 200, g: 100, b: 50 };
+        t.set_scheme(s);
+        // Rot (ANSI 1), Vorder- und Hintergrund folgen dem Schema.
+        assert_eq!(t.cell(0, 0).fg, Rgb { r: 200, g: 100, b: 50 });
+        assert_eq!(t.cell(0, 1).fg, Rgb { r: 1, g: 2, b: 3 });
+        assert_eq!(t.cell(0, 1).bg, Rgb { r: 9, g: 8, b: 7 });
+        // 256-Farben-Würfel und 24-Bit-Farben bleiben unverändert.
+        assert_eq!(t.cell(0, 2).fg, Rgb { r: 255, g: 0, b: 0 });
+        assert_eq!(t.cell(0, 3).fg, Rgb { r: 10, g: 20, b: 30 });
     }
 }

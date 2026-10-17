@@ -31,6 +31,10 @@ pub struct App {
     pub sessions: Manager,
     pub workspace: Workspace,
     unlocking: Option<Receiver<Result<Vault, String>>>,
+    /// Laufende Makros und ihr Eingabekanal an die Sitzungen.
+    pub(crate) macro_runs: Vec<crate::macro_run::RunningMacro>,
+    pub(crate) macro_input_tx: mpsc::Sender<(SessionId, Vec<u8>)>,
+    macro_input_rx: Receiver<(SessionId, Vec<u8>)>,
     lights: std::collections::HashMap<Uuid, Light>,
     _rt: tokio::runtime::Runtime,
     /// Tunnel; aufgebaut wird in Hintergrundaufgaben.
@@ -90,8 +94,12 @@ impl App {
         });
         let tunnels = std::sync::Arc::new(std::sync::Mutex::new(TunnelManager::new(rt.handle().clone(), known_hosts.clone(), ask)));
         let idle = crate::idle::IdleWatch::new(config.security.lock_after_idle_mins, std::time::Instant::now(), std::time::SystemTime::now());
-        App {
+        let (macro_input_tx, macro_input_rx) = mpsc::channel();
+        let mut app = App {
             _rt: rt,
+            macro_runs: Vec::new(),
+            macro_input_tx,
+            macro_input_rx,
             tunnels,
             deferred_releases: Vec::new(),
             jobs: Default::default(),
@@ -123,7 +131,11 @@ impl App {
             workspace: Workspace::default(),
             unlocking: None,
             lights: Default::default(),
-        }
+        };
+        // Gespeicherte Farben gelten schon für das erste Terminal.
+        let scheme = app.terminal_scheme();
+        app.sessions.set_scheme(scheme);
+        app
     }
 
     pub fn kdbx_path(&self) -> Option<String> {
@@ -197,6 +209,101 @@ impl App {
         });
     }
 
+    /// Übersetzt die Einstellungen in das Farbschema des Terminal-Moduls.
+    fn terminal_scheme(&self) -> rj_ssh::terminal::Scheme {
+        let e = self.config.terminal.effective();
+        let rgb = |c: [u8; 3]| alacritty_terminal::vte::ansi::Rgb { r: c[0], g: c[1], b: c[2] };
+        rj_ssh::terminal::Scheme { fg: rgb(e.fg), bg: rgb(e.bg), cursor: rgb(e.cursor), ansi: e.ansi.map(rgb) }
+    }
+
+    /// Wirksame Einstellungen für die Darstellung (Schrift und Farben) als JSON.
+    pub fn terminal_settings_json(&self) -> String {
+        use rj_core::termcolors::to_hex;
+        let t = &self.config.terminal;
+        let e = t.effective();
+        json!({
+            "font_family": t.font_family.clone().unwrap_or_default(),
+            "font_size": t.clamped_size(),
+            "scheme": t.scheme,
+            "custom": t.has_overrides(),
+            "fg": to_hex(e.fg),
+            "bg": to_hex(e.bg),
+            "cursor": to_hex(e.cursor),
+            "selection": to_hex(e.selection),
+        })
+        .to_string()
+    }
+
+    /// Eingebaute Schemata für die Auswahl (Kennung, Name, Farben).
+    pub fn terminal_schemes_json() -> String {
+        use rj_core::termcolors::{presets, to_hex};
+        let list: Vec<_> = presets()
+            .iter()
+            .map(|s| json!({ "id": s.id, "label": s.label, "fg": to_hex(s.fg), "bg": to_hex(s.bg), "cursor": to_hex(s.cursor), "selection": to_hex(s.selection), "ansi": s.ansi.iter().map(|c| to_hex(*c)).collect::<Vec<_>>() }))
+            .collect();
+        json!(list).to_string()
+    }
+
+    /// Ändert Schrift und Farben (nur die gelieferten Felder), wendet sie auf alle
+    /// Terminals an und speichert sie in der Konfiguration. Ergebnis: wirksame
+    /// Einstellungen als JSON oder `{"error": …}`.
+    pub fn set_terminal_settings(&mut self, change: &str) -> String {
+        use rj_core::termcolors::{self, FONT_SIZE_MAX, FONT_SIZE_MIN};
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(change) else { return json!({ "error": "Ungültige Eingabe" }).to_string() };
+        let mut t = self.config.terminal.clone();
+        if let Some(f) = v.get("font_family").and_then(|x| x.as_str()) {
+            let f = f.trim();
+            t.font_family = (!f.is_empty()).then(|| f.to_string());
+        }
+        if let Some(sz) = v.get("font_size").and_then(|x| x.as_f64()) {
+            if !sz.is_finite() || sz < FONT_SIZE_MIN as f64 || sz > FONT_SIZE_MAX as f64 {
+                return json!({ "error": format!("Die Schriftgröße muss zwischen {} und {} liegen.", FONT_SIZE_MIN, FONT_SIZE_MAX) }).to_string();
+            }
+            t.font_size = sz as f32;
+        }
+        if let Some(id) = v.get("scheme").and_then(|x| x.as_str()) {
+            if termcolors::preset(id).is_none() {
+                return json!({ "error": format!("Unbekanntes Farbschema „{id}“") }).to_string();
+            }
+            if id != t.scheme {
+                // Ein anderes Schema löscht eigene Abweichungen, außer sie kommen im selben Aufruf mit.
+                t.foreground = None;
+                t.background = None;
+                t.cursor = None;
+                t.selection = None;
+            }
+            t.scheme = id.to_string();
+        }
+        for (key, slot) in [("fg", &mut t.foreground), ("bg", &mut t.background), ("cursor", &mut t.cursor), ("selection", &mut t.selection)] {
+            if let Some(c) = v.get(key).and_then(|x| x.as_str()) {
+                if c.trim().is_empty() {
+                    *slot = None;
+                } else if let Some(rgb) = termcolors::parse_hex(c) {
+                    *slot = Some(termcolors::to_hex(rgb));
+                } else {
+                    return json!({ "error": format!("„{c}“ ist keine Farbe im Format #rrggbb.") }).to_string();
+                }
+            }
+        }
+        self.config.terminal = t;
+        let scheme = self.terminal_scheme();
+        self.sessions.set_scheme(scheme);
+        if !self.demo {
+            if let Some(cp) = self.config_path.clone() {
+                let _ = self.config.save(&cp);
+            }
+        }
+        self.terminal_settings_json()
+    }
+
+    /// Schrift in Schritten ändern (Strg+Mausrad); `0` setzt die Vorgabe zurück.
+    pub fn terminal_font_step(&mut self, delta: i32) -> String {
+        use rj_core::termcolors::{FONT_SIZE_DEFAULT, FONT_SIZE_MAX, FONT_SIZE_MIN};
+        let now = self.config.terminal.clamped_size();
+        let next = if delta == 0 { FONT_SIZE_DEFAULT } else { (now + delta as f32).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX) };
+        self.set_terminal_settings(&json!({ "font_size": next }).to_string())
+    }
+
     /// Merkt sich den Pfad der geöffneten KDBX in der Konfiguration (nicht im Demomodus).
     fn remember_kdbx_path(&mut self, path: &std::path::Path) {
         if self.demo || self.config.kdbx_path.as_deref() == Some(path) {
@@ -212,6 +319,9 @@ impl App {
     /// (überschrieben beim Freigeben). Laufende Sitzungen bleiben verbunden,
     /// außer `disconnect` ist gesetzt.
     pub fn lock(&mut self, disconnect: bool) {
+        for r in &self.macro_runs {
+            r.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         self.snmp_stop.store(true, std::sync::atomic::Ordering::Relaxed);
         self.vault = None;
         self.unlocking = None;
@@ -784,6 +894,26 @@ impl App {
 
     pub fn poll(&mut self) -> Vec<UiEvent> {
         let mut out = self.sessions.poll(Duration::from_millis(0));
+        // Eingaben laufender Makros an die Sitzungen weitergeben, beendete Makros melden.
+        while let Ok((s, bytes)) = self.macro_input_rx.try_recv() {
+            self.sessions.send_bytes(s, bytes);
+        }
+        let mut finished = Vec::new();
+        self.macro_runs.retain(|r| match r.done.try_recv() {
+            Ok(o) => {
+                finished.push((r.session, r.name.clone(), o));
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                finished.push((r.session, r.name.clone(), crate::macro_run::Outcome { ok: false, message: format!("Makro „{}“ wurde unerwartet beendet.", r.name) }));
+                false
+            }
+        });
+        for (s, name, o) in finished {
+            self.sessions.detach_macro_tap(s);
+            out.push(UiEvent::MacroDone { s, name, ok: o.ok, message: o.message });
+        }
         self.provide_patch_credentials();
         // Gehaltene Sitzungen (Tunnel, Konsolenbrücke): erst Tunnel bzw. Brücke, dann neu verbinden.
         for s in self.sessions.take_reconnect_requests() {
@@ -1141,5 +1271,80 @@ mod patchday_tests {
         let r = rows.iter().find(|r| r.target == victim).unwrap();
         assert_eq!(r.state, rj_tasks::patchday::JobState::Cancelled);
         assert!(rows.iter().filter(|r| r.target != victim).all(|r| r.state != rj_tasks::patchday::JobState::Cancelled));
+    }
+}
+
+#[cfg(test)]
+mod terminal_settings_tests {
+    use super::*;
+
+    fn parse(s: &str) -> serde_json::Value {
+        serde_json::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn scheme_font_and_overrides() {
+        let mut app = App::new(true);
+        app.config_path = None;
+        let d = parse(&app.terminal_settings_json());
+        assert_eq!(d["scheme"], "standard-dunkel");
+        assert_eq!(d["font_size"], 11.0);
+
+        // Schema wählen: wirksame Farben ändern sich.
+        let r = parse(&app.set_terminal_settings(r##"{"scheme":"catppuccin-mocha"}"##));
+        assert_eq!(r["bg"], "#1e1e2e");
+        assert_eq!(r["fg"], "#cdd6f4");
+        assert_eq!(r["custom"], false);
+
+        // Eigene Farbe, Schriftart mit Leerzeichen, Größe.
+        let r = parse(&app.set_terminal_settings(r##"{"bg":"#102030","font_family":"  DejaVu Sans Mono ","font_size":14}"##));
+        assert_eq!(r["bg"], "#102030");
+        assert_eq!(r["custom"], true);
+        assert_eq!(r["font_family"], "DejaVu Sans Mono");
+        assert_eq!(r["font_size"], 14.0);
+
+        // Anderes Schema verwirft die eigenen Abweichungen.
+        let r = parse(&app.set_terminal_settings(r##"{"scheme":"catppuccin-latte"}"##));
+        assert_eq!(r["bg"], "#eff1f5");
+        assert_eq!(r["custom"], false);
+
+        // Leere Schriftart und leere Farbe setzen zurück.
+        let r = parse(&app.set_terminal_settings(r##"{"font_family":"","bg":"#000001"}"##));
+        assert_eq!(r["font_family"], "");
+        let r = parse(&app.set_terminal_settings(r##"{"bg":""}"##));
+        assert_eq!(r["custom"], false);
+    }
+
+    #[test]
+    fn invalid_input_is_rejected_without_change() {
+        let mut app = App::new(true);
+        app.config_path = None;
+        let before = app.terminal_settings_json();
+        for bad in [r#"{"font_size":3}"#, r#"{"font_size":99}"#, r#"{"scheme":"gibt-es-nicht"}"#, r##"{"fg":"rot"}"##, "kein json"] {
+            let r = parse(&app.set_terminal_settings(bad));
+            assert!(r.get("error").is_some(), "{bad}");
+            assert_eq!(app.terminal_settings_json(), before, "{bad}");
+        }
+    }
+
+    #[test]
+    fn font_steps_are_clamped_and_reset() {
+        let mut app = App::new(true);
+        app.config_path = None;
+        assert_eq!(parse(&app.terminal_font_step(2))["font_size"], 13.0);
+        assert_eq!(parse(&app.terminal_font_step(-3))["font_size"], 10.0);
+        assert_eq!(parse(&app.terminal_font_step(100))["font_size"], 40.0);
+        assert_eq!(parse(&app.terminal_font_step(-100))["font_size"], 6.0);
+        assert_eq!(parse(&app.terminal_font_step(0))["font_size"], 11.0);
+    }
+
+    #[test]
+    fn schemes_list_contains_catppuccin() {
+        let l = parse(&App::terminal_schemes_json());
+        let ids: Vec<_> = l.as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect();
+        for id in ["standard-dunkel", "standard-hell", "hoher-kontrast", "catppuccin-latte", "catppuccin-frappe", "catppuccin-macchiato", "catppuccin-mocha"] {
+            assert!(ids.contains(&id.to_string()), "{id}");
+        }
+        assert_eq!(l[0]["ansi"].as_array().unwrap().len(), 16);
     }
 }

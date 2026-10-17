@@ -1,4 +1,5 @@
 #include "editor.h"
+#include "views.h"
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
@@ -7,6 +8,8 @@
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QStandardPaths>
+#include <QtCore/QRegularExpression>
+#include <QtWidgets/QMenu>
 #include <QtCore/QTimer>
 #include <QtCore/QElapsedTimer>
 #include <QtWidgets/QProgressBar>
@@ -16,11 +19,14 @@
 #include <QtGui/QPainterPath>
 #include <QtGui/QShortcut>
 #include <QtGui/QFileSystemModel>
+#include <QtGui/QFontDatabase>
 #include <QtWidgets/QButtonGroup>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QCompleter>
 #include <QtWidgets/QFileDialog>
+#include <QtWidgets/QFontComboBox>
+#include <QtWidgets/QSpinBox>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
@@ -1451,6 +1457,639 @@ void SnmpTab::wipeSecrets()
 		t.fill(QLatin1Char(' '));
 		e->clear();
 	}
+}
+
+// ------------------------------------------------------------ MacroTab
+
+namespace {
+QJsonObject macroCall(RjBackend* b, const QJsonObject& o)
+{
+	return QJsonDocument::fromJson(b->edit(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact))).toUtf8()).object();
+}
+}
+
+MacroTab::MacroTab(RjBackend* backend, const QString& id, QWidget* parent)
+  : QWidget(parent)
+  , m_backend(backend)
+  , m_id(id)
+{
+	setObjectName(QStringLiteral("macroTab"));
+	auto* v = new QVBoxLayout(this);
+	auto* top = new QFormLayout;
+	m_name = new QLineEdit(this);
+	top->addRow(new QLabel(rjText(backend, "macro.name"), this), m_name);
+	v->addLayout(top);
+	auto* hint = new QLabel(rjText(backend, "macro.hint"), this);
+	hint->setWordWrap(true);
+	v->addWidget(hint);
+	v->addWidget(new QLabel(rjText(backend, "macro.steps"), this));
+
+	auto* mid = new QHBoxLayout;
+	m_table = new QTableWidget(0, 3, this);
+	m_table->setHorizontalHeaderLabels({ rjText(backend, "macro.col.nr"), rjText(backend, "macro.col.kind"), rjText(backend, "macro.col.content") });
+	m_table->horizontalHeader()->setStretchLastSection(true);
+	m_table->verticalHeader()->hide();
+	m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+	m_table->setSelectionMode(QAbstractItemView::SingleSelection);
+	m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+	m_table->setMinimumHeight(150);
+	mid->addWidget(m_table, 1);
+	auto* side = new QVBoxLayout;
+	auto* add = new QPushButton(rjText(backend, "macro.add"), this);
+	auto* addMenu = new QMenu(add);
+	addMenu->addAction(rjText(backend, "macro.add.send"), this, [this] { addStep(QStringLiteral("send")); });
+	addMenu->addAction(rjText(backend, "macro.add.wait"), this, [this] { addStep(QStringLiteral("wait")); });
+	add->setMenu(addMenu);
+	auto* up = new QPushButton(rjText(backend, "macro.up"), this);
+	auto* down = new QPushButton(rjText(backend, "macro.down"), this);
+	auto* rem = new QPushButton(rjText(backend, "macro.remove"), this);
+	side->addWidget(add);
+	side->addWidget(up);
+	side->addWidget(down);
+	side->addWidget(rem);
+	side->addStretch(1);
+	mid->addLayout(side);
+	v->addLayout(mid);
+
+	// Formulare je Schritt
+	m_stack = new QStackedWidget(this);
+	m_stack->addWidget(new QWidget(this)); // 0: nichts gewählt
+	auto* sendPage = new QWidget(this);
+	{
+		auto* f = new QFormLayout(sendPage);
+		m_sendText = new QLineEdit(sendPage);
+		m_sendEnter = new QCheckBox(rjText(backend, "macro.send.enter"), sendPage);
+		m_sendInsert = new QComboBox(sendPage);
+		m_sendInsert->addItem(rjText(backend, "macro.send.insert"), QString());
+		m_sendInsert->addItem(rjText(backend, "macro.send.ins.enter"), QStringLiteral("{key:enter}"));
+		m_sendInsert->addItem(rjText(backend, "macro.send.ins.tab"), QStringLiteral("{key:tab}"));
+		m_sendInsert->addItem(rjText(backend, "macro.send.ins.esc"), QStringLiteral("{key:esc}"));
+		m_sendInsert->addItem(rjText(backend, "macro.send.ins.ctrlc"), QStringLiteral("{key:ctrl-c}"));
+		m_sendInsert->addItem(rjText(backend, "macro.send.ins.pw"), QStringLiteral("{cred:password}"));
+		m_sendInsert->addItem(rjText(backend, "macro.send.ins.user"), QStringLiteral("{cred:username}"));
+		f->addRow(new QLabel(rjText(backend, "macro.send.text"), sendPage), m_sendText);
+		f->addRow(QString(), m_sendEnter);
+		f->addRow(QString(), m_sendInsert);
+	}
+	m_stack->addWidget(sendPage); // 1
+	auto* waitPage = new QWidget(this);
+	{
+		auto* f = new QFormLayout(waitPage);
+		m_waitKind = new QComboBox(waitPage);
+		m_waitKind->addItem(rjText(backend, "macro.wait.text"), QStringLiteral("text"));
+		m_waitKind->addItem(rjText(backend, "macro.wait.regex"), QStringLiteral("regex"));
+		m_waitPattern = new QLineEdit(waitPage);
+		m_waitTimeout = new QSpinBox(waitPage);
+		m_waitTimeout->setRange(1, 600);
+		m_waitTimeout->setSuffix(QStringLiteral(" s"));
+		m_waitErrors = new QPlainTextEdit(waitPage);
+		m_waitErrors->setMaximumHeight(70);
+		f->addRow(new QLabel(rjText(backend, "macro.wait.kind"), waitPage), m_waitKind);
+		f->addRow(new QLabel(rjText(backend, "macro.wait.pattern"), waitPage), m_waitPattern);
+		f->addRow(new QLabel(rjText(backend, "macro.wait.timeout"), waitPage), m_waitTimeout);
+		f->addRow(new QLabel(rjText(backend, "macro.wait.errors"), waitPage), m_waitErrors);
+	}
+	m_stack->addWidget(waitPage); // 2
+	auto* advPage = new QWidget(this);
+	{
+		auto* l = new QVBoxLayout(advPage);
+		auto* t = new QLabel(rjText(backend, "macro.adv.hint"), advPage);
+		t->setWordWrap(true);
+		m_json = new QPlainTextEdit(advPage);
+		m_json->setMaximumHeight(140);
+		m_jsonError = new QLabel(advPage);
+		m_jsonError->setObjectName(QStringLiteral("fieldError"));
+		l->addWidget(t);
+		l->addWidget(m_json);
+		l->addWidget(m_jsonError);
+	}
+	m_stack->addWidget(advPage); // 3
+	v->addWidget(m_stack);
+
+	m_linked = new QLabel(this);
+	m_linked->setWordWrap(true);
+	v->addWidget(m_linked);
+	m_status = new QLabel(this);
+	m_status->setWordWrap(true);
+	m_status->setObjectName(QStringLiteral("fieldError"));
+	v->addWidget(m_status);
+	m_dirtyLabel = new QLabel(rjText(backend, "macro.dirty"), this);
+	m_dirtyLabel->setObjectName(QStringLiteral("dirtyLabel"));
+	m_dirtyLabel->hide();
+	auto* buttons = new QHBoxLayout;
+	auto* saveB = new QPushButton(rjText(backend, "macro.save"), this);
+	auto* discardB = new QPushButton(rjText(backend, "macro.discard"), this);
+	saveB->setDefault(true);
+	buttons->addWidget(m_dirtyLabel);
+	buttons->addStretch(1);
+	buttons->addWidget(discardB);
+	buttons->addWidget(saveB);
+	v->addLayout(buttons);
+
+	connect(m_name, &QLineEdit::textEdited, this, [this] {
+		if (!m_loading)
+		{
+			markDirty();
+			emit titleChanged();
+		}
+	});
+	connect(m_table, &QTableWidget::currentCellChanged, this, [this](int row, int, int, int) { showStep(row); });
+	connect(up, &QPushButton::clicked, this, [this] { moveStep(-1); });
+	connect(down, &QPushButton::clicked, this, [this] { moveStep(1); });
+	connect(rem, &QPushButton::clicked, this, &MacroTab::removeStep);
+	connect(m_sendText, &QLineEdit::textEdited, this, &MacroTab::storeStep);
+	connect(m_sendEnter, &QCheckBox::toggled, this, &MacroTab::storeStep);
+	connect(m_sendInsert, &QComboBox::activated, this, [this](int i) {
+		const QString ins = m_sendInsert->itemData(i).toString();
+		if (!ins.isEmpty())
+		{
+			m_sendText->insert(ins);
+			storeStep();
+		}
+		m_sendInsert->setCurrentIndex(0);
+	});
+	connect(m_waitKind, &QComboBox::activated, this, [this](int) { storeStep(); });
+	connect(m_waitPattern, &QLineEdit::textEdited, this, &MacroTab::storeStep);
+	connect(m_waitTimeout, &QSpinBox::valueChanged, this, [this](int) { storeStep(); });
+	connect(m_waitErrors, &QPlainTextEdit::textChanged, this, [this] { storeStep(); });
+	connect(m_json, &QPlainTextEdit::textChanged, this, [this] { storeStep(); });
+	connect(saveB, &QPushButton::clicked, this, [this] {
+		if (save())
+			emit saved();
+	});
+	connect(discardB, &QPushButton::clicked, this, [this] {
+		m_dirty = false;
+		emit discarded();
+	});
+	load();
+}
+
+QString MacroTab::title() const
+{
+	const QString n = m_name->text().trimmed();
+	return n.isEmpty() ? (m_origName.isEmpty() ? rjText(m_backend, "macro.title.default") : m_origName) : n;
+}
+
+void MacroTab::markDirty()
+{
+	m_dirty = true;
+	m_dirtyLabel->show();
+	m_status->clear();
+}
+
+void MacroTab::load()
+{
+	m_loading = true;
+	const QJsonObject r = macroCall(m_backend, { { QStringLiteral("op"), QStringLiteral("macro_get") }, { QStringLiteral("id"), m_id } });
+	m_origName = r.value(QStringLiteral("name")).toString();
+	m_name->setText(m_origName);
+	m_steps = r.value(QStringLiteral("steps")).toArray();
+	QStringList names;
+	for (const QJsonValue& l : r.value(QStringLiteral("linked")).toArray())
+		names << l.toObject().value(QStringLiteral("name")).toString();
+	m_linked->setText(names.isEmpty() ? rjText(m_backend, "macro.unlinked") : rjText(m_backend, "macro.linked").arg(names.join(QStringLiteral(", "))));
+	m_dirty = false;
+	m_dirtyLabel->hide();
+	m_loading = false;
+	refreshTable(m_steps.isEmpty() ? -1 : 0);
+}
+
+QString MacroTab::summary(const QJsonObject& step) const
+{
+	const QString kind = step.value(QStringLiteral("step")).toString();
+	if (kind == QLatin1String("send"))
+	{
+		QString t = step.value(QStringLiteral("text")).toString();
+		t.replace(QStringLiteral("{key:enter}"), QStringLiteral(" ⏎"));
+		t.replace(QStringLiteral("{cred:password}"), QStringLiteral("‹Kennwort›"));
+		t.replace(QStringLiteral("{cred:username}"), QStringLiteral("‹Benutzer›"));
+		return t;
+	}
+	if (kind == QLatin1String("wait"))
+	{
+		const QJsonObject pat = step.value(QStringLiteral("pattern")).toObject();
+		const bool rx = pat.contains(QStringLiteral("regex"));
+		const QString text = rx ? pat.value(QStringLiteral("regex")).toString() : pat.value(QStringLiteral("text")).toString();
+		return QStringLiteral("%1%2%3 (%4 s)").arg(rx ? QStringLiteral("/") : QStringLiteral("„"), text, rx ? QStringLiteral("/") : QStringLiteral("“")).arg(step.value(QStringLiteral("timeout_ms")).toInt(15000) / 1000);
+	}
+	if (kind == QLatin1String("expect_any"))
+		return QStringLiteral("%1 Zweige").arg(step.value(QStringLiteral("branches")).toArray().size());
+	return QString::fromUtf8(QJsonDocument(step).toJson(QJsonDocument::Compact));
+}
+
+void MacroTab::refreshTable(int select)
+{
+	const bool was = m_loading;
+	m_loading = true;
+	m_table->setRowCount(0);
+	for (int i = 0; i < m_steps.size(); ++i)
+	{
+		const QJsonObject st = m_steps[i].toObject();
+		const QString kind = st.value(QStringLiteral("step")).toString();
+		const QString kindText = kind == QLatin1String("send")         ? rjText(m_backend, "macro.kind.send")
+		                         : kind == QLatin1String("wait")       ? rjText(m_backend, "macro.kind.wait")
+		                         : kind == QLatin1String("expect_any") ? rjText(m_backend, "macro.kind.any")
+		                                                               : rjText(m_backend, "macro.kind.other");
+		m_table->insertRow(i);
+		m_table->setItem(i, 0, new QTableWidgetItem(QString::number(i + 1)));
+		m_table->setItem(i, 1, new QTableWidgetItem(kindText));
+		m_table->setItem(i, 2, new QTableWidgetItem(summary(st)));
+	}
+	m_table->resizeColumnToContents(0);
+	m_table->resizeColumnToContents(1);
+	m_loading = was;
+	if (select >= 0 && select < m_steps.size())
+	{
+		m_table->setCurrentCell(select, 2);
+		showStep(select);
+	}
+	else
+		showStep(-1);
+}
+
+void MacroTab::showStep(int row)
+{
+	if (m_loading)
+		return;
+	m_loading = true;
+	if (row < 0 || row >= m_steps.size())
+		m_stack->setCurrentIndex(0);
+	else
+	{
+		const QJsonObject st = m_steps[row].toObject();
+		const QString kind = st.value(QStringLiteral("step")).toString();
+		if (kind == QLatin1String("send"))
+		{
+			QString t = st.value(QStringLiteral("text")).toString();
+			const QString enter = QStringLiteral("{key:enter}");
+			const bool e = t.endsWith(enter);
+			if (e)
+				t.chop(enter.size());
+			m_sendText->setText(t);
+			m_sendEnter->setChecked(e);
+			m_stack->setCurrentIndex(1);
+		}
+		else if (kind == QLatin1String("wait"))
+		{
+			const QJsonObject pat = st.value(QStringLiteral("pattern")).toObject();
+			const bool rx = pat.contains(QStringLiteral("regex"));
+			m_waitKind->setCurrentIndex(rx ? 1 : 0);
+			m_waitPattern->setText(rx ? pat.value(QStringLiteral("regex")).toString() : pat.value(QStringLiteral("text")).toString());
+			m_waitTimeout->setValue(qBound(1, st.value(QStringLiteral("timeout_ms")).toInt(15000) / 1000, 600));
+			QStringList errs;
+			for (const QJsonValue& e : st.value(QStringLiteral("errors")).toArray())
+			{
+				const QJsonObject eo = e.toObject();
+				errs << (eo.contains(QStringLiteral("regex")) ? eo.value(QStringLiteral("regex")).toString() : eo.value(QStringLiteral("text")).toString());
+			}
+			m_waitErrors->setPlainText(errs.join(QLatin1Char('\n')));
+			m_stack->setCurrentIndex(2);
+		}
+		else
+		{
+			m_json->setPlainText(QString::fromUtf8(QJsonDocument(st).toJson(QJsonDocument::Indented)));
+			m_jsonError->clear();
+			m_stack->setCurrentIndex(3);
+		}
+	}
+	m_loading = false;
+}
+
+void MacroTab::storeStep()
+{
+	if (m_loading)
+		return;
+	const int row = m_table->currentRow();
+	if (row < 0 || row >= m_steps.size())
+		return;
+	QJsonObject st = m_steps[row].toObject();
+	const QString kind = st.value(QStringLiteral("step")).toString();
+	if (kind == QLatin1String("send"))
+		st.insert(QStringLiteral("text"), m_sendText->text() + (m_sendEnter->isChecked() ? QStringLiteral("{key:enter}") : QString()));
+	else if (kind == QLatin1String("wait"))
+	{
+		const bool rx = m_waitKind->currentData().toString() == QLatin1String("regex");
+		st.insert(QStringLiteral("pattern"), QJsonObject{ { rx ? QStringLiteral("regex") : QStringLiteral("text"), m_waitPattern->text() } });
+		st.insert(QStringLiteral("timeout_ms"), m_waitTimeout->value() * 1000);
+		QJsonArray errs;
+		for (const QString& line : m_waitErrors->toPlainText().split(QLatin1Char('\n'), Qt::SkipEmptyParts))
+			errs.append(QJsonObject{ { QStringLiteral("text"), line } });
+		st.insert(QStringLiteral("errors"), errs);
+	}
+	else
+	{
+		QJsonParseError err;
+		const QJsonDocument d = QJsonDocument::fromJson(m_json->toPlainText().toUtf8(), &err);
+		if (err.error != QJsonParseError::NoError || !d.isObject())
+		{
+			m_jsonError->setText(rjText(m_backend, "macro.adv.bad").arg(err.errorString()));
+			return;
+		}
+		m_jsonError->clear();
+		st = d.object();
+	}
+	m_steps[row] = st;
+	if (QTableWidgetItem* it = m_table->item(row, 2))
+		it->setText(summary(st));
+	markDirty();
+}
+
+void MacroTab::addStep(const QString& kind)
+{
+	QJsonObject st;
+	if (kind == QLatin1String("send"))
+		st = QJsonObject{ { QStringLiteral("step"), QStringLiteral("send") }, { QStringLiteral("text"), QString() } };
+	else
+		st = QJsonObject{ { QStringLiteral("step"), QStringLiteral("wait") },
+			              { QStringLiteral("pattern"), QJsonObject{ { QStringLiteral("text"), QString() } } },
+			              { QStringLiteral("errors"), QJsonArray() },
+			              { QStringLiteral("timeout_ms"), 15000 } };
+	const int at = m_table->currentRow() >= 0 ? m_table->currentRow() + 1 : m_steps.size();
+	m_steps.insert(at, st);
+	markDirty();
+	refreshTable(at);
+	(kind == QLatin1String("send") ? static_cast<QWidget*>(m_sendText) : static_cast<QWidget*>(m_waitPattern))->setFocus();
+}
+
+void MacroTab::moveStep(int delta)
+{
+	const int row = m_table->currentRow();
+	const int to = row + delta;
+	if (row < 0 || to < 0 || to >= m_steps.size())
+		return;
+	const QJsonValue v = m_steps[row];
+	m_steps.removeAt(row);
+	m_steps.insert(to, v);
+	markDirty();
+	refreshTable(to);
+}
+
+void MacroTab::removeStep()
+{
+	const int row = m_table->currentRow();
+	if (row < 0 || row >= m_steps.size())
+		return;
+	m_steps.removeAt(row);
+	markDirty();
+	refreshTable(m_steps.isEmpty() ? -1 : qMin(row, int(m_steps.size()) - 1));
+}
+
+bool MacroTab::save()
+{
+	const QString name = m_name->text().trimmed();
+	if (name.isEmpty())
+	{
+		m_status->setText(rjText(m_backend, "macro.err.name"));
+		return false;
+	}
+	// Muster prüfen: leere Muster und ungültige reguläre Ausdrücke abfangen.
+	for (int i = 0; i < m_steps.size(); ++i)
+	{
+		const QJsonObject st = m_steps[i].toObject();
+		if (st.value(QStringLiteral("step")).toString() != QLatin1String("wait"))
+			continue;
+		const QJsonObject pat = st.value(QStringLiteral("pattern")).toObject();
+		const bool rx = pat.contains(QStringLiteral("regex"));
+		const QString text = rx ? pat.value(QStringLiteral("regex")).toString() : pat.value(QStringLiteral("text")).toString();
+		if (text.isEmpty() || (rx && !QRegularExpression(text).isValid()))
+		{
+			m_table->setCurrentCell(i, 2);
+			m_status->setText(QStringLiteral("%1 %2: %3").arg(rjText(m_backend, "macro.col.nr"), QString::number(i + 1), text.isEmpty() ? rjText(m_backend, "macro.wait.pattern") : QRegularExpression(text).errorString()));
+			return false;
+		}
+	}
+	const QJsonObject r = macroCall(m_backend, { { QStringLiteral("op"), QStringLiteral("update_macro") }, { QStringLiteral("id"), m_id }, { QStringLiteral("name"), name }, { QStringLiteral("steps"), m_steps } });
+	if (r.contains(QStringLiteral("error")))
+	{
+		m_status->setText(r.value(QStringLiteral("error")).toString());
+		return false;
+	}
+	m_origName = name;
+	m_dirty = false;
+	m_dirtyLabel->hide();
+	emit indexChanged();
+	return true;
+}
+
+// ------------------------------------------------------------ TerminalSettingsTab
+
+namespace {
+
+/// Vorschau: Beispieltext, Cursor, Auswahl und die 16 ANSI-Farben im gewählten Schema.
+class TerminalPreview : public QWidget
+{
+public:
+	explicit TerminalPreview(QWidget* parent)
+	  : QWidget(parent)
+	{
+		setMinimumHeight(150);
+		setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+	}
+	void set(const QFont& font, const QColor& fg, const QColor& bg, const QColor& cursor, const QColor& selection, const QStringList& ansi)
+	{
+		m_font = font;
+		m_fg = fg;
+		m_bg = bg;
+		m_cursor = cursor;
+		m_sel = selection;
+		m_ansi = ansi;
+		update();
+	}
+
+protected:
+	void paintEvent(QPaintEvent*) override
+	{
+		QPainter p(this);
+		p.fillRect(rect(), m_bg);
+		p.setFont(m_font);
+		const QFontMetrics fm(m_font);
+		const int ch = fm.height(), cw = qMax(1, fm.horizontalAdvance(QLatin1Char('M')));
+		int y = 8 + fm.ascent();
+		auto text = [&](int x, const QString& t, const QColor& c) {
+			p.setPen(c);
+			p.drawText(x, y, t);
+			return x + fm.horizontalAdvance(t);
+		};
+		auto col = [&](int i, const QColor& dflt) { return i < m_ansi.size() ? QColor(m_ansi.at(i)) : dflt; };
+		int x = 10;
+		x = text(x, QStringLiteral("benutzer@rechner"), col(2, m_fg));
+		x = text(x, QStringLiteral(":"), m_fg);
+		x = text(x, QStringLiteral("~"), col(4, m_fg));
+		x = text(x, QStringLiteral("$ ls --color=auto"), m_fg);
+		y += ch;
+		x = 10;
+		x = text(x, QStringLiteral("Dokumente  "), col(4, m_fg));
+		x = text(x, QStringLiteral("skript.sh  "), col(2, m_fg));
+		x = text(x, QStringLiteral("archiv.tar  "), col(1, m_fg));
+		text(x, QStringLiteral("notiz.txt"), m_fg);
+		y += ch;
+		x = 10;
+		x = text(x, QStringLiteral("Fehler: "), col(1, m_fg));
+		x = text(x, QStringLiteral("Verbindung "), col(3, m_fg));
+		// Ausgewählter Text
+		const QString selText = QStringLiteral("ausgewählt");
+		p.fillRect(QRect(x, y - fm.ascent(), fm.horizontalAdvance(selText), ch), m_sel);
+		x = text(x, selText, m_fg);
+		x += cw;
+		QColor cur = m_cursor;
+		cur.setAlpha(160);
+		p.fillRect(QRect(x, y - fm.ascent(), cw, ch), cur);
+		// Farbstreifen
+		y += ch;
+		const int sw = qMax(14, cw * 2), top = y - fm.ascent() + 4;
+		for (int i = 0; i < 16 && i < m_ansi.size(); ++i)
+		{
+			p.fillRect(QRect(10 + (i % 8) * (sw + 3), top + (i / 8) * (ch / 2 + 2), sw, ch / 2), QColor(m_ansi.at(i)));
+		}
+	}
+
+private:
+	QFont m_font;
+	QColor m_fg, m_bg, m_cursor, m_sel;
+	QStringList m_ansi;
+};
+
+}
+
+TerminalSettingsTab::TerminalSettingsTab(RjBackend* backend, QWidget* parent)
+  : QWidget(parent)
+  , m_backend(backend)
+{
+	setObjectName(QStringLiteral("terminalSettings"));
+	m_schemes = QJsonDocument::fromJson(m_backend->terminalSchemes().toUtf8()).array();
+	auto* v = new QVBoxLayout(this);
+	auto* hint = new QLabel(rjText(backend, "term.hint"), this);
+	hint->setWordWrap(true);
+	v->addWidget(hint);
+	auto* f = new QFormLayout;
+	m_system = new QCheckBox(rjText(backend, "term.font.system"), this);
+	m_font = new QFontComboBox(this);
+	m_font->setFontFilters(QFontComboBox::MonospacedFonts);
+	m_size = new QSpinBox(this);
+	m_size->setRange(6, 40);
+	m_size->setSuffix(QStringLiteral(" pt"));
+	m_scheme = new QComboBox(this);
+	for (const QJsonValue& sv : std::as_const(m_schemes))
+		m_scheme->addItem(sv.toObject().value(QStringLiteral("label")).toString(), sv.toObject().value(QStringLiteral("id")).toString());
+	m_custom = new QLabel(rjText(backend, "term.custom"), this);
+	m_custom->setObjectName(QStringLiteral("dirtyLabel"));
+	m_custom->hide();
+	f->addRow(QString(), m_system);
+	f->addRow(new QLabel(rjText(backend, "term.font"), this), m_font);
+	f->addRow(new QLabel(rjText(backend, "term.size"), this), m_size);
+	f->addRow(new QLabel(rjText(backend, "term.scheme"), this), m_scheme);
+	f->addRow(QString(), m_custom);
+	const char* keys[4] = { "fg", "bg", "cursor", "selection" };
+	const char* labels[4] = { "term.fg", "term.bg", "term.cursor", "term.selection" };
+	for (int i = 0; i < 4; ++i)
+	{
+		m_hex[i] = new QLineEdit(this);
+		m_hex[i]->setMaxLength(7);
+		m_hex[i]->setPlaceholderText(QStringLiteral("#rrggbb"));
+		m_hex[i]->setMaximumWidth(110);
+		m_swatch[i] = new QLabel(this);
+		m_swatch[i]->setFixedSize(40, 20);
+		auto* rowW = new QWidget(this);
+		auto* rl = new QHBoxLayout(rowW);
+		rl->setContentsMargins(0, 0, 0, 0);
+		rl->addWidget(m_hex[i]);
+		rl->addWidget(m_swatch[i]);
+		rl->addStretch(1);
+		f->addRow(new QLabel(rjText(backend, labels[i]), this), rowW);
+		const QString key = QString::fromLatin1(keys[i]);
+		connect(m_hex[i], &QLineEdit::editingFinished, this, [this, i, key] {
+			if (!m_updating)
+				send({ { key, m_hex[i]->text().trimmed() } });
+		});
+	}
+	v->addLayout(f);
+	m_preview = new TerminalPreview(this);
+	v->addWidget(m_preview);
+	m_message = new QLabel(this);
+	m_message->setWordWrap(true);
+	m_message->setObjectName(QStringLiteral("fieldError"));
+	v->addWidget(m_message);
+	auto* reset = new QPushButton(rjText(backend, "term.reset"), this);
+	auto* row = new QHBoxLayout;
+	row->addWidget(reset);
+	row->addStretch(1);
+	v->addLayout(row);
+	v->addStretch(1);
+
+	connect(m_system, &QCheckBox::toggled, this, [this](bool on) {
+		if (m_updating)
+			return;
+		m_font->setEnabled(!on);
+		send({ { QStringLiteral("font_family"), on ? QString() : m_font->currentFont().family() } });
+	});
+	connect(m_font, &QFontComboBox::currentFontChanged, this, [this](const QFont& font) {
+		if (!m_updating && !m_system->isChecked())
+			send({ { QStringLiteral("font_family"), font.family() } });
+	});
+	connect(m_size, &QSpinBox::valueChanged, this, [this](int value) {
+		if (!m_updating)
+			send({ { QStringLiteral("font_size"), value } });
+	});
+	connect(m_scheme, &QComboBox::activated, this, [this](int i) {
+		if (!m_updating)
+			send({ { QStringLiteral("scheme"), m_scheme->itemData(i).toString() } });
+	});
+	connect(reset, &QPushButton::clicked, this, [this] {
+		send({ { QStringLiteral("scheme"), QStringLiteral("standard-dunkel") },
+		       { QStringLiteral("font_family"), QString() },
+		       { QStringLiteral("font_size"), 11 },
+		       { QStringLiteral("fg"), QString() },
+		       { QStringLiteral("bg"), QString() },
+		       { QStringLiteral("cursor"), QString() },
+		       { QStringLiteral("selection"), QString() } });
+	});
+	show(QJsonDocument::fromJson(m_backend->terminalSettings().toUtf8()).object());
+}
+
+void TerminalSettingsTab::send(const QJsonObject& change)
+{
+	const QJsonObject r = QJsonDocument::fromJson(m_backend->setTerminalSettings(QString::fromUtf8(QJsonDocument(change).toJson(QJsonDocument::Compact))).toUtf8()).object();
+	if (r.contains(QStringLiteral("error")))
+	{
+		// Eingabe abgelehnt: Fehler zeigen, Anzeige auf den gültigen Stand zurücksetzen.
+		const QString err = r.value(QStringLiteral("error")).toString();
+		show(QJsonDocument::fromJson(m_backend->terminalSettings().toUtf8()).object());
+		m_message->setText(err);
+		return;
+	}
+	show(r);
+}
+
+void TerminalSettingsTab::show(const QJsonObject& s)
+{
+	m_updating = true;
+	m_message->clear();
+	const QString family = s.value(QStringLiteral("font_family")).toString();
+	m_system->setChecked(family.isEmpty());
+	m_font->setEnabled(!family.isEmpty());
+	m_font->setCurrentFont(family.isEmpty() ? QFontDatabase::systemFont(QFontDatabase::FixedFont) : QFont(family));
+	m_size->setValue(qRound(s.value(QStringLiteral("font_size")).toDouble(11.0)));
+	m_scheme->setCurrentIndex(qMax(0, m_scheme->findData(s.value(QStringLiteral("scheme")).toString())));
+	m_custom->setVisible(s.value(QStringLiteral("custom")).toBool());
+	const char* keys[4] = { "fg", "bg", "cursor", "selection" };
+	for (int i = 0; i < 4; ++i)
+	{
+		const QString c = s.value(QString::fromLatin1(keys[i])).toString();
+		m_hex[i]->setText(c);
+		m_swatch[i]->setStyleSheet(QStringLiteral("background-color: %1; border: 1px solid gray;").arg(c));
+	}
+	QStringList ansi;
+	for (const QJsonValue& sv : std::as_const(m_schemes))
+		if (sv.toObject().value(QStringLiteral("id")).toString() == s.value(QStringLiteral("scheme")).toString())
+			for (const QJsonValue& a : sv.toObject().value(QStringLiteral("ansi")).toArray())
+				ansi << a.toString();
+	QFont pf = family.isEmpty() ? QFontDatabase::systemFont(QFontDatabase::FixedFont) : QFont(family);
+	pf.setStyleHint(QFont::Monospace);
+	pf.setPointSizeF(s.value(QStringLiteral("font_size")).toDouble(11.0));
+	static_cast<TerminalPreview*>(m_preview)->set(pf, QColor(s.value(QStringLiteral("fg")).toString()), QColor(s.value(QStringLiteral("bg")).toString()),
+	                                              QColor(s.value(QStringLiteral("cursor")).toString()), QColor(s.value(QStringLiteral("selection")).toString()), ansi);
+	m_updating = false;
+	TerminalView::applyToAll(s);
 }
 
 // ------------------------------------------------------------ UnlockOverlay

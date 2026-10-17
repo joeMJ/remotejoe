@@ -10,6 +10,7 @@ pub mod inherit;
 pub mod model;
 pub mod schema;
 pub mod secret;
+pub mod termcolors;
 
 pub use model::*;
 pub use secret::Secret;

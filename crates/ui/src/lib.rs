@@ -10,6 +10,7 @@ pub mod hyper;
 pub mod idle;
 pub mod jobs;
 pub mod keys;
+pub mod macro_run;
 pub mod patch;
 pub mod sessions;
 pub mod texts;

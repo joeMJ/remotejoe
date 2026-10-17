@@ -4,6 +4,7 @@
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 #include "views.h"
 
+#include <QtCore/QDateTime>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtGui/QAction>
@@ -23,6 +24,7 @@
 #include <QtCore/QPointer>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
+#include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QMenu>
@@ -57,6 +59,8 @@ constexpr int RoleConsoleHost = Qt::UserRole + 5;
 /// Platzhalter unter einem Hypervisor, bis die Gäste geladen sind.
 constexpr int RolePlaceholder = Qt::UserRole + 6;
 constexpr int RoleProtocol = Qt::UserRole + 7;
+/// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
+constexpr int RoleMacro = Qt::UserRole + 20;
 
 QString T(RjBackend* b, const char* key)
 {
@@ -69,6 +73,37 @@ QJsonObject parseObject(const QString& s)
 }
 
 /// Symbol je Protokoll (SVG mit Kürzel), optional mit Ampelpunkt.
+/// Zeichnet ein kleines SVG-Symbol (Körper mit dem Platzhalter COLOR) in der Textfarbe.
+QPixmap svgPixmap(const char* body, const QColor& color, int px)
+{
+	const QString svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>") +
+	                    QString::fromLatin1(body).replace(QLatin1String("COLOR"), color.name()) + QStringLiteral("</svg>");
+	QSvgRenderer renderer(svg.toUtf8());
+	const qreal dpr = qApp->devicePixelRatio();
+	QPixmap pm(QSize(px, px) * dpr);
+	pm.setDevicePixelRatio(dpr);
+	pm.fill(Qt::transparent);
+	QPainter p(&pm);
+	renderer.render(&p, QRectF(0, 0, px, px));
+	return pm;
+}
+
+const char* const kSvgTarget = "<rect x='1.5' y='2.5' width='13' height='8.5' rx='1' fill='none' stroke='COLOR' stroke-width='1.3'/>"
+                               "<path d='M5 14h6M8 11v3' stroke='COLOR' stroke-width='1.3' fill='none' stroke-linecap='round'/>";
+const char* const kSvgClock = "<circle cx='8' cy='8' r='6' fill='none' stroke='COLOR' stroke-width='1.3'/>"
+                              "<path d='M8 4.5V8l2.5 1.5' stroke='COLOR' stroke-width='1.3' fill='none' stroke-linecap='round' stroke-linejoin='round'/>";
+const char* const kSvgUser = "<circle cx='8' cy='5.5' r='2.7' fill='none' stroke='COLOR' stroke-width='1.3'/>"
+                             "<path d='M2.8 14c0-3 2.3-4.8 5.2-4.8s5.2 1.8 5.2 4.8' stroke='COLOR' stroke-width='1.3' fill='none' stroke-linecap='round'/>";
+
+QString protocolName(const QString& p)
+{
+	static const QHash<QString, QString> names = { { QStringLiteral("ssh"), QStringLiteral("SSH") },     { QStringLiteral("rdp"), QStringLiteral("RDP") },
+		                                           { QStringLiteral("vnc"), QStringLiteral("VNC") },     { QStringLiteral("web"), QStringLiteral("Web") },
+		                                           { QStringLiteral("psrp"), QStringLiteral("PowerShell") }, { QStringLiteral("proxmox"), QStringLiteral("Proxmox") },
+		                                           { QStringLiteral("hyperv"), QStringLiteral("Hyper-V") } };
+	return names.value(p, p.toUpper());
+}
+
 QIcon protocolIcon(const QString& protocol, const QString& light, bool folder)
 {
 	static QHash<QString, QIcon> cache;
@@ -84,7 +119,7 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder)
 	};
 	static const P table[] = { { "rdp", "R", "#0b5cad" },     { "ssh", "S", "#1b6e20" },   { "vnc", "V", "#7a3e9d" },
 		                       { "web", "W", "#8a5300" },     { "psrp", "P", "#005f73" },  { "proxmox", "X", "#b03a00" },
-		                       { "hyperv", "H", "#3a4a8c" } };
+		                       { "hyperv", "H", "#3a4a8c" },  { "macro", "M", "#6a1b9a" } };
 	QString svg;
 	if (folder)
 		svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
@@ -350,6 +385,32 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 
 	buildMenus();
 	statusBar()->showMessage(T(m_backend, "status.ready"));
+	// Fußzeile rechts: womit, wohin, seit wann, als wer.
+	m_connInfo = new QWidget(this);
+	{
+		auto* l = new QHBoxLayout(m_connInfo);
+		l->setContentsMargins(0, 0, 8, 0);
+		l->setSpacing(6);
+		auto add = [&](QLabel*& icon, QLabel*& text, const char* tip) {
+			icon = new QLabel(m_connInfo);
+			icon->setFixedSize(18, 18);
+			text = new QLabel(m_connInfo);
+			text->setToolTip(T(m_backend, tip));
+			icon->setToolTip(T(m_backend, tip));
+			l->addWidget(icon);
+			l->addWidget(text);
+			l->addSpacing(10);
+		};
+		add(m_ciProtoIcon, m_ciProto, "ci.tip.type");
+		add(m_ciTargetIcon, m_ciTarget, "ci.tip.target");
+		add(m_ciSinceIcon, m_ciSince, "ci.tip.since");
+		add(m_ciUserIcon, m_ciUser, "ci.tip.user");
+		m_ciTarget->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	}
+	statusBar()->addPermanentWidget(m_connInfo);
+	m_connInfo->hide();
+	connect(&m_ciTimer, &QTimer::timeout, this, &MainWindow::updateConnInfo);
+	m_ciTimer.start(1000);
 
 	// Eingabetaste und Doppelklick verbinden; die Eigenschaften öffnen F4, Alt+Eingabe und das Kontextmenü.
 	auto treeKey = [this, left](const QKeySequence& k, auto fn) {
@@ -361,6 +422,16 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		const QModelIndex i = m_tree->currentIndex();
 		if (!m_tree->hasFocus() || !i.isValid())
 			return;
+		if (i.data(RoleMacro).toInt() == 2)
+		{
+			openMacroTab(i.data(RoleId).toString());
+			return;
+		}
+		if (i.data(RoleMacro).toInt() == 1)
+		{
+			m_tree->setExpanded(i, !m_tree->isExpanded(i));
+			return;
+		}
 		if (i.data(RoleGuest).isValid())
 			openGuestConsole(i);
 		else if (!i.data(RoleFolder).toBool())
@@ -370,7 +441,20 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	};
 	treeKey(QKeySequence(Qt::Key_Return), activate);
 	treeKey(QKeySequence(Qt::Key_Enter), activate);
+	connect(m_tree, &QTreeView::expanded, this, [this](const QModelIndex& i) {
+		if (i.data(RoleMacro).toInt() == 1)
+			m_macroShelfOpen = true;
+	});
+	connect(m_tree, &QTreeView::collapsed, this, [this](const QModelIndex& i) {
+		if (i.data(RoleMacro).toInt() == 1)
+			m_macroShelfOpen = false;
+	});
 	connect(m_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex& i) {
+		if (i.data(RoleMacro).toInt() == 2)
+		{
+			openMacroTab(i.data(RoleId).toString());
+			return;
+		}
 		if (i.data(RoleGuest).isValid())
 			openGuestConsole(i);
 		else if (!i.data(RolePlaceholder).toBool() && !i.data(RoleFolder).toBool())
@@ -382,7 +466,13 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	treeKey(QKeySequence(QStringLiteral("Ctrl+N")), [this] { popupAddMenu(); });
 	treeKey(QKeySequence(Qt::Key_Insert), [this] { popupAddMenu(); });
 	treeKey(QKeySequence(Qt::Key_F2), [this] { renameSelected(); });
-	treeKey(QKeySequence(Qt::Key_Delete), [this] { deleteSelected(); });
+	treeKey(QKeySequence(Qt::Key_Delete), [this] {
+		const QModelIndex i = m_tree->currentIndex();
+		if (i.isValid() && i.data(RoleMacro).toInt() == 2)
+			deleteMacro(i.data(RoleId).toString(), i.data(Qt::DisplayRole).toString());
+		else
+			deleteSelected();
+	});
 	treeKey(QKeySequence(QStringLiteral("Ctrl+D")), [this] { duplicateSelected(); });
 	treeKey(QKeySequence(QStringLiteral("Ctrl+Shift+M")), [this] { moveSelected(); });
 	treeKey(QKeySequence(QStringLiteral("Alt+Up")), [this] { reorderSelected(-1); });
@@ -457,6 +547,24 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		if (auto* tt = qobject_cast<ToolTab*>(m_tabs->widget(i)))
 		{
 			closeToolTab(tt);
+			return;
+		}
+		if (auto* mt = qobject_cast<MacroTab*>(m_tabs->widget(i)))
+		{
+			if (mt->isDirty())
+			{
+				m_tabs->setCurrentIndex(i);
+				statusBar()->showMessage(T(m_backend, "macro.close.dirty"), 8000);
+				return;
+			}
+			m_tabs->removeTab(i);
+			mt->deleteLater();
+			return;
+		}
+		if (auto* ts = qobject_cast<TerminalSettingsTab*>(m_tabs->widget(i)))
+		{
+			m_tabs->removeTab(i);
+			ts->deleteLater();
 			return;
 		}
 		if (auto* ed = qobject_cast<PropertiesTab*>(m_tabs->widget(i)))
@@ -580,6 +688,7 @@ void MainWindow::buildMenus()
 		connect(t, &SnmpTab::status, this, [this](const QString& m) { statusBar()->showMessage(m, 5000); });
 		m_tabs->setCurrentIndex(m_tabs->addTab(t, T(m_backend, "snmp.title")));
 	});
+	extras->addAction(T(m_backend, "menu.extras.terminal"), this, [this] { openTerminalSettings(); });
 	QMenu* view = menuBar()->addMenu(T(m_backend, "menu.view"));
 	const char* modes[] = { "single", "one_by_two", "two_by_two", "free" };
 	int n = 1;
@@ -591,6 +700,10 @@ void MainWindow::buildMenus()
 				rebuildTabs();
 		});
 	}
+	view->addSeparator();
+	view->addAction(T(m_backend, "menu.view.term.bigger"), this, [this] { TerminalView::applyToAll(parseObject(m_backend->terminalFontStep(1))); });
+	view->addAction(T(m_backend, "menu.view.term.smaller"), this, [this] { TerminalView::applyToAll(parseObject(m_backend->terminalFontStep(-1))); });
+	view->addAction(T(m_backend, "menu.view.term.default"), this, [this] { TerminalView::applyToAll(parseObject(m_backend->terminalFontStep(0))); });
 	view->addSeparator();
 	view->addAction(T(m_backend, "menu.view.detach"), QKeySequence(QStringLiteral("Ctrl+Shift+D")), this, [this] {
 		if (m_backend->detachTab(currentTab()))
@@ -657,7 +770,34 @@ void MainWindow::reloadTree()
 		if (m_model->rowCount() > 0)
 			m_tree->expand(m_model->index(0, 0, m_model->index(0, 0)));
 	}
+	addMacroShelf();
 	updateEmptyHint();
+}
+
+void MainWindow::addMacroShelf()
+{
+	// Das Fach erscheint nur in der Ansicht „Alle Ziele“ und ohne Suchtext.
+	if (!m_search->text().isEmpty() || !m_viewBox->currentData().toString().isEmpty())
+		return;
+	const QJsonArray macros = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("macro_list") } }).toUtf8()).array();
+	auto* shelf = new QStandardItem(protocolIcon(QString(), QString(), true), T(m_backend, "macro.shelf"));
+	shelf->setData(1, RoleMacro);
+	shelf->setData(true, RolePlaceholder);
+	shelf->setEditable(false);
+	for (const QJsonValue& v : macros)
+	{
+		const QJsonObject m = v.toObject();
+		auto* it = new QStandardItem(protocolIcon(QStringLiteral("macro"), QString(), false), m.value(QStringLiteral("name")).toString());
+		it->setData(2, RoleMacro);
+		it->setData(m.value(QStringLiteral("id")).toString(), RoleId);
+		it->setData(true, RolePlaceholder);
+		it->setEditable(false);
+		it->setToolTip(T(m_backend, "macro.links").arg(m.value(QStringLiteral("links")).toInt()));
+		shelf->appendRow(it);
+	}
+	m_model->invisibleRootItem()->appendRow(shelf);
+	if (m_macroShelfOpen)
+		m_tree->expand(shelf->index());
 }
 
 void MainWindow::updateEmptyHint()
@@ -665,7 +805,11 @@ void MainWindow::updateEmptyHint()
 	if (!m_emptyHint)
 		return;
 	m_emptyHint->setGeometry(m_tree->viewport()->rect());
-	m_emptyHint->setVisible(m_model->rowCount() == 0 && m_search->text().isEmpty());
+	int rows = m_model->rowCount();
+	for (int r = 0; r < m_model->rowCount(); ++r)
+		if (m_model->index(r, 0).data(RoleMacro).toInt() == 1)
+			--rows;
+	m_emptyHint->setVisible(rows <= 0 && m_search->text().isEmpty());
 	m_emptyHint->raise();
 }
 
@@ -1010,6 +1154,12 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		empty.exec(m_tree->viewport()->mapToGlobal(pos));
 		return;
 	}
+	if (i.data(RoleMacro).toInt())
+	{
+		m_tree->setCurrentIndex(i);
+		macroContextMenu(i, m_tree->viewport()->mapToGlobal(pos));
+		return;
+	}
 	if (!m_tree->selectionModel()->isSelected(i))
 		m_tree->setCurrentIndex(i);
 	const QString id = i.data(RoleId).toString();
@@ -1128,6 +1278,115 @@ void MainWindow::showNewVault()
 	m_overlay->openNew();
 }
 
+void MainWindow::openMacroTab(const QString& id)
+{
+	for (int i = 0; i < m_tabs->count(); ++i)
+		if (auto* mt = qobject_cast<MacroTab*>(m_tabs->widget(i)); mt && mt->macroId() == id)
+		{
+			m_tabs->setCurrentIndex(i);
+			return;
+		}
+	auto* t = new MacroTab(m_backend, id, m_tabs);
+	const int idx = m_tabs->addTab(t, t->title());
+	m_tabs->setCurrentIndex(idx);
+	connect(t, &MacroTab::titleChanged, this, [this, t] {
+		const int i = m_tabs->indexOf(t);
+		if (i >= 0)
+			m_tabs->setTabText(i, t->title());
+	});
+	connect(t, &MacroTab::indexChanged, this, [this] { reloadTree(); });
+	auto closeIt = [this, t] {
+		const int i = m_tabs->indexOf(t);
+		if (i >= 0)
+		{
+			m_tabs->removeTab(i);
+			t->deleteLater();
+		}
+		reloadTree();
+	};
+	connect(t, &MacroTab::saved, this, [this, closeIt] {
+		statusBar()->showMessage(T(m_backend, "macro.saved"), 5000);
+		closeIt();
+	});
+	connect(t, &MacroTab::discarded, this, closeIt);
+	reloadTree();
+}
+
+void MainWindow::deleteMacro(const QString& id, const QString& name)
+{
+	m_bar->ask(T(m_backend, "macro.delete.ask").arg(name), { T(m_backend, "bar.delete.button") }, [this, id](int i) {
+		if (i != 0)
+			return;
+		for (auto* mt : findChildren<MacroTab*>())
+			if (mt->macroId() == id)
+			{
+				m_tabs->removeTab(m_tabs->indexOf(mt));
+				mt->deleteLater();
+			}
+		showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("macro_delete") }, { QStringLiteral("id"), id } })));
+		reloadTree();
+		m_tree->setFocus();
+	});
+}
+
+void MainWindow::macroContextMenu(const QModelIndex& i, const QPoint& globalPos)
+{
+	QMenu menu(this);
+	if (i.data(RoleMacro).toInt() == 1)
+	{
+		menu.addAction(T(m_backend, "macro.shelf.new"), this, [this] {
+			const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("macro_new") } }));
+			if (r.contains(QStringLiteral("macro")))
+			{
+				m_macroShelfOpen = true;
+				openMacroTab(r.value(QStringLiteral("macro")).toString());
+			}
+		});
+	}
+	else
+	{
+		const QString id = i.data(RoleId).toString();
+		const QString name = i.data(Qt::DisplayRole).toString();
+		menu.addAction(T(m_backend, "macro.edit"), this, [this, id] { openMacroTab(id); });
+		menu.addAction(T(m_backend, "macro.duplicate"), this, [this, id] {
+			const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("macro_duplicate") }, { QStringLiteral("id"), id } }));
+			reloadTree();
+			if (r.contains(QStringLiteral("macro")))
+				openMacroTab(r.value(QStringLiteral("macro")).toString());
+		});
+		menu.addAction(T(m_backend, "macro.delete") + QStringLiteral("\tEntf"), this, [this, id, name] { deleteMacro(id, name); });
+	}
+	menu.exec(globalPos);
+}
+
+void MainWindow::macrosForScreenshot()
+{
+	const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("macro_new") } }));
+	const QString id = r.value(QStringLiteral("macro")).toString();
+	const QJsonArray steps{
+		QJsonObject{ { QStringLiteral("step"), QStringLiteral("send") }, { QStringLiteral("text"), QStringLiteral("sudo -v{key:enter}") } },
+		QJsonObject{ { QStringLiteral("step"), QStringLiteral("wait") },
+		             { QStringLiteral("pattern"), QJsonObject{ { QStringLiteral("text"), QStringLiteral("Kennwort") } } },
+		             { QStringLiteral("errors"), QJsonArray{ QJsonObject{ { QStringLiteral("text"), QStringLiteral("Falsches Kennwort") } } } },
+		             { QStringLiteral("timeout_ms"), 10000 } },
+		QJsonObject{ { QStringLiteral("step"), QStringLiteral("send") }, { QStringLiteral("text"), QStringLiteral("{cred:password}{key:enter}") } },
+		QJsonObject{ { QStringLiteral("step"), QStringLiteral("send") }, { QStringLiteral("text"), QStringLiteral("apt list --upgradable{key:enter}") } } };
+	edit({ { QStringLiteral("op"), QStringLiteral("update_macro") }, { QStringLiteral("id"), id }, { QStringLiteral("name"), QStringLiteral("Updates prüfen") }, { QStringLiteral("steps"), steps } });
+	m_macroShelfOpen = true;
+	reloadTree();
+	openMacroTab(id);
+}
+
+void MainWindow::terminalSettingsForScreenshot(const QString& scheme)
+{
+	m_backend->setTerminalSettings(QStringLiteral("{\"scheme\":\"%1\"}").arg(scheme));
+	openTerminalSettings();
+	for (int i = 0; i < m_tabs->count(); ++i)
+		if (auto* t = qobject_cast<TerminalSettingsTab*>(m_tabs->widget(i)))
+			t->deleteLater(), m_tabs->removeTab(i);
+	openTerminalSettings();
+}
+
 void MainWindow::showEmptyTreeForScreenshot()
 {
 	m_model->clear();
@@ -1172,6 +1431,7 @@ QWidget* MainWindow::buildTabContent(const QJsonObject& tab)
 		{
 			const QJsonObject i = info.value(QString::number(s)).toObject();
 			p = new SessionPane(m_backend, s, i.value(QStringLiteral("title")).toString(), i.value(QStringLiteral("protocol")).toString());
+			p->setMacroOpener([this](const QString& macroId) { openMacroTab(macroId); });
 			if (!i.value(QStringLiteral("state")).toString().isEmpty())
 				p->setState(i.value(QStringLiteral("state")).toString(), QString());
 			m_panes.insert(s, p);
@@ -1305,6 +1565,62 @@ QWidget* MainWindow::detachedWindow() const
 	return nullptr;
 }
 
+void MainWindow::openTerminalSettings()
+{
+	for (int i = 0; i < m_tabs->count(); ++i)
+		if (qobject_cast<TerminalSettingsTab*>(m_tabs->widget(i)))
+		{
+			m_tabs->setCurrentIndex(i);
+			return;
+		}
+	m_tabs->setCurrentIndex(m_tabs->addTab(new TerminalSettingsTab(m_backend, m_tabs), T(m_backend, "term.title")));
+}
+
+void MainWindow::updateConnInfo()
+{
+	const auto s = currentSession();
+	const QJsonObject i = s ? parseObject(m_backend->sessionInfo(s)) : QJsonObject();
+	if (i.isEmpty())
+	{
+		m_connInfo->hide();
+		return;
+	}
+	const QColor c = palette().color(QPalette::WindowText);
+	if (c != m_ciColor)
+	{
+		m_ciColor = c;
+		m_ciTargetIcon->setPixmap(svgPixmap(kSvgTarget, c, 16));
+		m_ciSinceIcon->setPixmap(svgPixmap(kSvgClock, c, 16));
+		m_ciUserIcon->setPixmap(svgPixmap(kSvgUser, c, 16));
+	}
+	const QString proto = i.value(QStringLiteral("protocol")).toString();
+	m_ciProtoIcon->setPixmap(protocolIcon(proto, QString(), false).pixmap(16, 16));
+	m_ciProto->setText(protocolName(proto));
+	const int port = i.value(QStringLiteral("port")).toInt();
+	const QString host = i.value(QStringLiteral("host")).toString();
+	m_ciTarget->setText(port > 0 ? QStringLiteral("%1:%2").arg(host).arg(port) : host);
+	const QString state = i.value(QStringLiteral("state")).toString();
+	if (i.value(QStringLiteral("since")).isNull() || state != QLatin1String("connected"))
+		m_ciSince->setText(m_backend->text(QStringLiteral("state.") + (state.isEmpty() ? QStringLiteral("connecting") : state)));
+	else
+	{
+		const QDateTime start = QDateTime::fromSecsSinceEpoch(qint64(i.value(QStringLiteral("since")).toDouble()));
+		const qint64 sec = qMax<qint64>(0, start.secsTo(QDateTime::currentDateTime()));
+		QString dur;
+		if (sec < 60)
+			dur = T(m_backend, "ci.dur.s").arg(sec);
+		else if (sec < 3600)
+			dur = T(m_backend, "ci.dur.ms").arg(sec / 60).arg(sec % 60);
+		else
+			dur = T(m_backend, "ci.dur.hm").arg(sec / 3600).arg((sec % 3600) / 60);
+		const QString when = start.date() == QDate::currentDate() ? start.toString(QStringLiteral("HH:mm")) : start.toString(QStringLiteral("dd.MM. HH:mm"));
+		m_ciSince->setText(T(m_backend, "ci.since").arg(when, dur));
+	}
+	const QString user = i.value(QStringLiteral("user")).toString();
+	m_ciUser->setText(user.isEmpty() ? T(m_backend, "ci.nouser") : T(m_backend, "ci.user").arg(user));
+	m_connInfo->show();
+}
+
 void MainWindow::updateStatus()
 {
 	QString state;
@@ -1312,6 +1628,7 @@ void MainWindow::updateStatus()
 	if (auto* p = m_panes.value(s, nullptr))
 		state = p->title() + QStringLiteral(": ") + m_backend->text(QStringLiteral("state.") + (p->state().isEmpty() ? QStringLiteral("connecting") : p->state()));
 	statusBar()->showMessage(T(m_backend, "status.sessions").arg(m_panes.size()) + (state.isEmpty() ? QString() : QStringLiteral(" — ") + state));
+	updateConnInfo();
 }
 
 void MainWindow::poll()
@@ -1391,6 +1708,8 @@ void MainWindow::handleEvents(const QString& json)
 				else
 					m_backend->clipboardReadAnswer(s, false, QString());
 			}
+			else if (t == QLatin1String("macro_done") && p)
+				p->setMacroResult(e.value(QStringLiteral("message")).toString(), e.value(QStringLiteral("ok")).toBool());
 			else if (t == QLatin1String("title") && p)
 				p->setToolTip(e.value(QStringLiteral("title")).toString());
 			else if (t == QLatin1String("tree_changed"))

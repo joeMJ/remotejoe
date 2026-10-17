@@ -138,6 +138,19 @@ void screenshots(MainWindow& w, const QString& dir)
 	save(&w, dir, QStringLiteral("kdbx-neu.png"));
 	if (auto* o = w.findChild<QWidget*>(QStringLiteral("unlockOverlay")))
 		o->hide();
+	// Terminal-Einstellungen und Terminals im Schema Catppuccin Mocha.
+	w.terminalSettingsForScreenshot(QStringLiteral("catppuccin-mocha"));
+	pump(300);
+	save(&w, dir, QStringLiteral("terminal-einstellungen.png"));
+	w.tabs()->setCurrentIndex(0);
+	pump(300);
+	save(&w, dir, QStringLiteral("terminal-mocha.png"));
+	w.macrosForScreenshot();
+	pump(300);
+	save(&w, dir, QStringLiteral("makro-editor.png"));
+	w.tabs()->setCurrentIndex(0);
+	pump(300);
+	save(&w, dir, QStringLiteral("sitzung-makros.png"));
 	w.showEmptyTreeForScreenshot();
 	pump(300);
 	save(&w, dir, QStringLiteral("leerer-baum.png"));

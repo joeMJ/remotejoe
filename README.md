@@ -103,6 +103,16 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
    schaltet das automatische Sperren ein; **Extras → SNMP-Geräte** verwaltet SNMP-Zugänge (v3
    mit getrennten Kennwörtern für Authentisierung und Verschlüsselung).
 
+9. **Fußzeile:** zeigt für die vordere Sitzung den Verbindungstyp, das Ziel, seit wann und als wer
+   Sie verbunden sind.
+10. **Terminal:** **Extras → Terminal …** (Schrift, Größe, Farbschema mit Catppuccin und weiteren
+    Schemata, eigene Farben); Strg + Mausrad ändert die Schriftgröße direkt im Terminal.
+11. **Makros** (SSH): Im Baum liegt das Fach **Makros**; Makros werden Zielen oder Ordnern
+    zugeordnet (vererbt). In der Kopfzeile jeder SSH-Sitzung legt **Makro anlegen** ein Makro für
+    dieses Ziel an, **Makro ausführen ▾** startet eines der zugeordneten. Schritte sind „Senden“
+    und „Warten auf“ (Text oder regulärer Ausdruck, Zeitlimit, Fehlermuster); das Kennwort kommt
+    als Platzhalter aus den Zugangsdaten der Sitzung und steht nie im Protokoll.
+
 Zum Ausprobieren ohne eigene Daten: `remotejoe --demo` (erfundene Ziele, Vorführsitzungen).
 
 Einstellungen stehen in `~/.config/remotejoe/config.toml` (Windows:
