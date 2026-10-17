@@ -103,8 +103,9 @@ pub fn worker_program(p: Protocol) -> Option<&'static str> {
     match p {
         Protocol::Rdp | Protocol::Hyperv => Some("rj-worker-rdp"),
         Protocol::Ssh => Some("rj-worker-ssh"),
-        Protocol::Vnc | Protocol::Proxmox => Some("rj-worker-vnc"),
-        Protocol::Web => Some("rj-worker-web"),
+        Protocol::Vnc => Some("rj-worker-vnc"),
+        // Proxmox: die Weboberfläche des Hosts; Gäste haben eigene Konsolen.
+        Protocol::Web | Protocol::Proxmox => Some("rj-worker-web"),
         Protocol::Psrp => Some("rj-worker-psrp"),
     }
 }
@@ -175,6 +176,10 @@ impl Manager {
         }
         let mut ws = WorkerSpec::new(path);
         ws.restart = RestartPolicy { enabled: false, ..Default::default() };
+        if matches!(sess.spec.protocol, Protocol::Web | Protocol::Proxmox) {
+            // WebKit/WebView2 reservieren sehr viel Adressraum; keine RLIMIT_AS-Grenze.
+            ws.memory_limit = None;
+        }
         match self.sup.spawn(ws) {
             Ok((wid, pid)) => {
                 let spec = self.sessions[&id].spec.clone();

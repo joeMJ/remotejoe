@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod bridge;
+pub mod hyper;
 pub mod keys;
 pub mod patch;
 pub mod sessions;

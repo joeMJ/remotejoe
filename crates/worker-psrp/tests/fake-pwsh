@@ -12,6 +12,18 @@ echo '{"ready":true}'
 while read -r id code; do
   cmd=$(printf '%s' "$code" | base64 -d)
   esc=${cmd//\"/\\\"}
+  if [ -n "${RJ_FAKE_OUTPUT:-}" ]; then
+    # Feste Antwort (JSON-Text) aus einer Datei, z. B. für Get-VM.
+    if [[ "$cmd" == *Get-VM* && "$cmd" != *-Id* ]]; then
+      out=$(sed 's/\\/\\\\/g; s/"/\\"/g' "$RJ_FAKE_OUTPUT" | tr -d '\n')
+      echo "{\"id\":\"$id\",\"stream\":\"output\",\"text\":\"$out\"}"
+    else
+      printf '%s\n' "$cmd" >> "$RJ_FAKE_OUTPUT.befehle"
+      case "$cmd" in *unbekannt*) echo "{\"id\":\"$id\",\"stream\":\"error\",\"text\":\"VM nicht gefunden\"}" ;; esac
+    fi
+    echo "{\"id\":\"$id\",\"end\":true,\"ok\":true}"
+    continue
+  fi
   echo "{\"id\":\"$id\",\"stream\":\"output\",\"text\":\"Ergebnis: $esc\"}"
   echo "{\"id\":\"$id\",\"stream\":\"warning\",\"text\":\"Warnung äöü\"}"
   echo "{\"id\":\"$id\",\"stream\":\"error\",\"text\":\"Fehler 🚀\"}"

@@ -25,6 +25,7 @@ remotejoe-tasks = { path = "../tasks" }
 remotejoe-importer = { path = "../importer" }
 remotejoe-snmp = { path = "../snmp" }
 remotejoe-worker-psrp = { path = "../worker-psrp" }
+remotejoe-proxmox = { path = "../proxmox" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 alacritty_terminal = "0.26"
 serde.workspace = true

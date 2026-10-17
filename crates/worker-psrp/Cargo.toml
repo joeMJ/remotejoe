@@ -24,4 +24,5 @@ zeroize.workspace = true
 base64 = "0.22"
 
 [dev-dependencies]
+tempfile.workspace = true
 remotejoe-supervisor = { path = "../supervisor" }

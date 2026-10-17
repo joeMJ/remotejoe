@@ -45,6 +45,10 @@ void screenshots(MainWindow& w, const QString& dir)
 	w.setFilter(QStringLiteral("ssh-00"));
 	pump(300);
 	save(&w, dir, QStringLiteral("suche.png"));
+	w.setFilter(QStringLiteral("proxmox-000"));
+	w.expandFirstHypervisor();
+	pump(300);
+	save(&w, dir, QStringLiteral("hypervisor.png"));
 	w.setFilter(QString());
 	w.showCredentialChoiceForScreenshot();
 	pump(300);

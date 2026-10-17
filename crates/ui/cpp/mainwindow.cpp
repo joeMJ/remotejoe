@@ -44,6 +44,13 @@ namespace {
 
 constexpr int RoleId = Qt::UserRole + 1;
 constexpr int RoleFolder = Qt::UserRole + 2;
+/// Gast eines Hypervisors (Kennung), Ziel des Hypervisors, Konsolenadresse.
+constexpr int RoleGuest = Qt::UserRole + 3;
+constexpr int RoleGuestTarget = Qt::UserRole + 4;
+constexpr int RoleConsoleHost = Qt::UserRole + 5;
+/// Platzhalter unter einem Hypervisor, bis die Gäste geladen sind.
+constexpr int RolePlaceholder = Qt::UserRole + 6;
+constexpr int RoleProtocol = Qt::UserRole + 7;
 
 QString T(RjBackend* b, const char* key)
 {
@@ -129,8 +136,18 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		if (n.value(QStringLiteral("suspicious")).toBool())
 			tip += QStringLiteral("\nName enthält unsichtbare oder richtungsändernde Zeichen.");
 		item->setToolTip(tip);
+		const QString proto = n.value(QStringLiteral("protocol")).toString();
+		item->setData(proto, RoleProtocol);
 		parent->appendRow(item);
 		addNodes(item, n.value(QStringLiteral("children")).toArray());
+		if (proto == QStringLiteral("proxmox") || proto == QStringLiteral("hyperv"))
+		{
+			auto* ph = new QStandardItem(QStringLiteral("…"));
+			ph->setEditable(false);
+			ph->setData(true, RolePlaceholder);
+			ph->setData(true, RoleFolder);
+			item->appendRow(ph);
+		}
 	}
 }
 
@@ -400,8 +417,15 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	statusBar()->showMessage(T(m_backend, "status.ready"));
 
 	connect(m_tree, &QTreeView::activated, this, [this](const QModelIndex& i) {
-		if (!i.data(RoleFolder).toBool())
+		if (i.data(RoleGuest).isValid())
+			openGuestConsole(i);
+		else if (!i.data(RoleFolder).toBool())
 			connectSelected();
+	});
+	connect(m_tree, &QTreeView::expanded, this, [this](const QModelIndex& i) {
+		const QModelIndex first = m_model->index(0, 0, i);
+		if (first.isValid() && first.data(RolePlaceholder).toBool())
+			loadGuests(i);
 	});
 	connect(m_tree, &QTreeView::customContextMenuRequested, this, &MainWindow::treeContextMenu);
 	m_filterTimer.setSingleShot(true);
@@ -562,8 +586,12 @@ int MainWindow::treeRowCount() const
 	std::function<void(const QModelIndex&)> walk = [&](const QModelIndex& parent) {
 		for (int r = 0; r < m_model->rowCount(parent); ++r)
 		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			// Platzhalter und Gäste von Hypervisoren zählen nicht als Index-Einträge.
+			if (i.data(RolePlaceholder).toBool() || i.data(RoleGuest).isValid())
+				continue;
 			++n;
-			walk(m_model->index(r, 0, parent));
+			walk(i);
 		}
 	};
 	walk(QModelIndex());
@@ -694,6 +722,100 @@ void MainWindow::showProperties(const QString& id)
 	d.exec();
 }
 
+void MainWindow::expandFirstHypervisor()
+{
+	std::function<bool(const QModelIndex&)> walk = [&](const QModelIndex& parent) {
+		for (int r = 0; r < m_model->rowCount(parent); ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			if (i.data(RoleProtocol).toString() == QStringLiteral("proxmox"))
+			{
+				m_tree->expand(i);
+				m_tree->setCurrentIndex(m_model->index(0, 0, i));
+				return true;
+			}
+			if (walk(i))
+				return true;
+		}
+		return false;
+	};
+	walk(QModelIndex());
+}
+
+void MainWindow::loadGuests(const QModelIndex& index)
+{
+	QStandardItem* parent = m_model->itemFromIndex(index);
+	if (!parent)
+		return;
+	const QString target = index.data(RoleId).toString();
+	const QString proto = index.data(RoleProtocol).toString();
+	QApplication::setOverrideCursor(Qt::WaitCursor);
+	QJsonObject r = parseObject(m_backend->guestsJson(target));
+	QApplication::restoreOverrideCursor();
+	if (r.contains(QStringLiteral("certificate")))
+	{
+		// Unbekanntes oder geändertes Zertifikat: nie still annehmen.
+		const QJsonObject c = r.value(QStringLiteral("certificate")).toObject();
+		const bool changed = !c.value(QStringLiteral("old")).isNull() && c.contains(QStringLiteral("old"));
+		QMessageBox box(QMessageBox::Warning, T(m_backend, "app.title"),
+		                T(m_backend, changed ? "guest.cert.changed" : "guest.cert.unknown").arg(c.value(QStringLiteral("host")).toString()), QMessageBox::NoButton, this);
+		box.setInformativeText(QStringLiteral("SHA-256: ") + c.value(QStringLiteral("fingerprint")).toString());
+		QPushButton* yes = box.addButton(T(m_backend, "dialog.question.accept"), QMessageBox::AcceptRole);
+		QPushButton* no = box.addButton(T(m_backend, "dialog.question.reject"), QMessageBox::RejectRole);
+		box.setDefaultButton(no);
+		box.exec();
+		if (box.clickedButton() != yes ||
+		    !m_backend->acceptProxmoxCertificate(c.value(QStringLiteral("host")).toString(), c.value(QStringLiteral("fingerprint")).toString()))
+			return;
+		r = parseObject(m_backend->guestsJson(target));
+	}
+	parent->removeRows(0, parent->rowCount());
+	if (r.contains(QStringLiteral("error")))
+	{
+		auto* e = new QStandardItem(T(m_backend, "guest.error").arg(r.value(QStringLiteral("error")).toString()));
+		e->setEditable(false);
+		e->setData(true, RolePlaceholder);
+		e->setData(true, RoleFolder);
+		parent->appendRow(e);
+		return;
+	}
+	const QString consoleProto = proto == QStringLiteral("proxmox") ? QStringLiteral("vnc") : QStringLiteral("rdp");
+	for (const QJsonValue& v : r.value(QStringLiteral("guests")).toArray())
+	{
+		const QJsonObject g = v.toObject();
+		const QString state = g.value(QStringLiteral("state")).toString();
+		auto* item = new QStandardItem(g.value(QStringLiteral("name")).toString());
+		item->setEditable(false);
+		item->setData(g.value(QStringLiteral("id")).toString(), RoleGuest);
+		item->setData(target, RoleGuestTarget);
+		item->setData(g.value(QStringLiteral("console_host")).toString(), RoleConsoleHost);
+		item->setData(true, RoleFolder);
+		item->setIcon(protocolIcon(consoleProto, state == QStringLiteral("running") ? QStringLiteral("green") : QStringLiteral("grey"), false));
+		item->setToolTip(g.value(QStringLiteral("detail")).toString() + QStringLiteral("\n") + state);
+		parent->appendRow(item);
+	}
+}
+
+void MainWindow::openGuestConsole(const QModelIndex& i)
+{
+	const QSize px = contentSize(false);
+	const QString target = i.data(RoleGuestTarget).toString();
+	handleConnectResult(target, m_backend->guestConsole(target, i.data(RoleGuest).toString(), i.data(Qt::DisplayRole).toString(),
+	                                                    i.data(RoleConsoleHost).toString(), px.width(), px.height()));
+}
+
+void MainWindow::guestAction(const QModelIndex& i, const QString& action)
+{
+	if (action == QStringLiteral("stop") &&
+	    QMessageBox::question(this, T(m_backend, "app.title"), T(m_backend, "guest.stop.confirm").arg(i.data(Qt::DisplayRole).toString())) != QMessageBox::Yes)
+		return;
+	const QJsonObject r = parseObject(m_backend->guestAction(i.data(RoleGuestTarget).toString(), i.data(RoleGuest).toString(), action));
+	if (r.contains(QStringLiteral("error")))
+		QMessageBox::warning(this, T(m_backend, "app.title"), r.value(QStringLiteral("error")).toString());
+	else
+		statusBar()->showMessage(T(m_backend, "guest.action.sent"), 4000);
+}
+
 void MainWindow::treeContextMenu(const QPoint& pos)
 {
 	const QModelIndex i = m_tree->indexAt(pos);
@@ -703,6 +825,27 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		m_tree->setCurrentIndex(i);
 	const QString id = i.data(RoleId).toString();
 	QMenu menu(this);
+	if (i.data(RoleGuest).isValid())
+	{
+		const QPersistentModelIndex pi(i);
+		menu.addAction(T(m_backend, "ctx.guest.console"), this, [this, pi] { openGuestConsole(pi); });
+		menu.addSeparator();
+		menu.addAction(T(m_backend, "ctx.guest.start"), this, [this, pi] { guestAction(pi, QStringLiteral("start")); });
+		menu.addAction(T(m_backend, "ctx.guest.shutdown"), this, [this, pi] { guestAction(pi, QStringLiteral("shutdown")); });
+		menu.addAction(T(m_backend, "ctx.guest.reboot"), this, [this, pi] { guestAction(pi, QStringLiteral("reboot")); });
+		menu.addAction(T(m_backend, "ctx.guest.stop"), this, [this, pi] { guestAction(pi, QStringLiteral("stop")); });
+		menu.exec(m_tree->viewport()->mapToGlobal(pos));
+		return;
+	}
+	const QString proto = i.data(RoleProtocol).toString();
+	if (proto == QStringLiteral("proxmox") || proto == QStringLiteral("hyperv"))
+	{
+		const QPersistentModelIndex pi(i);
+		menu.addAction(T(m_backend, "ctx.guest.refresh"), this, [this, pi] {
+			loadGuests(pi);
+			m_tree->expand(pi);
+		});
+	}
 	if (!i.data(RoleFolder).toBool())
 	{
 		menu.addAction(T(m_backend, "ctx.connect"), this, [this] { connectSelected(); });

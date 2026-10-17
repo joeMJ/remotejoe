@@ -25,6 +25,8 @@ public:
 
 	void applyTheme(bool dark);
 	void setFilter(const QString& text);
+	/// Ersten Hypervisor im Baum aufklappen (lädt die Gäste).
+	void expandFirstHypervisor();
 	QWidget* detachedWindow() const;
 	void showCredentialChoiceForScreenshot();
 	void detachTabAt(int index);
@@ -51,6 +53,9 @@ private:
 	void handleConnectResult(const QString& id, const QString& json);
 	void showProperties(const QString& id);
 	void treeContextMenu(const QPoint& pos);
+	void loadGuests(const QModelIndex& index);
+	void openGuestConsole(const QModelIndex& index);
+	void guestAction(const QModelIndex& index, const QString& action);
 	void tabContextMenu(QTabWidget* tabs, const QPoint& pos);
 	void unlockDialog();
 	SessionPane* pane(std::uint64_t session);

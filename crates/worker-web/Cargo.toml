@@ -1,0 +1,44 @@
+[package]
+name = "remotejoe-worker-web"
+description = "Web-Worker: WebView mit Formular-Anmeldung, eigenem Profil je Ziel und Zertifikatswarnung"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_web"
+
+[[bin]]
+name = "rj-worker-web"
+path = "src/main.rs"
+required-features = ["webview"]
+
+[features]
+# WebView (Linux: WebKitGTK 4.1, Windows: WebView2). Ohne dieses Merkmal
+# wird nur die plattformunabhängige Logik gebaut.
+webview = ["dep:wry", "dep:tao", "dep:remotejoe-ipc", "dep:webkit2gtk", "dep:gtk", "dep:gio", "dep:glib"]
+
+[dependencies]
+remotejoe-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+remotejoe-ipc = { path = "../ipc", optional = true }
+wry = { version = "0.57", optional = true }
+tao = { version = "0.37", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0", optional = true, features = ["v2_40"] }
+gtk = { version = "0.18", optional = true }
+gio = { version = "0.18", optional = true }
+glib = { version = "0.18", optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+remotejoe-supervisor = { path = "../supervisor" }
+remotejoe-ipc = { path = "../ipc" }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }

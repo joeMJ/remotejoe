@@ -123,6 +123,18 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "unassignedJson"]
         fn unassigned_json(self: &RjBackend) -> QString;
+        #[qinvokable]
+        #[cxx_name = "guestsJson"]
+        fn guests_json(self: Pin<&mut RjBackend>, target: &QString) -> QString;
+        #[qinvokable]
+        #[cxx_name = "guestAction"]
+        fn guest_action(self: Pin<&mut RjBackend>, target: &QString, guest: &QString, action: &QString) -> QString;
+        #[qinvokable]
+        #[cxx_name = "guestConsole"]
+        fn guest_console(self: Pin<&mut RjBackend>, target: &QString, guest: &QString, title: &QString, console_host: &QString, width: i32, height: i32) -> QString;
+        #[qinvokable]
+        #[cxx_name = "acceptProxmoxCertificate"]
+        fn accept_proxmox_certificate(self: &RjBackend, host: &QString, fingerprint: &QString) -> bool;
     }
 
     unsafe extern "C++" {
@@ -293,6 +305,30 @@ impl qobject::RjBackend {
                 p.cancel(u);
             }
         }
+    }
+
+    fn guests_json(self: Pin<&mut Self>, target: &QString) -> QString {
+        let Some(id) = uuid(target) else { return q("{\"error\":\"Ziel ungültig\"}") };
+        q(self.app_mut().map(|a| a.guests_json(id)).unwrap_or_else(|| "{\"error\":\"gesperrt\"}".into()))
+    }
+
+    fn guest_action(self: Pin<&mut Self>, target: &QString, guest: &QString, action: &QString) -> QString {
+        let Some(id) = uuid(target) else { return q("{\"error\":\"Ziel ungültig\"}") };
+        let (g, a) = (guest.to_string(), action.to_string());
+        q(self.app_mut().map(|x| x.guest_action(id, &g, &a)).unwrap_or_else(|| "{\"error\":\"gesperrt\"}".into()))
+    }
+
+    fn guest_console(self: Pin<&mut Self>, target: &QString, guest: &QString, title: &QString, console_host: &QString, width: i32, height: i32) -> QString {
+        let Some(id) = uuid(target) else { return q("{\"error\":\"Ziel ungültig\"}") };
+        let (g, t, h) = (guest.to_string(), title.to_string(), console_host.to_string());
+        q(self
+            .app_mut()
+            .map(|x| x.guest_console(id, &g, &t, &h, width.max(0) as u32, height.max(0) as u32))
+            .unwrap_or_else(|| "{\"error\":\"gesperrt\"}".into()))
+    }
+
+    fn accept_proxmox_certificate(&self, host: &QString, fingerprint: &QString) -> bool {
+        self.app().is_some_and(|a| a.accept_proxmox_certificate(&host.to_string(), &fingerprint.to_string()))
     }
 
     fn accept_host_key(&self, host: &QString, port: u32, key: &QString) -> bool {

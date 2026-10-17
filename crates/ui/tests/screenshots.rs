@@ -13,7 +13,7 @@ fn offscreen_screenshots_and_start_time() {
         .unwrap();
     let log = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{log}");
-    for f in ["hauptfenster-hell.png", "hauptfenster-dunkel.png", "suche.png", "dialog-zugangsdaten.png", "patchday.png", "abgerissenes-fenster.png"] {
+    for f in ["hauptfenster-hell.png", "hauptfenster-dunkel.png", "suche.png", "hypervisor.png", "dialog-zugangsdaten.png", "patchday.png", "abgerissenes-fenster.png"] {
         let len = std::fs::metadata(dir.path().join(f)).map(|m| m.len()).unwrap_or(0);
         assert!(len > 5000, "{f} fehlt oder ist leer ({len} Bytes)\n{log}");
     }

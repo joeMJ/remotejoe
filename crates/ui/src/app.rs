@@ -44,6 +44,8 @@ pub struct App {
     snmp_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Verlauf und Zustand je SNMP-Gerät (für die Eigenschaften).
     snmp_state: std::collections::HashMap<Uuid, serde_json::Value>,
+    /// Lokale Brücken für Proxmox-Konsolen (je Sitzung).
+    pub(crate) console_bridges: std::collections::HashMap<SessionId, rj_proxmox::ConsoleBridge>,
 }
 
 impl App {
@@ -76,6 +78,7 @@ impl App {
             snmp_rx: None,
             snmp_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             snmp_state: Default::default(),
+            console_bridges: Default::default(),
             sessions: Manager::new(Manager::default_worker_dir(), reconnect),
             config,
             config_path,
@@ -137,6 +140,14 @@ impl App {
 
     pub fn set_light(&mut self, id: Uuid, light: Light) {
         self.lights.insert(id, light);
+    }
+
+    pub(crate) fn target_ref(&self, id: Uuid) -> Option<&Target> {
+        self.target(id)
+    }
+
+    pub(crate) fn credential_payload(&self, r: &ResolvedCredential, protocol: Protocol) -> Result<CredentialPayload, String> {
+        self.payload(r, protocol)
     }
 
     fn target(&self, id: Uuid) -> Option<&Target> {
@@ -407,6 +418,7 @@ impl App {
     pub fn close_session(&mut self, s: SessionId) {
         self.sessions.close(s);
         self.workspace.remove_session(s);
+        self.console_bridges.remove(&s);
         if let Some((id, host, port)) = self.session_tunnels.remove(&s) {
             self.tunnels.release(id, &host, port);
         }

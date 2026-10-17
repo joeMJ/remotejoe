@@ -7,6 +7,8 @@
 //! (Base64 der UTF-8-Bytes, damit es byte-genau bleibt); danach je Zeile ein
 //! Befehl (Base64). Die Antworten sind JSON-Zeilen mit getrennten Strömen.
 
+pub mod hyperv;
+
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
@@ -35,7 +37,7 @@ pub struct PsTarget {
     pub transport: PsrpTransport,
 }
 
-fn ps_quote(s: &str) -> String {
+pub(crate) fn ps_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
