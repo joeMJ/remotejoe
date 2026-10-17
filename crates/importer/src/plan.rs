@@ -4,7 +4,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use rj_core::charset::check_name;
-use rj_core::{CredentialRef, Folder, Index, Node, Target};
+use rj_core::model::{ProtocolOptions, WebOptions};
+use rj_core::{CredentialRef, Folder, Index, Node, Protocol, Target};
 use rj_kdbx::{CredentialData, Vault, VaultError};
 use serde::Serialize;
 use uuid::Uuid;
@@ -138,6 +139,19 @@ pub fn plan(doc: &SourceDocument, title: &str) -> ImportPlan {
                 check("Host von", host, &mut report);
                 let mut t = Target::new(name.clone(), *protocol, host.clone());
                 t.port = *port;
+                if *protocol == Protocol::Web {
+                    // Bei Web-Zielen steht die Adresse in den Optionen; Host und Port werden daraus abgeleitet
+                    // (wie beim Speichern im Eigenschaften-Tab). Ohne Schema wird https:// angenommen.
+                    let url = if host.contains("://") { host.clone() } else { rj_core::weburl::default_url(host, port.unwrap_or(443)) };
+                    match rj_core::weburl::endpoint(&url) {
+                        Some((h, p)) => {
+                            t.host = h;
+                            t.port = (p != Protocol::Web.default_port()).then_some(p);
+                            t.options = ProtocolOptions::Web(WebOptions { url: Some(url), ..Default::default() });
+                        }
+                        None => report.warnings.push(format!("„{name}“: „{}“ ist keine gültige Web-Adresse (http:// oder https://)", check_name(host).display)),
+                    }
+                }
                 let cred = match (credential, credential_ref) {
                     (Some(c), _) if !c.username.is_empty() => {
                         report.credentials_in_source += 1;

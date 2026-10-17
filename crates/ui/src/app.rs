@@ -1318,6 +1318,18 @@ impl App {
                         self.index.for_each_target(|_| n += 1);
                         let kdbx = v.path().to_path_buf();
                         self.vault = Some(v);
+                        // Web-Ziele aus älteren Importen (ganze Adresse im Host-Feld) reparieren.
+                        let repaired = self.index.repair_web_targets();
+                        if repaired > 0 {
+                            if let Some(v) = self.vault.as_mut() {
+                                let _ = v.set_index(self.index.clone());
+                            }
+                            let note = format!("{repaired} Web-Ziele aus einem älteren Import wurden repariert (Adresse in den Optionen); bitte speichern.");
+                            self.keyring_note = Some(match self.keyring_note.take() {
+                                Some(k) => format!("{k}. {note}"),
+                                None => note,
+                            });
+                        }
                         self.remember_kdbx_path(&kdbx);
                         self.restore_session_credentials();
                         self.start_snmp();

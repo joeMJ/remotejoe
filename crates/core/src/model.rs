@@ -633,6 +633,35 @@ impl Index {
     }
 
     /// Ruft `f` für jedes Ziel in Baumreihenfolge auf.
+    /// Repariert Web-Ziele aus älteren Importen, bei denen die ganze Adresse im Host-Feld stand
+    /// (`http://…`): Adresse in die Optionen, Host und Port daraus. Liefert die Zahl der Ziele.
+    pub fn repair_web_targets(&mut self) -> usize {
+        fn walk(folder: &mut Folder, n: &mut usize) {
+            for c in &mut folder.children {
+                match c {
+                    Node::Folder(sub) => walk(sub, n),
+                    Node::Target(t) if t.protocol == Protocol::Web && t.host.contains("://") => {
+                        if let Some((h, p)) = crate::weburl::endpoint(&t.host) {
+                            let url = t.host.trim().to_string();
+                            t.host = h;
+                            t.port = (p != Protocol::Web.default_port()).then_some(p);
+                            match &mut t.options {
+                                ProtocolOptions::Web(o) if o.url.as_deref().is_some_and(|u| !u.is_empty()) => {}
+                                ProtocolOptions::Web(o) => o.url = Some(url),
+                                other => *other = ProtocolOptions::Web(WebOptions { url: Some(url), ..Default::default() }),
+                            }
+                            *n += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut n = 0;
+        walk(&mut self.root, &mut n);
+        n
+    }
+
     pub fn for_each_target<'a>(&'a self, mut f: impl FnMut(&'a Target)) {
         fn walk<'a>(folder: &'a Folder, f: &mut impl FnMut(&'a Target)) {
             for n in &folder.children {
@@ -688,5 +717,27 @@ mod gfx_tests {
         assert_eq!(o.gfx, GfxMode::On);
         assert!(serde_json::to_string(&o).unwrap().contains(r#""gfx":"on""#));
         assert!(serde_json::from_str::<RdpOptions>(r#"{"gfx":"x"}"#).is_err());
+    }
+}
+
+#[cfg(test)]
+mod web_repair_tests {
+    use super::*;
+
+    #[test]
+    fn old_import_with_the_url_in_the_host_field_is_repaired() {
+        let mut idx = Index::default();
+        let mut f = Folder::new("alt");
+        f.children.push(Node::Target(Target::new("a", Protocol::Web, "http://host-a.example.test:3000/x")));
+        f.children.push(Node::Target(Target::new("b", Protocol::Web, "host-b.example.test")));
+        f.children.push(Node::Target(Target::new("c", Protocol::Ssh, "ssh://nicht-anfassen")));
+        idx.root.children.push(Node::Folder(f));
+        assert_eq!(idx.repair_web_targets(), 1);
+        let mut got = Vec::new();
+        idx.for_each_target(|t| got.push((t.name.clone(), t.host.clone(), t.port, matches!(&t.options, ProtocolOptions::Web(o) if o.url.as_deref() == Some("http://host-a.example.test:3000/x")))));
+        assert_eq!(got[0], ("a".into(), "host-a.example.test".into(), Some(3000), true));
+        assert_eq!(got[1].1, "host-b.example.test");
+        assert_eq!(got[2].1, "ssh://nicht-anfassen", "andere Protokolle bleiben unberührt");
+        assert_eq!(idx.repair_web_targets(), 0, "zweiter Lauf ändert nichts");
     }
 }

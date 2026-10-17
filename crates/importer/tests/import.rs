@@ -164,3 +164,37 @@ fn rdm_encrypted_passwords_reported_per_entry_and_in_total() {
     assert_eq!(v["encrypted_passwords"], 4);
     assert_eq!(v["encrypted_entries"][0][0], "credential");
 }
+
+/// Web-Ziele aus dem Import: Adresse in den Optionen, Host und Port daraus abgeleitet (nicht die ganze URL als Host).
+#[test]
+fn web_targets_get_their_address_in_the_options() {
+    let csv = "ConnectionType,Name,Group,Host,Port,URL\n\
+Website,A,,host-a.example.test,,https://host-a.example.test/\n\
+Website,B,,host-b.example.test,,http://host-b.example.test:3000/pfad\n\
+Website,C,,host-c.example.test,,\n\
+Website,D,,,,ftp://host-d.example.test/\n";
+    let doc = rj_importer::csv::read_csv(csv).unwrap();
+    let p = plan(&doc, "Web");
+    let mut got: Vec<(String, String, Option<u16>, Option<String>)> = Vec::new();
+    fn walk(f: &rj_core::Folder, out: &mut Vec<(String, String, Option<u16>, Option<String>)>) {
+        for c in &f.children {
+            match c {
+                Node::Target(t) => {
+                    let url = match &t.options {
+                        rj_core::model::ProtocolOptions::Web(o) => o.url.clone(),
+                        _ => None,
+                    };
+                    out.push((t.name.clone(), t.host.clone(), t.port, url));
+                }
+                Node::Folder(x) => walk(x, out),
+            }
+        }
+    }
+    walk(&p.folder, &mut got);
+    got.sort();
+    assert_eq!(got[0], ("A".into(), "host-a.example.test".into(), None, Some("https://host-a.example.test/".into())));
+    assert_eq!(got[1], ("B".into(), "host-b.example.test".into(), Some(3000), Some("http://host-b.example.test:3000/pfad".into())));
+    assert_eq!(got[2], ("C".into(), "host-c.example.test".into(), None, Some("https://host-c.example.test/".into())), "ohne URL aus dem Host");
+    assert_eq!(got[3].1, "ftp://host-d.example.test/", "ungültig: Host bleibt, Hinweis im Bericht");
+    assert!(p.report.warnings.iter().any(|w| w.contains("keine gültige Web-Adresse")), "{:?}", p.report.warnings);
+}
