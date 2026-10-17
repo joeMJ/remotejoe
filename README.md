@@ -106,17 +106,15 @@ wenn diese installiert sind, sonst werden sie übersprungen.
 
 ## Bauen unter Windows 10/11
 
-Voraussetzungen: Rust (stable, Ziel `x86_64-pc-windows-msvc`), Visual Studio Build Tools,
-Qt 6 (Widgets, Svg; `qmake` im `PATH`), FreeRDP 3 (z. B. über vcpkg, `pkg-config` muss
-`freerdp-client3` finden), LLVM/Clang für bindgen. Der Web-Worker nutzt die
-WebView2-Laufzeit (in Windows 10/11 meist vorhanden).
+Voraussetzungen: Visual Studio Build Tools (MSVC), Rust (`x86_64-pc-windows-msvc`), Qt 6
+(Widgets, Svg), LLVM (für bindgen) und FreeRDP 3 über vcpkg. Schritt-für-Schritt-Anleitung mit
+Stolpersteinen: [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md). Das Skript
+`scripts/build-windows.ps1` prüft die Voraussetzungen, baut alles und legt ein Paket mit den
+nötigen DLLs an:
 
-```bat
-cargo build --release
-cargo build --release -p remotejoe-worker-web --features webview
+```powershell
+.\scripts\build-windows.ps1 -VcpkgRoot C:\vcpkg -QtDir C:\Qt\6.5.3\msvc2019_64
 ```
-
-Qt- und FreeRDP-DLLs gehören neben `remotejoe.exe` (z. B. mit `windeployqt`).
 
 ## Lizenz
 

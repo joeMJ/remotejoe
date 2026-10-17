@@ -163,13 +163,15 @@ impl Xrdp {
 
 /// Beendet einen Prozess samt aller Nachfahren.
 fn kill_tree(pid: u32) {
+    #[cfg(unix)]
     for p in crate::sshd::descendants(pid) {
         // SAFETY: Signal an einen Nachfahren eines selbst gestarteten Prozesses.
-        #[cfg(unix)]
         unsafe {
             libc::kill(p as i32, libc::SIGKILL);
         }
     }
+    #[cfg(not(unix))]
+    let _ = pid;
 }
 
 /// Beendet übrig gebliebene Testinstanzen (erkennbar am Konfigurationspfad
@@ -186,6 +188,8 @@ fn kill_stale_instances() {
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
             }
+            #[cfg(not(unix))]
+            let _ = pid;
         }
     }
 }

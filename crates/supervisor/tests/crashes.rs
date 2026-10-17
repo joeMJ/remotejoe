@@ -98,6 +98,7 @@ fn twenty_five_workers_five_die() {
     assert_eq!(zombie_children(), 0, "keine Zombie-Prozesse");
 
     // Sauberes Ende: alle Kanäle schließen, alle Prozesse sind abgeräumt.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     let pids: Vec<u32> = healthy.iter().filter_map(|id| sup.pid(*id)).collect();
     sup.shutdown();
     assert_eq!(sup.running_count(), 0);

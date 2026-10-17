@@ -108,13 +108,15 @@ impl Sshd {
     /// Server selbst läuft weiter.
     pub fn drop_sessions(&self) {
         if let Some(c) = &self.child {
+            #[cfg(unix)]
             for pid in descendants(c.id()) {
                 // SAFETY: Signal an einen Nachfahren des selbst gestarteten sshd.
-                #[cfg(unix)]
                 unsafe {
                     libc::kill(pid as i32, libc::SIGKILL);
                 }
             }
+            #[cfg(not(unix))]
+            let _ = c;
         }
     }
 
@@ -134,6 +136,7 @@ impl Drop for Sshd {
 }
 
 /// Alle Nachfahren eines Prozesses (Linux, über /proc).
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn descendants(root: u32) -> Vec<u32> {
     let mut parents: Vec<(u32, u32)> = Vec::new();
     if let Ok(rd) = fs::read_dir("/proc") {
@@ -165,6 +168,8 @@ pub(crate) fn set_mode(p: &Path, mode: u32) {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(p, fs::Permissions::from_mode(mode));
     }
+    #[cfg(not(unix))]
+    let _ = (p, mode);
 }
 
 fn keygen(path: &Path, kind: &str) -> Result<(), Skip> {

@@ -1,0 +1,59 @@
+# Nur von Hand starten (Actions-Minuten knapp).
+# Baut alle Pakete unter Windows (MSVC, Qt 6, FreeRDP 3 aus vcpkg) und führt
+# die Tests der Pakete aus, die unter Windows laufen sollen.
+name: Windows (von Hand)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      VCPKG_ROOT: C:\vcpkg
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Quellen holen
+        uses: actions/checkout@v4
+
+      - name: Zwischenspeicher vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-cache
+          key: vcpkg-windows-freerdp3-pkgconf-v1
+
+      - name: Zwischenspeicher Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            target
+          key: cargo-windows-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-windows-
+
+      - name: Qt 6 installieren
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.5.3'
+          arch: win64_msvc2019_64
+          cache: true
+
+      - name: Bauen und testen
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          ./scripts/build-windows.ps1 -VcpkgRoot $env:VCPKG_ROOT -Test
+
+      - name: Ergebnis ablegen
+        uses: actions/upload-artifact@v4
+        with:
+          name: remotejoe-windows
+          path: target\release\remotejoe-paket
+          retention-days: 7
