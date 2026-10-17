@@ -114,6 +114,7 @@ private:
 	void selectLine(int row);
 	void finishSelection();
 	bool m_skipRelease = false;
+	int m_healTries = 0;
 	QElapsedTimer m_tripleClock;
 	QPoint m_tripleCell{ -1, -1 };
 	RjBackend* m_backend;

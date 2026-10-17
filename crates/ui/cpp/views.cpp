@@ -387,6 +387,21 @@ void TerminalView::refresh()
 {
 	const QString json = m_backend->terminalJson(m_session);
 	m_snap = QJsonDocument::fromJson(json.toUtf8()).object();
+	// Selbstheilung: Hat das Gitter der Sitzung eine andere Größe als die Ansicht fasst (zum Beispiel
+	// nach einer verlorenen Größenmeldung), wird die Größe erneut gemeldet; sonst wäre die letzte Zeile
+	// angeschnitten oder ein Streifen leer. Höchstens drei Versuche hintereinander.
+	const int rows = m_snap.value(QStringLiteral("rows")).toInt();
+	const int cols = m_snap.value(QStringLiteral("cols")).toInt();
+	const QSize want = cells();
+	if (rows > 0 && cols > 0 && (rows != want.height() || cols != want.width()) && m_healTries < 3 && isVisible())
+	{
+		++m_healTries;
+		m_lastSize = want;
+		m_backend->resizeSession(m_session, std::uint32_t(want.width()), std::uint32_t(want.height()));
+		m_snap = QJsonDocument::fromJson(m_backend->terminalJson(m_session).toUtf8()).object();
+	}
+	else if (rows == want.height() && cols == want.width())
+		m_healTries = 0;
 	update();
 }
 
