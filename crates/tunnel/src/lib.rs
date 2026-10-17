@@ -17,6 +17,7 @@ use std::time::Duration;
 use rj_core::inherit::resolve_tunnel;
 use rj_core::{Index, TunnelDef};
 use rj_ssh::client::{HostKeyAsk, SshParams};
+use std::sync::atomic::{AtomicBool, Ordering};
 use rj_ssh::known_hosts::KnownHosts;
 use uuid::Uuid;
 
@@ -32,6 +33,22 @@ pub enum TunnelError {
     Io(#[from] std::io::Error),
     #[error("Systemtunnel: {host}:{port} nicht erreichbar")]
     Unreachable { host: String, port: u16 },
+    #[error("Tunnelaufbau abgebrochen")]
+    Cancelled,
+}
+
+/// Wartet auf `fut`, bis es fertig ist oder `cancel` gesetzt wird (geprüft
+/// alle 20 ms). Bei Abbruch wird `fut` verworfen und damit ein halb
+/// aufgebauter Tunnel geschlossen.
+async fn until_cancelled<F: std::future::Future>(fut: F, cancel: &AtomicBool) -> Result<F::Output, TunnelError> {
+    tokio::select! {
+        r = fut => Ok(r),
+        _ = async {
+            while !cancel.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        } => Err(TunnelError::Cancelled),
+    }
 }
 
 /// Fertig aufgelöste Tunnelbeschreibung (mit Zugangsdaten).
@@ -110,6 +127,13 @@ impl TunnelManager {
     /// Tunnel für `host:port` nutzen; liefert die lokale Adresse (bei
     /// Systemtunneln das Ziel selbst).
     pub fn acquire(&mut self, id: Uuid, spec: &TunnelSpec, host: &str, port: u16) -> Result<Endpoint, TunnelError> {
+        self.acquire_cancellable(id, spec, host, port, &AtomicBool::new(false))
+    }
+
+    /// Wie [`acquire`](Self::acquire); wird `cancel` gesetzt, endet das Warten
+    /// auf das Netz sofort mit [`TunnelError::Cancelled`] und die
+    /// Tunnelverwaltung ist wieder frei.
+    pub fn acquire_cancellable(&mut self, id: Uuid, spec: &TunnelSpec, host: &str, port: u16, cancel: &AtomicBool) -> Result<Endpoint, TunnelError> {
         let key = (host.to_string(), port);
         if self.active.get(&id).is_some_and(Active::broken) {
             // Gestört: neu aufbauen; bestehende Zähler bleiben erhalten.
@@ -121,25 +145,27 @@ impl TunnelManager {
             drop(old);
             for (k, n) in counts {
                 for _ in 0..n {
-                    self.acquire_inner(id, spec, &k.0, k.1)?;
+                    self.acquire_inner(id, spec, &k.0, k.1, cancel)?;
                 }
             }
         }
-        self.acquire_inner(id, spec, &key.0, key.1)
+        self.acquire_inner(id, spec, &key.0, key.1, cancel)
     }
 
-    fn acquire_inner(&mut self, id: Uuid, spec: &TunnelSpec, host: &str, port: u16) -> Result<Endpoint, TunnelError> {
+    fn acquire_inner(&mut self, id: Uuid, spec: &TunnelSpec, host: &str, port: u16, cancel: &AtomicBool) -> Result<Endpoint, TunnelError> {
         let key = (host.to_string(), port);
         match spec {
             TunnelSpec::System { probe_host, probe_port } => {
-                if !reachable(probe_host, *probe_port, self.timeout) {
+                let timeout = self.timeout;
+                let probe = async move { tokio::time::timeout(timeout, tokio::net::TcpStream::connect((probe_host.as_str(), *probe_port))).await };
+                if !matches!(self.rt.block_on(until_cancelled(probe, cancel))?, Ok(Ok(_))) {
                     return Err(TunnelError::Unreachable { host: probe_host.clone(), port: *probe_port });
                 }
                 Ok(Endpoint { host: host.into(), port })
             }
             TunnelSpec::Ssh { hops } => {
                 if !self.active.contains_key(&id) {
-                    let chain = self.rt.block_on(ssh::Chain::connect(hops, &self.known, &self.ask))?;
+                    let chain = self.rt.block_on(until_cancelled(ssh::Chain::connect(hops, &self.known, &self.ask), cancel))??;
                     self.active.insert(id, Active::Ssh { chain: Arc::new(chain), forwards: HashMap::new() });
                 }
                 let Some(Active::Ssh { chain, forwards }) = self.active.get_mut(&id) else { unreachable!() };
@@ -147,7 +173,7 @@ impl TunnelManager {
                     f.1 += 1;
                     return Ok(Endpoint { host: "127.0.0.1".into(), port: f.0.local_port });
                 }
-                let fw = self.rt.block_on(ssh::Forward::start(chain.clone(), key.0.clone(), port))?;
+                let fw = self.rt.block_on(until_cancelled(ssh::Forward::start(chain.clone(), key.0.clone(), port), cancel))??;
                 let local = fw.local_port;
                 forwards.insert(key, (fw, 1));
                 Ok(Endpoint { host: "127.0.0.1".into(), port: local })
@@ -218,6 +244,11 @@ impl TunnelManager {
     /// Gestörte Tunnel mit Nutzern neu aufbauen. Liefert die neuen
     /// Endpunkte je (Tunnel, Ziel), damit Sitzungen neu verbinden können.
     pub fn check(&mut self, specs: &HashMap<Uuid, TunnelSpec>) -> Vec<(Uuid, String, u16, Result<Endpoint, String>)> {
+        self.check_cancellable(specs, &AtomicBool::new(false))
+    }
+
+    /// Wie [`check`](Self::check), mit Abbruchmarke.
+    pub fn check_cancellable(&mut self, specs: &HashMap<Uuid, TunnelSpec>, cancel: &AtomicBool) -> Vec<(Uuid, String, u16, Result<Endpoint, String>)> {
         let broken: Vec<Uuid> = self.active.iter().filter(|(_, a)| a.broken()).map(|(id, _)| *id).collect();
         let mut out = Vec::new();
         for id in broken {
@@ -231,7 +262,7 @@ impl TunnelManager {
             for ((h, p), n) in counts {
                 let mut last = Err("nicht aufgebaut".to_string());
                 for _ in 0..n {
-                    last = self.acquire_inner(id, spec, &h, p).map_err(|e| e.to_string());
+                    last = self.acquire_inner(id, spec, &h, p, cancel).map_err(|e| e.to_string());
                 }
                 out.push((id, h, p, last));
             }

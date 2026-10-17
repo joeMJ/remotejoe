@@ -51,6 +51,8 @@ pub struct App {
     hop_question: std::sync::Arc<std::sync::Mutex<Option<HostKeyQuestion>>>,
     session_tunnels: std::collections::HashMap<SessionId, (Uuid, String, u16)>,
     pub patchday: Option<rj_tasks::patchday::Patchday>,
+    /// Zugangsdaten des laufenden Patchday-Laufs (nur bis zur Übernahme durch die Aufgaben).
+    pub patch_creds: Option<std::sync::Arc<crate::patch::CredStore>>,
     import_plan: Option<rj_importer::plan::ImportPlan>,
     snmp_rx: Option<Receiver<(Uuid, rj_snmp::Light, serde_json::Value)>>,
     snmp_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -101,6 +103,7 @@ impl App {
             hop_question,
             session_tunnels: Default::default(),
             patchday: None,
+            patch_creds: None,
             import_plan: None,
             snmp_rx: None,
             snmp_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -161,6 +164,9 @@ impl App {
         self.history.clear();
         self.jobs.cancel_all();
         self.stagger = None;
+        if let Some(c) = &self.patch_creds {
+            c.wipe_on_lock();
+        }
         if disconnect {
             for s in self.sessions.ids() {
                 self.close_session(s);
@@ -250,12 +256,12 @@ impl App {
         let spec = self.index.tunnels.iter().find(|t| t.id == tid).cloned().ok_or_else(|| "Tunnel nicht mehr im Index".to_string()).and_then(|def| self.tunnel_spec(&def, target));
         let tunnels = self.tunnels.clone();
         let name = self.index.tunnels.iter().find(|t| t.id == tid).map(|t| t.name.clone()).unwrap_or_default();
-        self.jobs.spawn(format!("Tunnel „{name}“ neu aufbauen"), move |_| {
+        self.jobs.spawn_cancellable(format!("Tunnel „{name}“ neu aufbauen"), move |_, cancel| {
             let r: Result<Option<rj_tunnel::Endpoint>, String> = spec.and_then(|spec| {
                 let mut specs = std::collections::HashMap::new();
                 specs.insert(tid, spec);
                 let mut tm = tunnels.lock().unwrap_or_else(|e| e.into_inner());
-                let rebuilt = tm.check(&specs);
+                let rebuilt = tm.check_cancellable(&specs, &cancel);
                 match rebuilt.into_iter().find(|(id, h, p, _)| *id == tid && *h == host && *p == port) {
                     Some((_, _, _, Ok(ep))) => Ok(Some(ep)),
                     Some((_, _, _, Err(e))) => Err(e),
@@ -461,9 +467,9 @@ impl App {
             let hq = self.hop_question.clone();
             let (host, port, proto) = (t.host.clone(), t.effective_port(), t.protocol);
             let title = rj_core::charset::mark_visible(&t.name, false).into_owned();
-            let job = self.jobs.spawn(format!("Tunnel „{}“ für {}", def.name, title), move |job| {
+            let job = self.jobs.spawn_cancellable(format!("Tunnel „{}“ für {}", def.name, title), move |job, cancel| {
                 *hq.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                let r = tunnels.lock().unwrap_or_else(|e| e.into_inner()).acquire(def.id, &tspec, &host, port);
+                let r = tunnels.lock().unwrap_or_else(|e| e.into_inner()).acquire_cancellable(def.id, &tspec, &host, port, &cancel);
                 let q = if r.is_err() { hq.lock().unwrap_or_else(|e| e.into_inner()).take() } else { None };
                 Box::new(move |app: &mut App, cancelled| match r {
                     Ok(ep) => {
@@ -587,10 +593,34 @@ impl App {
         let exec: std::sync::Arc<dyn rj_tasks::patchday::Executor> = if self.demo {
             std::sync::Arc::new(crate::patch::DemoExecutor)
         } else {
-            std::sync::Arc::new(crate::patch::AppExecutor { jobs, execute, full_upgrade: false, known_hosts: self.known_hosts.clone() })
+            let creds = std::sync::Arc::new(crate::patch::CredStore::new(jobs));
+            self.patch_creds = Some(creds.clone());
+            std::sync::Arc::new(crate::patch::AppExecutor { creds, execute, full_upgrade: false, known_hosts: self.known_hosts.clone() })
         };
         self.patchday = Some(rj_tasks::patchday::Patchday::start(targets, 4, exec));
         Ok(n)
+    }
+
+    /// Patchday: angeforderte Zugangsdaten nachliefern (nur entsperrt).
+    fn provide_patch_credentials(&mut self) {
+        let Some(store) = self.patch_creds.clone() else { return };
+        if self.locked || self.vault.is_none() {
+            return;
+        }
+        store.set_unlocked();
+        for id in store.wanted() {
+            let spec = self.target(id).cloned().and_then(|t| match resolve_credential(&self.index, t.id) {
+                Ok(CredentialResolution::Found(r)) => self.payload(&r, t.protocol).ok().map(|c| crate::patch::JobSpec {
+                    protocol: t.protocol,
+                    host: t.host.clone(),
+                    port: t.effective_port(),
+                    credentials: c,
+                    transport: rj_core::inherit::resolve_psrp_transport(&self.index, t.id).ok().flatten(),
+                }),
+                _ => None,
+            });
+            store.provide(id, spec);
+        }
     }
 
     /// Patchday-Zeilen für die Anzeige: ohne Protokolle (außer für das
@@ -688,6 +718,7 @@ impl App {
 
     pub fn poll(&mut self) -> Vec<UiEvent> {
         let mut out = self.sessions.poll(Duration::from_millis(0));
+        self.provide_patch_credentials();
         // Gehaltene Sitzungen (Tunnel, Konsolenbrücke): erst Tunnel bzw. Brücke, dann neu verbinden.
         for s in self.sessions.take_reconnect_requests() {
             self.reconnect_session(s);

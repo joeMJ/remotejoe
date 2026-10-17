@@ -3885,6 +3885,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "base64 0.22.1",
+ "hmac 0.12.1",
  "remotejoe-core",
  "remotejoe-ipc",
  "remotejoe-supervisor",
@@ -3893,6 +3894,7 @@ dependencies = [
  "russh",
  "serde",
  "serde_json",
+ "sha1 0.10.7",
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",

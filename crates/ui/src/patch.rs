@@ -1,6 +1,7 @@
 //! Ausführung der Patchday-Aufgaben aus der Oberfläche heraus.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use rj_core::{Protocol, PsrpTransport, Secret, WinrmAuth};
@@ -20,8 +21,110 @@ pub struct JobSpec {
     pub transport: Option<PsrpTransport>,
 }
 
+/// Zugangsdaten eines Patchday-Laufs im Hauptprozess. Eine Aufgabe nimmt
+/// ihre Angaben beim Start heraus (danach liegt hier keine Kopie mehr).
+/// Braucht sie sie erneut (Neuverbinden) oder ist sie noch nicht gestartet,
+/// fordert sie sie an; die App liefert sie nur im entsperrten Zustand nach.
+/// Sperren löscht alle hier liegenden Kopien.
+#[derive(Default)]
+pub struct CredStore {
+    inner: Mutex<CredInner>,
+    cv: Condvar,
+}
+
+#[derive(Default)]
+struct CredInner {
+    specs: HashMap<Uuid, JobSpec>,
+    /// Ziele, deren Aufgabe auf Zugangsdaten wartet.
+    wanted: BTreeSet<Uuid>,
+    /// Ziele ohne ermittelbare Zugangsdaten.
+    missing: BTreeSet<Uuid>,
+    locked: bool,
+}
+
+impl CredStore {
+    pub fn new(specs: HashMap<Uuid, JobSpec>) -> Self {
+        CredStore { inner: Mutex::new(CredInner { specs, ..Default::default() }), cv: Condvar::new() }
+    }
+
+    fn lock_inner(&self) -> std::sync::MutexGuard<'_, CredInner> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Nimmt die Angaben für `target` heraus. Liegen keine vor, werden sie
+    /// angefordert und es wird gewartet (bis geliefert, abgebrochen oder als
+    /// nicht ermittelbar gemeldet). `waiting` wird einmal aufgerufen, wenn
+    /// gewartet werden muss.
+    pub fn take(&self, target: Uuid, cancelled: &dyn Fn() -> bool, waiting: &dyn Fn(bool)) -> Result<JobSpec, String> {
+        let mut g = self.lock_inner();
+        let mut told = false;
+        loop {
+            if cancelled() {
+                g.wanted.remove(&target);
+                return Err("abgebrochen".into());
+            }
+            if !g.locked {
+                if let Some(spec) = g.specs.remove(&target) {
+                    g.wanted.remove(&target);
+                    return Ok(spec);
+                }
+                if g.missing.remove(&target) {
+                    g.wanted.remove(&target);
+                    return Err("Zugangsdaten für dieses Ziel nicht ermittelbar".into());
+                }
+            }
+            g.wanted.insert(target);
+            if !told {
+                waiting(g.locked);
+                told = true;
+            }
+            g = self.cv.wait_timeout(g, Duration::from_millis(200)).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
+    /// Sperren: alle Kopien löschen (die Angaben werden beim Freigeben überschrieben).
+    pub fn wipe_on_lock(&self) {
+        let mut g = self.lock_inner();
+        g.locked = true;
+        g.specs.clear();
+    }
+
+    /// Ziele, für die Angaben angefordert sind (leer, solange gesperrt).
+    pub fn wanted(&self) -> Vec<Uuid> {
+        let g = self.lock_inner();
+        if g.locked {
+            return Vec::new();
+        }
+        g.wanted.iter().copied().filter(|t| !g.specs.contains_key(t) && !g.missing.contains(t)).collect()
+    }
+
+    /// Entsperrt: Angaben nachliefern (`None`: nicht ermittelbar).
+    pub fn provide(&self, target: Uuid, spec: Option<JobSpec>) {
+        let mut g = self.lock_inner();
+        match spec {
+            Some(s) => {
+                g.specs.insert(target, s);
+            }
+            None => {
+                g.missing.insert(target);
+            }
+        }
+        self.cv.notify_all();
+    }
+
+    pub fn set_unlocked(&self) {
+        self.lock_inner().locked = false;
+        self.cv.notify_all();
+    }
+
+    /// Zahl der Kopien von Zugangsdaten, die hier noch liegen.
+    pub fn held(&self) -> usize {
+        self.lock_inner().specs.len()
+    }
+}
+
 pub struct AppExecutor {
-    pub jobs: HashMap<Uuid, JobSpec>,
+    pub creds: Arc<CredStore>,
     pub execute: bool,
     pub full_upgrade: bool,
     pub known_hosts: KnownHosts,
@@ -121,15 +224,44 @@ impl AppExecutor {
     }
 }
 
+impl AppExecutor {
+    fn take(&self, target: Uuid, job: &JobHandle) -> Result<JobSpec, String> {
+        self.creds.take(target, &|| job.cancelled(), &|locked| {
+            if locked {
+                job.log("Gesperrt: Die Zugangsdaten werden erst nach dem Entsperren wieder bereitgestellt.");
+            }
+        })
+    }
+}
+
 impl Executor for AppExecutor {
     fn run(&self, target: Uuid, job: &JobHandle) -> Result<(), String> {
-        let spec = self.jobs.get(&target).ok_or("Zugangsdaten für dieses Ziel nicht ermittelbar")?;
-        match spec.protocol {
-            Protocol::Ssh => self.apt(spec, job),
-            Protocol::Psrp | Protocol::Rdp | Protocol::Hyperv => self.windows(spec, job),
+        let spec = self.take(target, job)?;
+        let r = match spec.protocol {
+            Protocol::Ssh => self.apt(&spec, job),
+            Protocol::Psrp | Protocol::Rdp | Protocol::Hyperv => self.windows(&spec, job),
             _ => Err("Für dieses Protokoll gibt es keine Aktualisierungsaufgabe".into()),
+        };
+        drop(spec);
+        match r {
+            // Verbindung nicht zustande gekommen: einmal neu verbinden; die
+            // Zugangsdaten werden dafür neu angefordert (nach dem Entsperren).
+            Err(e) if spec_is_retryable(&e) && !job.cancelled() => {
+                job.log(&format!("{e} – neuer Versuch"));
+                let spec = self.take(target, job)?;
+                match spec.protocol {
+                    Protocol::Ssh => self.apt(&spec, job),
+                    _ => self.windows(&spec, job),
+                }
+            }
+            r => r,
         }
     }
+}
+
+/// Fehler beim Verbindungsaufbau, nach denen ein zweiter Versuch sinnvoll ist.
+fn spec_is_retryable(e: &str) -> bool {
+    e.contains("Zeitüberschreitung beim Verbindungsaufbau") || e.starts_with("Verbindung zu ")
 }
 
 /// Vorführung ohne echte Ziele (Bildschirmfotos).
@@ -157,5 +289,60 @@ impl Executor for DemoExecutor {
             }
             _ => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec() -> JobSpec {
+        JobSpec {
+            protocol: Protocol::Ssh,
+            host: "srv.example.test".into(),
+            port: 22,
+            credentials: CredentialPayload { username: "root".into(), domain: None, password: rj_ipc::SecretBytes(b"geheim".to_vec()), private_key: None },
+            transport: None,
+        }
+    }
+
+    #[test]
+    fn copies_are_dropped_after_take_and_reconnect_waits_for_unlock() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let store = Arc::new(CredStore::new(HashMap::from([(a, spec()), (b, spec())])));
+        let no = || false;
+        // Übernommen: keine Kopie mehr im Hauptprozess.
+        assert!(store.take(a, &no, &|_| {}).is_ok());
+        assert_eq!(store.held(), 1);
+        // Sperren löscht die übrigen Kopien.
+        store.wipe_on_lock();
+        assert_eq!(store.held(), 0);
+        // Neuverbinden im gesperrten Zustand: wartet, keine Anforderung an die App.
+        let s2 = store.clone();
+        let waited_locked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let w = waited_locked.clone();
+        let t = std::thread::spawn(move || s2.take(a, &|| false, &|locked| w.store(locked, std::sync::atomic::Ordering::SeqCst)).map(|s| s.host));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!t.is_finished());
+        assert!(waited_locked.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(store.wanted().is_empty(), "gesperrt: nichts anfordern");
+        // Entsperren: die App liefert nach, die Aufgabe läuft weiter.
+        store.set_unlocked();
+        assert_eq!(store.wanted(), vec![a]);
+        store.provide(a, Some(spec()));
+        assert_eq!(t.join().unwrap().unwrap(), "srv.example.test");
+        assert_eq!(store.held(), 0);
+        // Nicht ermittelbar: Fehler statt Warten.
+        let s3 = store.clone();
+        let t = std::thread::spawn(move || s3.take(b, &|| false, &|_| {}));
+        while store.wanted().is_empty() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        store.provide(b, None);
+        assert!(t.join().unwrap().is_err());
+        // Abbruch beendet das Warten.
+        let c = Uuid::new_v4();
+        assert!(store.take(c, &|| true, &|_| {}).is_err());
     }
 }

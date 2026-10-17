@@ -5,10 +5,31 @@
 //! Beim Freigeben wird der Speicher überschrieben.
 
 use std::fmt;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-#[derive(Clone, Default, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Default, Zeroize, ZeroizeOnDrop)]
 pub struct Secret(Vec<u8>);
+
+/// Vergleich in einer Zeit, die nur von der Länge abhängt, nicht vom
+/// Inhalt (keine vorzeitige Rückkehr bei der ersten Abweichung).
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    std::hint::black_box(diff) == 0
+}
+
+impl PartialEq for Secret {
+    fn eq(&self, other: &Self) -> bool {
+        constant_time_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Secret {}
 
 impl Secret {
     /// Übernimmt die Bytes unverändert.
@@ -39,9 +60,14 @@ impl Secret {
     }
 
     /// UTF-16-Codeeinheiten für Unicode-Tastenereignisse (z. B. RDP).
-    /// Liefert `None`, wenn der Inhalt kein gültiges UTF-8 ist.
-    pub fn utf16_units(&self) -> Option<Vec<u16>> {
-        self.as_str().map(|s| s.encode_utf16().collect())
+    /// Liefert `None`, wenn der Inhalt kein gültiges UTF-8 ist. Der Puffer
+    /// wird beim Freigeben überschrieben; er wird in passender Größe
+    /// angelegt, damit beim Füllen keine Kopie zurückbleibt.
+    pub fn utf16_units(&self) -> Option<Zeroizing<Vec<u16>>> {
+        let s = self.as_str()?;
+        let mut v = Zeroizing::new(Vec::with_capacity(s.encode_utf16().count()));
+        v.extend(s.encode_utf16());
+        Some(v)
     }
 }
 
@@ -80,6 +106,21 @@ mod tests {
         let s = Secret::from_bytes(vec![0xFF, 0x00, 0xC3]);
         assert_eq!(s.as_bytes(), &[0xFF, 0x00, 0xC3]);
         assert!(s.as_str().is_none());
+    }
+
+    #[test]
+    fn comparison_is_exact_and_utf16_matches() {
+        let a = Secret::from_str_exact("Kennwort ✓");
+        assert_eq!(a, Secret::from_str_exact("Kennwort ✓"));
+        assert_ne!(a, Secret::from_str_exact("Kennwort ✗"));
+        assert_ne!(a, Secret::from_str_exact("Kennwort ✓ "));
+        assert_ne!(Secret::from_str_exact("e\u{301}"), Secret::from_str_exact("\u{e9}"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(!constant_time_eq(b"a", b""));
+        let u = a.utf16_units().unwrap();
+        assert_eq!(&u[..], &"Kennwort ✓".encode_utf16().collect::<Vec<_>>()[..]);
+        assert_eq!(u.capacity(), u.len());
+        assert!(Secret::from_bytes(vec![0xff]).utf16_units().is_none());
     }
 
     #[test]

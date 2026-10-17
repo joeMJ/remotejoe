@@ -25,6 +25,8 @@ struct Job {
     label: String,
     started: Instant,
     cancelled: bool,
+    /// Abbruchmarke für die Arbeit im Hintergrund.
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     rx: Receiver<Continuation>,
 }
 
@@ -38,19 +40,31 @@ impl Jobs {
     /// Startet eine Aufgabe. `work` läuft im Hintergrund und liefert die
     /// Fortsetzung.
     pub fn spawn(&mut self, label: impl Into<String>, work: impl FnOnce(u64) -> Continuation + Send + 'static) -> u64 {
+        self.spawn_cancellable(label, move |id, _| work(id))
+    }
+
+    /// Wie [`spawn`](Self::spawn); die Arbeit erhält die Abbruchmarke, die
+    /// beim Abbrechen gesetzt wird, und kann ihr Warten sofort beenden.
+    pub fn spawn_cancellable(
+        &mut self,
+        label: impl Into<String>,
+        work: impl FnOnce(u64, std::sync::Arc<std::sync::atomic::AtomicBool>) -> Continuation + Send + 'static,
+    ) -> u64 {
         if self.next < FIRST_JOB {
             self.next = FIRST_JOB;
         }
         let id = self.next;
         self.next += 1;
         let (tx, rx) = mpsc::channel();
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let f = flag.clone();
         std::thread::Builder::new()
             .name(format!("rj-job-{id}"))
             .spawn(move || {
-                let _ = tx.send(work(id));
+                let _ = tx.send(work(id, f));
             })
             .expect("Faden startbar");
-        self.list.push(Job { id, label: label.into(), started: Instant::now(), cancelled: false, rx });
+        self.list.push(Job { id, label: label.into(), started: Instant::now(), cancelled: false, flag, rx });
         id
     }
 
@@ -72,6 +86,7 @@ impl Jobs {
         match self.list.iter_mut().find(|j| j.id == id) {
             Some(j) => {
                 j.cancelled = true;
+                j.flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 true
             }
             None => false,
@@ -81,6 +96,7 @@ impl Jobs {
     pub fn cancel_all(&mut self) {
         for j in &mut self.list {
             j.cancelled = true;
+            j.flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 

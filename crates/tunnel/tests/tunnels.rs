@@ -202,3 +202,46 @@ fn manager_with_wireguard_and_system_tunnel() {
     drop(l);
     assert!(matches!(m.acquire(Uuid::new_v4(), &sys, "ziel.example.test", 3389), Err(TunnelError::Unreachable { .. })));
 }
+
+#[test]
+fn cancelled_acquire_frees_the_manager_at_once() {
+    // Langsame Gegenstelle: nimmt Verbindungen an, antwortet nie.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let silent_port = silent.local_addr().unwrap().port();
+    let _keep = std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for c in silent.incoming().flatten() {
+            held.push(c);
+        }
+    });
+    let open = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let open_port = open.local_addr().unwrap().port();
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let m = std::sync::Arc::new(std::sync::Mutex::new(TunnelManager::new(rt.handle().clone(), KnownHosts::new(dir.path().join("k")), accept_all(&rt))));
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (m2, c2) = (m.clone(), cancel.clone());
+    let slow = TunnelSpec::Ssh { hops: vec![params(silent_port)] };
+    let t = std::thread::spawn(move || {
+        let start = Instant::now();
+        let r = m2.lock().unwrap().acquire_cancellable(Uuid::new_v4(), &slow, "192.0.2.10", 22, &c2);
+        (r.map(|_| ()).map_err(|e| e.to_string()), start.elapsed())
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!t.is_finished(), "Aufbau wartet auf die Gegenstelle");
+    let cancelled_at = Instant::now();
+    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    // Sofort ein neuer Aufbau: wartet nicht auf das Zeitlimit von 15 s.
+    let ep = m
+        .lock()
+        .unwrap()
+        .acquire(Uuid::new_v4(), &TunnelSpec::System { probe_host: "127.0.0.1".into(), probe_port: open_port }, "192.0.2.11", 3389)
+        .unwrap();
+    let waited = cancelled_at.elapsed();
+    assert_eq!(ep.port, 3389);
+    let (r, total) = t.join().unwrap();
+    assert_eq!(r, Err("Tunnelaufbau abgebrochen".to_string()));
+    assert!(waited < Duration::from_secs(1), "neuer Aufbau wartete {waited:?}");
+    assert!(total < Duration::from_secs(2), "Abbruch nach {total:?}");
+    eprintln!("Abbruch wirksam nach {waited:?}");
+}
