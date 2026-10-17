@@ -8,7 +8,7 @@
 #
 # Ablauf: neueste Veröffentlichung von GitHub laden, die Ed25519-Signatur von SHA256SUMS mit dem
 # unten eingebauten Schlüssel prüfen, dann die Prüfsumme des Archivs. Erst danach wird entpackt.
-# Installiert wird nach ~/.local/share/remotejoe (Starter ~/.local/bin/remotejoe, Eintrag im
+# Installiert wird nach ~/.local/opt/remotejoe (Starter ~/.local/bin/remotejoe, Eintrag im
 # Anwendungsmenü). Einstellungen (~/.config/remotejoe) und Schlüsseldatenbank bleiben unberührt.
 set -euo pipefail
 
@@ -17,7 +17,10 @@ REPO="joeMJ/remotejoe"
 UPDATE_KEY='remotejoe-update-ed25519 rX04dvtzNUPhXGPerFMcSxAuy1RFAeenHEup6eNVkaw='
 
 API="${REMOTEJOE_API:-https://api.github.com}"
-PREFIX="${REMOTEJOE_PREFIX:-$HOME/.local/share/remotejoe}"
+# Programme liegen getrennt von den Daten des Programms (~/.local/share/remotejoe: bekannte Host-Schlüssel,
+# Browserprofile, Zertifikate). Der Installationsordner wird beim Update ersetzt und darf nie der Datenordner sein.
+PREFIX="${REMOTEJOE_PREFIX:-$HOME/.local/opt/remotejoe}"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/remotejoe"
 BINDIR="${HOME}/.local/bin"
 APPDIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 
@@ -25,6 +28,8 @@ say() { printf '» %s\n' "$*"; }
 die() { printf '✖ %s\n' "$*" >&2; exit 1; }
 
 uninstall() {
+    [ "$(readlink -m -- "$PREFIX")" != "$(readlink -m -- "$DATA_DIR")" ] || die "Der Installationsordner darf nicht der Datenordner sein."
+    if [ -e "$PREFIX" ] && [ ! -x "$PREFIX/remotejoe" ]; then die "$PREFIX ist keine remotejoe-Installation. Nichts gelöscht."; fi
     rm -rf "$PREFIX" "$PREFIX.neu" "$PREFIX.alt"
     rm -f "$BINDIR/remotejoe" "$APPDIR/remotejoe.desktop"
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPDIR" 2>/dev/null || true
@@ -40,6 +45,13 @@ while [ $# -gt 0 ]; do
         *) die "Unbekannte Option: $1" ;;
     esac
 done
+
+# Schutz: nie den Datenordner oder einen fremden Ordner ersetzen.
+canon() { readlink -m -- "$1"; }
+[ "$(canon "$PREFIX")" != "$(canon "$DATA_DIR")" ] || die "Der Installationsordner darf nicht der Datenordner ($DATA_DIR) sein."
+if [ -e "$PREFIX" ] && [ ! -x "$PREFIX/remotejoe" ]; then
+    die "$PREFIX existiert und ist keine remotejoe-Installation (kein Programm 'remotejoe' darin). Nichts verändert."
+fi
 
 [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || die "Es gibt Pakete nur für Linux x86_64."
 for t in tar zstd openssl sha256sum base64; do

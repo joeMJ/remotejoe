@@ -39,7 +39,7 @@
 curl -fsSL https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh | bash
 ```
 
-Das Skript lädt die neueste signierte Veröffentlichung per HTTPS von GitHub, prüft Signatur und Prüfsumme, installiert nach `~/.local/share/remotejoe`, legt den Starter und das Programmsymbol im Anwendungsmenü an und räumt danach auf.
+Das Skript lädt die neueste signierte Veröffentlichung per HTTPS von GitHub, prüft Signatur und Prüfsumme, installiert nach `~/.local/opt/remotejoe`, legt den Starter und das Programmsymbol im Anwendungsmenü an und räumt danach auf.
 
 **Erst ansehen, dann ausführen:**
 

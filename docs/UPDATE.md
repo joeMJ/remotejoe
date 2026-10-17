@@ -17,10 +17,10 @@ curl -fsSL https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh | b
 ```
 
 `install.sh` lädt die neueste Veröffentlichung, prüft **erst die Signatur**, **dann die Prüfsumme**,
-entpackt in `~/.local/share/remotejoe`, legt den Starter `~/.local/bin/remotejoe` und einen Eintrag
+entpackt in `~/.local/opt/remotejoe`, legt den Starter `~/.local/bin/remotejoe` und einen Eintrag
 im Anwendungsmenü samt Programmsymbol an. Es braucht kein `sudo`. Fehlen Systembibliotheken (Qt 6,
 FreeRDP 3, WebKitGTK), bricht es ab und nennt die `apt`-Pakete. Die bisherige Fassung bleibt als
-`~/.local/share/remotejoe.alt`. Entfernen: `bash install.sh --uninstall` (Einstellungen und
+`~/.local/opt/remotejoe.alt`. Entfernen: `bash install.sh --uninstall` (Einstellungen und
 Schlüsseldatenbank bleiben). Offline aus einem Ordner mit den drei Dateien einer Veröffentlichung:
 `bash install.sh --aus-ordner <Ordner>`.
 

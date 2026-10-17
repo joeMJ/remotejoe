@@ -50,6 +50,18 @@ fn sibling(dir: &Path, suffix: &str) -> Result<PathBuf> {
 /// Installiert ein bereits geprüftes Archiv nach `dir`. Gibt das Verzeichnis
 /// der bisherigen Fassung (`.alt`) zurück.
 pub fn install(archive_name: &str, data: &[u8], dir: &Path) -> Result<PathBuf> {
+    // Schutz: nur ein vorhandenes Programmverzeichnis wird ersetzt, nie der Datenordner oder ein
+    // fremder Ordner (die bisherige Fassung würde als `.alt` verschoben und beim nächsten Mal gelöscht).
+    if !dir.join(main_program()).is_file() {
+        return Err(UpdateError::Install(format!("„{}“ ist kein Programmverzeichnis (es enthält „{}“ nicht); nichts verändert", dir.display(), main_program())));
+    }
+    if let Some(data_dir) = rj_core::config::data_dir() {
+        if let (Ok(a), Ok(b)) = (fs::canonicalize(&data_dir), fs::canonicalize(dir)) {
+            if a == b {
+                return Err(UpdateError::Install(format!("„{}“ ist der Datenordner des Programms und wird nie ersetzt", dir.display())));
+            }
+        }
+    }
     let staging = sibling(dir, ".neu")?;
     let old = sibling(dir, ".alt")?;
     if staging.exists() {
@@ -89,6 +101,23 @@ mod tests {
         assert!(matches!(plan(Path::new("/home/nutzer/projekt/target/release")), Plan::Development { .. }));
         assert!(matches!(plan(Path::new("/home/nutzer/projekt/target/debug")), Plan::Development { .. }));
         assert!(matches!(plan(Path::new("/home/nutzer/target-ordner/remotejoe")), Plan::Replace { .. }));
+    }
+
+    #[test]
+    fn only_program_directories_are_replaced() {
+        let base = tempfile::tempdir().unwrap();
+        // Ein Ordner mit Daten (kein Hauptprogramm darin) bleibt unberührt.
+        let data = base.path().join("remotejoe");
+        fs::create_dir(&data).unwrap();
+        fs::write(data.join("known_hosts"), b"wichtig").unwrap();
+        let src = tempfile::tempdir().unwrap();
+        fs::write(src.path().join(main_program()), b"neu").unwrap();
+        let pkg = archive::pack_tar_zst(src.path()).unwrap();
+        assert!(matches!(install("p.tar.zst", &pkg, &data), Err(UpdateError::Install(_))));
+        assert_eq!(fs::read(data.join("known_hosts")).unwrap(), b"wichtig");
+        assert!(!data.with_file_name("remotejoe.alt").exists() && !data.with_file_name("remotejoe.neu").exists());
+        // Ein nicht vorhandener Ordner wird nicht angelegt.
+        assert!(install("p.tar.zst", &pkg, &base.path().join("fehlt")).is_err());
     }
 
     #[test]

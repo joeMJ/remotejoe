@@ -14,18 +14,29 @@ target/release/rj-update packen "$STAGE" 0.0.1 linux-x86_64 "$W/keys/update-key.
 KEY="$(grep -v '^#' "$W/keys/update-key.pub" | head -1)"
 run() { HOME="$W/home" REMOTEJOE_UPDATE_KEY="${KEY_OVERRIDE:-$KEY}" ./install.sh "$@"; }
 mkdir -p "$W/home"
+# Daten des Programms, die nie angefasst werden dürfen (Datenordner ≠ Installationsordner).
+DATA="$W/home/.local/share/remotejoe"; mkdir -p "$DATA/web-profile"; echo "wichtig" > "$DATA/known_hosts"
 
 run --aus-ordner "$W/pak" >/dev/null 2>&1 || fail "gültiges Paket wurde nicht installiert"
-[ -x "$W/home/.local/share/remotejoe/remotejoe" ] || fail "Hauptprogramm fehlt"
+[ -x "$W/home/.local/opt/remotejoe/remotejoe" ] || fail "Hauptprogramm fehlt"
 [ -L "$W/home/.local/bin/remotejoe" ] || fail "Starter-Verknüpfung fehlt"
-grep -q "^Exec=$W/home/.local/share/remotejoe/remotejoe" "$W/home/.local/share/applications/remotejoe.desktop" || fail "Menüeintrag falsch"
+grep -q "^Exec=$W/home/.local/opt/remotejoe/remotejoe" "$W/home/.local/share/applications/remotejoe.desktop" || fail "Menüeintrag falsch"
 run --aus-ordner "$W/pak" >/dev/null 2>&1 || fail "zweite Installation fehlgeschlagen"
-[ -d "$W/home/.local/share/remotejoe.alt" ] || fail "bisherige Fassung nicht als .alt behalten"
+[ -d "$W/home/.local/opt/remotejoe.alt" ] || fail "bisherige Fassung nicht als .alt behalten"
 
 KEY_OVERRIDE="remotejoe-update-ed25519 $(head -c 32 /dev/urandom | base64)" run --aus-ordner "$W/pak" >/dev/null 2>&1 && fail "falscher Schlüssel wurde angenommen"
 mkdir -p "$W/schlecht"; cp "$W"/pak/* "$W/schlecht/"; printf x >> "$W/schlecht/remotejoe-0.0.1-linux-x86_64.tar.zst"
 run --aus-ordner "$W/schlecht" >/dev/null 2>&1 && fail "manipuliertes Archiv wurde angenommen"
 
+[ "$(cat "$DATA/known_hosts")" = wichtig ] && [ -d "$DATA/web-profile" ] || fail "Daten des Programms wurden verändert"
+# Installationsordner = Datenordner wird verweigert, fremde Ordner werden nicht ersetzt.
+REMOTEJOE_PREFIX="$DATA" run --aus-ordner "$W/pak" >/dev/null 2>&1 && fail "Installation in den Datenordner wurde nicht verweigert"
+mkdir -p "$W/fremd" && echo x > "$W/fremd/datei"
+REMOTEJOE_PREFIX="$W/fremd" run --aus-ordner "$W/pak" >/dev/null 2>&1 && fail "Ein fremder Ordner wurde ersetzt"
+[ -f "$W/fremd/datei" ] || fail "Fremder Ordner wurde verändert"
+[ "$(cat "$DATA/known_hosts")" = wichtig ] || fail "Daten nach den Verweigerungen verändert"
+
 run --uninstall >/dev/null 2>&1
-[ ! -e "$W/home/.local/share/remotejoe" ] && [ ! -e "$W/home/.local/bin/remotejoe" ] || fail "Entfernen unvollständig"
+[ "$(cat "$DATA/known_hosts")" = wichtig ] || fail "Entfernen hat Daten gelöscht"
+[ ! -e "$W/home/.local/opt/remotejoe" ] && [ ! -e "$W/home/.local/bin/remotejoe" ] || fail "Entfernen unvollständig"
 echo "✔ install.sh: alle Prüfungen bestanden"
