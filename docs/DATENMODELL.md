@@ -14,7 +14,7 @@ Oberste Ebene:
 
 | Feld | Inhalt |
 |---|---|
-| `schema_version` | Version des Formats (derzeit 2) |
+| `schema_version` | Version des Formats (derzeit 3) |
 | `revision` | Zähler, wird bei jedem Speichern erhöht |
 | `root` | Wurzelordner mit dem ganzen Baum |
 | `tunnels` | Tunneldefinitionen (SSH-Kette, WireGuard, System) |
@@ -22,15 +22,19 @@ Oberste Ebene:
 | `tasks` | Aufgabendefinitionen |
 | `macros` | Makros (Folgen von Schritten) |
 | `views` | Ansichten: benannte Auswahl von Zielen; ein Ziel darf in mehreren Ansichten stehen |
+| `templates` | Vorlagen je Protokoll (Port, Optionen, Tunnel, Art der Zugangsdaten; eine Standardvorlage je Protokoll); **nie** Kennwörter oder Verweise auf KDBX-Einträge |
+| `favorites` | Favoriten (Ziele oder Ordner) in Anzeigereihenfolge |
 
 Knoten im Baum (`children`, Feld `kind`):
 
-- **Ordner** (`folder`): `id`, `name`, `settings`, `children`. Die Reihenfolge der Kinder
-  ist die Anzeigereihenfolge.
+- **Ordner** (`folder`): `id`, `name`, `settings`, `meta`, `children`. Die Reihenfolge der
+  Kinder ist die Anzeigereihenfolge.
 - **Ziel** (`target`): `id`, `name`, `protocol` (`rdp`, `ssh`, `vnc`, `web`, `proxmox`,
   `hyperv`, `psrp`), `host`, optional `port` (sonst Standardport des Protokolls), `options`
   (protokollabhängig, z. B. Zwischenablage-Richtung, Auflösung, Formular-Anmeldung),
-  `credential` (Name des benötigten Zugangsdatensatzes, Standard `default`), `settings`.
+  `credential` (Name des benötigten Zugangsdatensatzes, Standard `default`), `settings`, `meta`.
+- `meta` (beide, optional): `description`, `notes`, `fields` (eigene Felder Name → Wert),
+  `tasks` und `macros` (zugeordnete Aufgaben und Makros per ID). Keine Geheimnisse.
 
 Namen werden unverändert gespeichert. Auffällige Zeichen (Steuerzeichen, Zeichen ohne Breite,
 Richtungswechsel) werden bei der Anzeige als `⟦U+XXXX⟧` markiert, nicht entfernt.
@@ -39,7 +43,7 @@ Beispiel (gekürzt, erfundene Daten):
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "revision": 7,
   "root": {
     "id": "6f1c0000-0000-4000-8000-000000000000",
@@ -104,6 +108,24 @@ gewinnt**.
 | `psrp_transport` | WinRM (HTTPS/HTTP, Port, Kerberos/NTLM/Basic, Zertifikatsprüfung) oder SSH; nächstgelegene Angabe |
 | `snmp` | SNMP-Gerät oder `"none"`; nächstgelegene Angabe |
 
+Zugangsdaten am Knoten (Eigenschaften-Tab, fünf Möglichkeiten):
+
+| Art | Ablage |
+|---|---|
+| keine | `settings.credentials_off = true`; schneidet die Vererbung ab (auch für Unterobjekte ohne eigene Angabe) |
+| vom übergeordneten Ordner | nichts am Knoten |
+| direkt (Benutzername und Kennwort) | neuer Eintrag in der KDBX-Gruppe `remotejoe`, Verweis unter `settings.credentials` |
+| vorhandener Datensatz | Verweis per UUID unter `settings.credentials` |
+| Datensatz nach Name | Ziel: `credential`; Ordner: `settings.credential_name` (gilt für Unterobjekte ohne eigenen Namen) |
+
+Der verlangte Name eines Ziels ist `credential`, sonst der nächstgelegene `credential_name`
+eines Ordners, sonst `default`.
+
+Weitere Einstellungen: `clipboard` am Ordner ist die Vorgabe der Zwischenablage-Richtung für
+neue Ziele. „Auf Unterobjekte anwenden“ entfernt die eigenen Angaben der Unterobjekte
+(Zugangsdaten, Tunnel, PowerShell-Transport, SNMP), damit der Wert des Ordners gilt; bei der
+Zwischenablage wird die Richtung an jedem RDP-/VNC-Ziel gesetzt.
+
 Gibt es zu einem Namen keinen Eintrag, meldet die Oberfläche „Kein Zugangsdatensatz … am Ziel
 oder in einem Elternordner“. Legt das Ziel keinen Namen fest, fehlt `default` und kommen
 mehrere Namen in Frage, fragt die Oberfläche, welcher genommen werden soll, und kann die Wahl
@@ -135,7 +157,7 @@ nächsten Speichern im neuen Format geschrieben.
 ## Schema-Versionen
 
 - Ältere Versionen werden beim Laden schrittweise migriert (Version 1 → 2: Einstellungen in
-  `settings`, Verweise als Objekt statt bloßer UUID).
+  `settings`, Verweise als Objekt statt bloßer UUID; Version 2 → 3: nur neue, optionale Felder).
 - Ist die Version neuer als die des Programms, wird der Index nachsichtig gelesen (unbekannte
   Felder werden übergangen) und **schreibgeschützt** geöffnet; Speichern wird verweigert, damit
   ein älteres Programm keine Daten verliert.
@@ -154,7 +176,15 @@ nächsten Speichern im neuen Format geschrieben.
 
 | Datei (Linux / Windows) | Inhalt |
 |---|---|
-| `~/.config/remotejoe/config.toml` / `%APPDATA%\remotejoe\config.toml` | Pfad der KDBX, Schlüsseldatei, Fenster, Zeitlimits, Sperre nach Leerlauf |
+| `~/.config/remotejoe/config.toml` / `%APPDATA%\remotejoe\config.toml` | Pfad der KDBX, Schlüsseldatei, Fenster, Zeitlimits, `connect_all_parallel` (Vorgabe 4), Sperre nach Leerlauf (`lock_after_idle_mins`, Vorgabe 0 = aus; `disconnect_on_lock`) |
 | `~/.local/share/remotejoe/` / `%LOCALAPPDATA%\remotejoe\` | `known_hosts` (SSH-Host-Schlüssel, OpenSSH-Format), `vnc_certs` und `proxmox-zertifikate.json` (angenommene Fingerabdrücke), Web-Profile je Ziel (`web-profile/<Ziel-UUID>`, darin `zertifikate.json`) |
 
 In diesen Dateien stehen keine Kennwörter.
+
+## SNMP-Geräte
+
+`snmp_devices[]`: `id`, `name`, `host`, `port`, `version` (`v2c`/`v3`), `credential` (Verweis),
+bei v3 `auth_proto` (`md5`, `sha1`, `sha256`; Vorgabe `sha1`) und `priv_proto` (`des`, `aes128`,
+`none`; Vorgabe `aes128`). Im KDBX-Eintrag: v2c die Community im Kennwortfeld; v3 Benutzername,
+Kennwort zur Authentisierung im Kennwortfeld und Kennwort zur Verschlüsselung im geschützten
+Feld `SNMP-Verschlüsselung` (fehlt es, gilt das Kennwortfeld für beides).

@@ -22,7 +22,7 @@ anderen Sitzungen unberührt.
 
 | Paket (`crates/…`) | Aufgabe |
 |---|---|
-| `core` | Datenmodell des Index, Schema und Migration, Vererbung, Zeichensatzprüfung, Kennwort-Typ `Secret`, Konfiguration, atomares Schreiben |
+| `core` | Datenmodell des Index, Schema und Migration, Vererbung, Bearbeiten (`edit`: Einfügen, Verschieben, Duplizieren, Löschen, Ansichten, Vorlagen, Auf Unterobjekte anwenden, Verlauf), Zeichensatzprüfung, Kennwort-Typ `Secret`, Konfiguration, atomares Schreiben |
 | `kdbx` | KDBX lesen/schreiben (KDBX 4), Zugangsdaten auflösen, Index-Ablage in der KDBX oder als `.rjindex`, Zusammenführen bei fremder Änderung |
 | `ipc` | Nachrichten Hauptprozess ⇄ Worker, Rahmung, geteilter Bildspeicher |
 | `supervisor` | Worker starten, Herzschlag, Absturzerkennung, Neustart mit Rückstau, Speichergrenze |
@@ -36,7 +36,7 @@ anderen Sitzungen unberührt.
 | `tasks` | Makros, apt-Aktualisierung, Windows-Update-Skript, Patchday (parallel) |
 | `importer` | Import aus Remote Desktop Manager und Royal TS (Planen, dann Anwenden) |
 | `snmp` | SNMP v2c/v3, Zähler mit Überlauf, Verlauf, Ampel |
-| `ui` | Hauptprogramm `remotejoe`: Qt-Oberfläche, Sitzungsverwaltung, Arbeitsbereich |
+| `ui` | Hauptprogramm `remotejoe`: Qt-Oberfläche, Sitzungsverwaltung, Arbeitsbereich, Bearbeitungsschicht (`editor`), Hintergrundaufgaben (`jobs`), Leerlauf und Standby (`idle`), überschreibende Speicherverwaltung (`alloc`) |
 | `testkit` | Hilfen für Tests gegen lokale Server (sshd, xrdp, Xvnc, snmpd) |
 
 ## Prozessmodell
@@ -90,7 +90,36 @@ anderen Sitzungen unberührt.
   geteilten Speicher.
 - Texte der Oberfläche stehen in `crates/ui/res/texte.de.json`.
 - Auffällige Zeichen in Namen (Steuerzeichen, Zeichen ohne Breite, Richtungswechsel) werden als
-  `⟦U+XXXX⟧` angezeigt, nicht entfernt.
+  `⟦U+XXXX⟧` angezeigt, nicht entfernt; Eingabefelder melden sie beim Tippen.
+- Bearbeiten ohne zusätzliche Fenster: Eigenschaften-Tab neben den Sitzungs-Tabs
+  (`cpp/editor.cpp`), Rückfragen und kurze Eingaben in einer Leiste im Fenster (`ActionBar`),
+  Entsperren als Abdeckung des Hauptfensters, SNMP-Geräte als Tab. Alle Änderungen laufen über
+  eine Brückenmethode `edit` (JSON-Befehle, `src/editor.rs`) und von dort über
+  `Vault::set_index`/`Vault::save` (Sicherungskopie, atomares Schreiben, Sperre,
+  Konfliktabfrage).
+
+## Hintergrundaufgaben
+
+- Was auf das Netz wartet, läuft nicht im Oberflächenfaden: Tunnelaufbau beim Verbinden,
+  Gäste von Proxmox/Hyper-V abrufen, Gastaktionen, Proxmox-Konsole öffnen. Eine Aufgabe läuft
+  in einem eigenen Faden und liefert eine Fortsetzung, die im Takt der Oberfläche (`poll`)
+  angewandt wird (Sitzung öffnen, Ergebnis melden). Abbrechen: Die Oberfläche wartet nicht
+  mehr, ein noch aufgebauter Tunnel wird freigegeben.
+- „Alle im Ordner verbinden“ startet höchstens `connect_all_parallel` Aufbauten gleichzeitig;
+  Fehler einzelner Ziele halten die übrigen nicht auf.
+
+## Sperren, Leerlauf und Standby
+
+- Sperren (von Hand oder nach Leerlauf, Vorgabe aus): Tresor, Import-Plan und Verlauf werden
+  verworfen, die Zugangsdaten der Sitzungen überschrieben; Sitzungen bleiben verbunden
+  (Option: trennen), Neuverbinden wartet auf das Entsperren. Das Hauptprogramm verwendet eine
+  Speicherverwaltung, die jeden freigegebenen Block mit Nullen überschreibt.
+- Leerlauf zählt mit der monotonen Uhr; Standby zählt nicht. Aufwachen wird über logind
+  (D-Bus `PrepareForSleep`), unter Windows über `WM_POWERBROADCAST` und als Rückfall über einen
+  Sprung der Systemuhr erkannt. Danach wird nie gesperrt; zwei Minuten lang werden abgebrochene
+  Sitzungen sofort neu verbunden, Sitzungen über einen Tunnel erst nach dem Neuaufbau des
+  Tunnels. Proxmox-Konsolen werden beim Neuverbinden neu geöffnet (neues Ticket, neue Brücke;
+  die alte Brücke schließt Websocket und Client-Verbindung).
 
 ## Tunnel
 

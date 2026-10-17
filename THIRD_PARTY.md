@@ -552,7 +552,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 
 | Bibliothek | Lizenz | Verwendung |
 |---|---|---|
-| Qt 6 (Core, Gui, Widgets, Network, Svg) | LGPL-3.0 (dynamisch gelinkt) | Oberfläche |
+| Qt 6 (Core, Gui, Widgets, Network, Svg; unter Linux DBus) | LGPL-3.0 (dynamisch gelinkt) | Oberfläche; DBus für die Meldung von logind zum Standby |
 | FreeRDP 3 (libfreerdp3, libfreerdp-client3, libwinpr3) | Apache-2.0 | RDP-Worker |
 | WebKitGTK 4.1, GTK 3 (Linux) | LGPL-2.1 (dynamisch gelinkt) | Web-Worker, Merkmal `webview` |
 | Microsoft Edge WebView2 Runtime (Windows) | Laufzeit von Microsoft, nicht mitgeliefert | Web-Worker, Merkmal `webview` |

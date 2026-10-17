@@ -26,6 +26,13 @@ Zugangsdaten liegen in einer KeePass-Datei (KDBX), die man weiter mit KeePassXC 
   PowerShell), als „Patchday“ für viele Ziele parallel.
 - **SNMP-Ampel** am Baum (CPU, Speicher, Schnittstellen) mit Verlauf.
 - **Import** aus Remote Desktop Manager (`.rdm`, JSON) und Royal TS (`.rtsz`, `.rtsx`).
+- **Bearbeiten im Hauptfenster:** Ordner und Ziele anlegen, ändern, verschieben, duplizieren
+  und löschen im Eigenschaften-Tab (kein Dialogfenster), Vorlagen je Zieltyp, Favoriten,
+  Ansichten (z. B. „Patchday“), „Auf Unterobjekte anwenden“, Rückgängig.
+- **Alle im Ordner verbinden**, neu verbinden oder trennen (gestaffelt, höchstens 4
+  gleichzeitig).
+- **Sperre nach Leerlauf** (Vorgabe aus) und Sperren von Hand; nach dem Aufwachen aus dem
+  Standby werden abgebrochene Verbindungen sofort neu aufgebaut, Tunnel zuerst.
 - Jede Verbindung läuft in einem eigenen Prozess: Absturz oder Hänger einer Sitzung betrifft
   die anderen nicht.
 
@@ -54,19 +61,34 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
 
 ## Bedienung
 
-1. Programm starten: `remotejoe`. Beim ersten Start **Datei → KDBX öffnen …** wählen,
-   Hauptkennwort und gegebenenfalls Schlüsseldatei angeben.
-2. Struktur anlegen: **Datei → Importieren (RDM, Royal TS) …** zeigt zuerst eine Vorschau
-   (was übernommen, zusammengelegt oder übersprungen wird) und übernimmt erst nach Bestätigung.
-   Zugangsdaten aus dem Import werden als KDBX-Einträge in der Gruppe `remotejoe` angelegt.
-3. Verbinden: Doppelklick auf ein Ziel oder Kontextmenü **Verbinden**. Fehlt ein Eintrag oder
-   kommen mehrere in Frage, fragt das Programm nach.
-4. Rückfragen zu unbekannten Host-Schlüsseln und Zertifikaten zeigen den Fingerabdruck; ein
+1. Programm starten: `remotejoe`. Beim ersten Start **Datei → KDBX öffnen …**: Datei,
+   Hauptkennwort und gegebenenfalls Schlüsseldatei in der Abdeckung des Hauptfensters angeben.
+2. Struktur anlegen: im Baum **Hinzufügen** (Kontextmenü, Menü „Bearbeiten“ oder Strg+N):
+   Ordner, RDP, SSH, VNC, Web, Proxmox, Hyper-V, PowerShell, Aufgabe, Makro oder aus einer
+   Vorlage. Das neue Objekt öffnet seinen **Eigenschaften-Tab** (auch per Doppelklick oder F4):
+   Allgemein, Verbindung, Zugangsdaten, Tunnel, Aufgaben und Makros, Zwischenablage,
+   Organisation, Übergeordneter Ordner; **Speichern** im Tab.
+   Oder **Datei → Importieren (RDM, Royal TS) …** mit Vorschau.
+3. Zugangsdaten je Ordner oder Ziel: keine, vom übergeordneten Ordner, Benutzername und
+   Kennwort direkt (neuer Eintrag in der KDBX-Gruppe `remotejoe`), vorhandener Datensatz oder
+   Datensatz nach Name. Der Tab zeigt, woher der wirksame Wert kommt.
+4. Verbinden: Eingabetaste auf einem Ziel oder Kontextmenü **Verbinden**; für einen Ordner
+   **Alle im Ordner verbinden**. Fehlt ein Eintrag oder kommen mehrere in Frage, fragt das
+   Programm nach. Tunnel werden im Hintergrund aufgebaut (Fortschritt und „Abbrechen“ in der
+   Statuszeile).
+5. Baum per Tastatur: F2 umbenennen, Entf löschen, Strg+D duplizieren, Strg+Umschalt+M
+   verschieben (auch Ziehen und Ablegen, Alt+↑/↓), Strg+B Favorit, Strg+Z rückgängig.
+   Über dem Baum lässt sich zwischen allen Zielen, Favoriten und eigenen Ansichten wählen.
+6. Rückfragen zu unbekannten Host-Schlüsseln und Zertifikaten zeigen den Fingerabdruck; ein
    geänderter Schlüssel wird deutlich gewarnt und nie still angenommen.
-5. Kontextmenü **Aufgaben → Aktualisierungen prüfen** startet den Patchday für die gewählten
+7. Kontextmenü **Aufgaben → Aktualisierungen prüfen** startet den Patchday für die gewählten
    Ziele (zuerst als Trockenlauf).
-6. **Datei → Speichern** schreibt KDBX und Index (atomar, mit Sicherungskopie `.bak`).
-   **Datei → Sperren** schließt die KDBX; laufende Sitzungen bleiben bestehen.
+8. **Datei → Speichern** schreibt KDBX und Index (atomar, mit Sicherungskopie `.bak`); hat
+   jemand die KDBX inzwischen geändert, fragt eine Leiste: eigene, fremde oder beide behalten.
+   **Datei → Sperren** (Strg+L) verwirft Schlüssel und Kennwörter im Speicher; laufende
+   Sitzungen bleiben bestehen, ihre Bilder sind verdeckt. **Extras → Sperre nach Leerlauf**
+   schaltet das automatische Sperren ein; **Extras → SNMP-Geräte** verwaltet SNMP-Zugänge (v3
+   mit getrennten Kennwörtern für Authentisierung und Verschlüsselung).
 
 Zum Ausprobieren ohne eigene Daten: `remotejoe --demo` (erfundene Ziele, Vorführsitzungen).
 
@@ -80,7 +102,14 @@ kdbx_path = "/home/benutzer/zugang.kdbx"
 connect_timeout_secs = 15
 keepalive_secs = 30
 auto_reconnect = false
+connect_all_parallel = 4
+
+[security]
+lock_after_idle_mins = 0      # 0 = aus
+disconnect_on_lock = false
 ```
+
+Handprobe gegen echte Gegenstellen: [`docs/HANDPROBE.md`](docs/HANDPROBE.md).
 
 ## Bauen unter Ubuntu 24.04
 
