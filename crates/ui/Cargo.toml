@@ -43,3 +43,9 @@ cxx-qt-build = "0.10"
 [dev-dependencies]
 tempfile.workspace = true
 remotejoe-testkit = { path = "../testkit" }
+
+# Hauptkennwort im Schlüsselbund des Systems (Linux: Secret Service über D-Bus, reines Rust; Windows: Anmeldeinformationsverwaltung).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["async-secret-service", "async-io", "crypto-rust"] }
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }

@@ -96,6 +96,11 @@ Entfernt Programm, Starter und Symbole. Dein Ordner `~/remotejoe` (Einstellungen
 - **Mehrere Ziele auf einmal anlegen:** ein Host pro Zeile (bis 500), Namensmuster mit
   `{host}` und `{nr}`, Vorlage und Zugangsdaten, Vorschau mit Hinweisen je Zeile; alles als eine
   rückgängig machbare Aktion.
+- **Entsperren mit dem Schlüsselbund (optional, Standard aus):** An der Entsperrmaske lässt sich das
+  Hauptkennwort im Schlüsselbund des Systems merken (Linux: Secret Service/GNOME-Schlüsselbund, Windows:
+  Anmeldeinformationsverwaltung). Danach entsperrt der Programmstart damit; nach „Sperren“ oder Leerlauf ist das
+  Kennwort wieder nötig. Wer das Benutzerkonto entsperrt hat, kommt so an die Datenbank. Entfernen: Datei →
+  „Gemerktes Hauptkennwort aus dem Schlüsselbund entfernen“.
 - **Zugangsdaten kopieren:** Im Kontextmenü eines Ziels „Benutzernamen kopieren“ und „Kennwort kopieren“
   (Eintrag als „geheim“ markiert, die Zwischenablage wird nach 30 s geleert; Frist unter Extras).
 - **Eigene Titelleiste** mit Logo, Name und Version, **Darstellung** (System hell/dunkel oder eigene

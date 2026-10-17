@@ -338,7 +338,10 @@ std::int32_t rjRunApplication()
 	w.show();
 	// Echter Start: zuerst die Entsperrmaske für die Schlüsseldatenbank.
 	if (!demo)
+	{
 		w.showUnlock(false);
+		w.tryKeyringUnlock();
+	}
 	if (useSingle)
 		QObject::connect(&single.server, &QLocalServer::newConnection, &w, [&w] {
 			while (QLocalSocket* c = single.server.nextPendingConnection())

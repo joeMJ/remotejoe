@@ -46,6 +46,10 @@ pub struct App {
     pub sessions: Manager,
     pub workspace: Workspace,
     unlocking: Option<Receiver<Result<(Vault, crate::vaultlock::VaultLock), String>>>,
+    /// Ergebnis des Ablegens im Schlüsselbund (vom Hintergrundfaden), wird nach dem Entsperren abgeholt.
+    keyring_result: std::sync::Arc<std::sync::Mutex<Option<Result<(), String>>>>,
+    /// Hinweis zum Schlüsselbund für die Statuszeile (einmal abholbar).
+    keyring_note: Option<String>,
     /// Sperre der geöffneten Schlüsseldatenbank (fällt mit dem Tresor weg).
     vault_lock: Option<crate::vaultlock::VaultLock>,
     /// Laufendes „Felder erkennen“ (unsichtbare Web-Sitzung ohne Tab).
@@ -151,6 +155,8 @@ impl App {
             demo,
             workspace: Workspace::default(),
             unlocking: None,
+            keyring_result: Default::default(),
+            keyring_note: None,
             vault_lock: None,
             probe: None,
             lights: Default::default(),
@@ -167,38 +173,78 @@ impl App {
         self.config.kdbx_path.as_ref().map(|p| p.display().to_string())
     }
 
-    /// Entsperren im Hintergrund; das Ergebnis kommt über `poll`.
-    pub fn unlock(&mut self, path: String, password: Secret, key_file: Option<String>) {
+    /// Entsperren im Hintergrund; das Ergebnis kommt über `poll`. `remember`: nach Erfolg das
+    /// Hauptkennwort im Schlüsselbund des Systems ablegen (nur auf ausdrücklichen Wunsch).
+    pub fn unlock(&mut self, path: String, password: Secret, key_file: Option<String>, remember: bool) {
+        let storage = self.config.index_storage;
+        let (tx, rx) = mpsc::channel();
+        self.unlocking = Some(rx);
+        let outcome = self.keyring_result.clone();
+        std::thread::spawn(move || {
+            let r = open_vault(&path, password.clone(), key_file.clone(), storage);
+            if remember && r.is_ok() {
+                let pw = password.as_str().map(str::to_string).unwrap_or_default();
+                let res = crate::keyring::store(&path, &pw, key_file.as_deref().filter(|k| !k.is_empty()));
+                *outcome.lock().unwrap_or_else(|e| e.into_inner()) = Some(res);
+            }
+            let _ = tx.send(r);
+        });
+    }
+
+    /// Beim Programmstart: mit dem im Schlüsselbund gemerkten Hauptkennwort entsperren (nur wenn der
+    /// Nutzer das eingeschaltet hat). Gibt es keinen Eintrag oder ist der Schlüsselbund nicht erreichbar,
+    /// meldet `poll` das als Hinweis und die Entsperrmaske bleibt stehen.
+    pub fn unlock_from_keyring(&mut self) -> bool {
+        let Some(path) = self.config.kdbx_path.as_ref().map(|p| p.display().to_string()) else { return false };
+        if self.demo || !self.config.security.keyring_unlock {
+            return false;
+        }
         let storage = self.config.index_storage;
         let (tx, rx) = mpsc::channel();
         self.unlocking = Some(rx);
         std::thread::spawn(move || {
-            let lock = match crate::vaultlock::VaultLock::acquire(std::path::Path::new(&path)) {
-                Ok(l) => l,
-                Err(e) => {
-                    let _ = tx.send(Err(e));
-                    return;
-                }
+            let r = match crate::keyring::load(&path) {
+                Ok(Some(f)) => open_vault(&path, Secret::from_str_exact(&f.password), f.key_file.clone(), storage),
+                Ok(None) => Err("Im Schlüsselbund ist für diese Schlüsseldatenbank nichts gespeichert. Bitte das Hauptkennwort eingeben.".to_string()),
+                Err(e) => Err(format!("Der Schlüsselbund ist nicht erreichbar ({e}). Bitte das Hauptkennwort eingeben.")),
             };
-            let mut key = MasterKey { password: Some(password), key_file: None };
-            if let Some(k) = key_file.filter(|k| !k.is_empty()) {
-                match key.clone().with_key_file(std::path::Path::new(&k)) {
-                    Ok(k2) => key = k2,
-                    Err(e) => {
-                        let _ = tx.send(Err(format!("Schlüsseldatei: {e}")));
-                        return;
-                    }
-                }
-            }
-            let _ = tx.send(Vault::open(std::path::Path::new(&path), key, storage).map(|v| (v, lock)).map_err(|e| e.to_string()));
+            let _ = tx.send(r);
         });
+        true
+    }
+
+    /// Entfernt das gemerkte Hauptkennwort der geöffneten Datenbank aus dem Schlüsselbund.
+    pub fn keyring_forget(&mut self) -> String {
+        let Some(path) = self.config.kdbx_path.as_ref().map(|p| p.display().to_string()) else { return "Es ist keine Schlüsseldatenbank eingetragen".into() };
+        let msg = match crate::keyring::forget(&path) {
+            Ok(true) => "Das gemerkte Hauptkennwort wurde aus dem Schlüsselbund entfernt".to_string(),
+            Ok(false) => "Im Schlüsselbund war für diese Schlüsseldatenbank nichts gespeichert".to_string(),
+            Err(e) => return format!("Schlüsselbund nicht erreichbar: {e}"),
+        };
+        self.config.security.keyring_unlock = false;
+        if !self.demo {
+            if let Some(cp) = self.config_path.clone() {
+                let _ = self.config.save(&cp);
+            }
+        }
+        msg
+    }
+
+    pub fn keyring_enabled(&self) -> bool {
+        self.config.security.keyring_unlock && !self.demo
+    }
+
+    /// Hinweis zum Schlüsselbund für die Statuszeile (wird beim Abholen gelöscht).
+    pub fn take_keyring_note(&mut self) -> String {
+        self.keyring_note.take().unwrap_or_default()
     }
 
     /// Legt eine neue KDBX an und öffnet sie; das Ergebnis kommt wie beim
     /// Entsperren über `poll`. Eine vorhandene Datei wird nie überschrieben.
     /// `make_key_file`: Die Schlüsseldatei unter `key_file` wird neu erzeugt.
-    pub fn create_vault(&mut self, path: String, password: Secret, key_file: Option<String>, make_key_file: bool) {
+    pub fn create_vault(&mut self, path: String, password: Secret, key_file: Option<String>, make_key_file: bool, remember: bool) {
         let storage = self.config.index_storage;
+        let outcome = self.keyring_result.clone();
         let (tx, rx) = mpsc::channel();
         if self.vault.as_ref().is_some_and(|v| v.is_dirty()) {
             let _ = tx.send(Err("Es gibt ungespeicherte Änderungen. Bitte zuerst speichern (Datei → Speichern).".to_string()));
@@ -225,6 +271,7 @@ impl App {
                 if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
                     std::fs::create_dir_all(dir).map_err(|e| format!("Ordner: {e}"))?;
                 }
+                let pw_copy = password.as_str().map(str::to_string).unwrap_or_default();
                 let mut key = MasterKey { password: Some(password), key_file: None };
                 if let Some(k) = &kf {
                     let kp = std::path::Path::new(k);
@@ -236,6 +283,10 @@ impl App {
                 let lock = crate::vaultlock::VaultLock::acquire(p)?;
                 let mut v = Vault::create(p, key, rj_kdbx::KdfChoice::Argon2idDefault, storage);
                 v.save(None).map_err(|e| e.to_string())?;
+                if remember {
+                    let res = crate::keyring::store(&path, &pw_copy, kf.as_deref());
+                    *outcome.lock().unwrap_or_else(|e| e.into_inner()) = Some(res);
+                }
                 Ok((v, lock))
             })();
             let _ = tx.send(result);
@@ -1270,6 +1321,21 @@ impl App {
                         self.remember_kdbx_path(&kdbx);
                         self.restore_session_credentials();
                         self.start_snmp();
+                        // Hauptkennwort im Schlüsselbund gemerkt? (Ergebnis vom Hintergrundfaden)
+                        if let Some(r) = self.keyring_result.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                            match r {
+                                Ok(()) => {
+                                    self.config.security.keyring_unlock = true;
+                                    if !self.demo {
+                                        if let Some(cp) = self.config_path.clone() {
+                                            let _ = self.config.save(&cp);
+                                        }
+                                    }
+                                    self.keyring_note = Some("Hauptkennwort im Schlüsselbund des Systems gemerkt; beim nächsten Start wird damit entsperrt".into());
+                                }
+                                Err(e) => self.keyring_note = Some(format!("Hauptkennwort nicht im Schlüsselbund gemerkt: {e}")),
+                            }
+                        }
                         out.push(UiEvent::Unlocked { targets: n });
                         self.maybe_auto_check();
                     }
@@ -1677,4 +1743,14 @@ mod web_options_tests {
         assert!(v["login"]["password_selector"].is_null() && v["login"]["username_selector"].is_null() && v.get("url").is_none());
         assert_eq!(v["ignore_certificate"], false);
     }
+}
+
+/// Öffnet die Schlüsseldatenbank (Sperrdatei, Schlüsseldatei, Vault).
+fn open_vault(path: &str, password: Secret, key_file: Option<String>, storage: rj_core::config::IndexStorage) -> Result<(Vault, crate::vaultlock::VaultLock), String> {
+    let lock = crate::vaultlock::VaultLock::acquire(std::path::Path::new(path))?;
+    let mut key = MasterKey { password: Some(password), key_file: None };
+    if let Some(k) = key_file.filter(|k| !k.is_empty()) {
+        key = key.with_key_file(std::path::Path::new(&k)).map_err(|e| format!("Schlüsseldatei: {e}"))?;
+    }
+    Vault::open(std::path::Path::new(path), key, storage).map(|v| (v, lock)).map_err(|e| e.to_string())
 }

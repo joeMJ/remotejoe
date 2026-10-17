@@ -29,23 +29,23 @@ fn create_open_lock_unlock_and_never_overwrite() {
     app.config_path = None;
 
     // 1. Anlegen: Datei und Unterordner entstehen, die KDBX ist danach geöffnet.
-    app.create_vault(path.display().to_string(), Secret::from_str_exact("Prüf-Kennwort ß 1234"), None, false);
+    app.create_vault(path.display().to_string(), Secret::from_str_exact("Prüf-Kennwort ß 1234"), None, false, false);
     assert!(matches!(warte(&mut app), UiEvent::Unlocked { targets: 0 }));
     assert!(path.exists());
 
     // 2. Sperren und mit demselben Kennwort wieder entsperren.
     app.lock(false);
-    app.unlock(path.display().to_string(), Secret::from_str_exact("Prüf-Kennwort ß 1234"), None);
+    app.unlock(path.display().to_string(), Secret::from_str_exact("Prüf-Kennwort ß 1234"), None, false);
     assert!(matches!(warte(&mut app), UiEvent::Unlocked { .. }));
 
     // 3. Falsches Kennwort schlägt fehl.
     app.lock(false);
-    app.unlock(path.display().to_string(), Secret::from_str_exact("falsch"), None);
+    app.unlock(path.display().to_string(), Secret::from_str_exact("falsch"), None, false);
     assert!(matches!(warte(&mut app), UiEvent::UnlockFailed { .. }));
 
     // 4. Eine vorhandene Datei wird nicht überschrieben.
     let before = std::fs::read(&path).unwrap();
-    app.create_vault(path.display().to_string(), Secret::from_str_exact("anderes Kennwort"), None, false);
+    app.create_vault(path.display().to_string(), Secret::from_str_exact("anderes Kennwort"), None, false, false);
     match warte(&mut app) {
         UiEvent::UnlockFailed { reason } => assert!(reason.contains("schon"), "{reason}"),
         e => panic!("unerwartet: {e:?}"),
@@ -61,15 +61,15 @@ fn create_with_generated_key_file_needs_both() {
     let mut app = App::new(false);
     app.config_path = None;
 
-    app.create_vault(path.display().to_string(), Secret::from_str_exact("Kennwort 1"), Some(key.display().to_string()), true);
+    app.create_vault(path.display().to_string(), Secret::from_str_exact("Kennwort 1"), Some(key.display().to_string()), true, false);
     assert!(matches!(warte(&mut app), UiEvent::Unlocked { .. }));
     assert!(key.exists());
 
     app.lock(false);
     // Ohne Schlüsseldatei geht es nicht, mit ihr schon.
-    app.unlock(path.display().to_string(), Secret::from_str_exact("Kennwort 1"), None);
+    app.unlock(path.display().to_string(), Secret::from_str_exact("Kennwort 1"), None, false);
     assert!(matches!(warte(&mut app), UiEvent::UnlockFailed { .. }));
-    app.unlock(path.display().to_string(), Secret::from_str_exact("Kennwort 1"), Some(key.display().to_string()));
+    app.unlock(path.display().to_string(), Secret::from_str_exact("Kennwort 1"), Some(key.display().to_string()), false);
     assert!(matches!(warte(&mut app), UiEvent::Unlocked { .. }));
 }
 
@@ -79,10 +79,10 @@ fn create_rejects_missing_input() {
     let mut app = App::new(false);
     app.config_path = None;
     // Weder Kennwort noch Schlüsseldatei.
-    app.create_vault(dir.path().join("leer.kdbx").display().to_string(), Secret::from_str_exact(""), None, false);
+    app.create_vault(dir.path().join("leer.kdbx").display().to_string(), Secret::from_str_exact(""), None, false, false);
     assert!(matches!(warte(&mut app), UiEvent::UnlockFailed { .. }));
     assert!(!dir.path().join("leer.kdbx").exists());
     // Neue Schlüsseldatei ohne Pfad.
-    app.create_vault(dir.path().join("x.kdbx").display().to_string(), Secret::from_str_exact("pw"), None, true);
+    app.create_vault(dir.path().join("x.kdbx").display().to_string(), Secret::from_str_exact("pw"), None, true, false);
     assert!(matches!(warte(&mut app), UiEvent::UnlockFailed { .. }));
 }

@@ -547,12 +547,12 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		reloadTree();
 	});
 	m_overlay = new UnlockOverlay(m_backend, this);
-	connect(m_overlay, &UnlockOverlay::unlockRequested, this, [this](const QString& path, const QString& pw, const QString& keyFile) {
-		m_backend->unlock(path, pw, keyFile);
+	connect(m_overlay, &UnlockOverlay::unlockRequested, this, [this](const QString& path, const QString& pw, const QString& keyFile, bool remember) {
+		m_backend->unlock(path, pw, keyFile, remember);
 		statusBar()->showMessage(T(m_backend, "status.unlocking"));
 	});
-	connect(m_overlay, &UnlockOverlay::createRequested, this, [this](const QString& path, const QString& pw, const QString& keyFile, bool makeKey) {
-		m_backend->createVault(path, pw, keyFile, makeKey);
+	connect(m_overlay, &UnlockOverlay::createRequested, this, [this](const QString& path, const QString& pw, const QString& keyFile, bool makeKey, bool remember) {
+		m_backend->createVault(path, pw, keyFile, makeKey, remember);
 		statusBar()->showMessage(T(m_backend, "status.creating"));
 	});
 	// Hintergrundaufgaben in der Statuszeile: Fortschritt und Abbruch.
@@ -710,6 +710,8 @@ void MainWindow::buildMenus()
 			saveAll();
 	});
 	file->addAction(T(m_backend, "menu.file.lock"), QKeySequence(QStringLiteral("Ctrl+L")), this, [this] { lockNow(false); });
+	file->addSeparator();
+	file->addAction(T(m_backend, "menu.file.keyring.forget"), this, [this] { forgetKeyring(); });
 	file->addSeparator();
 	file->addAction(T(m_backend, "menu.file.quit"), QKeySequence::Quit, this, &QWidget::close);
 	QMenu* editMenu = m_menuBar->addMenu(T(m_backend, "menu.edit"));
@@ -2033,6 +2035,8 @@ void MainWindow::handleEvents(const QString& json)
 				for (auto* ed : findChildren<PropertiesTab*>())
 					ed->reload();
 				statusBar()->showMessage(T(m_backend, "status.unlocked"), 5000);
+				if (const QString note = m_backend->keyringNote(); !note.isEmpty())
+					statusBar()->showMessage(note, 12000);
 			}
 			else if (t == QLatin1String("unlock_failed"))
 			{
@@ -2342,6 +2346,21 @@ void MainWindow::changeEvent(QEvent* e)
 		if (m_titleBar)
 			m_titleBar->updateState();
 	}
+}
+
+/// Beim Start: mit dem im Schlüsselbund gemerkten Hauptkennwort entsperren (nur wenn eingeschaltet).
+void MainWindow::tryKeyringUnlock()
+{
+	if (m_backend->unlockFromKeyring())
+	{
+		m_overlay->setBusy(true, QString());
+		statusBar()->showMessage(T(m_backend, "status.keyring.unlocking"));
+	}
+}
+
+void MainWindow::forgetKeyring()
+{
+	statusBar()->showMessage(m_backend->keyringForget(), 10000);
 }
 
 void MainWindow::restoreWindowState()

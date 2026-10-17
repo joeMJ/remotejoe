@@ -505,8 +505,8 @@ public:
 	void setBusy(bool busy, const QString& message = QString());
 
 signals:
-	void unlockRequested(const QString& path, const QString& password, const QString& keyFile);
-	void createRequested(const QString& path, const QString& password, const QString& keyFile, bool makeKeyFile);
+	void unlockRequested(const QString& path, const QString& password, const QString& keyFile, bool remember);
+	void createRequested(const QString& path, const QString& password, const QString& keyFile, bool makeKeyFile, bool remember);
 
 protected:
 	void paintEvent(QPaintEvent*) override;
@@ -527,6 +527,7 @@ private:
 	QLineEdit* m_password2;
 	QLineEdit* m_keyFile;
 	QCheckBox* m_makeKey;
+	QCheckBox* m_remember;
 	QLabel* m_strength;
 	QWidget* m_repeatRow;
 	QWidget* m_makeKeyRow;

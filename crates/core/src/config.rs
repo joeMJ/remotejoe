@@ -147,11 +147,13 @@ pub struct SecurityDefaults {
     pub disconnect_on_lock: bool,
     /// Sekunden, nach denen ein kopiertes Kennwort aus der Zwischenablage gelöscht wird; 0 = nie.
     pub clipboard_clear_secs: u32,
+    /// Das Hauptkennwort liegt (auf Wunsch) im Schlüsselbund des Systems; der Start entsperrt damit.
+    pub keyring_unlock: bool,
 }
 
 impl Default for SecurityDefaults {
     fn default() -> Self {
-        SecurityDefaults { lock_after_idle_mins: 0, disconnect_on_lock: false, clipboard_clear_secs: 30 }
+        SecurityDefaults { lock_after_idle_mins: 0, disconnect_on_lock: false, clipboard_clear_secs: 30, keyring_unlock: false }
     }
 }
 

@@ -44,6 +44,8 @@ public:
 	void clipboardClearSettings();
 	/// Fensterlage aus der Konfiguration herstellen (vor dem Zeigen) bzw. beim Beenden merken.
 	void restoreWindowState();
+	void tryKeyringUnlock();
+	void forgetKeyring();
 	void saveWindowState();
 	void setFilter(const QString& text);
 	/// Ersten Hypervisor im Baum aufklappen (lädt die Gäste).

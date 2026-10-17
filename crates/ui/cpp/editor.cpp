@@ -2291,6 +2291,8 @@ UnlockOverlay::UnlockOverlay(RjBackend* backend, QWidget* parent)
 	m_keyFile = new QLineEdit(box);
 	m_keyFile->setCompleter(new QCompleter(fs, this));
 	m_makeKey = new QCheckBox(rjText(backend, "unlock.makekey"), box);
+	m_remember = new QCheckBox(rjText(backend, "unlock.remember"), box);
+	m_remember->setToolTip(rjText(backend, "unlock.remember.tip"));
 	m_strength = new QLabel(box);
 	m_strength->setWordWrap(true);
 	auto addRow = [&](const char* label, QWidget* field, QWidget* buddy) {
@@ -2303,6 +2305,7 @@ UnlockOverlay::UnlockOverlay(RjBackend* backend, QWidget* parent)
 	addRow("unlock.password2", m_password2, m_password2);
 	addRow("unlock.keyfile", m_keyFile, m_keyFile);
 	m_form->addRow(QString(), m_makeKey);
+	m_form->addRow(QString(), m_remember);
 	m_form->addRow(QString(), m_strength);
 	v->addLayout(m_form);
 	m_message = new QLabel(box);
@@ -2483,7 +2486,7 @@ void UnlockOverlay::submit()
 				kf = fi.dir().filePath(fi.completeBaseName() + QStringLiteral(".key"));
 			}
 			setBusy(true, rjText(m_backend, "unlock.busy.new"));
-			emit createRequested(path, pw, kf, make);
+			emit createRequested(path, pw, kf, make, m_remember->isChecked());
 			m_password->clear();
 			m_password2->clear();
 		}
@@ -2492,7 +2495,7 @@ void UnlockOverlay::submit()
 	}
 	QString pw = m_password->text();
 	setBusy(true, rjText(m_backend, "unlock.busy"));
-	emit unlockRequested(m_path->text(), pw, m_keyFile->text());
+	emit unlockRequested(m_path->text(), pw, m_keyFile->text(), m_remember->isChecked());
 	pw.fill(QLatin1Char(' '));
 	m_password->clear();
 }

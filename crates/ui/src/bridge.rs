@@ -177,10 +177,24 @@ pub mod qobject {
         #[qinvokable]
         fn reconnect(self: Pin<&mut RjBackend>, session: u64);
         #[qinvokable]
-        fn unlock(self: Pin<&mut RjBackend>, path: &QString, password: &QString, key_file: &QString);
+        fn unlock(self: Pin<&mut RjBackend>, path: &QString, password: &QString, key_file: &QString, remember: bool);
         #[qinvokable]
         #[cxx_name = "createVault"]
-        fn create_vault(self: Pin<&mut RjBackend>, path: &QString, password: &QString, key_file: &QString, make_key_file: bool);
+        fn create_vault(self: Pin<&mut RjBackend>, path: &QString, password: &QString, key_file: &QString, make_key_file: bool, remember: bool);
+        /// Beim Start mit dem im Schlüsselbund gemerkten Hauptkennwort entsperren (wenn eingeschaltet).
+        #[qinvokable]
+        #[cxx_name = "unlockFromKeyring"]
+        fn unlock_from_keyring(self: Pin<&mut RjBackend>) -> bool;
+        #[qinvokable]
+        #[cxx_name = "keyringForget"]
+        fn keyring_forget(self: Pin<&mut RjBackend>) -> QString;
+        #[qinvokable]
+        #[cxx_name = "keyringEnabled"]
+        fn keyring_enabled(self: &RjBackend) -> bool;
+        /// Hinweis zum Schlüsselbund für die Statuszeile (einmal abholbar).
+        #[qinvokable]
+        #[cxx_name = "keyringNote"]
+        fn keyring_note(self: Pin<&mut RjBackend>) -> QString;
         #[qinvokable]
         fn lock(self: Pin<&mut RjBackend>);
         /// Eingabe des Benutzers (Leerlauf-Zeitgeber).
@@ -288,6 +302,22 @@ impl qobject::RjBackend {
         if let Some(a) = self.app_mut() {
             a.set_clipboard_clear_secs(secs.max(0) as u32);
         }
+    }
+
+    fn unlock_from_keyring(self: Pin<&mut Self>) -> bool {
+        self.app_mut().is_some_and(|a| a.unlock_from_keyring())
+    }
+
+    fn keyring_forget(self: Pin<&mut Self>) -> QString {
+        q(self.app_mut().map(|a| a.keyring_forget()).unwrap_or_default())
+    }
+
+    fn keyring_enabled(&self) -> bool {
+        self.app().is_some_and(|a| a.keyring_enabled())
+    }
+
+    fn keyring_note(self: Pin<&mut Self>) -> QString {
+        q(self.app_mut().map(|a| a.take_keyring_note()).unwrap_or_default())
     }
 
     fn window_state_json(&self) -> QString {
@@ -572,19 +602,19 @@ impl qobject::RjBackend {
         }
     }
 
-    fn unlock(self: Pin<&mut Self>, path: &QString, password: &QString, key_file: &QString) {
+    fn unlock(self: Pin<&mut Self>, path: &QString, password: &QString, key_file: &QString, remember: bool) {
         let (p, k) = (path.to_string(), key_file.to_string());
         let pw = rj_core::Secret::from_str_exact(&password.to_string());
         if let Some(a) = self.app_mut() {
-            a.unlock(p, pw, (!k.is_empty()).then_some(k));
+            a.unlock(p, pw, (!k.is_empty()).then_some(k), remember);
         }
     }
 
-    fn create_vault(self: Pin<&mut Self>, path: &QString, password: &QString, key_file: &QString, make_key_file: bool) {
+    fn create_vault(self: Pin<&mut Self>, path: &QString, password: &QString, key_file: &QString, make_key_file: bool, remember: bool) {
         let (p, k) = (path.to_string(), key_file.to_string());
         let pw = rj_core::Secret::from_str_exact(&password.to_string());
         if let Some(a) = self.app_mut() {
-            a.create_vault(p, pw, (!k.is_empty()).then_some(k), make_key_file);
+            a.create_vault(p, pw, (!k.is_empty()).then_some(k), make_key_file, remember);
         }
     }
 
