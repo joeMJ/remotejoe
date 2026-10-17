@@ -402,5 +402,21 @@
   "snmp.auth_password": "Kennwort &Authentisierung",
   "snmp.priv": "Verschlüsselung",
   "snmp.priv.none": "keine",
-  "snmp.priv_password": "Kennwort &Verschlüsselung"
+  "snmp.priv_password": "Kennwort &Verschlüsselung",
+  "web.back": "Zurück",
+  "web.forward": "Vor",
+  "web.reload": "Neu laden",
+  "web.tip.back": "Vorherige Seite dieser Web-Sitzung",
+  "web.tip.forward": "Nächste Seite dieser Web-Sitzung",
+  "web.tip.reload": "Seite neu laden",
+  "web.menu.back": "Zurück",
+  "web.menu.forward": "Vor",
+  "web.menu.reload": "Neu laden",
+  "web.menu.cut": "Ausschneiden",
+  "web.menu.copy": "Kopieren",
+  "web.menu.paste": "Einfügen",
+  "web.menu.select_all": "Alles auswählen",
+  "web.status.loading": "%1: Seite lädt … %2 %",
+  "web.status.loaded": "%1: Seite geladen",
+  "web.status.error": "%1: Seite nicht geladen – %2"
 }

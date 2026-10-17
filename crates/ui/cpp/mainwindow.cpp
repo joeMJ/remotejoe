@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include <algorithm>
 
 #include "editor.h"
 #include "remotejoe-ui/src/bridge.cxxqt.h"
@@ -1391,6 +1392,21 @@ void MainWindow::terminalSettingsForScreenshot(const QString& scheme)
 	openTerminalSettings();
 }
 
+bool MainWindow::showWebTabForScreenshot()
+{
+	for (SessionPane* p : std::as_const(m_panes))
+		if (p && p->isWeb())
+			for (int i = 0; i < m_tabs->count(); ++i)
+				if (m_tabs->widget(i)->isAncestorOf(p))
+				{
+					m_tabs->setCurrentIndex(i);
+					if (p->frame())
+						p->frame()->setFocus();
+					return true;
+				}
+	return false;
+}
+
 void MainWindow::showEmptyTreeForScreenshot()
 {
 	m_model->clear();
@@ -1505,6 +1521,9 @@ void MainWindow::rebuildTabs()
 			const int i = target->addTab(content, tab.value(QStringLiteral("title")).toString());
 			if (id == active)
 				activeIndex = i;
+			for (SessionPane* p : std::as_const(m_panes))
+				if (p && content->isAncestorOf(p))
+					applyPageTitle(p);
 		}
 		target->setCurrentIndex(activeIndex);
 		for (const auto& e : editors)
@@ -1644,6 +1663,25 @@ void MainWindow::poll()
 	m_dirtyTerminals.clear();
 }
 
+void MainWindow::applyPageTitle(SessionPane* p)
+{
+	// Titel der Webseite als Tab-Titel, wenn der Tab nur diese Sitzung zeigt.
+	if (p->pageTitle().isEmpty())
+		return;
+	QList<QTabWidget*> all = findChildren<QTabWidget*>();
+	for (auto& w : m_windows)
+		if (w)
+			all += w->findChildren<QTabWidget*>();
+	for (QTabWidget* tabs : all)
+		for (int i = 0; i < tabs->count(); ++i)
+			if (tabs->widget(i)->isAncestorOf(p) &&
+			    std::count_if(m_panes.cbegin(), m_panes.cend(), [&](SessionPane* o) { return o && tabs->widget(i)->isAncestorOf(o); }) == 1)
+			{
+				tabs->setTabText(i, p->pageTitle());
+				tabs->setTabToolTip(i, p->title() + QStringLiteral(" — ") + p->pageTitle());
+			}
+}
+
 void MainWindow::handleEvents(const QString& json)
 {
 	if (json.size() > 2)
@@ -1716,6 +1754,21 @@ void MainWindow::handleEvents(const QString& json)
 				p->setMacroResult(e.value(QStringLiteral("message")).toString(), e.value(QStringLiteral("ok")).toBool());
 			else if (t == QLatin1String("title") && p)
 				p->setToolTip(e.value(QStringLiteral("title")).toString());
+			else if (t == QLatin1String("web_status") && p)
+			{
+				p->setWebStatus(e);
+				applyPageTitle(p);
+				// Lade- und Fehlerzustand in der Fußzeile.
+				const QString error = e.value(QStringLiteral("error")).toString();
+				if (!error.isEmpty())
+					statusBar()->showMessage(T(m_backend, "web.status.error").arg(p->title(), error), 15000);
+				else if (e.value(QStringLiteral("loading")).toBool())
+					statusBar()->showMessage(T(m_backend, "web.status.loading").arg(p->title()).arg(e.value(QStringLiteral("progress")).toInt()), 5000);
+				else
+					statusBar()->showMessage(T(m_backend, "web.status.loaded").arg(p->title()), 3000);
+			}
+			else if (t == QLatin1String("web_menu") && p)
+				p->showWebMenu(e);
 			else if (t == QLatin1String("tree_changed"))
 				reloadTree();
 			else if (t == QLatin1String("unlocked"))

@@ -548,6 +548,13 @@ impl App {
                 }
                 Ok(json!({ "ok": true }))
             }
+            "web_command" => {
+                let s = c.get("session").and_then(Value::as_u64).unwrap_or(0);
+                match c.get("cmd") {
+                    Some(cmd) => self.sessions.web_command(s, cmd).map(|_| json!({ "ok": true })),
+                    None => Err("Befehl fehlt".into()),
+                }
+            }
             _ => Err(format!("Unbekannter Befehl „{op}“")),
         };
         match r {

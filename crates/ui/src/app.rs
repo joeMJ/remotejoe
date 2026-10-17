@@ -927,6 +927,37 @@ impl App {
         self.workspace.set_arrangement(t1, Arrangement::TwoByTwo);
         let e = self.sessions.open_demo_terminal("ssh-005", "admin@netz-01:~$ ip -br addr\r\nlo   UNKNOWN 127.0.0.1/8\r\neth0 UP      192.0.2.15/24\r\nadmin@netz-01:~$ ", 90, 20);
         self.workspace.open(e, "ssh-005");
+        // Echte Web-Sitzungen für das Bildschirmfoto des Web-Tabs (Adressen aus
+        // RJ_DEMO_WEB, durch Komma getrennt), nebeneinander gekachelt.
+        let urls = std::env::var("RJ_DEMO_WEB").unwrap_or_default();
+        let mut web_tab = None;
+        for (i, url) in urls.split(',').filter(|u| !u.trim().is_empty()).take(2).enumerate() {
+            let title = format!("web-{:03}", i + 1);
+            let spec = ConnectSpec {
+                target: Uuid::nil(),
+                title: title.clone(),
+                protocol: Protocol::Web,
+                request: ConnectRequest {
+                    host: "127.0.0.1".into(),
+                    port: 0,
+                    width: 640,
+                    height: 560,
+                    options_json: json!({ "url": url.trim(), "allow_http": true, "profile": title }).to_string(),
+                    connect_timeout_secs: 15,
+                    keepalive_secs: 30,
+                },
+                credentials: CredentialPayload { username: String::new(), domain: None, password: SecretBytes(Vec::new()), private_key: None },
+            };
+            let s = self.sessions.open(spec);
+            match web_tab {
+                None => web_tab = Some(self.workspace.open(s, &title)),
+                Some(t) => {
+                    self.workspace.open(s, &title);
+                    self.workspace.tile(s, t);
+                    self.workspace.set_arrangement(t, Arrangement::OneByTwo);
+                }
+            }
+        }
         self.workspace.activate(t1);
     }
 

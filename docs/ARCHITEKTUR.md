@@ -14,8 +14,8 @@ anderen Sitzungen unberührt.
    stdin/stdout     stdin/stdout    stdin/stdout    stdin/stdout  (+ Socket für Bildpuffer)
            │              │              │              │
    rj-worker-ssh   rj-worker-rdp   rj-worker-vnc   rj-worker-web  rj-worker-psrp
-   (russh,         (FreeRDP 3,     (eigene RFB-    (WebView,      (pwsh)
-    Terminal)       C-Hülle)        Umsetzung)      eigenes Fenster)
+   (russh,         (FreeRDP 3,     (eigene RFB-    (WebKitGTK     (pwsh)
+    Terminal)       C-Hülle)        Umsetzung)      ohne Fenster)
 ```
 
 ## Bausteine
@@ -29,7 +29,7 @@ anderen Sitzungen unberührt.
 | `worker-ssh` | SSH-Client (russh), Terminal (alacritty_terminal), Host-Schlüssel, Makros |
 | `worker-rdp` | RDP über FreeRDP 3 (eigene C-Hülle + bindgen), Zwischenablage, Tastaturbelegung |
 | `worker-vnc` | VNC/RFB (Raw, CopyRect, Hextile, ZRLE), VeNCrypt mit TLS, erweiterte Zwischenablage |
-| `worker-web` | WebView (WebKitGTK / WebView2), Formular-Anmeldung, Profil je Ziel, Zertifikatsrückfrage |
+| `worker-web` | WebKitGTK in einem `GtkOffscreenWindow` (kein sichtbares Fenster), Bild in den geteilten Speicher, Eingaben als GDK-Ereignisse, Formular-Anmeldung, Profil je Ziel, Zertifikatsrückfrage |
 | `worker-psrp` | PowerShell-Remoting über lokales `pwsh` (WinRM oder SSH), Hyper-V-Befehle |
 | `proxmox` | Proxmox-VE-REST, Aktionen, Konsole über VNC-Websocket mit lokaler Brücke |
 | `tunnel` | SSH-Sprungserver-Ketten, WireGuard im Prozess (boringtun + smoltcp), System-Tunnel |
@@ -76,7 +76,7 @@ anderen Sitzungen unberührt.
   (geänderter Bereich), `Output` (Terminalbytes), `Clipboard`, `Question` (Sicherheitsabfrage
   mit `SecurityInfo`: Art, Host, Port, Schlüsseltyp, vollständiger und bisheriger
   Fingerabdruck), `Notice`, `Log`, `Pong`, `Custom`. Protokollversion 3.
-- Bilddaten (RDP, VNC): anonymer geteilter Speicher ohne Dateinamen, BGRA mit 32 Bit je
+- Bilddaten (RDP, VNC, Web): anonymer geteilter Speicher ohne Dateinamen, BGRA mit 32 Bit je
   Bildpunkt; über den Kanal laufen nur die geänderten Rechtecke und eine laufende Nummer.
   Linux: `memfd` mit Versiegelung gegen Verkleinern und Vergrößern; der Hauptprozess prüft
   Versiegelung (`F_GET_SEALS`) und Größe und lehnt andere Deskriptoren ab, sodass ein Worker

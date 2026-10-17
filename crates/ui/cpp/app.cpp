@@ -50,6 +50,14 @@ void screenshots(MainWindow& w, const QString& dir)
 {
 	QDir().mkpath(dir);
 	pump(600);
+	// Web-Sitzungen (RJ_DEMO_WEB): Seite im Tab, gerendert im Worker ohne eigenes Fenster.
+	if (w.showWebTabForScreenshot())
+	{
+		pump(6000);
+		save(&w, dir, QStringLiteral("web-tab.png"));
+	}
+	w.tabs()->setCurrentIndex(0);
+	pump(300);
 	save(&w, dir, QStringLiteral("hauptfenster-hell.png"));
 	w.applyTheme(true);
 	pump(300);

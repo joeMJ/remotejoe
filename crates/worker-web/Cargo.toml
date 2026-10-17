@@ -1,6 +1,6 @@
 [package]
 name = "remotejoe-worker-web"
-description = "Web-Worker: WebView mit Formular-Anmeldung, eigenem Profil je Ziel und Zertifikatswarnung"
+description = "Web-Worker: WebView ohne eigenes Fenster (Bild im geteilten Speicher), Formular-Anmeldung, eigenes Profil je Ziel, Zertifikatswarnung"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
@@ -16,9 +16,9 @@ path = "src/main.rs"
 required-features = ["webview"]
 
 [features]
-# WebView (Linux: WebKitGTK 4.1, Windows: WebView2). Ohne dieses Merkmal
-# wird nur die plattformunabhängige Logik gebaut.
-webview = ["dep:wry", "dep:tao", "dep:remotejoe-ipc", "dep:webkit2gtk", "dep:gtk", "dep:gio", "dep:glib"]
+# WebView (Linux: WebKitGTK 4.1 in einem GtkOffscreenWindow). Ohne dieses
+# Merkmal wird nur die plattformunabhängige Logik gebaut.
+webview = ["dep:remotejoe-ipc", "dep:webkit2gtk", "dep:gtk", "dep:javascriptcore-rs"]
 
 [dependencies]
 remotejoe-core = { path = "../core" }
@@ -28,14 +28,11 @@ thiserror.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
 remotejoe-ipc = { path = "../ipc", optional = true }
-wry = { version = "0.57", optional = true }
-tao = { version = "0.37", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0", optional = true, features = ["v2_40"] }
 gtk = { version = "0.18", optional = true }
-gio = { version = "0.18", optional = true }
-glib = { version = "0.18", optional = true }
+javascriptcore-rs = { version = "1.1", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
