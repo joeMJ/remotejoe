@@ -13,10 +13,17 @@ pub enum Plan {
     Replace { dir: PathBuf },
     /// Von der Paketverwaltung installiert (unter `/usr`): nur Hinweis, keine Selbstveränderung.
     PackageManaged { dir: PathBuf },
+    /// Entwicklungsstand (`target/release` oder `target/debug` eines Arbeitsbereichs): wird nie
+    /// ersetzt, sonst ginge der Bauordner verloren.
+    Development { dir: PathBuf },
 }
 
 /// Plan für das Verzeichnis des laufenden Programms.
 pub fn plan(program_dir: &Path) -> Plan {
+    let parts: Vec<_> = program_dir.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    if parts.windows(2).any(|w| w[0] == "target" && (w[1] == "release" || w[1] == "debug")) {
+        return Plan::Development { dir: program_dir.to_path_buf() };
+    }
     if cfg!(unix) && program_dir.starts_with("/usr") {
         Plan::PackageManaged { dir: program_dir.to_path_buf() }
     } else {
@@ -77,7 +84,11 @@ mod tests {
         if cfg!(unix) {
             assert!(matches!(plan(Path::new("/usr/lib/remotejoe")), Plan::PackageManaged { .. }));
             assert!(matches!(plan(Path::new("/home/nutzer/remotejoe")), Plan::Replace { .. }));
+            assert!(matches!(plan(Path::new("/home/nutzer/.local/share/remotejoe")), Plan::Replace { .. }));
         }
+        assert!(matches!(plan(Path::new("/home/nutzer/projekt/target/release")), Plan::Development { .. }));
+        assert!(matches!(plan(Path::new("/home/nutzer/projekt/target/debug")), Plan::Development { .. }));
+        assert!(matches!(plan(Path::new("/home/nutzer/target-ordner/remotejoe")), Plan::Replace { .. }));
     }
 
     #[test]

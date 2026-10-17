@@ -1,0 +1,59 @@
+# Baut bei einem Versions-Tag (v1.2.3) das Linux-Paket und legt einen ENTWURF der Veröffentlichung an.
+# Signiert wird nicht hier: Der Herausgeber setzt die Signatur lokal mit seinem privaten Schlüssel
+# (rj-update abschliessen) und veröffentlicht den Entwurf erst danach. Der Schlüssel liegt nie bei GitHub.
+name: Release (Versions-Tag)
+
+on:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    container: ubuntu:26.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+    steps:
+      - name: Systempakete
+        run: |
+          apt-get update
+          apt-get install -y build-essential pkg-config cmake clang libclang-dev lld \
+            qt6-base-dev qt6-base-dev-tools qt6-svg-dev qmake6 freerdp3-dev libwinpr3-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev git curl ca-certificates zstd gh
+
+      - name: Quellen holen
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rust
+        run: |
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install --profile minimal
+
+      - name: Bauen
+        run: |
+          cargo build --release --locked
+          cargo build --release --locked -p remotejoe-worker-web --features webview
+          cargo build --release --locked -p remotejoe-update-tool
+
+      - name: Paket
+        run: scripts/package-linux.sh "${GITHUB_REF_NAME#v}" dist
+
+      - name: Entwurf der Veröffentlichung anlegen
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          NOTES="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "remotejoe ${GITHUB_REF_NAME#v}" \
+            --notes "${NOTES:-Linux-Paket, gebaut unter Ubuntu 26.04.}"

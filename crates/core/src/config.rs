@@ -42,13 +42,13 @@ pub struct Config {
     pub security: SecurityDefaults,
     /// Schrift und Farben des SSH-Terminals.
     pub terminal: crate::termcolors::TerminalSettings,
-    /// Update-Quelle (Voreinstellung: keine).
+    /// Update-Quelle (Voreinstellung: GitHub, `joeMJ/remotejoe`).
     pub update: UpdateSettings,
 }
 
 /// Einstellungen der Update-Funktion. Der Zugriffsschlüssel steht nie hier,
 /// sondern als Eintrag in der Schlüsseldatenbank (`token_entry`).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UpdateSettings {
     /// `gitea`, `github` oder leer (keine Quelle).
@@ -61,6 +61,13 @@ pub struct UpdateSettings {
     pub token_entry: Option<uuid::Uuid>,
     /// Beim Start im Hintergrund prüfen (Voreinstellung aus).
     pub check_on_start: bool,
+}
+
+impl Default for UpdateSettings {
+    /// Voreinstellung: die öffentlichen Veröffentlichungen von remotejoe auf GitHub.
+    fn default() -> Self {
+        UpdateSettings { source: "github".into(), base_url: String::new(), repo: "joeMJ/remotejoe".into(), token_entry: None, check_on_start: false }
+    }
 }
 
 impl Default for Config {

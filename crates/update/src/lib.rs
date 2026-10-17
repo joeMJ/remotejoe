@@ -7,6 +7,7 @@
 //! Archivs aus dieser Datei. Schlägt eine Prüfung fehl, wird nichts entpackt.
 
 pub mod archive;
+pub mod github;
 pub mod http;
 pub mod install;
 pub mod release;

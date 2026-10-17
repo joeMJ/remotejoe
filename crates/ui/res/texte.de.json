@@ -475,6 +475,9 @@
   "update.confirm": "Es sind %1 Sitzungen offen. Sie bleiben bis zum Neustart verbunden. Trotzdem installieren?",
   "update.confirm.yes": "Installieren",
   "update.package_managed": "remotejoe wurde über die Paketverwaltung installiert (unter /usr) und verändert sich nicht selbst.",
+  "update.development": "Dies ist ein Entwicklungsstand (Bauordner target/release) und aktualisiert sich nicht selbst. Die installierte Fassung (install.sh) wird über diese Funktion aktualisiert.",
+  "update.development.hint": "Entwicklungsstand: nicht ersetzt. Die neue Fassung steht hier bereit: %1",
+  "update.source.github": "GitHub (Voreinstellung: joeMJ/remotejoe)",
   "update.package_managed.hint": "Installation über die Paketverwaltung: bitte das Paket von dort aktualisieren. Download: %1",
   "update.available": "Update verfügbar: remotejoe %1 (Hilfe → Nach Updates suchen …)"
 }

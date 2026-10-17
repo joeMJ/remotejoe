@@ -3289,7 +3289,7 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 	m_source = new QComboBox(src);
 	m_source->addItem(T("update.source.none"), QString());
 	m_source->addItem(QStringLiteral("Gitea"), QStringLiteral("gitea"));
-	m_source->addItem(QStringLiteral("GitHub"), QStringLiteral("github"));
+	m_source->addItem(T("update.source.github"), QStringLiteral("github"));
 	m_base = new QLineEdit(src);
 	m_base->setPlaceholderText(QStringLiteral("https://git.example.test"));
 	m_repo = new QLineEdit(src);
@@ -3390,6 +3390,8 @@ void UpdateTab::refresh()
 		m_found->setText(m_backend->text(QStringLiteral("update.found.none")));
 	if (s.value(QStringLiteral("package_managed")).toBool())
 		m_state->setText(m_backend->text(QStringLiteral("update.package_managed")));
+	else if (s.value(QStringLiteral("development")).toBool())
+		m_state->setText(m_backend->text(QStringLiteral("update.development")));
 }
 
 void UpdateTab::saveSettings()
@@ -3442,6 +3444,8 @@ void UpdateTab::install(bool confirm)
 		           });
 	else if (state == QLatin1String("package"))
 		m_state->setText(m_backend->text(QStringLiteral("update.package_managed.hint")).arg(r.value(QStringLiteral("url")).toString()));
+	else if (state == QLatin1String("development"))
+		m_state->setText(m_backend->text(QStringLiteral("update.development.hint")).arg(r.value(QStringLiteral("url")).toString()));
 	else
 		setBusy(true, m_backend->text(QStringLiteral("update.installing")));
 }

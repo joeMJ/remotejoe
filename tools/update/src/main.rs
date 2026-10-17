@@ -11,13 +11,23 @@
 //! rj-update hochladen <gitea-adresse> <besitzer/name> <version> <ausgabeordner> [<aenderungstext-datei>]
 //!     legt die Veröffentlichung an und lädt alle Dateien des Ordners hoch;
 //!     Zugriffsschlüssel aus der Umgebungsvariable RJ_GITEA_TOKEN
+//! rj-update packen-ohne-signatur <programmordner> <version> <plattform> <ausgabeordner>
+//!     wie „packen“, aber ohne Signatur (für die automatische Paketierung auf GitHub)
+//! rj-update abschliessen <besitzer/name> <tag> [--minuten <n>] [--schluessel <datei>] [--oeffentlich <datei>]
+//!     GitHub: prüft den von der Paketierung angelegten Entwurf, signiert SHA256SUMS mit dem
+//!     lokalen privaten Schlüssel und veröffentlicht die Veröffentlichung. Zugriffsschlüssel aus
+//!     der Umgebungsvariable RJ_GITHUB_TOKEN oder aus dem Schlüsselbund
+//!     (`secret-tool lookup service remotejoe-github`)
 //! ```
+//!
+//! Der private Schlüssel liegt standardmäßig unter `~/.config/remotejoe/signing/update-key.priv`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use rj_update::github::{self, Endpoints};
 use rj_update::http::{self, Control};
 use rj_update::sign::{self, SIG, SUMS};
 use rj_update::{archive, asset_name, Limits, UpdateError, Version};
@@ -26,12 +36,15 @@ use zeroize::Zeroizing;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {
+        Some("schluessel") if args.len() == 1 => keys(&default_key_dir()),
         Some("schluessel") if args.len() == 2 => keys(Path::new(&args[1])),
-        Some("packen") if args.len() == 6 => pack(Path::new(&args[1]), &args[2], &args[3], Path::new(&args[4]), Path::new(&args[5])),
+        Some("packen") if args.len() == 6 => pack(Path::new(&args[1]), &args[2], &args[3], Some(Path::new(&args[4])), Path::new(&args[5])),
+        Some("packen-ohne-signatur") if args.len() == 5 => pack(Path::new(&args[1]), &args[2], &args[3], None, Path::new(&args[4])),
         Some("pruefen") if args.len() == 3 => check(Path::new(&args[1]), Path::new(&args[2])),
         Some("hochladen") if args.len() == 5 || args.len() == 6 => upload(&args[1], &args[2], &args[3], Path::new(&args[4]), args.get(5).map(PathBuf::from)),
+        Some("abschliessen") if args.len() >= 3 => finish(&args[1], &args[2], &args[3..]),
         _ => {
-            eprintln!("Aufruf: rj-update schluessel <ordner> | packen <programmordner> <version> <plattform> <privater-schluessel> <ausgabeordner> | pruefen <ausgabeordner> <oeffentlicher-schluessel> | hochladen <gitea-adresse> <besitzer/name> <version> <ausgabeordner> [<aenderungstext-datei>]");
+            eprintln!("Aufruf: rj-update schluessel [<ordner>] | packen <programmordner> <version> <plattform> <privater-schluessel> <ausgabeordner> | packen-ohne-signatur <programmordner> <version> <plattform> <ausgabeordner> | pruefen <ausgabeordner> <oeffentlicher-schluessel> | hochladen <gitea-adresse> <besitzer/name> <version> <ausgabeordner> [<aenderungstext-datei>] | abschliessen <besitzer/name> <tag> [--minuten <n>] [--schluessel <datei>] [--oeffentlich <datei>]");
             return ExitCode::from(2);
         }
     };
@@ -66,17 +79,21 @@ fn keys(dir: &Path) -> Result<(), UpdateError> {
     Ok(())
 }
 
-fn pack(src: &Path, version: &str, platform: &str, key: &Path, out: &Path) -> Result<(), UpdateError> {
+fn pack(src: &Path, version: &str, platform: &str, key: Option<&Path>, out: &Path) -> Result<(), UpdateError> {
     let v = Version::parse(version)?;
-    let sk = sign::secret_key_from_text(&Zeroizing::new(fs::read_to_string(key)?))?;
     let name = asset_name(&v.to_string(), platform);
     let data = if name.ends_with(".zip") { archive::pack_zip(src)? } else { archive::pack_tar_zst(src)? };
     fs::create_dir_all(out)?;
     fs::write(out.join(&name), &data)?;
     let sums = sign::sums_text(&[(name.clone(), sign::sha256_hex(&data))]);
     fs::write(out.join(SUMS), &sums)?;
-    fs::write(out.join(SIG), sign::sign(&sk, sums.as_bytes()))?;
-    println!("{} ({} Bytes), {SUMS}, {SIG} in {}", name, data.len(), out.display());
+    if let Some(key) = key {
+        let sk = sign::secret_key_from_text(&Zeroizing::new(fs::read_to_string(key)?))?;
+        fs::write(out.join(SIG), sign::sign(&sk, sums.as_bytes()))?;
+        println!("{} ({} Bytes), {SUMS}, {SIG} in {}", name, data.len(), out.display());
+    } else {
+        println!("{} ({} Bytes), {SUMS} (ohne Signatur) in {}", name, data.len(), out.display());
+    }
     Ok(())
 }
 
@@ -129,5 +146,52 @@ fn upload(base: &str, repo: &str, version: &str, dir: &Path, notes: Option<PathB
         }
         println!("hochgeladen: {name}");
     }
+    Ok(())
+}
+
+fn default_key_dir() -> PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))).unwrap_or_else(|| PathBuf::from("."));
+    base.join("remotejoe").join("signing")
+}
+
+/// Zugriffsschlüssel für GitHub: Umgebungsvariable oder Schlüsselbund (`secret-tool`).
+fn github_token() -> Result<Zeroizing<String>, UpdateError> {
+    if let Ok(t) = std::env::var("RJ_GITHUB_TOKEN") {
+        if !t.trim().is_empty() {
+            return Ok(Zeroizing::new(t.trim().to_string()));
+        }
+    }
+    let out = std::process::Command::new("secret-tool").args(["lookup", "service", "remotejoe-github"]).output();
+    match out {
+        Ok(o) if o.status.success() && !o.stdout.is_empty() => Ok(Zeroizing::new(String::from_utf8_lossy(&o.stdout).trim().to_string())),
+        _ => Err(UpdateError::BadKey(
+            "Kein GitHub-Zugriffsschlüssel: RJ_GITHUB_TOKEN setzen oder ihn einmal im Schlüsselbund ablegen:\n  secret-tool store --label='remotejoe GitHub' service remotejoe-github".into(),
+        )),
+    }
+}
+
+fn finish(repo: &str, tag: &str, opts: &[String]) -> Result<(), UpdateError> {
+    let (mut minutes, mut key_path, mut pub_path) = (30u64, default_key_dir().join("update-key.priv"), PathBuf::from("crates/ui/res/update-key.pub"));
+    let mut it = opts.iter();
+    while let Some(o) = it.next() {
+        let v = it.next().ok_or_else(|| UpdateError::Url(format!("Wert für {o} fehlt")))?;
+        match o.as_str() {
+            "--minuten" => minutes = v.parse().map_err(|_| UpdateError::Url("--minuten erwartet eine Zahl".into()))?,
+            "--schluessel" => key_path = PathBuf::from(v),
+            "--oeffentlich" => pub_path = PathBuf::from(v),
+            other => return Err(UpdateError::Url(format!("Unbekannte Option {other}"))),
+        }
+    }
+    let sk = sign::secret_key_from_text(&Zeroizing::new(fs::read_to_string(&key_path).map_err(|e| UpdateError::BadKey(format!("{}: {e}", key_path.display())))?))?;
+    // Der Signaturschlüssel muss zu dem im Programm eingebauten öffentlichen Schlüssel gehören, sonst
+    // könnte kein installiertes Programm das Paket annehmen.
+    let embedded = sign::public_key_from_text(&fs::read_to_string(&pub_path).map_err(|e| UpdateError::BadKey(format!("{}: {e}", pub_path.display())))?)?;
+    if embedded != sk.verifying_key() {
+        return Err(UpdateError::BadKey(format!("Der private Schlüssel gehört nicht zum eingebauten öffentlichen Schlüssel ({}).", pub_path.display())));
+    }
+    let token = github_token()?;
+    println!("Warte auf die Paketierung von {tag} (bis zu {minutes} Minuten) …");
+    let done = github::finish_release(&Endpoints::default(), repo, tag, &token, &sk, &embedded, Duration::from_secs(minutes * 60), None)?;
+    println!("Veröffentlicht: {} mit {}", done.tag, done.archives.join(", "));
     Ok(())
 }

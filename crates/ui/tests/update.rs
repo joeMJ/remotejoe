@@ -66,7 +66,11 @@ fn check_and_install_with_token_from_vault() {
     app.update.dir_override = Some(target.clone());
     app.update.key_override = Some(sign::public_key_text(&key.verifying_key()));
 
+    // Voreinstellung: die öffentlichen Veröffentlichungen auf GitHub.
+    let st = app.update_status();
+    assert_eq!((st["source"].as_str(), st["repo"].as_str()), (Some("github"), Some("joeMJ/remotejoe")), "{st}");
     // Ohne Quelle: Fehler; nur https außer 127.0.0.1.
+    edit(&mut app, json!({"op": "update_settings", "source": ""}));
     assert!(edit(&mut app, json!({"op": "update_check"}))["error"].as_str().unwrap().contains("Quelle"));
     let r = edit(&mut app, json!({"op": "update_settings", "source": "gitea", "base_url": "http://git.example.test", "repo": "team/remotejoe"}));
     assert!(r["error"].as_str().unwrap().contains("https"), "{r}");

@@ -8,7 +8,7 @@
 >
 > * **Keine Unterstützung:** Issues und Pull Requests werden nicht bearbeitet, Feature-Wünsche nicht umgesetzt. Bitte keine Issues eröffnen.
 > * **Keine Garantie:** Bereitstellung „wie besehen“, ohne jede Gewährleistung und Haftung. Nutzung auf eigenes Risiko.
-> * **Eigene Umgebung:** Entwickelt und getestet nur auf meinen eigenen Ubuntu-Rechnern (24.04 / 26.04). Auf anderen Systemen kann es fehlschlagen. Die Windows-Fassung ist bisher nur vorbereitet (Bauanleitung), aber nicht erprobt.
+> * **Eigene Umgebung:** Entwickelt und getestet nur auf meinen eigenen Ubuntu-Rechnern (zuletzt 26.04). Auf anderen Systemen kann es fehlschlagen. Die Windows-Fassung ist bisher nur vorbereitet (Bauanleitung), aber nicht erprobt.
 > * **Zugangsdaten & Netzwerk:** Das Programm läuft mit den Rechten deines Benutzerkontos, öffnet Verbindungen zu den Zielen, die du einträgst, und verwaltet Zugangsdaten in einer KeePass-Datei (KDBX). Für die Update-Prüfung ruft es die Veröffentlichungen dieses Repositorys auf GitHub ab. **Lies den Code, bevor du ihn installierst.**
 > * **Keine Updates zugesichert:** Es kann jederzeit ohne Ankündigung Änderungen, Brüche oder die Löschung des Repos geben. Gern selbst forken und anpassen.
 >
@@ -26,14 +26,14 @@
 
 | Plattform | Status | Hinweis |
 | :--- | :--- | :--- |
-| **Linux (Ubuntu 24.04 / 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto |
+| **Linux (Ubuntu 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto; Pakete werden unter 26.04 gebaut (24.04 ungeprüft) |
 | **Windows 10/11** | Vorbereitet | Bauanleitung [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md); noch nicht erprobt, Web-Ziele im Tab fehlen noch |
 
 ---
 
 ## Installation (Linux, Ubuntu)
 
-**Voraussetzungen:** Ubuntu 24.04 – 26.04, `curl`, `tar` und `zstd`. Kein `sudo` für das Programm selbst nötig – es wird im eigenen Benutzerkonto installiert (`~/.local`). Die benötigten Systembibliotheken (Qt 6, FreeRDP 3, WebKitGTK) kommen aus den Ubuntu-Paketquellen; das Skript prüft sie und nennt fehlende Pakete.
+**Voraussetzungen:** Ubuntu 26.04 (24.04 ungeprüft), `curl`, `tar`, `zstd` und `openssl`. Kein `sudo` für das Programm selbst nötig – es wird im eigenen Benutzerkonto installiert (`~/.local`). Die benötigten Systembibliotheken (Qt 6, FreeRDP 3, WebKitGTK) kommen aus den Ubuntu-Paketquellen; das Skript prüft sie und nennt fehlende Pakete.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh | bash

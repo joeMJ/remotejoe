@@ -71,6 +71,7 @@ impl App {
             "token_title": token_title,
             "check_on_start": s.check_on_start,
             "package_managed": matches!(plan, Some(install::Plan::PackageManaged { .. })),
+            "development": matches!(plan, Some(install::Plan::Development { .. })),
             "busy": self.update.job.is_some_and(|j| self.jobs.is_pending(j)),
             "found": self.update.found.as_ref().map(|f| found_json(f)),
             "sessions": self.sessions.ids().len(),
@@ -156,8 +157,10 @@ impl App {
             return Err("Es läuft bereits eine Update-Prüfung oder -Installation.".into());
         }
         let dir = self.program_dir().ok_or("Programmverzeichnis unbekannt")?;
-        if let install::Plan::PackageManaged { dir } = install::plan(&dir) {
-            return Ok(json!({ "state": "package", "dir": dir, "url": found.archive.browser_download_url }));
+        match install::plan(&dir) {
+            install::Plan::PackageManaged { dir } => return Ok(json!({ "state": "package", "dir": dir, "url": found.archive.browser_download_url })),
+            install::Plan::Development { dir } => return Ok(json!({ "state": "development", "dir": dir, "url": found.archive.browser_download_url })),
+            install::Plan::Replace { .. } => {}
         }
         let open = self.sessions.ids().len();
         if open > 0 && !confirm {

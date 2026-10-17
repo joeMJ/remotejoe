@@ -1,13 +1,30 @@
 # Updates
 
-remotejoe kann neue Versionen selbst finden, laden und installieren. Quelle ist ein
-Gitea-Server oder GitHub. Jedes Paket ist mit einem Ed25519-Schlüssel signiert; das Programm
-installiert nur, was mit dem eingebauten öffentlichen Schlüssel signiert ist und dessen
-Prüfsumme stimmt.
+remotejoe kann neue Versionen selbst finden, laden und installieren. Standardquelle sind die
+Veröffentlichungen dieses Repositorys auf GitHub (`joeMJ/remotejoe`); einstellbar ist auch ein
+eigener Gitea-Server oder ein anderes GitHub-Repository. Jedes Paket ist mit einem
+Ed25519-Schlüssel signiert; das Programm installiert nur, was mit dem eingebauten öffentlichen
+Schlüssel signiert ist und dessen Prüfsumme stimmt.
 
 ![Update-Tab](screenshots/update-tab.png)
 
 ## Für Anwender
+
+### Erstinstallation (Linux, Benutzerkonto)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh | bash
+```
+
+`install.sh` lädt die neueste Veröffentlichung, prüft **erst die Signatur**, **dann die Prüfsumme**,
+entpackt in `~/.local/share/remotejoe`, legt den Starter `~/.local/bin/remotejoe` und einen Eintrag
+im Anwendungsmenü samt Programmsymbol an. Es braucht kein `sudo`. Fehlen Systembibliotheken (Qt 6,
+FreeRDP 3, WebKitGTK), bricht es ab und nennt die `apt`-Pakete. Die bisherige Fassung bleibt als
+`~/.local/share/remotejoe.alt`. Entfernen: `bash install.sh --uninstall` (Einstellungen und
+Schlüsseldatenbank bleiben). Offline aus einem Ordner mit den drei Dateien einer Veröffentlichung:
+`bash install.sh --aus-ordner <Ordner>`.
+
+Die Pakete werden unter Ubuntu 26.04 gebaut; für 24.04 gibt es keine Prüfung.
 
 ### Quelle einstellen
 
@@ -15,10 +32,10 @@ Prüfsumme stimmt.
 
 | Feld | Bedeutung |
 |---|---|
-| Quelle | Keine (Voreinstellung), Gitea oder GitHub |
+| Quelle | GitHub (Voreinstellung), Gitea oder Keine |
 | Gitea-Adresse | Basisadresse des Servers, z. B. `https://git.example.test` (bei GitHub leer lassen) |
-| Repository | `besitzer/name` |
-| Zugriffsschlüssel | Eintrag der Schlüsseldatenbank, dessen **Kennwort** der Zugriffsschlüssel (Token) ist; leer für öffentliche Repositorys |
+| Repository | `besitzer/name`; Voreinstellung `joeMJ/remotejoe` |
+| Zugriffsschlüssel | Eintrag der Schlüsseldatenbank, dessen **Kennwort** der Zugriffsschlüssel (Token) ist; für das öffentliche Repository nicht nötig |
 | Beim Start im Hintergrund prüfen | Voreinstellung aus; prüft einmal je Start, ohne den Start zu verzögern (mit Zugriffsschlüssel erst nach dem Entsperren) |
 
 „Einstellungen speichern“ schreibt die Werte in `config.toml`, Abschnitt `[update]`. Der
@@ -27,14 +44,14 @@ Zugriffsschlüssel steht nie in der Konfiguration, sondern nur als Verweis auf d
 
 ```toml
 [update]
-source = "gitea"
-base_url = "https://git.example.test"
-repo = "team/remotejoe"
-token_entry = "0b5c…"      # Eintrag in der KDBX
+source = "github"            # Voreinstellung; "gitea" oder "" (keine Quelle)
+base_url = ""                # nur bei Gitea
+repo = "joeMJ/remotejoe"
+token_entry = "0b5c…"        # nur für private Repositorys: Eintrag in der KDBX
 check_on_start = false
 ```
 
-### Zugriffsschlüssel anlegen
+### Zugriffsschlüssel anlegen (nur für private Quellen)
 
 - **Gitea:** Einstellungen → Anwendungen → „Zugriffstoken generieren“, Berechtigung
   `read:repository` genügt. Das Token als Kennwort eines neuen KDBX-Eintrags speichern (z. B.
@@ -58,8 +75,9 @@ Protokollen, Fehlermeldungen oder im Tab.
    dann wird das Programmverzeichnis ersetzt; die bisherige Fassung bleibt als
    `<programm>.alt`. „Jetzt neu starten“ ist freiwillig, bis dahin läuft die bisherige Fassung.
 5. Sind Sitzungen offen, fragt der Tab vorher nach (Leiste im Tab).
-6. Liegt das Programm unter `/usr` (Paketverwaltung), verändert es sich nicht selbst; der Tab
-   nennt nur den Download.
+6. Liegt das Programm unter `/usr` (Paketverwaltung) oder ist es ein Entwicklungsstand
+   (`target/release` eines Arbeitsbereichs), verändert es sich nicht selbst; der Tab nennt nur
+   den Download.
 
 **Zurück zur alten Fassung:** Programm beenden, `<programm>` löschen oder umbenennen und
 `<programm>.alt` zurückbenennen.
@@ -71,7 +89,8 @@ Hosts (z. B. Speicherdienst für Downloads) wird der Zugriffsschlüssel nicht mi
 
 ## Für Herausgeber
 
-Das Werkzeug `rj-update` (`tools/update/`) erzeugt Schlüssel, packt, signiert und lädt hoch.
+Das Werkzeug `rj-update` (`tools/update/`) erzeugt Schlüssel, packt, signiert und schließt
+Veröffentlichungen ab.
 
 ```sh
 cargo build --release -p remotejoe-update-tool    # liefert target/release/rj-update
@@ -80,31 +99,49 @@ cargo build --release -p remotejoe-update-tool    # liefert target/release/rj-up
 ### 1. Schlüsselpaar erzeugen (einmalig)
 
 ```sh
-rj-update schluessel ~/remotejoe-signatur
+rj-update schluessel            # legt ~/.config/remotejoe/signing/update-key.{priv,pub} an
 ```
 
-- `update-key.priv` – **privat**, Rechte 0600. Nur lokal aufbewahren (am besten auf einem
-  Datenträger, der nicht ständig eingebunden ist, und als Sicherung in der KDBX als Anhang). Nie
-  in ein Repository: `.gitignore` schließt `*.priv` aus.
-- `update-key.pub` – öffentlich; nach `crates/ui/res/update-key.pub` kopieren und das Programm
-  neu bauen. Die mitgelieferte Datei ist ein **Platzhalter**, zu dem kein privater Schlüssel
-  existiert.
+- `update-key.priv` – **privat**, Rechte 0600. Nur lokal aufbewahren und sichern (zum Beispiel
+  als Anhang in der Schlüsseldatenbank oder auf einem Datenträger, der nicht ständig eingebunden
+  ist). Nie in ein Repository und nie als GitHub-Secret: `.gitignore` schließt `*.priv` aus.
+- `update-key.pub` – öffentlich; **zweimal** übernehmen: in `crates/ui/res/update-key.pub` (im
+  Programm eingebaut) und als `UPDATE_KEY` in `install.sh`. Danach das Programm neu bauen.
 
-### 2. Paket erzeugen und signieren
+### 2. Veröffentlichen über GitHub (Versions-Tag, Workflow, lokale Signatur)
 
-Programmordner vorbereiten (alle Dateien, die neben dem Programm liegen: `remotejoe`, die Worker
-`rj-worker-*`, …), dann:
+1. Version in `Cargo.toml` anheben und committen.
+2. Annotiertes Tag `vX.Y.Z` setzen (der Tag-Text wird zum Änderungstext) und nach GitHub
+   schieben. Der Workflow `.github/workflows/release.yml` baut unter Ubuntu 26.04 das Paket
+   (`scripts/package-linux.sh`) und legt einen **Entwurf** der Veröffentlichung mit
+   `remotejoe-X.Y.Z-linux-x86_64.tar.zst` und `SHA256SUMS` an. Signiert wird dort nicht.
+3. Lokal abschließen:
+
+   ```sh
+   secret-tool store --label='remotejoe GitHub' service remotejoe-github   # einmalig: Zugriffsschlüssel
+   rj-update abschliessen joeMJ/remotejoe vX.Y.Z
+   ```
+
+   Das wartet auf den Entwurf, lädt Archiv und `SHA256SUMS`, rechnet die Prüfsummen nach,
+   signiert `SHA256SUMS` mit dem lokalen privaten Schlüssel (nur wenn er zum eingebauten
+   öffentlichen Schlüssel passt), lädt `SHA256SUMS.sig` hoch und veröffentlicht den Entwurf.
+   Der Zugriffsschlüssel ist ein fein granulares GitHub-Token mit Schreibrecht auf „Contents“ nur
+   für dieses Repository; er kann statt im Schlüsselbund auch in `RJ_GITHUB_TOKEN` stehen.
+
+Ob `install.sh` und die Update-Funktion das Paket annehmen, lässt sich vor dem Veröffentlichen
+lokal prüfen: `scripts/test-install.sh` (Wegwerf-Schlüssel, Wegwerf-Benutzerverzeichnis).
+
+### Paket von Hand erzeugen und signieren
 
 ```sh
-rj-update packen target/release/paket 0.2.0 linux-x86_64 ~/remotejoe-signatur/update-key.priv ausgabe/
+scripts/package-linux.sh 0.2.0 ausgabe/            # Archiv und SHA256SUMS (ohne Signatur)
+rj-update packen programmordner 0.2.0 linux-x86_64 ~/.config/remotejoe/signing/update-key.priv ausgabe/
 rj-update pruefen ausgabe/ crates/ui/res/update-key.pub
 ```
 
 Ergebnis in `ausgabe/`: `remotejoe-0.2.0-linux-x86_64.tar.zst` (Windows:
 `remotejoe-0.2.0-windows-x86_64.zip`), `SHA256SUMS`, `SHA256SUMS.sig`. Die Version muss der
 Version in `Cargo.toml` des neuen Programms entsprechen.
-
-### 3. Veröffentlichen
 
 **Gitea:**
 
@@ -114,18 +151,14 @@ rj-update hochladen https://git.example.test team/remotejoe v0.2.0 ausgabe/ aend
 unset RJ_GITEA_TOKEN
 ```
 
-Das legt die Veröffentlichung mit dem Tag `v0.2.0` an und lädt alle Dateien aus `ausgabe/` hoch.
-
-**GitHub:** Veröffentlichung von Hand oder mit `gh release create v0.2.0 ausgabe/*` anlegen; die
-drei Dateien müssen als Anhänge dabei sein.
-
-### 4. Schlüsselwechsel
+### Schlüsselwechsel
 
 1. Neues Schlüsselpaar erzeugen.
 2. Eine Übergangsversion mit dem **alten** Schlüssel signieren, die bereits den **neuen**
    öffentlichen Schlüssel eingebaut hat, und veröffentlichen.
-3. Ab der nächsten Version mit dem neuen Schlüssel signieren.
+3. Ab der nächsten Version mit dem neuen Schlüssel signieren und `UPDATE_KEY` in `install.sh`
+   anpassen.
 
 Ist der alte private Schlüssel verloren oder kompromittiert, können bestehende Installationen
-nicht mehr automatisch aktualisiert werden: neue Fassung von Hand installieren und den
-Anwendern mitteilen.
+nicht mehr automatisch aktualisiert werden: neue Fassung mit dem aktuellen `install.sh`
+installieren und den Anwendern mitteilen.
