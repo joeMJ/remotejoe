@@ -45,6 +45,10 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "credentialCopy"]
         fn credential_copy(self: &RjBackend, id: &QString, kind: &QString) -> QString;
+        /// Der eine Ordner für alles (z. B. `~/remotejoe`); leer, wenn die alten Ordner gelten.
+        #[qinvokable]
+        #[cxx_name = "homeDir"]
+        fn home_dir(self: &RjBackend) -> QString;
         #[qinvokable]
         #[cxx_name = "clipboardClearSecs"]
         fn clipboard_clear_secs(self: &RjBackend) -> i32;
@@ -270,6 +274,10 @@ impl qobject::RjBackend {
     fn credential_copy(&self, id: &QString, kind: &QString) -> QString {
         let (i, k) = (id.to_string(), kind.to_string());
         q(self.app().map(|a| a.credential_copy_json(&i, &k)).unwrap_or_else(|| "{\"error\":\"Nicht bereit\"}".into()))
+    }
+
+    fn home_dir(&self) -> QString {
+        q(rj_core::config::home_dir().map(|p| p.display().to_string()).unwrap_or_default())
     }
 
     fn clipboard_clear_secs(&self) -> i32 {

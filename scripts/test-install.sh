@@ -31,6 +31,9 @@ run --aus-ordner "$W/schlecht" >/dev/null 2>&1 && fail "manipuliertes Archiv wur
 [ "$(cat "$DATA/known_hosts")" = wichtig ] && [ -d "$DATA/web-profile" ] || fail "Daten des Programms wurden verändert"
 # Installationsordner = Datenordner wird verweigert, fremde Ordner werden nicht ersetzt.
 REMOTEJOE_PREFIX="$DATA" run --aus-ordner "$W/pak" >/dev/null 2>&1 && fail "Installation in den Datenordner wurde nicht verweigert"
+REMOTEJOE_PREFIX="$W/home/remotejoe" run --aus-ordner "$W/pak" >/dev/null 2>&1 && fail "Installation in ~/remotejoe (Ordner für alles) wurde nicht verweigert"
+REMOTEJOE_HOME="$W/eigener" REMOTEJOE_PREFIX="$W/eigener" run --aus-ordner "$W/pak" >/dev/null 2>&1 && fail "Installation in REMOTEJOE_HOME wurde nicht verweigert"
+[ ! -e "$W/home/remotejoe" ] || fail "~/remotejoe wurde trotz Verweigerung angelegt"
 mkdir -p "$W/fremd" && echo x > "$W/fremd/datei"
 REMOTEJOE_PREFIX="$W/fremd" run --aus-ordner "$W/pak" >/dev/null 2>&1 && fail "Ein fremder Ordner wurde ersetzt"
 [ -f "$W/fremd/datei" ] || fail "Fremder Ordner wurde verändert"

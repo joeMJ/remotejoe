@@ -55,8 +55,8 @@ pub fn install(archive_name: &str, data: &[u8], dir: &Path) -> Result<PathBuf> {
     if !dir.join(main_program()).is_file() {
         return Err(UpdateError::Install(format!("„{}“ ist kein Programmverzeichnis (es enthält „{}“ nicht); nichts verändert", dir.display(), main_program())));
     }
-    if let Some(data_dir) = rj_core::config::data_dir() {
-        if let (Ok(a), Ok(b)) = (fs::canonicalize(&data_dir), fs::canonicalize(dir)) {
+    for protected in [rj_core::config::data_dir(), rj_core::config::config_dir(), rj_core::config::home_dir()].into_iter().flatten() {
+        if let (Ok(a), Ok(b)) = (fs::canonicalize(&protected), fs::canonicalize(dir)) {
             if a == b {
                 return Err(UpdateError::Install(format!("„{}“ ist der Datenordner des Programms und wird nie ersetzt", dir.display())));
             }

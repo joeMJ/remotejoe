@@ -155,8 +155,8 @@ impl Default for SecurityDefaults {
     }
 }
 
-/// Konfigurationsordner: Linux nach XDG, Windows `%APPDATA%`.
-pub fn config_dir() -> Option<PathBuf> {
+/// Alter Konfigurationsordner: Linux nach XDG, Windows `%APPDATA%`.
+fn legacy_config_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("remotejoe"))
@@ -171,9 +171,8 @@ pub fn config_dir() -> Option<PathBuf> {
     }
 }
 
-/// Ordner für Daten, die nicht synchronisiert werden müssen (Linux:
-/// `XDG_DATA_HOME`, Windows `%LOCALAPPDATA%`).
-pub fn data_dir() -> Option<PathBuf> {
+/// Alter Datenordner (Linux `XDG_DATA_HOME`, Windows `%LOCALAPPDATA%`).
+fn legacy_data_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("remotejoe"))
@@ -186,6 +185,54 @@ pub fn data_dir() -> Option<PathBuf> {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
             .map(|p| p.join("remotejoe"))
     }
+}
+
+/// Der eine Ordner für alles (Einstellungen `config.toml`, Paletten, Daten unter `daten/`):
+/// 1. `REMOTEJOE_HOME`, wenn gesetzt;
+/// 2. wer `XDG_CONFIG_HOME` oder `XDG_DATA_HOME` selbst setzt, behält die alten Ordner (`None`);
+/// 3. `~/remotejoe`, sobald dort eine `config.toml` liegt;
+/// 4. eine vorhandene alte Installation (alte `config.toml` oder `known_hosts`) bleibt, wo sie ist (`None`);
+/// 5. sonst `~/remotejoe` (neue Installation).
+/// `None` heißt: die alten Ordner gelten, es geht nichts verloren und nichts wird verschoben.
+pub fn home_dir() -> Option<PathBuf> {
+    resolve_home(&|k| std::env::var_os(k).filter(|v| !v.is_empty()), &|p| p.exists())
+}
+
+/// Wie `home_dir`, mit austauschbarer Umgebung und Dateiprüfung (für Tests).
+fn resolve_home(get: &dyn Fn(&str) -> Option<std::ffi::OsString>, exists: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    if let Some(p) = get("REMOTEJOE_HOME") {
+        return Some(PathBuf::from(p));
+    }
+    #[cfg(not(windows))]
+    if get("XDG_CONFIG_HOME").is_some() || get("XDG_DATA_HOME").is_some() {
+        return None;
+    }
+    #[cfg(windows)]
+    let (home, old_config, old_data) = (get("USERPROFILE").map(PathBuf::from)?, get("APPDATA").map(|p| PathBuf::from(p).join("remotejoe")), get("LOCALAPPDATA").map(|p| PathBuf::from(p).join("remotejoe")));
+    #[cfg(not(windows))]
+    let (home, old_config, old_data) = {
+        let h = PathBuf::from(get("HOME")?);
+        (h.clone(), Some(h.join(".config/remotejoe")), Some(h.join(".local/share/remotejoe")))
+    };
+    let new = home.join("remotejoe");
+    if exists(&new.join("config.toml")) {
+        return Some(new);
+    }
+    let old_in_use = old_config.is_some_and(|d| exists(&d.join("config.toml"))) || old_data.is_some_and(|d| exists(&d.join("known_hosts")));
+    if old_in_use {
+        return None;
+    }
+    Some(new)
+}
+
+/// Konfigurationsordner (`config.toml`, `paletten/`): der eine Ordner, sonst der alte.
+pub fn config_dir() -> Option<PathBuf> {
+    home_dir().or_else(legacy_config_dir)
+}
+
+/// Datenordner (bekannte Host-Schlüssel, FreeRDP- und Web-Profile): `daten/` im einen Ordner, sonst der alte.
+pub fn data_dir() -> Option<PathBuf> {
+    home_dir().map(|h| h.join("daten")).or_else(legacy_data_dir)
 }
 
 pub fn default_config_path() -> Option<PathBuf> {
@@ -256,5 +303,37 @@ mod tests {
         let p = dir.path().join("c.toml");
         std::fs::write(&p, b"kdbx_path = \"\xFF\"\n").unwrap();
         assert!(matches!(Config::load(&p), Err(ConfigError::Utf8(_))));
+    }
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::ffi::OsString;
+
+    fn run(env: &[(&str, &str)], files: &[&str]) -> Option<PathBuf> {
+        let files: HashSet<PathBuf> = files.iter().map(PathBuf::from).collect();
+        let env: Vec<(String, String)> = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        resolve_home(&|k| env.iter().find(|(n, _)| n == k).map(|(_, v)| OsString::from(v)), &|p| files.contains(p))
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn one_folder_for_new_installations_and_old_ones_stay_put() {
+        let h = [("HOME", "/home/u")];
+        // Neue Installation: ein Ordner unter dem persönlichen Ordner.
+        assert_eq!(run(&h, &[]), Some(PathBuf::from("/home/u/remotejoe")));
+        // Vorhandene alte Installation bleibt (nichts wird verschoben oder abgespalten).
+        assert_eq!(run(&h, &["/home/u/.config/remotejoe/config.toml"]), None);
+        assert_eq!(run(&h, &["/home/u/.local/share/remotejoe/known_hosts"]), None);
+        // Sobald der neue Ordner eine config.toml hat, gilt er.
+        assert_eq!(run(&h, &["/home/u/remotejoe/config.toml", "/home/u/.config/remotejoe/config.toml"]), Some(PathBuf::from("/home/u/remotejoe")));
+        // Eigene XDG-Ordner und REMOTEJOE_HOME haben Vorrang.
+        assert_eq!(run(&[("HOME", "/home/u"), ("XDG_DATA_HOME", "/x")], &[]), None);
+        assert_eq!(run(&[("HOME", "/home/u"), ("XDG_CONFIG_HOME", "/x")], &[]), None);
+        assert_eq!(run(&[("HOME", "/home/u"), ("REMOTEJOE_HOME", "/daten/rj"), ("XDG_DATA_HOME", "/x")], &[]), Some(PathBuf::from("/daten/rj")));
+        // Ohne persönlichen Ordner gibt es keinen neuen Ordner.
+        assert_eq!(run(&[], &[]), None);
     }
 }

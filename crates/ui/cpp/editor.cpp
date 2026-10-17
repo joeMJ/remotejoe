@@ -2389,7 +2389,12 @@ void UnlockOverlay::openNew()
 	m_switch->setVisible(true);
 	m_cancel->setVisible(true);
 	if (m_path->text().trimmed().isEmpty() || QFileInfo::exists(m_path->text().trimmed()))
-		m_path->setText(QDir(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)).filePath(QStringLiteral("remotejoe.kdbx")));
+	{
+		// Vorschlag: der eine Ordner von remotejoe (~/remotejoe); bei alter Installation die Dokumente.
+		const QString home = m_backend->homeDir();
+		const QString base = home.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) : home;
+		m_path->setText(QDir(base).filePath(QStringLiteral("remotejoe.kdbx")));
+	}
 	m_keyFile->clear();
 	setBusy(false);
 	setGeometry(parentWidget()->rect());
@@ -2411,7 +2416,8 @@ void UnlockOverlay::setBusy(bool busy, const QString& message)
 
 void UnlockOverlay::browse()
 {
-	const QString start = m_path->text().trimmed().isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) : m_path->text().trimmed();
+	const QString homeDir = m_backend->homeDir();
+	const QString start = m_path->text().trimmed().isEmpty() ? (homeDir.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) : homeDir) : m_path->text().trimmed();
 	const QString filter = rjText(m_backend, "unlock.filter");
 	if (m_create)
 	{

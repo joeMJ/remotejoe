@@ -57,7 +57,7 @@ bash install.sh
 curl -fsSL https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh | bash -s -- --uninstall
 ```
 
-Entfernt Programm, Starter und Symbole. Einstellungen (`~/.config/remotejoe`) und deine Schlüsseldatenbank bleiben erhalten.
+Entfernt Programm, Starter und Symbole. Dein Ordner `~/remotejoe` (Einstellungen, Daten) und deine Schlüsseldatenbank bleiben erhalten.
 
 ---
 
@@ -200,8 +200,15 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
 
 Zum Ausprobieren ohne eigene Daten: `remotejoe --demo` (erfundene Ziele, Vorführsitzungen).
 
-Einstellungen stehen in `~/.config/remotejoe/config.toml` (Windows:
-`%APPDATA%\remotejoe\config.toml`), z. B.:
+**Ablage:** Neue Installationen legen alles in **einem Ordner** unter dem persönlichen Ordner ab:
+`~/remotejoe/` (Windows: `%USERPROFILE%\remotejoe\`) mit `config.toml`, `paletten/` (eigene Farbpaletten) und
+`daten/` (bekannte Host-Schlüssel, Zertifikate, Browser- und FreeRDP-Profile). Als Vorschlag für die
+Schlüsseldatenbank gilt dort `remotejoe.kdbx`. Der Ordner lässt sich mit der Umgebungsvariable `REMOTEJOE_HOME`
+wählen. **Bestehende Installationen bleiben, wo sie sind** (`~/.config/remotejoe`, `~/.local/share/remotejoe`);
+dasselbe gilt, wenn `XDG_CONFIG_HOME` oder `XDG_DATA_HOME` gesetzt ist. Es wird nichts verschoben. Nicht
+mit Syncthing oder Ähnlichem abgleichen, solange der Ordner Browserprofile enthält.
+
+Einstellungen stehen in `~/remotejoe/config.toml` (alte Installationen: `~/.config/remotejoe/config.toml`), z. B.:
 
 ```toml
 kdbx_path = "/home/benutzer/zugang.kdbx"

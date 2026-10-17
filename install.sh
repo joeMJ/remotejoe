@@ -9,7 +9,7 @@
 # Ablauf: neueste Veröffentlichung von GitHub laden, die Ed25519-Signatur von SHA256SUMS mit dem
 # unten eingebauten Schlüssel prüfen, dann die Prüfsumme des Archivs. Erst danach wird entpackt.
 # Installiert wird nach ~/.local/opt/remotejoe (Starter ~/.local/bin/remotejoe, Eintrag im
-# Anwendungsmenü). Einstellungen (~/.config/remotejoe) und Schlüsseldatenbank bleiben unberührt.
+# Anwendungsmenü). Einstellungen und Daten (~/remotejoe bzw. die alten Ordner) und die Schlüsseldatenbank bleiben unberührt.
 set -euo pipefail
 
 REPO="joeMJ/remotejoe"
@@ -21,6 +21,9 @@ API="${REMOTEJOE_API:-https://api.github.com}"
 # Browserprofile, Zertifikate). Der Installationsordner wird beim Update ersetzt und darf nie der Datenordner sein.
 PREFIX="${REMOTEJOE_PREFIX:-$HOME/.local/opt/remotejoe}"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/remotejoe"
+# Geschützt sind auch der eine Ordner für alles (~/remotejoe bzw. REMOTEJOE_HOME) und der alte Konfigurationsordner.
+PROTECTED=("$DATA_DIR" "$HOME/remotejoe" "${XDG_CONFIG_HOME:-$HOME/.config}/remotejoe")
+[ -z "${REMOTEJOE_HOME:-}" ] || PROTECTED+=("$REMOTEJOE_HOME")
 BINDIR="${HOME}/.local/bin"
 APPDIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 
@@ -28,12 +31,14 @@ say() { printf '» %s\n' "$*"; }
 die() { printf '✖ %s\n' "$*" >&2; exit 1; }
 
 uninstall() {
-    [ "$(readlink -m -- "$PREFIX")" != "$(readlink -m -- "$DATA_DIR")" ] || die "Der Installationsordner darf nicht der Datenordner sein."
+    for d in "${PROTECTED[@]}"; do
+        [ "$(readlink -m -- "$PREFIX")" != "$(readlink -m -- "$d")" ] || die "Der Installationsordner darf nicht der Datenordner ($d) sein."
+    done
     if [ -e "$PREFIX" ] && [ ! -x "$PREFIX/remotejoe" ]; then die "$PREFIX ist keine remotejoe-Installation. Nichts gelöscht."; fi
     rm -rf "$PREFIX" "$PREFIX.neu" "$PREFIX.alt"
     rm -f "$BINDIR/remotejoe" "$APPDIR/remotejoe.desktop"
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPDIR" 2>/dev/null || true
-    say "remotejoe entfernt. Einstellungen (~/.config/remotejoe) und deine Schlüsseldatenbank bleiben erhalten."
+    say "remotejoe entfernt. Dein Ordner ~/remotejoe (bzw. die alten Ordner) und deine Schlüsseldatenbank bleiben erhalten."
     exit 0
 }
 
@@ -48,7 +53,9 @@ done
 
 # Schutz: nie den Datenordner oder einen fremden Ordner ersetzen.
 canon() { readlink -m -- "$1"; }
-[ "$(canon "$PREFIX")" != "$(canon "$DATA_DIR")" ] || die "Der Installationsordner darf nicht der Datenordner ($DATA_DIR) sein."
+for d in "${PROTECTED[@]}"; do
+    [ "$(canon "$PREFIX")" != "$(canon "$d")" ] || die "Der Installationsordner darf nicht der Datenordner ($d) sein."
+done
 if [ -e "$PREFIX" ] && [ ! -x "$PREFIX/remotejoe" ]; then
     die "$PREFIX existiert und ist keine remotejoe-Installation (kein Programm 'remotejoe' darin). Nichts verändert."
 fi
