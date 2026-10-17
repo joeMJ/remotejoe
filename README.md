@@ -27,8 +27,13 @@ Zugangsdaten liegen in einer KeePass-Datei (KDBX), die man weiter mit KeePassXC 
 - **SNMP-Ampel** am Baum (CPU, Speicher, Schnittstellen) mit Verlauf.
 - **Import** aus Remote Desktop Manager (`.rdm`, JSON) und Royal TS (`.rtsz`, `.rtsx`).
 - **Bearbeiten im Hauptfenster:** Ordner und Ziele anlegen, ändern, verschieben, duplizieren
-  und löschen im Eigenschaften-Tab (kein Dialogfenster), Vorlagen je Zieltyp, Favoriten,
-  Ansichten (z. B. „Patchday“), „Auf Unterobjekte anwenden“, Rückgängig.
+  und löschen im Eigenschaften-Tab, Vorlagen je Zieltyp, Favoriten, Ansichten (z. B.
+  „Patchday“), „Auf Unterobjekte anwenden“, Rückgängig.
+- **Mehrere Ziele auf einmal anlegen:** ein Host pro Zeile (bis 500), Namensmuster mit
+  `{host}` und `{nr}`, Vorlage und Zugangsdaten, Vorschau mit Hinweisen je Zeile; alles als eine
+  rückgängig machbare Aktion.
+- **Keine Dialogfenster:** Rückfragen, Hinweise und Fehlermeldungen erscheinen als Leiste im
+  Tab oder im Hauptfenster; Import-Vorschau und Patchday sind Tabs.
 - **Alle im Ordner verbinden**, neu verbinden oder trennen (gestaffelt, höchstens 4
   gleichzeitig).
 - **Sperre nach Leerlauf** (Vorgabe aus) und Sperren von Hand; nach dem Aufwachen aus dem
@@ -76,11 +81,17 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
    **Alle im Ordner verbinden**. Fehlt ein Eintrag oder kommen mehrere in Frage, fragt das
    Programm nach. Tunnel werden im Hintergrund aufgebaut (Fortschritt und „Abbrechen“ in der
    Statuszeile).
-5. Baum per Tastatur: F2 umbenennen, Entf löschen, Strg+D duplizieren, Strg+Umschalt+M
+5. **Bearbeiten → Hinzufügen → Mehrere Ziele …** öffnet einen Tab: Hosts einfügen (ein Host
+   pro Zeile, `#` für Kommentare), Vorschau prüfen, Strg+Eingabe legt an; Zeilen mit Fehlern
+   bleiben im Feld stehen.
+   Baum per Tastatur: F2 umbenennen, Entf löschen, Strg+D duplizieren, Strg+Umschalt+M
    verschieben (auch Ziehen und Ablegen, Alt+↑/↓), Strg+B Favorit, Strg+Z rückgängig.
    Über dem Baum lässt sich zwischen allen Zielen, Favoriten und eigenen Ansichten wählen.
-6. Rückfragen zu unbekannten Host-Schlüsseln und Zertifikaten zeigen den Fingerabdruck; ein
-   geänderter Schlüssel wird deutlich gewarnt und nie still angenommen.
+6. Rückfragen zu unbekannten Host-Schlüsseln und Zertifikaten erscheinen als Leiste im Tab der
+   Sitzung mit Schlüsseltyp und vollständigem Fingerabdruck; Standard ist „Ablehnen“, ohne
+   Antwort wird nach 120 s abgelehnt. Ein geänderter Schlüssel wird deutlich gewarnt (alter und
+   neuer Fingerabdruck) und lässt sich erst nach ausdrücklicher Bestätigung annehmen. Die
+   Liste bekannter SSH-Host-Schlüssel (`known_hosts`) hat das Format von OpenSSH.
 7. Kontextmenü **Aufgaben → Aktualisierungen prüfen** startet den Patchday für die gewählten
    Ziele (zuerst als Trockenlauf).
 8. **Datei → Speichern** schreibt KDBX und Index (atomar, mit Sicherungskopie `.bak`); hat

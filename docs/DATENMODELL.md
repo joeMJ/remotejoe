@@ -94,6 +94,8 @@ Beispiel (gekürzt, erfundene Daten):
   kann ein Eintrag einem Ziel oder Ordner zugeordnet werden.
 - Neue Einträge legt remotejoe in der Gruppe `remotejoe` an und ändert nur Einträge in dieser
   Gruppe. Einträge in anderen Gruppen werden nur gelesen.
+- „Mehrere Ziele …“ mit der Art „Benutzername und Kennwort direkt“ legt **einen** neuen Eintrag
+  an (Titel = Name des ersten Ziels), auf den alle neu angelegten Ziele verweisen.
 
 ## Vererbung
 
@@ -177,7 +179,7 @@ nächsten Speichern im neuen Format geschrieben.
 | Datei (Linux / Windows) | Inhalt |
 |---|---|
 | `~/.config/remotejoe/config.toml` / `%APPDATA%\remotejoe\config.toml` | Pfad der KDBX, Schlüsseldatei, Fenster, Zeitlimits, `connect_all_parallel` (Vorgabe 4), Sperre nach Leerlauf (`lock_after_idle_mins`, Vorgabe 0 = aus; `disconnect_on_lock`) |
-| `~/.local/share/remotejoe/` / `%LOCALAPPDATA%\remotejoe\` | `known_hosts` (SSH-Host-Schlüssel, OpenSSH-Format), `vnc_certs` und `proxmox-zertifikate.json` (angenommene Fingerabdrücke), Web-Profile je Ziel (`web-profile/<Ziel-UUID>`, darin `zertifikate.json`) |
+| `~/.local/share/remotejoe/` / `%LOCALAPPDATA%\remotejoe\` | `known_hosts` (SSH-Host-Schlüssel im Format von OpenSSH: `host` bzw. `[host]:port`, austauschbar mit `~/.ssh/known_hosts`; gelesen werden auch gehashte Einträge, Listen und Platzhalter, Einträge im früheren Format `host:port` werden beim nächsten Schreiben umgestellt), `vnc_certs` und `proxmox-zertifikate.json` (angenommene Fingerabdrücke), Web-Profile je Ziel (`web-profile/<Ziel-UUID>`, darin `zertifikate.json`) |
 
 In diesen Dateien stehen keine Kennwörter.
 

@@ -11,7 +11,7 @@ anderen Sitzungen unberührt.
 │   KDBX + Index (rj_kdbx) · Vererbung (rj_core) · Tunnel (rj_tunnel)       │
 │   Supervisor (rj_supervisor) · Aufgaben/Patchday (rj_tasks) · SNMP        │
 └──────────┬──────────────┬──────────────┬──────────────┬──────────────────┘
-   stdin/stdout     stdin/stdout    stdin/stdout    stdin/stdout  (+ geteilter Speicher)
+   stdin/stdout     stdin/stdout    stdin/stdout    stdin/stdout  (+ Socket für Bildpuffer)
            │              │              │              │
    rj-worker-ssh   rj-worker-rdp   rj-worker-vnc   rj-worker-web  rj-worker-psrp
    (russh,         (FreeRDP 3,     (eigene RFB-    (WebView,      (pwsh)
@@ -61,8 +61,10 @@ anderen Sitzungen unberührt.
 
 ## Interprozesskommunikation (IPC)
 
-- Transport: die Standardkanäle des Workers (anonyme Pipes). Kein Socket, kein
-  Dateisystemeintrag, keine Rechtevergabe; der Kanal schließt sich mit dem Prozess.
+- Transport: die Standardkanäle des Workers (anonyme Pipes). Kein Dateisystemeintrag, keine
+  Rechtevergabe; der Kanal schließt sich mit dem Prozess. Unter Linux erhält jeder Worker
+  zusätzlich ein Ende eines `SOCK_SEQPACKET`-Socket-Paars (Nummer in `RJ_FRAME_FD`), über das
+  er nur Deskriptoren von Bildpuffern übergibt (`SCM_RIGHTS`).
   Unter Linux wird im Worker die ursprüngliche Standardausgabe für den Kanal dupliziert und
   Kanal 1 auf die Fehlerausgabe umgelenkt, damit Bibliotheken, die auf die Standardausgabe
   schreiben (z. B. FreeRDP), den Kanal nicht stören.
@@ -71,10 +73,18 @@ anderen Sitzungen unberührt.
 - Nachrichten an den Worker (`ToWorker`): `Connect`, `Credentials`, `Answer` (Antwort auf eine
   Rückfrage), `Input` (Tasten, Text, Maus), `Resize`, `Clipboard`, `Ping`, `Shutdown`, `Custom`.
 - Nachrichten vom Worker (`FromWorker`): `Hello`, `Heartbeat`, `State`, `SharedFrame`, `Frame`
-  (geänderter Bereich), `Output` (Terminalbytes), `Clipboard`, `Question` (Sicherheitsabfrage,
-  z. B. Host-Schlüssel oder Zertifikat), `Notice`, `Log`, `Pong`, `Custom`.
-- Bilddaten (RDP, VNC): geteilter Speicher (Linux `/dev/shm`), BGRA mit 32 Bit je Bildpunkt;
-  über den Kanal laufen nur die geänderten Rechtecke und eine laufende Nummer.
+  (geänderter Bereich), `Output` (Terminalbytes), `Clipboard`, `Question` (Sicherheitsabfrage
+  mit `SecurityInfo`: Art, Host, Port, Schlüsseltyp, vollständiger und bisheriger
+  Fingerabdruck), `Notice`, `Log`, `Pong`, `Custom`. Protokollversion 3.
+- Bilddaten (RDP, VNC): anonymer geteilter Speicher ohne Dateinamen, BGRA mit 32 Bit je
+  Bildpunkt; über den Kanal laufen nur die geänderten Rechtecke und eine laufende Nummer.
+  Linux: `memfd` mit Versiegelung gegen Verkleinern und Vergrößern; der Hauptprozess prüft
+  Versiegelung (`F_GET_SEALS`) und Größe und lehnt andere Deskriptoren ab, sodass ein Worker
+  den Puffer nicht nachträglich verkürzen kann. Windows: anonymes Dateimapping, dessen Kennung
+  der Hauptprozess aus dem Worker dupliziert.
+- Sicherheitsrückfragen haben eine Frist (Vorgabe 120 s); danach, beim Schließen der Sitzung
+  und bei einer späten Antwort gilt „Ablehnen“. Beim SSH-Aufbau zählt die Bedenkzeit nicht zum
+  Zeitlimit des Verbindungsaufbaus.
 - Kennwörter laufen nur in `Credentials` als Bytes, werden im Worker nach Gebrauch
   überschrieben und nie protokolliert. Kennwörter werden nie über die Zwischenablage in ein Ziel
   gebracht, sondern als Protokollereignisse (z. B. Tastenfolge, Anmeldedaten im Protokoll,
@@ -87,13 +97,18 @@ anderen Sitzungen unberührt.
 - Widgets in C++ (Qt 6 Widgets), Logik in Rust. Die Brücke ist ein QObject `RjBackend`
   (cxx-qt), dessen Methoden JSON zurückgeben (Baum, Eigenschaften, Arbeitsbereich, Ereignisse).
 - Die Oberfläche fragt Ereignisse der Sitzungen im Takt ab (`poll`) und zeichnet Bilder aus dem
-  geteilten Speicher.
+  geteilten Speicher (nur lesend abgebildet).
 - Texte der Oberfläche stehen in `crates/ui/res/texte.de.json`.
 - Auffällige Zeichen in Namen (Steuerzeichen, Zeichen ohne Breite, Richtungswechsel) werden als
   `⟦U+XXXX⟧` angezeigt, nicht entfernt; Eingabefelder melden sie beim Tippen.
-- Bearbeiten ohne zusätzliche Fenster: Eigenschaften-Tab neben den Sitzungs-Tabs
-  (`cpp/editor.cpp`), Rückfragen und kurze Eingaben in einer Leiste im Fenster (`ActionBar`),
-  Entsperren als Abdeckung des Hauptfensters, SNMP-Geräte als Tab. Alle Änderungen laufen über
+- Keine zusätzlichen Fenster der obersten Ebene (außer der Dateiauswahl des Betriebssystems und
+  einem auf Wunsch abgerissenen Tab): Eigenschaften-Tab neben den Sitzungs-Tabs
+  (`cpp/editor.cpp`), Rückfragen, Hinweise und Fehlermeldungen in einer Leiste im Fenster
+  (`ActionBar`), Host-Schlüssel und Zertifikate in einer `SecurityBar` im Tab der Sitzung
+  (Standard Ablehnen, voller Fingerabdruck, bei Änderung alter und neuer Fingerabdruck),
+  Rückfragen vor dem Bestehen einer Sitzung (Zugangsdatensatz, Sprungserver, Proxmox-Zertifikat)
+  im Tab „Verbinden mit …“, Entsperren als Abdeckung des Hauptfensters, SNMP-Geräte,
+  Mehrere Ziele, Import-Vorschau und Patchday als Tabs. Alle Änderungen laufen über
   eine Brückenmethode `edit` (JSON-Befehle, `src/editor.rs`) und von dort über
   `Vault::set_index`/`Vault::save` (Sicherungskopie, atomares Schreiben, Sperre,
   Konfliktabfrage).
@@ -104,7 +119,8 @@ anderen Sitzungen unberührt.
   Gäste von Proxmox/Hyper-V abrufen, Gastaktionen, Proxmox-Konsole öffnen. Eine Aufgabe läuft
   in einem eigenen Faden und liefert eine Fortsetzung, die im Takt der Oberfläche (`poll`)
   angewandt wird (Sitzung öffnen, Ergebnis melden). Abbrechen: Die Oberfläche wartet nicht
-  mehr, ein noch aufgebauter Tunnel wird freigegeben.
+  mehr, ein noch aufgebauter Tunnel wird freigegeben; das Warten auf das Netz endet über eine
+  Abbruchmarke sofort, sodass die Tunnelverwaltung gleich wieder frei ist.
 - „Alle im Ordner verbinden“ startet höchstens `connect_all_parallel` Aufbauten gleichzeitig;
   Fehler einzelner Ziele halten die übrigen nicht auf.
 
@@ -114,6 +130,10 @@ anderen Sitzungen unberührt.
   verworfen, die Zugangsdaten der Sitzungen überschrieben; Sitzungen bleiben verbunden
   (Option: trennen), Neuverbinden wartet auf das Entsperren. Das Hauptprogramm verwendet eine
   Speicherverwaltung, die jeden freigegebenen Block mit Nullen überschreibt.
+- Patchday: Jede Aufgabe übernimmt ihre Zugangsdaten beim Start; im Speicher des Laufs bleibt
+  keine Kopie. Sperren löscht noch nicht übernommene Kopien; braucht eine Aufgabe die
+  Zugangsdaten erneut (zweiter Versuch) oder startet sie später, werden sie erst nach dem
+  Entsperren nachgeliefert.
 - Leerlauf zählt mit der monotonen Uhr; Standby zählt nicht. Aufwachen wird über logind
   (D-Bus `PrepareForSleep`), unter Windows über `WM_POWERBROADCAST` und als Rückfall über einen
   Sprung der Systemuhr erkannt. Danach wird nie gesperrt; zwei Minuten lang werden abgebrochene
