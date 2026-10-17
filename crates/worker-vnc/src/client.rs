@@ -68,13 +68,14 @@ impl KnownCerts {
     }
 
     fn remember(&self, id: &str, fp: &str) -> io::Result<()> {
-        let text = std::fs::read_to_string(&self.path).unwrap_or_default();
-        let mut out: String = text.lines().filter(|l| !l.starts_with(&format!("{id} "))).map(|l| format!("{l}\n")).collect();
-        out.push_str(&format!("{id} {fp}\n"));
         if let Some(d) = self.path.parent() {
             std::fs::create_dir_all(d)?;
         }
-        rj_core::fsutil::atomic_write_with_backup(&self.path, out.as_bytes())
+        let _lock = rj_core::fsutil::WriteLock::acquire_wait(&self.path, Duration::from_secs(5))?;
+        let text = std::fs::read_to_string(&self.path).unwrap_or_default();
+        let mut out: String = text.lines().filter(|l| !l.starts_with(&format!("{id} "))).map(|l| format!("{l}\n")).collect();
+        out.push_str(&format!("{id} {fp}\n"));
+        rj_core::fsutil::atomic_write_locked(&self.path, out.as_bytes())
     }
 }
 
@@ -399,7 +400,11 @@ impl VncClient {
         let mut security = String::from("keine");
 
         let types: Vec<u8> = if minor == 3 {
-            vec![read_u32(&mut r)? as u8]
+            // RFB 3.3: Typ 0 heißt Ablehnung, danach folgt der Grund.
+            match read_u32(&mut r)? {
+                0 => return Err(VncError::Refused(read_reason(&mut r))),
+                t => vec![t as u8],
+            }
         } else {
             let n = read_u8(&mut r)?;
             if n == 0 {

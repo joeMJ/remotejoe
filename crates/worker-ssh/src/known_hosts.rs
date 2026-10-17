@@ -134,6 +134,12 @@ impl KnownHosts {
         let alg = key.algorithm().to_string();
         let openssh = key.to_openssh().map_err(|e| std::io::Error::other(e.to_string()))?;
         let b64 = openssh.split_whitespace().nth(1).unwrap_or_default();
+        if let Some(d) = self.path.parent() {
+            std::fs::create_dir_all(d)?;
+        }
+        // Lesen und Schreiben unter einer Sperre, damit gleichzeitig angenommene
+        // Schlüssel anderer Sitzungen nicht verloren gehen.
+        let _lock = rj_core::fsutil::WriteLock::acquire_wait(&self.path, std::time::Duration::from_secs(5))?;
         let mut out = String::new();
         for (h, a, k) in self.entries() {
             if !(h == id && a == alg) {
@@ -141,9 +147,6 @@ impl KnownHosts {
             }
         }
         out.push_str(&format!("{id} {alg} {b64}\n"));
-        if let Some(d) = self.path.parent() {
-            std::fs::create_dir_all(d)?;
-        }
-        rj_core::fsutil::atomic_write_with_backup(&self.path, out.as_bytes())
+        rj_core::fsutil::atomic_write_locked(&self.path, out.as_bytes())
     }
 }

@@ -52,7 +52,9 @@ impl Xvnc {
         let pwfile = dir.path().join("passwd");
         fs::write(&pwfile, obfuscated(PASSWORD)).map_err(|e| Skip(e.to_string()))?;
         let port = free_port();
-        let display = format!(":{}", 20 + (port % 60));
+        // Außerhalb des Anzeigebereichs von xrdp-sesman (10–60).
+        let number = crate::free_display(500 + u32::from(port) % 400).ok_or_else(|| Skip("keine freie Anzeigenummer".into()))?;
+        let display = format!(":{number}");
         let mut args = vec![
             display.clone(),
             "-rfbport".into(),
@@ -134,6 +136,9 @@ impl Xvnc {
         if let Some(mut c) = self.server.take() {
             let _ = c.kill();
             let _ = c.wait();
+            if let Ok(n) = self.display.trim_start_matches(':').parse() {
+                crate::remove_display_files(n);
+            }
         }
     }
 

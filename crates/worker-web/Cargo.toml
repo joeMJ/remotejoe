@@ -40,5 +40,6 @@ glib = { version = "0.18", optional = true }
 [dev-dependencies]
 tempfile.workspace = true
 remotejoe-supervisor = { path = "../supervisor" }
+remotejoe-testkit = { path = "../testkit" }
 remotejoe-ipc = { path = "../ipc" }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }

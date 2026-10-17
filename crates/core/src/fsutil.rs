@@ -31,12 +31,51 @@ impl WriteLock {
         let path = lock_path(target);
         let file = OpenOptions::new().create(true).truncate(false).write(true).open(&path)?;
         match file.try_lock() {
-            Ok(()) => Ok(WriteLock { file, path }),
+            Ok(()) if Self::still_current(&file, &path) => Ok(WriteLock { file, path }),
+            Ok(()) => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("Datei wird gerade von einem anderen Vorgang geschrieben: {}", target.display()),
+            )),
             Err(fs::TryLockError::WouldBlock) => Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 format!("Datei wird gerade von einem anderen Vorgang geschrieben: {}", target.display()),
             )),
             Err(fs::TryLockError::Error(e)) => Err(e),
+        }
+    }
+}
+
+impl WriteLock {
+    /// Wartet bis zu `timeout` auf die Sperre (für kurze Schreibvorgänge
+    /// mehrerer Prozesse, z. B. gleichzeitig angenommene Host-Schlüssel).
+    pub fn acquire_wait(target: &Path, timeout: std::time::Duration) -> io::Result<WriteLock> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match Self::try_acquire(target) {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                r => return r,
+            }
+        }
+    }
+
+    /// Die gesperrte Datei ist noch die unter dem Pfad (nicht inzwischen vom
+    /// vorigen Halter entfernt und neu angelegt).
+    fn still_current(file: &File, path: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            match (file.metadata(), fs::metadata(path)) {
+                (Ok(a), Ok(b)) => a.ino() == b.ino() && a.dev() == b.dev(),
+                _ => false,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            // Unter Windows lässt sich eine geöffnete Datei nicht entfernen.
+            let _ = file;
+            path.exists()
         }
     }
 }
@@ -110,5 +149,26 @@ mod tests {
         assert_eq!(e.kind(), io::ErrorKind::WouldBlock);
         drop(l);
         WriteLock::try_acquire(&p).unwrap();
+    }
+
+    #[test]
+    fn waiting_lock_keeps_all_concurrent_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("liste");
+        let threads: Vec<_> = (0..20)
+            .map(|i| {
+                let p = p.clone();
+                std::thread::spawn(move || {
+                    let _l = WriteLock::acquire_wait(&p, std::time::Duration::from_secs(10)).unwrap();
+                    let mut t = fs::read_to_string(&p).unwrap_or_default();
+                    t.push_str(&format!("eintrag-{i}\n"));
+                    atomic_write_locked(&p, t.as_bytes()).unwrap();
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(fs::read_to_string(&p).unwrap().lines().count(), 20);
     }
 }

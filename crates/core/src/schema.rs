@@ -277,4 +277,18 @@ mod tests {
         assert_eq!(path[0].name(), "Büro 🏢");
         assert_eq!(idx.referenced_entries().len(), 1);
     }
+
+    #[test]
+    fn example_in_documentation_is_valid() {
+        let doc = include_str!("../../../docs/DATENMODELL.md");
+        let start = doc.find("```json\n").expect("JSON-Beispiel") + 8;
+        let end = start + doc[start..].find("```").expect("Ende");
+        let loaded = from_json(doc[start..end].as_bytes(), "DATENMODELL.md").unwrap();
+        let idx = &loaded.index;
+        assert_eq!(idx.revision, 7);
+        let mut n = 0;
+        idx.for_each_target(|_| n += 1);
+        assert_eq!(n, 2);
+    }
 }
+

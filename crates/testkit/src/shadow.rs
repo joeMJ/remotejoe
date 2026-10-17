@@ -4,12 +4,12 @@ use std::fs;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use crate::{free_port, have_program, wait_for_port, Skip};
+use crate::{free_port, have_program, wait_for_port, Skip, Xvfb};
 
 pub struct Shadow {
     pub port: u16,
     pub dir: tempfile::TempDir,
-    xvfb: Option<Child>,
+    xvfb: Option<Xvfb>,
     server: Option<Child>,
 }
 
@@ -24,15 +24,8 @@ impl Shadow {
         let dir = tempfile::Builder::new().prefix("rj-shadow").tempdir().map_err(|e| Skip(e.to_string()))?;
         let sam = dir.path().join("SAM");
         fs::write(&sam, format!("{sam_line}\n")).map_err(|e| Skip(e.to_string()))?;
-        let display = format!(":{}", 50 + (std::process::id() % 40));
-        let xvfb = Command::new("/usr/bin/Xvfb")
-            .args([display.as_str(), "-screen", "0", "800x600x24", "-nolisten", "tcp"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| Skip(format!("Xvfb: {e}")))?;
-        std::thread::sleep(Duration::from_millis(500));
+        let xvfb = Xvfb::start("800x600x24")?;
+        let display = xvfb.display.clone();
         let port = free_port();
         let server = Command::new("/usr/bin/freerdp-shadow-cli3")
             .arg(format!("/port:{port}"))
@@ -56,11 +49,11 @@ impl Shadow {
     }
 
     pub fn stop(&mut self) {
-        for c in [self.server.take(), self.xvfb.take()].into_iter().flatten() {
-            let mut c = c;
+        if let Some(mut c) = self.server.take() {
             let _ = c.kill();
             let _ = c.wait();
         }
+        self.xvfb = None;
     }
 }
 

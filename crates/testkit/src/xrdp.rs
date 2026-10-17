@@ -42,6 +42,9 @@ pub struct Xrdp {
     pub dir: tempfile::TempDir,
     xrdp: Option<Child>,
     sesman: Option<Child>,
+    /// Exklusiver Zugriff: sesman lauscht fest auf Port 3350 und räumt die
+    /// Sitzungen der Testbenutzer auf, daher immer nur eine Instanz zugleich.
+    _exclusive: fs::File,
 }
 
 fn home() -> PathBuf {
@@ -58,6 +61,13 @@ impl Xrdp {
         if !is_root() {
             return Err(Skip("Root-Rechte nötig".into()));
         }
+        let exclusive = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(std::env::temp_dir().join("rj-xrdp-testkit.lock"))
+            .map_err(|e| Skip(e.to_string()))?;
+        exclusive.lock().map_err(|e| Skip(format!("Sperre: {e}")))?;
         ensure_user(USER)?;
         ensure_user(USER2)?;
         cleanup_sessions();
@@ -103,7 +113,7 @@ impl Xrdp {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| Skip(format!("xrdp: {e}")))?;
-        let mut x = Xrdp { port, dir, xrdp: Some(xrdp), sesman: Some(sesman) };
+        let mut x = Xrdp { port, dir, xrdp: Some(xrdp), sesman: Some(sesman), _exclusive: exclusive };
         if !wait_for_port(port, Duration::from_secs(10)) || !wait_for_port(3350, Duration::from_secs(10)) {
             x.stop();
             return Err(Skip("xrdp oder sesman startet nicht".into()));
@@ -155,6 +165,7 @@ impl Xrdp {
 fn kill_tree(pid: u32) {
     for p in crate::sshd::descendants(pid) {
         // SAFETY: Signal an einen Nachfahren eines selbst gestarteten Prozesses.
+        #[cfg(unix)]
         unsafe {
             libc::kill(p as i32, libc::SIGKILL);
         }
@@ -171,6 +182,7 @@ fn kill_stale_instances() {
         let cmd = String::from_utf8_lossy(&cmd);
         if (cmd.starts_with("/usr/sbin/xrdp-sesman") || cmd.starts_with("/usr/sbin/xrdp\0")) && cmd.contains("rj-xrdp") {
             // SAFETY: übrig gebliebene Testinstanz.
+            #[cfg(unix)]
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
             }
@@ -184,6 +196,23 @@ fn cleanup_sessions() {
     let _ = Command::new("pkill").args(["-KILL", "-u", USER]).status();
     let _ = Command::new("pkill").args(["-KILL", "-f", "xrdp-chansrv"]).status();
     std::thread::sleep(Duration::from_millis(200));
+    remove_stale_displays();
+}
+
+/// Entfernt Socket und Sperrdatei von X-Anzeigen, deren Server nicht mehr
+/// läuft (nach SIGKILL bleiben sie liegen und belegen sonst den
+/// Anzeigebereich von sesman).
+fn remove_stale_displays() {
+    let Ok(rd) = fs::read_dir("/tmp") else { return };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(num) = name.strip_prefix(".X").and_then(|n| n.strip_suffix("-lock")) else { continue };
+        let Ok(pid) = fs::read_to_string(e.path()).map(|t| t.trim().parse::<i32>().unwrap_or(0)) else { continue };
+        if pid <= 0 || !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            let _ = fs::remove_file(e.path());
+            let _ = fs::remove_file(format!("/tmp/.X11-unix/X{num}"));
+        }
+    }
 }
 
 impl Drop for Xrdp {

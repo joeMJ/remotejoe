@@ -78,3 +78,60 @@ pub fn run(cmd: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<String, Ski
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
+
+/// Freie X-Anzeigenummer ab `first` (weder Sperrdatei noch Socket vorhanden).
+pub fn free_display(first: u32) -> Option<u32> {
+    (first..first + 200).find(|n| !std::path::Path::new(&format!("/tmp/.X{n}-lock")).exists() && !std::path::Path::new(&format!("/tmp/.X11-unix/X{n}")).exists())
+}
+
+/// Entfernt Socket und Sperrdatei einer beendeten X-Anzeige.
+pub fn remove_display_files(number: u32) {
+    let _ = std::fs::remove_file(format!("/tmp/.X11-unix/X{number}"));
+    let _ = std::fs::remove_file(format!("/tmp/.X{number}-lock"));
+}
+
+/// Virtuelle Anzeige (Xvfb) auf einer freien Nummer ab 100, also außerhalb
+/// des Bereichs, den xrdp-sesman für Sitzungen nutzt (10–60). Beim Beenden
+/// werden Socket und Sperrdatei entfernt, die Xvfb nach SIGKILL zurücklässt.
+pub struct Xvfb {
+    pub display: String,
+    number: u32,
+    child: Option<std::process::Child>,
+}
+
+impl Xvfb {
+    pub fn start(size: &str) -> Result<Xvfb, Skip> {
+        if !have_program("/usr/bin/Xvfb") {
+            return Err(Skip("/usr/bin/Xvfb fehlt".into()));
+        }
+        let number = free_display(100 + std::process::id() % 400).ok_or_else(|| Skip("keine freie Anzeigenummer".into()))?;
+        let display = format!(":{number}");
+        let child = std::process::Command::new("/usr/bin/Xvfb")
+            .args([display.as_str(), "-screen", "0", size, "-nolisten", "tcp"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| Skip(format!("Xvfb: {e}")))?;
+        let x = Xvfb { display, number, child: Some(child) };
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !std::path::Path::new(&format!("/tmp/.X11-unix/X{number}")).exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Ok(x)
+    }
+
+    pub fn stop(&mut self) {
+        if let Some(mut c) = self.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+            remove_display_files(self.number);
+        }
+    }
+}
+
+impl Drop for Xvfb {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}

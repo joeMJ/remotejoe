@@ -147,21 +147,14 @@ fn run(display: &str, data: &std::path::Path, url: &str, port: u16, accept: bool
     r
 }
 
-fn xvfb() -> Option<(String, std::process::Child)> {
-    if Command::new("/usr/bin/Xvfb").arg("-help").stderr(Stdio::null()).stdout(Stdio::null()).status().is_err() {
-        eprintln!("ÜBERSPRUNGEN: Xvfb fehlt");
-        return None;
+fn xvfb() -> Option<rj_testkit::Xvfb> {
+    match rj_testkit::Xvfb::start("1024x768x24") {
+        Ok(x) => Some(x),
+        Err(e) => {
+            eprintln!("ÜBERSPRUNGEN: {}", e.0);
+            None
+        }
     }
-    let display = format!(":{}", 20 + (std::process::id() % 30));
-    let x = Command::new("/usr/bin/Xvfb")
-        .args([display.as_str(), "-screen", "0", "1024x768x24", "-nolisten", "tcp"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    std::thread::sleep(Duration::from_millis(500));
-    Some((display, x))
 }
 
 fn expect_login(r: &Run) {
@@ -172,7 +165,8 @@ fn expect_login(r: &Run) {
 
 #[test]
 fn form_login_and_certificate_warning_in_real_webview() {
-    let Some((display, mut x)) = xvfb() else { return };
+    let Some(x) = xvfb() else { return };
+    let display = x.display.clone();
     let data = tempfile::tempdir().unwrap();
 
     // HTTP: Anmeldung über das eingespeiste Skript.
@@ -201,7 +195,6 @@ fn form_login_and_certificate_warning_in_real_webview() {
         .unwrap_or(false);
     if !ok {
         eprintln!("ÜBERSPRUNGEN (TLS-Teil): openssl fehlt");
-        let _ = x.kill();
         return;
     }
     use rustls::pki_types::pem::PemObject;
@@ -233,5 +226,5 @@ fn form_login_and_certificate_warning_in_real_webview() {
     let r = run(&display, data.path(), &url, port, true, &rx);
     expect_login(&r);
     assert_eq!(r.questions, 0);
-    let _ = x.kill();
+    drop(x);
 }
