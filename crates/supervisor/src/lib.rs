@@ -439,7 +439,13 @@ impl Supervisor {
             if slot.kill_reason.is_some() {
                 continue;
             }
-            if slot.last_beat.elapsed() > slot.spec.heartbeat_timeout {
+            // Ein Prozess, der gerade abstürzt und sein Speicherabbild schreibt (z. B. über apport),
+            // braucht einige Sekunden bis zum Ende; er ist nicht hängend und wird nach seinem Signal eingeordnet.
+            let late = slot.last_beat.elapsed();
+            if late > slot.spec.heartbeat_timeout && late < slot.spec.heartbeat_timeout + CORE_DUMP_GRACE && is_dumping_core(child.id()) {
+                continue;
+            }
+            if late > slot.spec.heartbeat_timeout {
                 slot.kill_reason = Some(ExitReason::Hung);
                 let _ = child.kill();
                 to_reap.push(*id);
@@ -570,6 +576,28 @@ pub fn classify(status: &ExitStatus) -> ExitReason {
     }
 }
 
+/// Zusätzliche Frist für einen Prozess, der beim Absturz sein Speicherabbild schreibt.
+const CORE_DUMP_GRACE: Duration = Duration::from_secs(15);
+
+/// Schreibt der Prozess gerade ein Speicherabbild (Absturz)? Linux: Prozessmarke `PF_DUMPCORE` in
+/// `/proc/<pid>/task/<tid>/stat`; sie steht an dem Faden, der abgestürzt ist, nicht unbedingt am Hauptfaden.
+#[cfg(target_os = "linux")]
+pub fn is_dumping_core(pid: u32) -> bool {
+    const PF_DUMPCORE: u64 = 0x200;
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else { return false };
+    tasks.flatten().take(512).any(|t| {
+        let Ok(stat) = std::fs::read_to_string(t.path().join("stat")) else { return false };
+        // Nach dem Namen in Klammern: Zustand, Elternprozess, Gruppe, Sitzung, Terminal, Vordergrundgruppe, Marken.
+        let Some((_, rest)) = stat.rsplit_once(')') else { return false };
+        rest.split_whitespace().nth(6).and_then(|f| f.parse::<u64>().ok()).is_some_and(|f| f & PF_DUMPCORE != 0)
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn is_dumping_core(_pid: u32) -> bool {
+    false
+}
+
 /// Belegter Arbeitsspeicher eines Prozesses in Bytes.
 #[cfg(target_os = "linux")]
 pub fn resident_bytes(pid: u32) -> Option<u64> {
@@ -588,6 +616,13 @@ pub fn resident_bytes(_pid: u32) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn running_process_is_not_dumping_core() {
+        assert!(!is_dumping_core(std::process::id()));
+        assert!(!is_dumping_core(u32::MAX), "unbekannter Prozess");
+    }
 
     #[test]
     fn backoff_doubles_and_caps() {
