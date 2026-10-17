@@ -178,7 +178,7 @@ nächsten Speichern im neuen Format geschrieben.
 
 | Datei (Linux / Windows) | Inhalt |
 |---|---|
-| `~/.config/remotejoe/config.toml` / `%APPDATA%\remotejoe\config.toml` | Pfad der KDBX, Schlüsseldatei, Fenster, Zeitlimits, `connect_all_parallel` (Vorgabe 4), Sperre nach Leerlauf (`lock_after_idle_mins`, Vorgabe 0 = aus; `disconnect_on_lock`) |
+| `~/.config/remotejoe/config.toml` / `%APPDATA%\remotejoe\config.toml` | Pfad der KDBX, Schlüsseldatei, Fenster, Zeitlimits, `connect_all_parallel` (Vorgabe 4), Sperre nach Leerlauf (`lock_after_idle_mins`, Vorgabe 0 = aus; `disconnect_on_lock`), Update-Quelle `[update]` (`source`, `base_url`, `repo`, `token_entry` als Verweis auf einen KDBX-Eintrag, `check_on_start`, Vorgabe aus) |
 | `~/.local/share/remotejoe/` / `%LOCALAPPDATA%\remotejoe\` | `known_hosts` (SSH-Host-Schlüssel im Format von OpenSSH: `host` bzw. `[host]:port`, austauschbar mit `~/.ssh/known_hosts`; gelesen werden auch gehashte Einträge, Listen und Platzhalter, Einträge im früheren Format `host:port` werden beim nächsten Schreiben umgestellt), `vnc_certs` und `proxmox-zertifikate.json` (angenommene Fingerabdrücke), Web-Profile je Ziel (`web-profile/<Ziel-UUID>`, darin `zertifikate.json`) |
 
 In diesen Dateien stehen keine Kennwörter.

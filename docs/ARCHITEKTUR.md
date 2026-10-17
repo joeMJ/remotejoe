@@ -35,6 +35,7 @@ anderen Sitzungen unberührt.
 | `tunnel` | SSH-Sprungserver-Ketten, WireGuard im Prozess (boringtun + smoltcp), System-Tunnel |
 | `tasks` | Makros, apt-Aktualisierung, Windows-Update-Skript, Patchday (parallel) |
 | `importer` | Import aus Remote Desktop Manager und Royal TS (Planen, dann Anwenden) |
+| `update` | Update-Funktion: SemVer, Abruf von Veröffentlichungen (Gitea, GitHub), HTTPS mit Systemzertifikaten, Ed25519-Signatur und SHA-256, sicheres Entpacken, Installation mit `.alt`-Sicherung |
 | `snmp` | SNMP v2c/v3, Zähler mit Überlauf, Verlauf, Ampel |
 | `ui` | Hauptprogramm `remotejoe`: Qt-Oberfläche, Sitzungsverwaltung, Arbeitsbereich, Bearbeitungsschicht (`editor`), Hintergrundaufgaben (`jobs`), Leerlauf und Standby (`idle`), überschreibende Speicherverwaltung (`alloc`) |
 | `testkit` | Hilfen für Tests gegen lokale Server (sshd, xrdp, Xvnc, snmpd) |
@@ -140,6 +141,44 @@ anderen Sitzungen unberührt.
   Sitzungen sofort neu verbunden, Sitzungen über einen Tunnel erst nach dem Neuaufbau des
   Tunnels. Proxmox-Konsolen werden beim Neuverbinden neu geöffnet (neues Ticket, neue Brücke;
   die alte Brücke schließt Websocket und Client-Verbindung).
+
+## Web-Sitzungen ohne eigenes Fenster
+
+- Der Web-Worker (`crates/worker-web`, Merkmal `webview`) startet GTK und WebKitGTK, aber
+  zeigt kein Fenster: Die WebView steckt in einem `GtkOffscreenWindow`, Hardwarebeschleunigung
+  ist aus. Das Fenster meldet geänderte Bereiche (`damage-event`); im 16-ms-Takt wird deren
+  Vereinigung aus der Oberfläche des Fensters in den versiegelten Bildpuffer kopiert und als
+  `Frame` gemeldet – derselbe Weg wie bei RDP und VNC. Die Oberfläche zeigt ihn im `FrameView`
+  des Tabs; jede Kachel hat ihren eigenen Worker, ihr eigenes Bild und ihre eigene Größe.
+- Größe: `Resize` aus dem `FrameView` (dort schon entprellt) wird nach weiteren 120 ms
+  übernommen; ein neuer Bildpuffer passender Größe wird angelegt und übergeben.
+- Eingaben (`Input`) werden zu GDK-Ereignissen (Bewegung, Tasten, Rad, Taste mit Keysym,
+  Unicode-Text) und an GTK übergeben (`gtk_main_do_event`). WebKit verarbeitet Maus- und
+  Tastenereignisse in getrennten Warteschlangen; damit die Reihenfolge stimmt, warten Tasten
+  60 ms nach einem Klick und Bearbeiten-Befehle 120 ms nach der letzten Taste.
+- Erweiterung des Kanals für Web (`Custom`, JSON): an den Worker `nav` (Zurück, Vor, Neu laden),
+  `focus`, `edit` (Kopieren, Ausschneiden, Einfügen, Alles auswählen), `menu` (Auswahl);
+  vom Worker `status` (Seitentitel, Laden, Fehler, Zurück/Vor möglich) und `menu`
+  (Kontextmenü, Auswahlliste), die die Oberfläche als Popup des Hauptfensters zeigt.
+- Zwischenablage: Strg+C/X und „Kopieren“ lesen die Markierung per Skript in einer eigenen
+  Skriptwelt und schicken sie als `Clipboard` an das Hauptprogramm (Größenlimit des Ziels);
+  Strg+V fügt den vom Hauptprogramm angebotenen Text als Bearbeiten-Befehl ein. Die
+  Zwischenablage des Systems berührt der Worker nicht; aus Kennwortfeldern wird nichts kopiert.
+- Neue Fenster (`target=_blank`, `window.open`) öffnen im selben Tab; Vollbild und
+  Hinweisfenster (Tooltips) sind gesperrt.
+- Windows (WebView2): noch nicht umgesetzt; der Worker meldet das und öffnet kein Fenster.
+
+## Update
+
+- Quelle in `config.toml` (`[update]`): `gitea` (Basisadresse) oder `github`, Repository, Verweis
+  auf den KDBX-Eintrag mit dem Zugriffsschlüssel, Prüfung beim Start (aus).
+- Prüfen und Installieren laufen als Hintergrundaufgaben; Ergebnis als `JobResult`
+  (`update_check`, `update_install`) an den Tab „Programm-Update“.
+- Ablauf: `releases/latest` → Version nach SemVer vergleichen → `SHA256SUMS.sig` und
+  `SHA256SUMS` laden → Signatur mit dem eingebauten Schlüssel (`crates/ui/res/update-key.pub`)
+  prüfen → Archiv laden und SHA-256 prüfen → in `<programm>.neu` entpacken → Programmverzeichnis
+  nach `<programm>.alt` verschieben und `.neu` an seine Stelle setzen.
+- Einzelheiten und Werkzeug für Herausgeber: [`UPDATE.md`](UPDATE.md).
 
 ## Tunnel
 
