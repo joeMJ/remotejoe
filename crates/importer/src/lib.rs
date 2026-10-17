@@ -67,6 +67,8 @@ pub struct SourceDocument {
     pub warnings: Vec<String>,
     /// Einträge, deren Kennwort verschlüsselt exportiert wurde und nicht übernommen werden kann.
     pub encrypted_passwords: usize,
+    /// Dieselben Einträge mit Art (`target` oder `credential`) und Name.
+    pub encrypted_entries: Vec<(String, String)>,
 }
 
 impl SourceDocument {

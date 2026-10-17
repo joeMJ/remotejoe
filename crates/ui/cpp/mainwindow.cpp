@@ -638,7 +638,7 @@ void MainWindow::buildMenus()
 			m_bar->inform(T(m_backend, "import.failed").arg(r.value(QStringLiteral("error")).toString()));
 			return;
 		}
-		openImport(path, r.value(QStringLiteral("summary")).toString());
+		openImport(path, r.value(QStringLiteral("report")).toObject(), r.value(QStringLiteral("summary")).toString());
 	});
 	file->addAction(T(m_backend, "menu.file.save"), QKeySequence::Save, this, [this] {
 		// Liegt ein geänderter Eigenschaften-Tab vorn, speichert er seine Felder mit.
@@ -1002,9 +1002,9 @@ void MainWindow::closeToolTab(ToolTab* t)
 	t->deleteLater();
 }
 
-void MainWindow::openImport(const QString& path, const QString& summary)
+void MainWindow::openImport(const QString& path, const QJsonObject& report, const QString& summary)
 {
-	addToolTab(new ImportTab(m_backend, path, summary, m_tabs), T(m_backend, "import.title"));
+	addToolTab(new ImportTab(m_backend, path, report, summary, m_tabs), T(m_backend, "import.title"));
 }
 
 void MainWindow::showProperties(const QString& id)

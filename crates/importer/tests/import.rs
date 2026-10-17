@@ -38,7 +38,8 @@ fn rdm_xml_structure_report_and_credentials() {
     let w = r.warnings.join("\n");
     assert!(w.contains("web⟦U+200B⟧01"), "{w}");
     assert!(w.contains("Kassen⟦U+202E⟧txt.exe"), "{w}");
-    assert!(w.contains("verschlüsselt"), "SafePassword gemeldet");
+    assert!(r.summary().contains("verschlüsselt"), "SafePassword gemeldet");
+    assert_eq!(r.encrypted_entries, [("target".to_string(), "Firewall-Oberfläche".to_string())]);
     assert!(w.contains("„Druckserver“ kommt") || !w.contains("Druckserver"), "doppelter Name nur je Ordner");
     // Reihenfolge und Ebenen.
     assert_eq!(names(&p.folder), ["Standort Nord", "Standort Süd"]);
@@ -146,12 +147,20 @@ fn rdm_encrypted_passwords_reported_per_entry_and_in_total() {
     let doc = read_file(&data("rdm-verschluesselt.rdm")).unwrap();
     let p = plan(&doc, "Import verschlüsselt");
     let r = &p.report;
-    assert_eq!(r.encrypted_passwords, 3, "Datensatz, RDP-Block und Terminal-Block; Klartext zählt nicht");
+    assert_eq!(r.encrypted_passwords, 4, "Datensatz, RDP-, Terminal- und Web-Block; Klartext zählt nicht");
+    let list: Vec<(&str, &str)> = r.encrypted_entries.iter().map(|(k, n)| (k.as_str(), n.as_str())).collect();
+    assert_eq!(
+        list,
+        [("credential", "Konto verschlüsselt"), ("target", "RDP mit eigenem Konto"), ("target", "SSH mit eigenem Konto"), ("target", "Web mit eigenem Konto")]
+    );
+    assert!(!r.encrypted_entries.iter().any(|(_, n)| n == "SSH im Klartext"), "Klartext-Kennwort ist kein Fund");
     let w = r.warnings.join("\n");
-    assert!(w.contains("Konto verschlüsselt") && w.contains("verschlüsselt"), "{w}");
-    assert!(w.contains("RDP mit eigenem Konto"), "{w}");
-    assert!(w.contains("SSH mit eigenem Konto"), "{w}");
-    assert!(!w.contains("SSH im Klartext"), "Klartext-Kennwort ist kein Fund: {w}");
+    assert!(!w.contains("Konto verschlüsselt"), "keine doppelte Warnung für gelistete Datensätze: {w}");
     let summary = r.summary();
-    assert!(summary.contains("3 Einträge mit verschlüsselt exportiertem Kennwort"), "{summary}");
+    assert!(summary.contains("4 Einträge mit verschlüsselt exportiertem Kennwort"), "{summary}");
+    assert!(summary.contains("Zugangsdatensatz „Konto verschlüsselt“") && summary.contains("Ziel „RDP mit eigenem Konto“"), "{summary}");
+    // Der Bericht lässt sich für die Oberfläche als JSON ausgeben.
+    let v = serde_json::to_value(r).unwrap();
+    assert_eq!(v["encrypted_passwords"], 4);
+    assert_eq!(v["encrypted_entries"][0][0], "credential");
 }

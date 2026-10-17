@@ -303,7 +303,8 @@ class ImportTab : public ToolTab
 {
 	Q_OBJECT
 public:
-	ImportTab(RjBackend* backend, const QString& path, const QString& summary, QWidget* parent = nullptr);
+	/// `report`: Bericht des Imports als JSON-Objekt (siehe `ImportReport`); `summary`: Text als Rückfall.
+	ImportTab(RjBackend* backend, const QString& path, const QJsonObject& report, const QString& summary, QWidget* parent = nullptr);
 };
 
 /// Patchday: Zustand je Ziel, Fortschritt, Protokoll, Abbruch, Ausführen

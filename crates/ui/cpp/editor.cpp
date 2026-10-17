@@ -40,6 +40,7 @@
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTableWidget>
+#include <QtWidgets/QToolButton>
 #include <QtWidgets/QTreeWidget>
 #include <QtWidgets/QVBoxLayout>
 
@@ -2895,7 +2896,50 @@ void ConnectPromptTab::wipeSecrets()
 
 // ------------------------------------------------------------------ ImportTab
 
-ImportTab::ImportTab(RjBackend* backend, const QString& path, const QString& summary, QWidget* parent)
+namespace {
+
+// Aufklappbarer Bereich: Kopfzeile mit Pfeil, darunter der Inhalt.
+QWidget* makeFold(const QString& title, QWidget* body, bool open, QWidget* parent)
+{
+	auto* box = new QWidget(parent);
+	auto* l = new QVBoxLayout(box);
+	l->setContentsMargins(0, 0, 0, 0);
+	l->setSpacing(2);
+	auto* btn = new QToolButton(box);
+	btn->setText(title);
+	btn->setCheckable(true);
+	btn->setChecked(open);
+	btn->setAutoRaise(true);
+	btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+	btn->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
+	QFont f = btn->font();
+	f.setBold(true);
+	btn->setFont(f);
+	body->setParent(box);
+	body->setVisible(open);
+	QObject::connect(btn, &QToolButton::toggled, body, [btn, body](bool on) {
+		body->setVisible(on);
+		btn->setArrowType(on ? Qt::DownArrow : Qt::RightArrow);
+	});
+	l->addWidget(btn, 0, Qt::AlignLeft);
+	l->addWidget(body);
+	return box;
+}
+
+QListWidget* makeList(const QStringList& lines, const QString& accessibleName, QWidget* parent)
+{
+	auto* list = new QListWidget(parent);
+	list->addItems(lines);
+	list->setFixedHeight(qMin(220, list->sizeHintForRow(0) * int(lines.size()) + 2 * list->frameWidth() + 4));
+	list->setAccessibleName(accessibleName);
+	list->setEditTriggers(QAbstractItemView::NoEditTriggers);
+	list->setWordWrap(true);
+	return list;
+}
+
+} // namespace
+
+ImportTab::ImportTab(RjBackend* backend, const QString& path, const QJsonObject& report, const QString& summary, QWidget* parent)
   : ToolTab(parent)
 {
 	setObjectName(QStringLiteral("importTab"));
@@ -2903,20 +2947,103 @@ ImportTab::ImportTab(RjBackend* backend, const QString& path, const QString& sum
 	auto* head = new QLabel(rjText(backend, "import.heading").arg(path), this);
 	head->setObjectName(QStringLiteral("heading"));
 	head->setWordWrap(true);
-	auto* text = new QPlainTextEdit(summary, this);
-	text->setObjectName(QStringLiteral("importSummary"));
-	text->setReadOnly(true);
-	text->setAccessibleName(rjText(backend, "import.summary"));
+	lay->addWidget(head);
+
+	const auto num = [&report](const char* key) { return report.value(QLatin1String(key)).toInt(); };
+	const auto strings = [](const QJsonArray& a) {
+		QStringList out;
+		for (const QJsonValue& v : a)
+			out << v.toString();
+		return out;
+	};
+	int withoutPassword = 0;
+
+	if (report.isEmpty())
+	{
+		// Ohne strukturierten Bericht: der Text als Ganzes.
+		auto* text = new QPlainTextEdit(summary, this);
+		text->setObjectName(QStringLiteral("importSummary"));
+		text->setReadOnly(true);
+		text->setAccessibleName(rjText(backend, "import.summary"));
+		lay->addWidget(text, 1);
+	}
+	else
+	{
+		// Zahlenkopf.
+		auto* counts = new QLabel(rjText(backend, "import.counts").arg(num("folders")).arg(num("targets")).arg(num("credentials_in_source")).arg(num("credentials_unique")).arg(num("references")), this);
+		counts->setObjectName(QStringLiteral("importCounts"));
+		counts->setWordWrap(true);
+		lay->addWidget(counts);
+
+		// Hinweisleiste: Kennwörter, die nicht mitkommen, stehen ganz oben.
+		const QJsonArray entries = report.value(QStringLiteral("encrypted_entries")).toArray();
+		withoutPassword = num("encrypted_passwords");
+		if (withoutPassword > 0)
+		{
+			auto* notice = new QFrame(this);
+			notice->setObjectName(QStringLiteral("importNotice"));
+			notice->setFrameShape(QFrame::StyledPanel);
+			notice->setStyleSheet(QStringLiteral("QFrame#importNotice { background: #fff4ce; border: 1px solid #c79100; border-radius: 4px; } "
+			                                     "QFrame#importNotice QLabel { color: #3d2c00; background: transparent; }"));
+			auto* nl = new QVBoxLayout(notice);
+			auto* title = new QLabel(rjText(backend, "import.notice.title").arg(withoutPassword), notice);
+			QFont f = title->font();
+			f.setBold(true);
+			title->setFont(f);
+			auto* body = new QLabel(rjText(backend, "import.notice.body"), notice);
+			body->setWordWrap(true);
+			nl->addWidget(title);
+			nl->addWidget(body);
+			notice->setAccessibleName(title->text());
+			lay->addWidget(notice);
+		}
+
+		// Einklappbare Bereiche.
+		QStringList passwordLines;
+		for (const QJsonValue& v : entries)
+		{
+			const QJsonArray pair = v.toArray();
+			const bool credential = pair.at(0).toString() == QLatin1String("credential");
+			passwordLines << QStringLiteral("%1 „%2“").arg(rjText(backend, credential ? "import.kind.credential" : "import.kind.target"), pair.at(1).toString());
+		}
+		QStringList skipped;
+		for (const QJsonValue& v : report.value(QStringLiteral("skipped")).toArray())
+			skipped << QStringLiteral("%1: %2").arg(v.toArray().at(0).toString(), v.toArray().at(1).toString());
+		const QStringList warnings = strings(report.value(QStringLiteral("warnings")).toArray());
+		QStringList unknown;
+		for (const QJsonValue& v : report.value(QStringLiteral("unknown_fields")).toArray())
+			unknown << QStringLiteral("%1 (%2×)").arg(v.toArray().at(0).toString()).arg(v.toArray().at(1).toInt());
+
+		struct Section { const char* key; QStringList lines; bool open; };
+		const Section sections[] = {
+			{ "import.fold.passwords", passwordLines, true },
+			{ "import.fold.warnings", warnings, warnings.size() <= 5 },
+			{ "import.fold.skipped", skipped, false },
+			{ "import.fold.unknown", unknown, false },
+		};
+		for (const Section& sec : sections)
+		{
+			if (sec.lines.isEmpty())
+				continue;
+			const QString title = rjText(backend, sec.key).arg(sec.lines.size());
+			lay->addWidget(makeFold(title, makeList(sec.lines, title, this), sec.open, this));
+		}
+		lay->addStretch(1);
+	}
+
 	auto* buttons = new QHBoxLayout;
 	auto* apply = new QPushButton(rjText(backend, "import.apply"), this);
 	apply->setObjectName(QStringLiteral("importApply"));
 	auto* cancel = new QPushButton(rjText(backend, "bar.cancel"), this);
+	if (withoutPassword > 0)
+	{
+		auto* hint = new QLabel(rjText(backend, "import.apply.hint").arg(withoutPassword), this);
+		hint->setObjectName(QStringLiteral("importApplyHint"));
+		buttons->addWidget(hint);
+	}
 	buttons->addStretch(1);
 	buttons->addWidget(apply);
 	buttons->addWidget(cancel);
-	lay->addWidget(head);
-	lay->addWidget(new QLabel(rjText(backend, "import.summary"), this));
-	lay->addWidget(text, 1);
 	lay->addLayout(buttons);
 	connect(apply, &QPushButton::clicked, this, [this, backend] {
 		emit status(backend->importApply());

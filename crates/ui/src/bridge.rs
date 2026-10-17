@@ -326,7 +326,7 @@ impl qobject::RjBackend {
     fn import_preview(self: Pin<&mut Self>, path: &QString) -> QString {
         let p = path.to_string();
         q(match self.app_mut().map(|a| a.import_preview(&p)) {
-            Some(Ok(s)) => serde_json::json!({ "summary": s }).to_string(),
+            Some(Ok((s, report))) => serde_json::json!({ "summary": s, "report": report }).to_string(),
             Some(Err(e)) => serde_json::json!({ "error": e }).to_string(),
             None => "{}".into(),
         })

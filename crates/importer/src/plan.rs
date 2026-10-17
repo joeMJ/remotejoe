@@ -28,6 +28,8 @@ pub struct ImportReport {
     pub unknown_fields: Vec<(String, usize)>,
     /// Einträge mit verschlüsselt exportiertem Kennwort (nicht übernommen).
     pub encrypted_passwords: usize,
+    /// Dieselben Einträge mit Art (`target` oder `credential`) und Name.
+    pub encrypted_entries: Vec<(String, String)>,
 }
 
 impl ImportReport {
@@ -42,6 +44,10 @@ impl ImportReport {
                 "\nKennwörter: {} Einträge mit verschlüsselt exportiertem Kennwort – die Kennwörter wurden NICHT übernommen und müssen in der Schlüsseldatenbank ergänzt werden (oder die Quelle mit Klartext-Kennwörtern neu exportieren).",
                 self.encrypted_passwords
             ));
+            for (kind, name) in &self.encrypted_entries {
+                let art = if kind == "credential" { "Zugangsdatensatz" } else { "Ziel" };
+                s.push_str(&format!("\n  – {art} „{name}“"));
+            }
         }
         if !self.skipped.is_empty() {
             s.push_str(&format!("\nÜbersprungen: {}", self.skipped.len()));
@@ -99,6 +105,7 @@ pub fn plan(doc: &SourceDocument, title: &str) -> ImportPlan {
         warnings: doc.warnings.clone(),
         unknown_fields: doc.unknown_fields.clone(),
         encrypted_passwords: doc.encrypted_passwords,
+        encrypted_entries: doc.encrypted_entries.clone(),
         ..Default::default()
     };
     let check = |what: &str, name: &str, report: &mut ImportReport| {
@@ -226,7 +233,8 @@ pub fn plan(doc: &SourceDocument, title: &str) -> ImportPlan {
     let keys: Vec<Key> = key_data.keys().cloned().collect();
     let credentials: Vec<PlannedCredential> = keys.iter().map(|k| PlannedCredential { title: key_data[k].0.clone(), credential: key_data[k].1.clone() }).collect();
     for c in &credentials {
-        if c.credential.password.is_none() {
+        let already_listed = report.encrypted_entries.iter().any(|(k, n)| k == "credential" && *n == c.title);
+        if c.credential.password.is_none() && !already_listed {
             report.warnings.push(format!("Zugangsdaten „{}“ ohne Kennwort übernommen – bitte in der Schlüsseldatenbank ergänzen", check_name(&c.title).display));
         }
     }

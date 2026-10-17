@@ -29,4 +29,12 @@
     <Name>SSH im Klartext</Name>
     <Terminal><Host>klar.example.test</Host><UserName>joe</UserName><Password>geheim-test</Password></Terminal>
   </Connection>
+  <Connection>
+    <ConnectionType>WebBrowser</ConnectionType>
+    <Group>Ziele</Group>
+    <ID>33333333-0000-0000-0000-000000000005</ID>
+    <Name>Web mit eigenem Konto</Name>
+    <WebBrowserUrl>https://web.example.test</WebBrowserUrl>
+    <Web><UserName>webuser</UserName><SafePassword>QUJDREVGRw==</SafePassword></Web>
+  </Connection>
 </RDMExport>

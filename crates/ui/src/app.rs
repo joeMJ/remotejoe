@@ -867,13 +867,14 @@ impl App {
     }
 
     /// Importvorschau: liest die Datei und liefert den Bericht (nichts wird geschrieben).
-    pub fn import_preview(&mut self, path: &str) -> Result<String, String> {
+    pub fn import_preview(&mut self, path: &str) -> Result<(String, serde_json::Value), String> {
         let doc = rj_importer::read_file(std::path::Path::new(path)).map_err(|e| e.to_string())?;
         let title = format!("Import {}", std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default());
         let plan = rj_importer::plan::plan(&doc, &title);
         let summary = plan.report.summary();
+        let report = serde_json::to_value(&plan.report).map_err(|e| e.to_string())?;
         self.import_plan = Some(plan);
-        Ok(summary)
+        Ok((summary, report))
     }
 
     /// Übernimmt die Vorschau in KDBX und Index (gespeichert wird erst auf Befehl).

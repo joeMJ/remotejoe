@@ -42,7 +42,7 @@ public:
 	void showCredentialChoiceForScreenshot();
 	/// Für Bildschirmfotos: Host-Schlüssel-Rückfrage in der ersten Sitzung.
 	QWidget* showHostKeyQuestionForScreenshot(bool changed);
-	void openImport(const QString& path, const QString& summary);
+	void openImport(const QString& path, const QJsonObject& report, const QString& summary);
 	void detachTabAt(int index);
 	void openPatchday(const QStringList& ids);
 	void patchdayForFirstTargets(int n);

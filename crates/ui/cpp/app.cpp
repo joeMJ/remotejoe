@@ -86,8 +86,21 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.tabs()->removeTab(w.tabs()->indexOf(t));
 		t->deleteLater();
 	}
-	w.openImport(QStringLiteral("beispiel.rdm"), QStringLiteral("Ordner: 4\nZiele: 37 (RDP 21, SSH 12, Web 4)\nZugangsdaten: 6 (in der Gruppe „remotejoe/Import beispiel.rdm“)\n"
-	                                                           "Hinweise:\n– Ziel „srv⟦U+202E⟧gpj.exe“: Schreibrichtungs-Steuerzeichen im Namen (markiert)\n– 2 Ziele ohne Host"));
+	{
+		// Vorführbericht (erfundene Namen) mit allen Bereichen der Vorschau.
+		const QJsonObject report{
+			{ QStringLiteral("folders"), 4 }, { QStringLiteral("targets"), 37 }, { QStringLiteral("credentials_in_source"), 15 },
+			{ QStringLiteral("credentials_unique"), 3 }, { QStringLiteral("references"), 11 }, { QStringLiteral("encrypted_passwords"), 3 },
+			{ QStringLiteral("encrypted_entries"),
+			  QJsonArray{ QJsonArray{ QStringLiteral("target"), QStringLiteral("srv-01") }, QJsonArray{ QStringLiteral("target"), QStringLiteral("srv-02") },
+			              QJsonArray{ QStringLiteral("credential"), QStringLiteral("Dienstkonto") } } },
+			{ QStringLiteral("warnings"),
+			  QJsonArray{ QStringLiteral("Ziel „srv⟦U+202E⟧gpj.exe“ enthält versteckte Zeichen (Schreibrichtung)"), QStringLiteral("Name „Drucker“ kommt in „Import/Büro“ 2× vor") } },
+			{ QStringLiteral("skipped"), QJsonArray{ QJsonArray{ QStringLiteral("Fernwartung"), QStringLiteral("Verbindungstyp „TeamViewer“ wird nicht unterstützt") } } },
+			{ QStringLiteral("unknown_fields"), QJsonArray{ QJsonArray{ QStringLiteral("AppVersion"), 39 }, QJsonArray{ QStringLiteral("MetaInformation"), 21 } } },
+		};
+		w.openImport(QStringLiteral("beispiel.rdm"), report, QString());
+	}
 	pump(300);
 	if (auto* t = w.findChild<ToolTab*>(QStringLiteral("importTab")))
 	{
