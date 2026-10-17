@@ -123,3 +123,39 @@ fn ignore_certificate_option_is_read_from_the_target() {
     // Ohne Angabe wird nicht übergangen.
     assert!(!serde_json::from_str::<WebOptions>("{}").unwrap().ignore_certificate);
 }
+
+#[test]
+fn web_command_json_and_shortcuts() {
+    let c: WebCommand = serde_json::from_str(r#"{"op":"nav","action":"reload"}"#).unwrap();
+    assert_eq!(c, WebCommand::Nav { action: NavAction::Reload });
+    let c: WebCommand = serde_json::from_str(r#"{"op":"menu","id":0,"action":"copy"}"#).unwrap();
+    assert_eq!(c, WebCommand::Menu { id: 0, index: None, action: Some("copy".into()) });
+    assert!(serde_json::from_str::<WebCommand>(r#"{"op":"exec","script":"x"}"#).is_err());
+    let ev = WebEvent::Status { title: "t".into(), uri: String::new(), loading: false, progress: 100, error: None, back: true, forward: false };
+    let v: serde_json::Value = serde_json::from_slice(&ev.to_bytes()).unwrap();
+    assert_eq!(v["ev"], "status");
+
+    let mut m = Modifiers::default();
+    assert!(m.update(0xffe3, true));
+    assert_eq!(m.shortcut(0x63), Some(EditAction::Copy));
+    assert_eq!(m.shortcut(0x56), Some(EditAction::Paste));
+    assert_eq!(m.shortcut(0x61), None, "Strg+A erledigt die Seite selbst");
+    assert!(m.update(0xffe9, true));
+    assert_eq!(m.shortcut(0x63), None, "Strg+Alt+C ist kein Kopieren");
+    assert!(!m.update(0x61, true));
+
+    let items = context_menu(false, false, true, false, true);
+    let get = |a: &str| items.iter().find(|i| i.action == a).unwrap().enabled;
+    assert!(!get("back") && get("paste") && get("copy") && !get("cut"));
+}
+
+#[test]
+fn damage_union_is_clipped() {
+    let mut d = Damage::default();
+    assert_eq!(d.take(100, 100), None);
+    d.add(10, 10, 5, 5);
+    d.add(-5, 50, 20, 100);
+    d.add(0, 0, 0, 10);
+    assert_eq!(d.take(100, 100), Some((0, 10, 15, 90)));
+    assert_eq!(d.take(100, 100), None);
+}

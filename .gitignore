@@ -4,3 +4,6 @@ target/
 build/
 *.kdbx
 *.bak
+# Privater Signaturschlüssel für Updates: nur lokal beim Herausgeber
+*.priv
+update-key.priv*

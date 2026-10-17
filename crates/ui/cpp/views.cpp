@@ -240,7 +240,25 @@ void FrameView::focusInEvent(QFocusEvent* e)
 	const QString text = QGuiApplication::clipboard()->text();
 	if (!text.isEmpty())
 		m_backend->offerClipboard(m_session, text);
+	if (m_web)
+		m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":{\"op\":\"focus\",\"on\":true}}").arg(m_session));
 	update();
+}
+
+void FrameView::focusOutEvent(QFocusEvent* e)
+{
+	QWidget::focusOutEvent(e);
+	if (m_web)
+		m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":{\"op\":\"focus\",\"on\":false}}").arg(m_session));
+	update();
+}
+
+QPoint FrameView::toLocal(const QPoint& remote) const
+{
+	const QRect t = target();
+	if (m_image.isNull() || m_image.width() == 0 || m_image.height() == 0)
+		return remote;
+	return QPoint(t.x() + remote.x() * t.width() / m_image.width(), t.y() + remote.y() * t.height() / m_image.height());
 }
 
 // ---------- TerminalView ----------
@@ -533,6 +551,27 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 				m_openMacro(id);
 		});
 	}
+	if (protocol == QLatin1String("web") || protocol == QLatin1String("proxmox"))
+	{
+		// Web-Sitzung: Zurück, Vor, Neu laden in der Kopfzeile (Seite läuft im Worker).
+		auto nav = [&](QPushButton*& b, const char* label, const char* tip, const char* action) {
+			b = new QPushButton(backend->text(QString::fromLatin1(label)), headRow);
+			b->setToolTip(backend->text(QString::fromLatin1(tip)));
+			b->setAccessibleName(b->toolTip());
+			const QString a = QString::fromLatin1(action);
+			connect(b, &QPushButton::clicked, this, [this, a] {
+				webCommand(QStringLiteral("{\"op\":\"nav\",\"action\":\"%1\"}").arg(a));
+				if (m_frame)
+					m_frame->setFocus();
+			});
+			hl->addWidget(b);
+		};
+		nav(m_back, "web.back", "web.tip.back", "back");
+		nav(m_forward, "web.forward", "web.tip.forward", "forward");
+		nav(m_reload, "web.reload", "web.tip.reload", "reload");
+		m_back->setEnabled(false);
+		m_forward->setEnabled(false);
+	}
 	lay->addWidget(headRow);
 	lay->addWidget(m_notice);
 	lay->addWidget(m_security);
@@ -547,6 +586,7 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 	else
 	{
 		m_frame = new FrameView(backend, session, this);
+		m_frame->setWeb(m_back != nullptr);
 		lay->addWidget(m_frame, 1);
 	}
 }
@@ -559,14 +599,83 @@ QWidget* SessionPane::view() const
 void SessionPane::setState(const QString& state, const QString& detail)
 {
 	m_state = state;
-	QString label = m_backend->text(QStringLiteral("state.") + state);
-	QString text = m_title + QStringLiteral(" — ") + label;
+	m_stateText = m_backend->text(QStringLiteral("state.") + state);
 	if (!detail.isEmpty())
-		text += QStringLiteral(": ") + detail;
-	m_header->setText(text);
+		m_stateText += QStringLiteral(": ") + detail;
+	updateHeader();
 	const bool down = state == QLatin1String("disconnected") || state == QLatin1String("failed") ||
 	                  state == QLatin1String("crashed");
 	m_reconnect->setVisible(down);
+}
+
+void SessionPane::updateHeader()
+{
+	QString text = m_title;
+	if (!m_pageTitle.isEmpty())
+		text += QStringLiteral(" · ") + m_pageTitle;
+	m_header->setText(text + QStringLiteral(" — ") + m_stateText);
+}
+
+void SessionPane::webCommand(const QString& json)
+{
+	m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":%2}").arg(m_session).arg(json));
+}
+
+void SessionPane::setWebStatus(const QJsonObject& e)
+{
+	m_pageTitle = e.value(QStringLiteral("title")).toString();
+	if (m_back)
+	{
+		m_back->setEnabled(e.value(QStringLiteral("back")).toBool());
+		m_forward->setEnabled(e.value(QStringLiteral("forward")).toBool());
+	}
+	updateHeader();
+}
+
+void SessionPane::showWebMenu(const QJsonObject& e)
+{
+	if (!m_frame)
+		return;
+	const int id = e.value(QStringLiteral("id")).toInt();
+	const bool option = e.value(QStringLiteral("kind")).toString() == QLatin1String("option");
+	// Das Menü ist ein Popup im Hauptfenster; die Seite läuft ohne eigenes Fenster im Worker.
+	auto* menu = new QMenu(this);
+	menu->setAttribute(Qt::WA_DeleteOnClose);
+	const QJsonArray items = e.value(QStringLiteral("items")).toArray();
+	for (int i = 0; i < items.size(); ++i)
+	{
+		const QJsonObject it = items.at(i).toObject();
+		const QString action = it.value(QStringLiteral("action")).toString();
+		if (!option && action.isEmpty())
+		{
+			menu->addSeparator();
+			continue;
+		}
+		const QString label = option ? it.value(QStringLiteral("label")).toString() : m_backend->text(QStringLiteral("web.menu.") + action);
+		QAction* a = menu->addAction(label);
+		a->setEnabled(it.value(QStringLiteral("enabled")).toBool());
+		if (option)
+		{
+			a->setCheckable(true);
+			a->setChecked(it.value(QStringLiteral("selected")).toBool());
+		}
+		connect(a, &QAction::triggered, this, [this, id, i, action, option] {
+			if (option)
+				webCommand(QStringLiteral("{\"op\":\"menu\",\"id\":%1,\"index\":%2}").arg(id).arg(i));
+			else
+				webCommand(QStringLiteral("{\"op\":\"menu\",\"id\":0,\"action\":\"%1\"}").arg(action));
+		});
+	}
+	if (option)
+	{
+		// Ohne Auswahl geschlossen: Auswahlliste im Worker ebenfalls schließen.
+		connect(menu, &QMenu::aboutToHide, this, [this, id, menu] {
+			if (!menu->activeAction())
+				webCommand(QStringLiteral("{\"op\":\"menu\",\"id\":%1}").arg(id));
+		});
+	}
+	const QPoint at = m_frame->toLocal(QPoint(e.value(QStringLiteral("x")).toInt(), e.value(QStringLiteral("y")).toInt()));
+	menu->popup(m_frame->mapToGlobal(at));
 }
 
 void SessionPane::setNotice(const QString& text)

@@ -69,6 +69,10 @@ pub enum UiEvent {
     Clipboard { s: SessionId, text: String },
     ClipboardReadRequest { s: SessionId },
     Title { s: SessionId, title: String },
+    /// Zustand einer Web-Sitzung: Seitentitel, Laden, Fehler, Zurück/Vor möglich.
+    WebStatus { s: SessionId, title: String, loading: bool, progress: u8, error: Option<String>, back: bool, forward: bool },
+    /// Menü des Web-Workers (Kontextmenü oder Auswahlliste) an Bildpunkt `x`, `y`.
+    WebMenu { s: SessionId, id: u32, kind: String, x: i32, y: i32, items: serde_json::Value },
     Bell { s: SessionId },
     Unlocked { targets: usize },
     /// „Alle im Ordner verbinden“ ist abgeschlossen.
@@ -498,6 +502,19 @@ impl Manager {
         }
     }
 
+    /// Befehl an eine Web-Sitzung (Zurück, Vor, Neu laden, Fokus, Bearbeiten, Menüauswahl).
+    pub fn web_command(&mut self, s: SessionId, cmd: &serde_json::Value) -> Result<(), String> {
+        if !self.sessions.get(&s).is_some_and(|x| matches!(x.spec.protocol, Protocol::Web | Protocol::Proxmox)) {
+            return Err("Keine Web-Sitzung".into());
+        }
+        let op = cmd.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        if !matches!(op, "nav" | "focus" | "edit" | "menu") {
+            return Err(format!("Unbekannter Web-Befehl „{op}“"));
+        }
+        self.send(s, &ToWorker::Custom(cmd.to_string().into_bytes()));
+        Ok(())
+    }
+
     /// Lokale Zwischenablage an eine grafische Sitzung anbieten.
     pub fn offer_clipboard(&mut self, s: SessionId, text: &str) {
         if self.sessions.get(&s).is_some_and(|x| x.term.is_none()) {
@@ -827,7 +844,11 @@ impl Manager {
                 }
                 self.pending.push(UiEvent::Terminal { s });
             }
-            FromWorker::Clipboard(ClipData::Text(text)) => self.pending.push(UiEvent::Clipboard { s, text }),
+            FromWorker::Clipboard(ClipData::Text(text)) => {
+                // Größenlimit des Ziels auch für grafische Sitzungen; protokolliert wird nie der Inhalt.
+                let limit = self.sessions.get(&s).map(|x| clipboard_limit(&x.spec.request.options_json)).unwrap_or(16 * 1024 * 1024);
+                self.pending.push(clipboard_event(s, text, limit));
+            }
             FromWorker::Clipboard(ClipData::Files(files)) => {
                 let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
                 self.pending.push(UiEvent::Notice { s, text: format!("Dateien in der Zwischenablage empfangen: {}", names.join(", ")) });
@@ -837,12 +858,55 @@ impl Manager {
                 self.pending.push(UiEvent::Question { s, q: id, text, detail, info, timeout_secs: self.question_timeout.as_secs() });
             }
             FromWorker::Notice(text) => self.pending.push(UiEvent::Notice { s, text }),
-            FromWorker::Log(_) | FromWorker::Pong | FromWorker::Hello { .. } | FromWorker::Heartbeat { .. } | FromWorker::Custom(_) => {}
+            FromWorker::Custom(bytes) => {
+                if self.sessions.get(&s).is_some_and(|x| matches!(x.spec.protocol, Protocol::Web | Protocol::Proxmox)) {
+                    if let Some(e) = web_event(s, &bytes) {
+                        self.pending.push(e);
+                    }
+                }
+            }
+            FromWorker::Log(_) | FromWorker::Pong | FromWorker::Hello { .. } | FromWorker::Heartbeat { .. } => {}
         }
     }
 
     pub fn shutdown(&mut self) {
         self.sup.shutdown();
+    }
+}
+
+/// Text aus der Zwischenablage des Ziels, höchstens `limit` Bytes.
+fn clipboard_event(s: SessionId, text: String, limit: u64) -> UiEvent {
+    if text.len() as u64 <= limit {
+        UiEvent::Clipboard { s, text }
+    } else {
+        UiEvent::Notice { s, text: format!("Zwischenablage vom Ziel verworfen: {} Bytes überschreiten das Limit von {limit} Bytes", text.len()) }
+    }
+}
+
+/// Meldung des Web-Workers (JSON in `FromWorker::Custom`) in ein Ereignis der Oberfläche.
+fn web_event(s: SessionId, bytes: &[u8]) -> Option<UiEvent> {
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let text = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|t| rj_core::charset::mark_visible(t, false).into_owned()).unwrap_or_default();
+    let flag = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
+    match v.get("ev")?.as_str()? {
+        "status" => Some(UiEvent::WebStatus {
+            s,
+            title: text("title"),
+            loading: flag("loading"),
+            progress: v.get("progress").and_then(|x| x.as_u64()).unwrap_or(0).min(100) as u8,
+            error: v.get("error").and_then(|x| x.as_str()).map(|t| rj_core::charset::mark_visible(t, false).into_owned()),
+            back: flag("back"),
+            forward: flag("forward"),
+        }),
+        "menu" => Some(UiEvent::WebMenu {
+            s,
+            id: v.get("id").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+            kind: text("kind"),
+            x: v.get("x").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+            y: v.get("y").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+            items: v.get("items").cloned().unwrap_or_default(),
+        }),
+        _ => None,
     }
 }
 
@@ -905,6 +969,31 @@ mod tests {
         let s = m.open(demo_spec("x", Protocol::Ssh));
         let ev = m.poll(Duration::from_millis(1));
         assert!(ev.iter().any(|e| matches!(e, UiEvent::State { s: id, state, .. } if *id == s && state == "failed")));
+    }
+}
+
+#[cfg(test)]
+mod web_tests {
+    use super::*;
+
+    #[test]
+    fn web_events_and_clipboard_limit() {
+        let st = br#"{"ev":"status","title":"Seite\u202e","uri":"http://example.test/","loading":true,"progress":40,"error":null,"back":true,"forward":false}"#;
+        match web_event(7, st) {
+            Some(UiEvent::WebStatus { s, title, loading, progress, error, back, forward }) => {
+                assert_eq!((s, loading, progress, error, back, forward), (7, true, 40, None, true, false));
+                assert_eq!(title, "Seite⟦U+202E⟧");
+            }
+            other => panic!("{other:?}"),
+        }
+        let menu = br#"{"ev":"menu","id":3,"kind":"option","x":10,"y":20,"items":[{"action":"","label":"a","enabled":true,"selected":false}]}"#;
+        assert!(matches!(web_event(7, menu), Some(UiEvent::WebMenu { id: 3, x: 10, y: 20, .. })));
+        assert!(web_event(7, b"kaputt").is_none());
+        assert!(matches!(clipboard_event(1, "abc".into(), 3), UiEvent::Clipboard { .. }));
+        match clipboard_event(1, "abcd".into(), 3) {
+            UiEvent::Notice { text, .. } => assert!(!text.contains("abcd")),
+            other => panic!("{other:?}"),
+        }
     }
 }
 

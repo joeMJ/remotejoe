@@ -64,6 +64,10 @@ public:
 	void terminalSettingsForScreenshot(const QString& scheme);
 	/// Nur für Bildschirmfotos: leerer Baum mit Hinweis.
 	void showEmptyTreeForScreenshot();
+	/// Wählt den ersten Tab mit einer Web-Sitzung; `false`, wenn es keinen gibt.
+	bool showWebTabForScreenshot();
+	/// Update-Tab mit einer Prüfung gegen `base` (lokale Attrappe).
+	void updateForScreenshot(const QString& base);
 	QTabWidget* tabs() const { return m_tabs; }
 
 	/// Zeit vom Programmstart bis zum ersten Zeichnen des Fensters.
@@ -100,6 +104,8 @@ private:
 	void updateJobs();
 	void idleSettings();
 	void handleEvents(const QString& json);
+	void applyPageTitle(SessionPane* p);
+	void openUpdateTab();
 	void openGuestConsole(const QModelIndex& index);
 	void guestAction(const QModelIndex& index, const QString& action, bool confirmed = false);
 	/// Tab für Rückfragen beim Verbinden eines Ziels (vorhanden oder neu).

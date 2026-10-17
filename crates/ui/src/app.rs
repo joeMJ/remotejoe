@@ -57,6 +57,8 @@ pub struct App {
     hop_question: std::sync::Arc<std::sync::Mutex<Option<HostKeyQuestion>>>,
     session_tunnels: std::collections::HashMap<SessionId, (Uuid, String, u16)>,
     pub patchday: Option<rj_tasks::patchday::Patchday>,
+    /// Update-Funktion (gefundene Version, laufende Aufgabe).
+    pub update: crate::update::UpdateState,
     /// Zugangsdaten des laufenden Patchday-Laufs (nur bis zur Übernahme durch die Aufgaben).
     pub patch_creds: Option<std::sync::Arc<crate::patch::CredStore>>,
     import_plan: Option<rj_importer::plan::ImportPlan>,
@@ -134,6 +136,7 @@ impl App {
             unlocking: None,
             vault_lock: None,
             lights: Default::default(),
+            update: Default::default(),
         };
         // Gespeicherte Farben gelten schon für das erste Terminal.
         let scheme = app.terminal_scheme();
@@ -928,6 +931,37 @@ impl App {
         self.workspace.set_arrangement(t1, Arrangement::TwoByTwo);
         let e = self.sessions.open_demo_terminal("ssh-005", "admin@netz-01:~$ ip -br addr\r\nlo   UNKNOWN 127.0.0.1/8\r\neth0 UP      192.0.2.15/24\r\nadmin@netz-01:~$ ", 90, 20);
         self.workspace.open(e, "ssh-005");
+        // Echte Web-Sitzungen für das Bildschirmfoto des Web-Tabs (Adressen aus
+        // RJ_DEMO_WEB, durch Komma getrennt), nebeneinander gekachelt.
+        let urls = std::env::var("RJ_DEMO_WEB").unwrap_or_default();
+        let mut web_tab = None;
+        for (i, url) in urls.split(',').filter(|u| !u.trim().is_empty()).take(2).enumerate() {
+            let title = format!("web-{:03}", i + 1);
+            let spec = ConnectSpec {
+                target: Uuid::nil(),
+                title: title.clone(),
+                protocol: Protocol::Web,
+                request: ConnectRequest {
+                    host: "127.0.0.1".into(),
+                    port: 0,
+                    width: 640,
+                    height: 560,
+                    options_json: json!({ "url": url.trim(), "allow_http": true, "profile": title }).to_string(),
+                    connect_timeout_secs: 15,
+                    keepalive_secs: 30,
+                },
+                credentials: CredentialPayload { username: String::new(), domain: None, password: SecretBytes(Vec::new()), private_key: None },
+            };
+            let s = self.sessions.open(spec);
+            match web_tab {
+                None => web_tab = Some(self.workspace.open(s, &title)),
+                Some(t) => {
+                    self.workspace.open(s, &title);
+                    self.workspace.tile(s, t);
+                    self.workspace.set_arrangement(t, Arrangement::OneByTwo);
+                }
+            }
+        }
         self.workspace.activate(t1);
     }
 
@@ -1013,6 +1047,7 @@ impl App {
                         self.restore_session_credentials();
                         self.start_snmp();
                         out.push(UiEvent::Unlocked { targets: n });
+                        self.maybe_auto_check();
                     }
                     Err(reason) => out.push(UiEvent::UnlockFailed { reason }),
                 }

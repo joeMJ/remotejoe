@@ -1,0 +1,31 @@
+[package]
+name = "remotejoe-update"
+description = "Update-Funktion: Veröffentlichungen aus Gitea oder GitHub, signierte Pakete prüfen und installieren"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_update"
+
+[dependencies]
+remotejoe-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+base64 = "0.22"
+getrandom = "0.4"
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
+rustls-native-certs = "0.8"
+tar = { version = "0.4", default-features = false }
+ruzstd = "0.8"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+remotejoe-testkit = { path = "../testkit" }

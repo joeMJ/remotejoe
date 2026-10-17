@@ -15,8 +15,10 @@ Zugangsdaten liegen in einer KeePass-Datei (KDBX), die man weiter mit KeePassXC 
   Host-Schlüssel-Prüfung im OpenSSH-Format, Schlüssel aus KDBX-Anhängen.
 - **VNC** (eigene Umsetzung) mit TLS (VeNCrypt), Zertifikatsprüfung per Fingerabdruck und
   UTF-8-Zwischenablage.
-- **Web** in eigenem Fenster mit eigenem Browserprofil je Ziel und automatischer
-  Formular-Anmeldung.
+- **Web** im Tab wie RDP und VNC, auch gekachelt: Die Seite wird im Worker ohne eigenes
+  Fenster gerendert (WebKitGTK); Zurück, Vor, Neu laden in der Kopfzeile, Seitentitel als
+  Tab-Titel, Zwischenablage über das Hauptprogramm, eigenes Browserprofil je Ziel und
+  automatische Formular-Anmeldung. Unter Windows noch nicht verfügbar.
 - **PowerShell-Remoting** (WinRM oder SSH) über ein lokal installiertes PowerShell 7.
 - **Proxmox VE und Hyper-V:** Ziele im Baum aufklappen, Gäste starten, herunterfahren, neu
   starten, ausschalten und deren Konsole öffnen.
@@ -34,6 +36,9 @@ Zugangsdaten liegen in einer KeePass-Datei (KDBX), die man weiter mit KeePassXC 
   rückgängig machbare Aktion.
 - **Keine Dialogfenster:** Rückfragen, Hinweise und Fehlermeldungen erscheinen als Leiste im
   Tab oder im Hauptfenster; Import-Vorschau und Patchday sind Tabs.
+- **Updates** aus dem eigenen Gitea oder von GitHub: Hilfe → Nach Updates suchen …; Pakete
+  sind mit Ed25519 signiert und werden vor der Installation geprüft (siehe
+  [`docs/UPDATE.md`](docs/UPDATE.md)).
 - **Alle im Ordner verbinden**, neu verbinden oder trennen (gestaffelt, höchstens 4
   gleichzeitig).
 - **Sperre nach Leerlauf** (Vorgabe aus) und Sperren von Hand; nach dem Aufwachen aus dem
@@ -153,8 +158,14 @@ selben Ordner wie `remotejoe` liegen.
 
 Für PowerShell-Remoting und Hyper-V muss PowerShell 7 (`pwsh`) installiert sein.
 
+Werkzeug für Herausgeber von Updates (Schlüssel, Packen, Signieren, Hochladen):
+`cargo build --release -p remotejoe-update-tool` (liefert `rj-update`, siehe `docs/UPDATE.md`).
+
 Tests: `cargo test --workspace`. Tests gegen lokale Server (sshd, xrdp, Xvnc, snmpd) laufen,
-wenn diese installiert sind, sonst werden sie übersprungen.
+wenn diese installiert sind, sonst werden sie übersprungen. Web-Tests mit echter WebView:
+`xvfb-run -a cargo test -p remotejoe-worker-web --features webview` (braucht `xvfb`).
+
+![Web-Sitzungen gekachelt im Tab](docs/screenshots/web-tab.png)
 
 ## Bauen unter Windows 10/11
 

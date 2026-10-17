@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include <algorithm>
 
 #include "editor.h"
 #include "remotejoe-ui/src/bridge.cxxqt.h"
@@ -690,6 +691,7 @@ void MainWindow::buildMenus()
 		m_tabs->setCurrentIndex(m_tabs->addTab(t, T(m_backend, "snmp.title")));
 	});
 	extras->addAction(T(m_backend, "menu.extras.terminal"), this, [this] { openTerminalSettings(); });
+	QMenu* help = nullptr;
 	QMenu* view = menuBar()->addMenu(T(m_backend, "menu.view"));
 	const char* modes[] = { "single", "one_by_two", "two_by_two", "free" };
 	int n = 1;
@@ -710,6 +712,32 @@ void MainWindow::buildMenus()
 		if (m_backend->detachTab(currentTab()))
 			rebuildTabs();
 	});
+	help = menuBar()->addMenu(T(m_backend, "menu.help"));
+	help->addAction(T(m_backend, "menu.help.update"), this, [this] { openUpdateTab(); });
+}
+
+void MainWindow::updateForScreenshot(const QString& base)
+{
+	QJsonObject o;
+	o.insert(QStringLiteral("op"), QStringLiteral("update_settings"));
+	o.insert(QStringLiteral("source"), QStringLiteral("gitea"));
+	o.insert(QStringLiteral("base_url"), base);
+	o.insert(QStringLiteral("repo"), QStringLiteral("team/remotejoe"));
+	m_backend->edit(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+	openUpdateTab();
+	if (auto* u = findChild<UpdateTab*>())
+		u->check();
+}
+
+void MainWindow::openUpdateTab()
+{
+	if (auto* u = findChild<UpdateTab*>())
+	{
+		u->refresh();
+		m_tabs->setCurrentWidget(u);
+		return;
+	}
+	addToolTab(new UpdateTab(m_backend, m_tabs), T(m_backend, "update.title"));
 }
 
 void MainWindow::applyTheme(bool dark)
@@ -1403,6 +1431,21 @@ void MainWindow::terminalSettingsForScreenshot(const QString& scheme)
 	openTerminalSettings();
 }
 
+bool MainWindow::showWebTabForScreenshot()
+{
+	for (SessionPane* p : std::as_const(m_panes))
+		if (p && p->isWeb())
+			for (int i = 0; i < m_tabs->count(); ++i)
+				if (m_tabs->widget(i)->isAncestorOf(p))
+				{
+					m_tabs->setCurrentIndex(i);
+					if (p->frame())
+						p->frame()->setFocus();
+					return true;
+				}
+	return false;
+}
+
 void MainWindow::showEmptyTreeForScreenshot()
 {
 	m_model->clear();
@@ -1517,6 +1560,9 @@ void MainWindow::rebuildTabs()
 			const int i = target->addTab(content, tab.value(QStringLiteral("title")).toString());
 			if (id == active)
 				activeIndex = i;
+			for (SessionPane* p : std::as_const(m_panes))
+				if (p && content->isAncestorOf(p))
+					applyPageTitle(p);
 		}
 		target->setCurrentIndex(activeIndex);
 		for (const auto& e : editors)
@@ -1656,6 +1702,25 @@ void MainWindow::poll()
 	m_dirtyTerminals.clear();
 }
 
+void MainWindow::applyPageTitle(SessionPane* p)
+{
+	// Titel der Webseite als Tab-Titel, wenn der Tab nur diese Sitzung zeigt.
+	if (p->pageTitle().isEmpty())
+		return;
+	QList<QTabWidget*> all = findChildren<QTabWidget*>();
+	for (auto& w : m_windows)
+		if (w)
+			all += w->findChildren<QTabWidget*>();
+	for (QTabWidget* tabs : all)
+		for (int i = 0; i < tabs->count(); ++i)
+			if (tabs->widget(i)->isAncestorOf(p) &&
+			    std::count_if(m_panes.cbegin(), m_panes.cend(), [&](SessionPane* o) { return o && tabs->widget(i)->isAncestorOf(o); }) == 1)
+			{
+				tabs->setTabText(i, p->pageTitle());
+				tabs->setTabToolTip(i, p->title() + QStringLiteral(" — ") + p->pageTitle());
+			}
+}
+
 void MainWindow::handleEvents(const QString& json)
 {
 	if (json.size() > 2)
@@ -1728,6 +1793,21 @@ void MainWindow::handleEvents(const QString& json)
 				p->setMacroResult(e.value(QStringLiteral("message")).toString(), e.value(QStringLiteral("ok")).toBool());
 			else if (t == QLatin1String("title") && p)
 				p->setToolTip(e.value(QStringLiteral("title")).toString());
+			else if (t == QLatin1String("web_status") && p)
+			{
+				p->setWebStatus(e);
+				applyPageTitle(p);
+				// Lade- und Fehlerzustand in der Fußzeile.
+				const QString error = e.value(QStringLiteral("error")).toString();
+				if (!error.isEmpty())
+					statusBar()->showMessage(T(m_backend, "web.status.error").arg(p->title(), error), 15000);
+				else if (e.value(QStringLiteral("loading")).toBool())
+					statusBar()->showMessage(T(m_backend, "web.status.loading").arg(p->title()).arg(e.value(QStringLiteral("progress")).toInt()), 5000);
+				else
+					statusBar()->showMessage(T(m_backend, "web.status.loaded").arg(p->title()), 3000);
+			}
+			else if (t == QLatin1String("web_menu") && p)
+				p->showWebMenu(e);
 			else if (t == QLatin1String("tree_changed"))
 				reloadTree();
 			else if (t == QLatin1String("unlocked"))
@@ -1775,7 +1855,15 @@ void MainWindow::handleEvents(const QString& json)
 			{
 				const QString kind = e.value(QStringLiteral("kind")).toString();
 				const QJsonObject r = parseObject(e.value(QStringLiteral("json")).toString());
-				if (kind == QLatin1String("guests"))
+				if (kind.startsWith(QLatin1String("update_")))
+				{
+					if (auto* u = findChild<UpdateTab*>())
+						u->handleResult(kind, r);
+					else if (kind == QLatin1String("update_check") && r.value(QStringLiteral("state")).toString() == QLatin1String("newer"))
+						// Prüfung beim Start: nur ein Hinweis in der Fußzeile.
+						statusBar()->showMessage(T(m_backend, "update.available").arg(r.value(QStringLiteral("found")).toObject().value(QStringLiteral("version")).toString()), 15000);
+				}
+				else if (kind == QLatin1String("guests"))
 					applyGuests(e.value(QStringLiteral("target")).toString(), r);
 				else if (r.contains(QStringLiteral("error")))
 					statusBar()->showMessage(T(m_backend, "edit.error").arg(r.value(QStringLiteral("error")).toString()), 8000);

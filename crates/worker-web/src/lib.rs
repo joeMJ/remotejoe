@@ -1,6 +1,8 @@
 //! Web-Ziele: Adressprüfung, Formular-Anmeldung per Skript, eigenes
-//! Profil je Ziel und Zertifikatsentscheidung. Die WebView selbst steckt im
-//! Worker (`main.rs`, Merkmal `webview`).
+//! Profil je Ziel, Zertifikatsentscheidung und die Erweiterung des Kanals
+//! für Web-Sitzungen. Die WebView selbst steckt im Worker (`main.rs`,
+//! Merkmal `webview`); sie rendert ohne sichtbares Fenster in den
+//! geteilten Bildspeicher.
 //!
 //! Das Kennwort gelangt nur über die Skript-Schnittstelle in die Seite
 //! (als JSON-Zeichenkette im eingespeisten Skript), nie in die Adresse.
@@ -297,6 +299,153 @@ impl AcceptedCerts {
 
     pub fn accept(&mut self, host: &str, der: &[u8]) {
         self.hosts.insert(host.to_string(), Self::fingerprint(der));
+    }
+}
+
+/// Befehl der Oberfläche an den Web-Worker (`ToWorker::Custom`, JSON).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum WebCommand {
+    /// Zurück, Vor, Neu laden, Anhalten.
+    Nav { action: NavAction },
+    /// Die Ansicht im Hauptfenster hat den Tastaturfokus erhalten oder verloren.
+    Focus { on: bool },
+    /// Bearbeiten: Kopieren, Ausschneiden, Einfügen, Alles auswählen.
+    Edit { action: EditAction },
+    /// Auswahl in einem Menü des Workers (`index` bei Auswahllisten,
+    /// `action` beim Kontextmenü; beides leer: abgebrochen).
+    Menu {
+        id: u32,
+        #[serde(default)]
+        index: Option<u32>,
+        #[serde(default)]
+        action: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavAction {
+    Back,
+    Forward,
+    Reload,
+    Stop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditAction {
+    Copy,
+    Cut,
+    Paste,
+    SelectAll,
+}
+
+/// Eintrag eines Menüs, das der Worker im Hauptfenster anzeigen lässt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MenuEntry {
+    /// Kontextmenü: Aktion (`back`, `copy` …), Auswahlliste: leer.
+    pub action: String,
+    /// Text der Auswahlliste (auffällige Zeichen markiert); beim Kontextmenü leer,
+    /// die Oberfläche nimmt ihre eigenen Texte.
+    pub label: String,
+    pub enabled: bool,
+    pub selected: bool,
+}
+
+/// Meldung des Web-Workers an die Oberfläche (`FromWorker::Custom`, JSON).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "ev", rename_all = "snake_case")]
+pub enum WebEvent {
+    /// Seitentitel, Ladezustand und Navigationsmöglichkeiten.
+    Status { title: String, uri: String, loading: bool, progress: u8, error: Option<String>, back: bool, forward: bool },
+    /// Menü an der Stelle `x`, `y` (Bildpunkte der Seite) anzeigen;
+    /// `kind`: `context` oder `option` (Auswahlliste).
+    Menu { id: u32, kind: String, x: i32, y: i32, items: Vec<MenuEntry> },
+}
+
+impl WebEvent {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("JSON")
+    }
+}
+
+/// Aktionen des Kontextmenüs in der angezeigten Reihenfolge (leer: Trennlinie).
+pub fn context_menu(back: bool, forward: bool, editable: bool, selection: bool, can_paste: bool) -> Vec<MenuEntry> {
+    let e = |a: &str, enabled: bool| MenuEntry { action: a.into(), label: String::new(), enabled, selected: false };
+    vec![
+        e("back", back),
+        e("forward", forward),
+        e("reload", true),
+        e("", false),
+        e("cut", editable && selection),
+        e("copy", selection || editable),
+        e("paste", editable && can_paste),
+        e("select_all", true),
+    ]
+}
+
+/// Skript (eigene Welt des Workers) für den markierten Text; aus
+/// Kennwortfeldern wird nichts kopiert.
+pub const SELECTION_SCRIPT: &str = "(function(){var e=document.activeElement;\
+if(e&&(e.tagName==='INPUT'||e.tagName==='TEXTAREA')&&typeof e.selectionStart==='number'){\
+if(e.type==='password')return '';return e.value.substring(e.selectionStart,e.selectionEnd);}\
+var s=window.getSelection();return s?s.toString():'';})()";
+
+/// Modifikatoren aus X11-Keysyms (Umschalt, Strg, Alt).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Modifiers {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+}
+
+impl Modifiers {
+    /// Wertet eine Taste aus; `true`, wenn sie ein Modifikator ist.
+    pub fn update(&mut self, keysym: u32, down: bool) -> bool {
+        match keysym {
+            0xffe1 | 0xffe2 => self.shift = down,
+            0xffe3 | 0xffe4 => self.ctrl = down,
+            0xffe9 | 0xffea | 0xffe7 | 0xffe8 => self.alt = down,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Strg+C/X/V/A, die der Worker selbst ausführt, statt sie an die Seite zu geben.
+    pub fn shortcut(&self, keysym: u32) -> Option<EditAction> {
+        if !self.ctrl || self.alt {
+            return None;
+        }
+        match keysym {
+            0x63 | 0x43 => Some(EditAction::Copy),
+            0x78 | 0x58 => Some(EditAction::Cut),
+            0x76 | 0x56 => Some(EditAction::Paste),
+            _ => None,
+        }
+    }
+}
+
+/// Vereinigung geänderter Bereiche, beschnitten auf die Bildgröße.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Damage(pub Option<(i32, i32, i32, i32)>);
+
+impl Damage {
+    pub fn add(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        self.0 = Some(match self.0 {
+            None => (x, y, x + w, y + h),
+            Some((a, b, c, d)) => (a.min(x), b.min(y), c.max(x + w), d.max(y + h)),
+        });
+    }
+
+    /// Nimmt den Bereich als (x, y, w, h) heraus, beschnitten auf `width`×`height`.
+    pub fn take(&mut self, width: i32, height: i32) -> Option<(i32, i32, i32, i32)> {
+        let (a, b, c, d) = self.0.take()?;
+        let (a, b, c, d) = (a.max(0), b.max(0), c.min(width), d.min(height));
+        (c > a && d > b).then_some((a, b, c - a, d - b))
     }
 }
 

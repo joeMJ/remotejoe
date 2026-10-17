@@ -28,6 +28,10 @@
 #include <QtWidgets/QFontComboBox>
 #include <QtWidgets/QSpinBox>
 #include <QtWidgets/QFormLayout>
+#include <QtWidgets/QGroupBox>
+#include <QtCore/QProcess>
+#include <QtCore/QProcessEnvironment>
+#include <QtWidgets/QApplication>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QLabel>
@@ -3190,4 +3194,214 @@ void PatchdayTab::refresh()
 	}
 	++refreshes;
 	maxRefreshMs = qMax(maxRefreshMs, t.elapsed());
+}
+
+// ---------- UpdateTab ----------
+
+UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
+  : ToolTab(parent)
+  , m_backend(backend)
+{
+	auto T = [backend](const char* k) { return backend->text(QString::fromLatin1(k)); };
+	auto* lay = new QVBoxLayout(this);
+	m_bar = new ActionBar(backend, this);
+	lay->addWidget(m_bar);
+	auto* src = new QGroupBox(T("update.source"), this);
+	auto* form = new QFormLayout(src);
+	m_source = new QComboBox(src);
+	m_source->addItem(T("update.source.none"), QString());
+	m_source->addItem(QStringLiteral("Gitea"), QStringLiteral("gitea"));
+	m_source->addItem(QStringLiteral("GitHub"), QStringLiteral("github"));
+	m_base = new QLineEdit(src);
+	m_base->setPlaceholderText(QStringLiteral("https://git.example.test"));
+	m_repo = new QLineEdit(src);
+	m_repo->setPlaceholderText(T("update.repo.placeholder"));
+	m_token = new QComboBox(src);
+	m_onStart = new QCheckBox(T("update.on_start"), src);
+	auto* save = new QPushButton(T("update.save"), src);
+	form->addRow(T("update.source.kind"), m_source);
+	form->addRow(T("update.base_url"), m_base);
+	form->addRow(T("update.repo"), m_repo);
+	form->addRow(T("update.token"), m_token);
+	form->addRow(QString(), m_onStart);
+	form->addRow(QString(), save);
+	lay->addWidget(src);
+	m_current = new QLabel(this);
+	m_found = new QLabel(this);
+	m_state = new QLabel(this);
+	m_state->setWordWrap(true);
+	m_state->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+	lay->addWidget(m_current);
+	lay->addWidget(m_found);
+	auto* notesLabel = new QLabel(T("update.notes"), this);
+	m_notes = new QPlainTextEdit(this);
+	m_notes->setReadOnly(true);
+	notesLabel->setBuddy(m_notes);
+	lay->addWidget(notesLabel);
+	lay->addWidget(m_notes, 1);
+	lay->addWidget(m_state);
+	auto* row = new QHBoxLayout;
+	m_check = new QPushButton(T("update.check"), this);
+	m_install = new QPushButton(T("update.install"), this);
+	m_later = new QPushButton(T("update.later"), this);
+	m_cancel = new QPushButton(T("update.cancel"), this);
+	m_restart = new QPushButton(T("update.restart"), this);
+	m_install->setEnabled(false);
+	m_cancel->hide();
+	m_restart->hide();
+	for (auto* b : { m_check, m_install, m_cancel, m_restart, m_later })
+		row->addWidget(b);
+	row->addStretch(1);
+	lay->addLayout(row);
+	connect(save, &QPushButton::clicked, this, [this] { saveSettings(); });
+	connect(m_check, &QPushButton::clicked, this, [this] { check(); });
+	connect(m_install, &QPushButton::clicked, this, [this] { install(false); });
+	connect(m_later, &QPushButton::clicked, this, [this] { emit closeRequested(); });
+	connect(m_cancel, &QPushButton::clicked, this, [this] {
+		m_backend->edit(QStringLiteral("{\"op\":\"update_cancel\"}"));
+		setBusy(false, m_backend->text(QStringLiteral("update.cancelled")));
+	});
+	connect(m_restart, &QPushButton::clicked, this, [this] {
+		// Neue Fassung starten; sie wartet, bis diese Instanz ihre Sperre freigibt.
+		QProcess p;
+		p.setProgram(m_program);
+		auto env = QProcessEnvironment::systemEnvironment();
+		env.insert(QStringLiteral("RJ_RESTART_WAIT"), QStringLiteral("1"));
+		p.setProcessEnvironment(env);
+		if (p.startDetached())
+		{
+			if (QWidget* w = window())
+				w->close();
+			qApp->quit();
+		}
+		else
+			m_state->setText(m_backend->text(QStringLiteral("update.restart.failed")));
+	});
+	refresh();
+}
+
+void UpdateTab::refresh()
+{
+	const QJsonObject s = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_status\"}")).toUtf8()).object();
+	m_source->setCurrentIndex(qMax(0, m_source->findData(s.value(QStringLiteral("source")).toString())));
+	m_base->setText(s.value(QStringLiteral("base_url")).toString());
+	m_repo->setText(s.value(QStringLiteral("repo")).toString());
+	m_onStart->setChecked(s.value(QStringLiteral("check_on_start")).toBool());
+	m_token->clear();
+	m_token->addItem(m_backend->text(QStringLiteral("update.token.none")), QString());
+	const QString chosen = s.value(QStringLiteral("token_entry")).toString();
+	for (const QJsonValue& v : s.value(QStringLiteral("entries")).toArray())
+	{
+		const QJsonObject e = v.toObject();
+		const QString group = e.value(QStringLiteral("group")).toString();
+		m_token->addItem(group.isEmpty() ? e.value(QStringLiteral("title")).toString() : group + QStringLiteral(" / ") + e.value(QStringLiteral("title")).toString(),
+		                 e.value(QStringLiteral("uuid")).toString());
+	}
+	if (!chosen.isEmpty() && m_token->findData(chosen) < 0)
+		m_token->addItem(s.value(QStringLiteral("locked")).toBool() ? m_backend->text(QStringLiteral("update.token.locked")) : chosen, chosen);
+	m_token->setCurrentIndex(qMax(0, m_token->findData(chosen)));
+	m_current->setText(m_backend->text(QStringLiteral("update.current")).arg(s.value(QStringLiteral("current")).toString(), s.value(QStringLiteral("platform")).toString()));
+	const QJsonObject f = s.value(QStringLiteral("found")).toObject();
+	if (!f.isEmpty())
+	{
+		m_found->setText(m_backend->text(QStringLiteral("update.found")).arg(f.value(QStringLiteral("version")).toString()));
+		m_notes->setPlainText(f.value(QStringLiteral("notes")).toString());
+		m_install->setEnabled(true);
+	}
+	else
+		m_found->setText(m_backend->text(QStringLiteral("update.found.none")));
+	if (s.value(QStringLiteral("package_managed")).toBool())
+		m_state->setText(m_backend->text(QStringLiteral("update.package_managed")));
+}
+
+void UpdateTab::saveSettings()
+{
+	QJsonObject o;
+	o.insert(QStringLiteral("op"), QStringLiteral("update_settings"));
+	o.insert(QStringLiteral("source"), m_source->currentData().toString());
+	o.insert(QStringLiteral("base_url"), m_base->text());
+	o.insert(QStringLiteral("repo"), m_repo->text());
+	o.insert(QStringLiteral("token_entry"), m_token->currentData().toString());
+	o.insert(QStringLiteral("check_on_start"), m_onStart->isChecked());
+	const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact))).toUtf8()).object();
+	if (r.contains(QStringLiteral("error")))
+		m_state->setText(r.value(QStringLiteral("error")).toString());
+	else
+		m_state->setText(m_backend->text(QStringLiteral("update.saved")));
+}
+
+void UpdateTab::setBusy(bool busy, const QString& text)
+{
+	m_check->setEnabled(!busy);
+	m_install->setEnabled(!busy && m_install->isEnabled());
+	m_cancel->setVisible(busy);
+	if (!text.isEmpty())
+		m_state->setText(text);
+}
+
+void UpdateTab::check()
+{
+	const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_check\"}")).toUtf8()).object();
+	if (r.contains(QStringLiteral("error")))
+	{
+		m_state->setText(r.value(QStringLiteral("error")).toString());
+		return;
+	}
+	setBusy(true, m_backend->text(QStringLiteral("update.checking")));
+}
+
+void UpdateTab::install(bool confirm)
+{
+	const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_install\",\"confirm\":%1}").arg(confirm ? QStringLiteral("true") : QStringLiteral("false"))).toUtf8()).object();
+	const QString state = r.value(QStringLiteral("state")).toString();
+	if (r.contains(QStringLiteral("error")))
+		m_state->setText(r.value(QStringLiteral("error")).toString());
+	else if (state == QLatin1String("confirm"))
+		m_bar->ask(m_backend->text(QStringLiteral("update.confirm")).arg(r.value(QStringLiteral("sessions")).toInt()), { m_backend->text(QStringLiteral("update.confirm.yes")) },
+		           [this](int b) {
+			           if (b == 0)
+				           install(true);
+		           });
+	else if (state == QLatin1String("package"))
+		m_state->setText(m_backend->text(QStringLiteral("update.package_managed.hint")).arg(r.value(QStringLiteral("url")).toString()));
+	else
+		setBusy(true, m_backend->text(QStringLiteral("update.installing")));
+}
+
+void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
+{
+	setBusy(false);
+	const QString state = r.value(QStringLiteral("state")).toString();
+	if (state == QLatin1String("error"))
+	{
+		m_state->setText(m_backend->text(QStringLiteral("update.error")).arg(r.value(QStringLiteral("error")).toString()));
+		return;
+	}
+	if (kind == QLatin1String("update_check"))
+	{
+		if (state == QLatin1String("newer"))
+		{
+			const QJsonObject f = r.value(QStringLiteral("found")).toObject();
+			m_found->setText(m_backend->text(QStringLiteral("update.found")).arg(f.value(QStringLiteral("version")).toString()));
+			m_notes->setPlainText(f.value(QStringLiteral("notes")).toString());
+			m_install->setEnabled(true);
+			m_state->setText(m_backend->text(QStringLiteral("update.newer")));
+			m_install->setFocus();
+		}
+		else
+		{
+			m_found->setText(m_backend->text(QStringLiteral("update.found.none")));
+			m_notes->clear();
+			m_install->setEnabled(false);
+			m_state->setText(m_backend->text(QStringLiteral("update.uptodate")).arg(r.value(QStringLiteral("latest")).toString()));
+		}
+	}
+	else if (state == QLatin1String("installed"))
+	{
+		m_program = r.value(QStringLiteral("program")).toString();
+		m_install->setEnabled(false);
+		m_state->setText(m_backend->text(QStringLiteral("update.installed")).arg(r.value(QStringLiteral("version")).toString(), r.value(QStringLiteral("old")).toString()));
+		m_restart->show();
+		m_restart->setFocus();
+	}
 }

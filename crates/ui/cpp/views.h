@@ -31,6 +31,10 @@ public:
 	/// Schließt eine nicht verwendete Kennung.
 	static void closeHandle(std::int64_t fd);
 	void damage(int x, int y, int w, int h);
+	/// Web-Sitzung: Fokuswechsel an den Worker melden.
+	void setWeb(bool web) { m_web = web; }
+	/// Bildpunkt der Gegenstelle in Koordinaten dieses Widgets.
+	QPoint toLocal(const QPoint& remote) const;
 
 protected:
 	void paintEvent(QPaintEvent*) override;
@@ -42,10 +46,12 @@ protected:
 	void keyPressEvent(QKeyEvent*) override;
 	void keyReleaseEvent(QKeyEvent*) override;
 	void focusInEvent(QFocusEvent*) override;
+	void focusOutEvent(QFocusEvent*) override;
 	bool focusNextPrevChild(bool) override { return false; }
 
 private:
 	QPoint toRemote(const QPointF& p) const;
+	bool m_web = false;
 	QRect target() const;
 	/// Meldet nach einer Pause die Größe des Fensters als Wunschauflösung der Sitzung
 	/// (RDP: Anzeige-Steuerkanal oder Neuaufbau, VNC: ExtendedDesktopSize).
@@ -120,9 +126,23 @@ public:
 	void setMacroOpener(std::function<void(const QString&)> opener) { m_openMacro = std::move(opener); }
 	/// Ergebnis eines Makrolaufs in der Kopfzeile anzeigen.
 	void setMacroResult(const QString& text, bool ok);
+	/// Web-Sitzung: Seitentitel, Laden/Fehler und Zurück/Vor aus dem Worker.
+	void setWebStatus(const QJsonObject& e);
+	/// Web-Sitzung: Menü des Workers (Kontextmenü, Auswahlliste) als Popup zeigen.
+	void showWebMenu(const QJsonObject& e);
+	/// Titel der Webseite (leer, solange keiner bekannt ist).
+	QString pageTitle() const { return m_pageTitle; }
+	bool isWeb() const { return m_back != nullptr; }
 
 private:
 	void fillMacroMenu();
+	void updateHeader();
+	void webCommand(const QString& json);
+	QString m_pageTitle;
+	QString m_stateText;
+	QPushButton* m_back = nullptr;
+	QPushButton* m_forward = nullptr;
+	QPushButton* m_reload = nullptr;
 	RjBackend* m_backend;
 	std::uint64_t m_session;
 	QString m_title;
