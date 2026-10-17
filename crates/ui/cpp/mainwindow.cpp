@@ -1288,8 +1288,14 @@ void MainWindow::handleEvents(const QString& json)
 					p->setState(e.value(QStringLiteral("state")).toString(), e.value(QStringLiteral("detail")).toString());
 				updateStatus();
 			}
-			else if (t == QLatin1String("shared_frame") && p && p->frame())
-				p->frame()->attach(e.value(QStringLiteral("path")).toString(), e.value(QStringLiteral("w")).toInt(), e.value(QStringLiteral("h")).toInt());
+			else if (t == QLatin1String("shared_frame"))
+			{
+				const auto fd = std::int64_t(e.value(QStringLiteral("fd")).toInteger(-1));
+				if (p && p->frame())
+					p->frame()->attach(fd, e.value(QStringLiteral("w")).toInt(), e.value(QStringLiteral("h")).toInt());
+				else
+					FrameView::closeHandle(fd);
+			}
 			else if (t == QLatin1String("frame") && p && p->frame())
 				p->frame()->damage(e.value(QStringLiteral("x")).toInt(), e.value(QStringLiteral("y")).toInt(), e.value(QStringLiteral("w")).toInt(),
 				                   e.value(QStringLiteral("h")).toInt());

@@ -78,7 +78,7 @@ pub fn fingerprint(key: &PublicKey) -> String {
 #[derive(Debug, Clone)]
 enum Line {
     /// Eintrag: Hostmuster, Algorithmus, Schlüssel (Base64).
-    Entry { hosts: String, alg: String, key: String, legacy: bool },
+    Entry { hosts: String, alg: String, key: String },
     /// Kommentar, Leerzeile, Zeile mit Markierung (`@cert-authority`,
     /// `@revoked`) oder unlesbare Zeile: bleibt beim Schreiben unverändert.
     Other(String),
@@ -184,10 +184,10 @@ impl KnownHosts {
                 }
                 let mut it = t.split_whitespace();
                 match (it.next(), it.next(), it.next()) {
-                    (Some(h), Some(a), Some(k)) => match legacy_id(h) {
-                        Some(id) => Line::Entry { hosts: id, alg: a.to_string(), key: k.to_string(), legacy: true },
-                        None => Line::Entry { hosts: h.to_string(), alg: a.to_string(), key: k.to_string(), legacy: false },
-                    },
+                    (Some(h), Some(a), Some(k)) => {
+                        let hosts = legacy_id(h).unwrap_or_else(|| h.to_string());
+                        Line::Entry { hosts, alg: a.to_string(), key: k.to_string() }
+                    }
                     _ => Line::Other(l.to_string()),
                 }
             })

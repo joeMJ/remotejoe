@@ -21,7 +21,10 @@ class FrameView : public QWidget
 public:
 	FrameView(RjBackend* backend, std::uint64_t session, QWidget* parent = nullptr);
 	~FrameView() override;
-	void attach(const QString& path, int w, int h);
+	/// Bildet den Bildpuffer ab (`fd`: Deskriptor bzw. Kennung, wird geschlossen).
+	void attach(std::int64_t fd, int w, int h);
+	/// Schließt eine nicht verwendete Kennung.
+	static void closeHandle(std::int64_t fd);
 	void damage(int x, int y, int w, int h);
 
 protected:
@@ -40,8 +43,9 @@ private:
 	QRect target() const;
 	RjBackend* m_backend;
 	std::uint64_t m_session;
-	std::unique_ptr<QFile> m_file;
+	void unmap();
 	uchar* m_map = nullptr;
+	std::size_t m_mapLen = 0;
 	QImage m_image;
 };
 

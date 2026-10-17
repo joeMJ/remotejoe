@@ -1,5 +1,11 @@
 #include "views.h"
 #include "editor.h"
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
@@ -26,20 +32,59 @@ FrameView::FrameView(RjBackend* backend, std::uint64_t session, QWidget* parent)
 
 FrameView::~FrameView()
 {
-	if (m_file && m_map)
-		m_file->unmap(m_map);
+	unmap();
 }
 
-void FrameView::attach(const QString& path, int w, int h)
+void FrameView::unmap()
 {
-	if (m_file && m_map)
-		m_file->unmap(m_map);
-	m_map = nullptr;
 	m_image = QImage();
-	m_file = std::make_unique<QFile>(path);
-	if (!m_file->open(QIODevice::ReadOnly))
+	if (!m_map)
 		return;
-	m_map = m_file->map(0, qint64(w) * h * 4);
+#ifdef _WIN32
+	UnmapViewOfFile(m_map);
+#else
+	munmap(m_map, m_mapLen);
+#endif
+	m_map = nullptr;
+	m_mapLen = 0;
+}
+
+void FrameView::closeHandle(std::int64_t fd)
+{
+	if (fd < 0)
+		return;
+#ifdef _WIN32
+	CloseHandle(reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(fd)));
+#else
+	::close(int(fd));
+#endif
+}
+
+void FrameView::attach(std::int64_t fd, int w, int h)
+{
+	// Der Hauptprozess hat Größe und Versiegelung bereits geprüft; die
+	// Kennung wird nach dem Abbilden geschlossen.
+	unmap();
+	const std::size_t len = std::size_t(w) * std::size_t(h) * 4;
+	if (fd >= 0 && len > 0)
+	{
+#ifdef _WIN32
+		void* p = MapViewOfFile(reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(fd)), FILE_MAP_READ, 0, 0, len);
+		if (p)
+		{
+			m_map = static_cast<uchar*>(p);
+			m_mapLen = len;
+		}
+#else
+		void* p = mmap(nullptr, len, PROT_READ, MAP_SHARED, int(fd), 0);
+		if (p != MAP_FAILED)
+		{
+			m_map = static_cast<uchar*>(p);
+			m_mapLen = len;
+		}
+#endif
+	}
+	closeHandle(fd);
 	if (m_map)
 		// BGRA im Speicher entspricht QImage::Format_RGB32 (little endian).
 		m_image = QImage(m_map, w, h, w * 4, QImage::Format_RGB32);

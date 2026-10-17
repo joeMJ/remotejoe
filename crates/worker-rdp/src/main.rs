@@ -268,10 +268,16 @@ mod imp {
             s.with_frame(|buf, width, height| {
                 if fb.as_ref().is_none_or(|f| f.width != width || f.height != height) {
                     match FrameBufferWriter::create(width, height) {
-                        Ok(f) => {
-                            new_fb = Some(f.path().display().to_string());
-                            *fb = Some(f);
-                        }
+                        Ok(f) => match rj_ipc::fdpass::share(&f) {
+                            Ok(h) => {
+                                new_fb = Some(h);
+                                *fb = Some(f);
+                            }
+                            Err(e) => {
+                                let _ = out.send(&FromWorker::Log(format!("Bildspeicher nicht übergebbar: {e}")));
+                                return;
+                            }
+                        },
                         Err(e) => {
                             let _ = out.send(&FromWorker::Log(format!("Bildspeicher nicht anlegbar: {e}")));
                             return;
@@ -285,8 +291,8 @@ mod imp {
                 }
             });
             let Some(f) = self.fb.as_ref() else { return };
-            if let Some(path) = new_fb {
-                self.send(FromWorker::SharedFrame { path, width: f.width, height: f.height });
+            if let Some(handle) = new_fb {
+                self.send(FromWorker::SharedFrame { handle, width: f.width, height: f.height });
             }
             self.serial += 1;
             self.send(FromWorker::Frame(FrameUpdate { width: f.width, height: f.height, x, y, w, h, serial: self.serial }));

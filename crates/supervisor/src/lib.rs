@@ -13,7 +13,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use rj_ipc::shm::SharedHandle;
 use rj_ipc::{FrameReader, FrameWriter, FromWorker, IpcError, ToWorker};
+
+/// Vom Worker übergebene Bildpuffer, bis die Sitzungsverwaltung sie abholt.
+type SharedMap = std::sync::Arc<std::sync::Mutex<HashMap<(WorkerId, u64), SharedHandle>>>;
 
 pub type WorkerId = u64;
 
@@ -154,6 +158,7 @@ pub struct Supervisor {
     slots: HashMap<WorkerId, Slot>,
     tx: Sender<Internal>,
     rx: Receiver<Internal>,
+    shared: SharedMap,
 }
 
 impl Default for Supervisor {
@@ -165,7 +170,7 @@ impl Default for Supervisor {
 impl Supervisor {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel();
-        Supervisor { next_id: 1, slots: HashMap::new(), tx, rx }
+        Supervisor { next_id: 1, slots: HashMap::new(), tx, rx, shared: Default::default() }
     }
 
     /// Startet einen neuen Worker.
@@ -211,7 +216,30 @@ impl Supervisor {
                 });
             }
         }
+        // Zweiter Weg nur für Bildpuffer (Deskriptoren per SCM_RIGHTS).
+        #[cfg(unix)]
+        let frame_sock = {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::process::CommandExt;
+            let (parent, child_end) = rj_ipc::fdpass::pair()?;
+            let raw = child_end.as_raw_fd();
+            cmd.env(rj_ipc::fdpass::FRAME_FD_ENV, raw.to_string());
+            // SAFETY: fcntl ist async-signal-sicher; nur dieses Ende wird vererbt.
+            unsafe {
+                cmd.pre_exec(move || {
+                    libc::fcntl(raw, libc::F_SETFD, 0);
+                    Ok(())
+                });
+            }
+            (parent, child_end)
+        };
         let mut child = cmd.spawn()?;
+        #[cfg(unix)]
+        let frame_sock = {
+            drop(frame_sock.1);
+            frame_sock.0
+        };
+        let shared = self.shared.clone();
         let pid = child.id();
         let stdout = child.stdout.take().expect("stdout angefordert");
         let stdin = child.stdin.take().expect("stdin angefordert");
@@ -223,6 +251,26 @@ impl Supervisor {
             loop {
                 match r.recv::<FromWorker>() {
                     Ok((_, msg)) => {
+                        // Der Deskriptor wird vor der Nachricht gesendet.
+                        #[cfg(unix)]
+                        if let FromWorker::SharedFrame { handle, .. } = &msg {
+                            let _ = frame_sock.set_read_timeout(Some(Duration::from_secs(2)));
+                            while let Ok((token, fd)) = rj_ipc::fdpass::recv_fd(&frame_sock) {
+                                if token == *handle {
+                                    let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                                    // Höchstens wenige nicht abgeholte Puffer je Worker.
+                                    let mut old: Vec<u64> = m.keys().filter(|k| k.0 == id).map(|k| k.1).collect();
+                                    old.sort_unstable();
+                                    for t in old.iter().rev().skip(3) {
+                                        m.remove(&(id, *t));
+                                    }
+                                    m.insert((id, token), fd);
+                                    break;
+                                }
+                            }
+                        }
+                        #[cfg(not(unix))]
+                        let _ = &shared;
                         if tx.send(Internal::Msg(id, generation, msg)).is_err() {
                             return;
                         }
@@ -252,6 +300,22 @@ impl Supervisor {
     pub fn send(&mut self, id: WorkerId, msg: &ToWorker) -> Result<(), IpcError> {
         let slot = self.slots.get_mut(&id).ok_or(IpcError::Closed)?;
         slot.stdin.as_mut().ok_or(IpcError::Closed)?.send(0, msg)
+    }
+
+    /// Holt den Bildpuffer zu `SharedFrame { handle }` eines Workers ab.
+    /// Unix: der über den Socket übergebene Deskriptor; Windows: die aus dem
+    /// Worker duplizierte Kennung.
+    pub fn take_shared(&mut self, id: WorkerId, handle: u64) -> Option<SharedHandle> {
+        #[cfg(unix)]
+        {
+            self.shared.lock().unwrap_or_else(|e| e.into_inner()).remove(&(id, handle))
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            let child = self.slots.get(&id)?.child.as_ref()?;
+            rj_ipc::shm::duplicate_from(child.as_raw_handle() as _, handle).ok()
+        }
     }
 
     pub fn is_running(&self, id: WorkerId) -> bool {
@@ -291,6 +355,7 @@ impl Supervisor {
 
     /// Entfernt einen beendeten Worker aus der Verwaltung.
     pub fn forget(&mut self, id: WorkerId) {
+        self.shared.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| k.0 != id);
         if let Some(mut s) = self.slots.remove(&id) {
             if let Some(mut c) = s.child.take() {
                 let _ = c.kill();

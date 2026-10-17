@@ -138,7 +138,9 @@ pub enum FromWorker {
     Heartbeat { seq: u64 },
     State(SessionState),
     /// Geteilter Speicher für Bilddaten wurde (neu) angelegt.
-    SharedFrame { path: String, width: u32, height: u32 },
+    /// `handle`: Linux die Nummer des über den Socket übergebenen
+    /// Deskriptors, Windows die Kennung im Worker (siehe [`crate::fdpass`]).
+    SharedFrame { handle: u64, width: u32, height: u32 },
     Frame(FrameUpdate),
     /// Terminalausgabe (Rohbytes) für Terminal-Worker.
     Output(Vec<u8>),

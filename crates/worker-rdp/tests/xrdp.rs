@@ -249,12 +249,18 @@ fn worker_crash_isolation() {
     }
     let mut connected = std::collections::HashSet::new();
     let mut frames = std::collections::HashMap::<WorkerId, u32>::new();
+    let mut shared = std::collections::HashMap::<WorkerId, rj_ipc::shm::FrameBufferReader>::new();
     let deadline = Instant::now() + Duration::from_secs(40);
     while (connected.len() < 2 || frames.values().filter(|n| **n > 2).count() < 2) && Instant::now() < deadline {
         for ev in sup.tick(Duration::from_millis(50)) {
             if let SupervisorEvent::Message { id, msg } = ev {
                 match msg {
                     FromWorker::Question { id: q, .. } => sup.send(id, &ToWorker::Answer { question: q, accept: true }).unwrap(),
+                    FromWorker::SharedFrame { handle, width, height } => {
+                        // Versiegelter Bildpuffer über den Socket übergeben.
+                        let h = sup.take_shared(id, handle).expect("Bildpuffer übergeben");
+                        shared.insert(id, rj_ipc::shm::FrameBufferReader::open(h, width, height).expect("versiegelt"));
+                    }
                     FromWorker::State(SessionState::Connected) => {
                         connected.insert(id);
                     }
@@ -266,6 +272,15 @@ fn worker_crash_isolation() {
         }
     }
     assert_eq!(connected.len(), 2, "beide Sitzungen verbunden");
+    assert_eq!(shared.len(), 2, "beide Bildpuffer angekommen");
+    // Das xterm der Sitzung erscheint erst nach den ersten Bildern.
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until && !shared.values().all(|r| r.pixels().iter().any(|b| *b != 0)) {
+        sup.tick(Duration::from_millis(50));
+    }
+    for r in shared.values() {
+        assert!(r.pixels().iter().any(|b| *b != 0), "Bild im geteilten Speicher");
+    }
     // Worker A hart beenden.
     let pid = sup.pid(ids[0]).unwrap();
     // SAFETY: Signal an den selbst gestarteten Worker.

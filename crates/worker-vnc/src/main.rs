@@ -215,10 +215,13 @@ fn run(out: Sender, rx: Receiver<ToWorker>, answers: Arc<Mutex<Receiver<(u32, bo
             c.with_frame(|f| {
                 if fb.as_ref().is_none_or(|b| b.width != f.width || b.height != f.height) {
                     match FrameBufferWriter::create(f.width, f.height) {
-                        Ok(b) => {
-                            send(FromWorker::SharedFrame { path: b.path().display().to_string(), width: f.width, height: f.height });
-                            fb = Some(b);
-                        }
+                        Ok(b) => match rj_ipc::fdpass::share(&b) {
+                            Ok(handle) => {
+                                send(FromWorker::SharedFrame { handle, width: f.width, height: f.height });
+                                fb = Some(b);
+                            }
+                            Err(e) => send(FromWorker::Log(format!("Bildspeicher nicht übergebbar: {e}"))),
+                        },
                         Err(e) => send(FromWorker::Log(format!("Bildspeicher nicht anlegbar: {e}"))),
                     }
                 }

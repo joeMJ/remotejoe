@@ -47,7 +47,9 @@ fn clipboard_limit(options_json: &str) -> u64 {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum UiEvent {
     State { s: SessionId, state: String, detail: String },
-    SharedFrame { s: SessionId, path: String, w: u32, h: u32 },
+    /// Neuer Bildpuffer: `fd` ist ein geprüfter, versiegelter Deskriptor
+    /// (Windows: Kennung), den die Oberfläche abbildet und dann schließt.
+    SharedFrame { s: SessionId, fd: i64, w: u32, h: u32 },
     Frame { s: SessionId, x: u32, y: u32, w: u32, h: u32 },
     Terminal { s: SessionId },
     Question { s: SessionId, q: u32, text: String, detail: String, info: rj_ipc::msg::SecurityInfo, timeout_secs: u64 },
@@ -101,20 +103,8 @@ struct Session {
     osc52_pending: Vec<std::sync::Arc<dyn Fn(&str) -> String + Send + Sync>>,
     /// Hält den Bildspeicher einer Vorführsitzung am Leben.
     _demo_frame: Option<rj_ipc::shm::FrameBufferWriter>,
-    pid: Option<u32>,
 }
 
-fn remove_frame_files(pid: u32) {
-    let dir = if cfg!(target_os = "linux") { PathBuf::from("/dev/shm") } else { std::env::temp_dir() };
-    let prefix = format!("remotejoe-{pid}-");
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            if e.file_name().to_string_lossy().starts_with(&prefix) {
-                let _ = std::fs::remove_file(e.path());
-            }
-        }
-    }
-}
 
 /// Einstellungen für das Wiederverbinden.
 #[derive(Debug, Clone, Copy)]
@@ -262,7 +252,7 @@ impl Manager {
         self.next += 1;
         let term = (spec.protocol == Protocol::Ssh)
             .then(|| Terminal::new(spec.request.width as usize, spec.request.height as usize, osc52_policy(&spec.request.options_json)));
-        self.sessions.insert(id, Session { spec, worker: None, term, state: String::new(), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None, pid: None });
+        self.sessions.insert(id, Session { spec, worker: None, term, state: String::new(), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None });
         self.start(id);
         id
     }
@@ -282,12 +272,11 @@ impl Manager {
             ws.memory_limit = None;
         }
         match self.sup.spawn(ws) {
-            Ok((wid, pid)) => {
+            Ok((wid, _pid)) => {
                 let spec = self.sessions[&id].spec.clone();
                 self.by_worker.insert(wid, id);
                 let x = self.sessions.get_mut(&id).expect("vorhanden");
                 x.worker = Some(wid);
-                x.pid = Some(pid);
                 let _ = self.sup.send(wid, &ToWorker::Connect(spec.request));
                 let _ = self.sup.send(wid, &ToWorker::Credentials(spec.credentials));
                 self.emit_state(id, "connecting", String::new());
@@ -303,7 +292,7 @@ impl Manager {
         let mut term = Terminal::new(cols, rows, Osc52Policy::default());
         term.feed(content.as_bytes());
         let spec = demo_spec(title, Protocol::Ssh);
-        self.sessions.insert(id, Session { spec, worker: None, term: Some(term), state: "connected".into(), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None, pid: None });
+        self.sessions.insert(id, Session { spec, worker: None, term: Some(term), state: "connected".into(), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None });
         self.pending.push(UiEvent::State { s: id, state: "connected".into(), detail: String::new() });
         self.pending.push(UiEvent::Terminal { s: id });
         id
@@ -330,11 +319,11 @@ impl Manager {
                 }
             }
         }
-        let path = fb.path().display().to_string();
+        let fd = fb.share_handle().map(into_raw).unwrap_or(-1);
         let spec = demo_spec(title, Protocol::Rdp);
-        self.sessions.insert(id, Session { spec, worker: None, term: None, state: "connected".into(), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: Some(fb), pid: None });
+        self.sessions.insert(id, Session { spec, worker: None, term: None, state: "connected".into(), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: Some(fb) });
         self.pending.push(UiEvent::State { s: id, state: "connected".into(), detail: String::new() });
-        self.pending.push(UiEvent::SharedFrame { s: id, path, w, h });
+        self.pending.push(UiEvent::SharedFrame { s: id, fd, w, h });
         self.pending.push(UiEvent::Frame { s: id, x: 0, y: 0, w, h });
         id
     }
@@ -622,10 +611,6 @@ impl Manager {
                     let Some(s) = self.by_worker.remove(&id) else { continue };
                     if let Some(x) = self.sessions.get_mut(&s) {
                         x.worker = None;
-                        // Bildspeicher eines abgestürzten Workers entfernen.
-                        if let Some(pid) = x.pid.take() {
-                            remove_frame_files(pid);
-                        }
                     }
                     if reason.is_crash() {
                         self.emit_state(s, "crashed", reason.describe());
@@ -681,7 +666,15 @@ impl Manager {
                     self.schedule_reconnect(s);
                 }
             }
-            FromWorker::SharedFrame { path, width, height } => self.pending.push(UiEvent::SharedFrame { s, path, w: width, h: height }),
+            FromWorker::SharedFrame { handle, width, height } => {
+                // Nur geprüfte Puffer (versiegelt, groß genug) gehen an die Oberfläche.
+                let shared = self.worker_of(s).and_then(|w| self.sup.take_shared(w, handle));
+                match shared.map(|h| rj_ipc::shm::FrameBufferReader::validate(&h, width, height).map(|_| h)) {
+                    Some(Ok(h)) => self.pending.push(UiEvent::SharedFrame { s, fd: into_raw(h), w: width, h: height }),
+                    Some(Err(e)) => self.pending.push(UiEvent::Notice { s, text: format!("Bildpuffer des Workers abgelehnt: {e}") }),
+                    None => self.pending.push(UiEvent::Notice { s, text: "Bildpuffer des Workers nicht übergeben".into() }),
+                }
+            }
             FromWorker::Frame(f) => self.pending.push(UiEvent::Frame { s, x: f.x, y: f.y, w: f.w, h: f.h }),
             FromWorker::Output(bytes) => {
                 let mut replies = Vec::new();
@@ -734,6 +727,14 @@ impl Manager {
     pub fn shutdown(&mut self) {
         self.sup.shutdown();
     }
+}
+
+/// Gibt die Kennung an die Oberfläche ab (die sie nach dem Abbilden schließt).
+fn into_raw(h: rj_ipc::shm::SharedHandle) -> i64 {
+    #[cfg(unix)]
+    return std::os::fd::IntoRawFd::into_raw_fd(h) as i64;
+    #[cfg(windows)]
+    return std::os::windows::io::IntoRawHandle::into_raw_handle(h) as usize as i64;
 }
 
 fn demo_spec(title: &str, protocol: Protocol) -> ConnectSpec {

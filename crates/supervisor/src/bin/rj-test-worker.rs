@@ -49,6 +49,8 @@ fn main() {
 
     if mode != "normal" {
         let beating = beating.clone();
+        #[cfg_attr(not(unix), allow(unused_variables))]
+        let send2 = send.clone();
         thread::spawn(move || {
             thread::sleep(after);
             match mode.as_str() {
@@ -73,6 +75,29 @@ fn main() {
                 "hang" => {
                     beating.store(false, Ordering::Relaxed);
                 }
+                // Bösartiger Worker: Bildpuffer übergeben, dann verkürzen.
+                #[cfg(unix)]
+                "shrink" => {
+                    use std::os::fd::{AsRawFd, AsFd};
+                    let fb = Box::leak(Box::new(rj_ipc::shm::FrameBufferWriter::create(64, 64).expect("Bildpuffer")));
+                    let handle = rj_ipc::fdpass::share(fb).expect("übergeben");
+                    send2(&FromWorker::SharedFrame { handle, width: 64, height: 64 });
+                    thread::sleep(Duration::from_millis(100));
+                    // SAFETY: ftruncate auf den eigenen Deskriptor.
+                    let rc = unsafe { libc::ftruncate(fb.handle().as_raw_fd(), 0) };
+                    let err = std::io::Error::last_os_error();
+                    send2(&FromWorker::Log(if rc == 0 { "verkürzt".into() } else { format!("verkürzen abgelehnt: {err}") }));
+                    let _ = fb.handle().as_fd();
+                }
+                // Bösartiger Worker: unversiegelten Speicher übergeben.
+                #[cfg(unix)]
+                "unsealed" => {
+                    use std::os::fd::AsFd;
+                    let f = tempfile_in_memory();
+                    let handle = rj_ipc::fdpass::share_fd(f.as_fd()).expect("übergeben");
+                    send2(&FromWorker::SharedFrame { handle, width: 64, height: 64 });
+                    std::mem::forget(f);
+                }
                 "oom" => {
                     let mut hog: Vec<Vec<u8>> = Vec::new();
                     loop {
@@ -95,4 +120,14 @@ fn main() {
             Ok(_) => {}
         }
     }
+}
+
+/// Unversiegelter anonymer Speicher (für den Test „unsealed“).
+#[cfg(unix)]
+fn tempfile_in_memory() -> std::fs::File {
+    use std::os::fd::FromRawFd;
+    // SAFETY: memfd_create mit festem Namen; der Deskriptor gehört der Datei.
+    let f = unsafe { std::fs::File::from_raw_fd(libc::memfd_create(c"unversiegelt".as_ptr(), libc::MFD_CLOEXEC)) };
+    f.set_len(64 * 64 * 4).expect("Größe");
+    f
 }
