@@ -6,7 +6,9 @@
 #include <QtCore/QDir>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QFile>
+#include <QtCore/QLibraryInfo>
 #include <QtCore/QTimer>
+#include <QtCore/QTranslator>
 #include <QtWidgets/QApplication>
 #include <cstdio>
 
@@ -49,6 +51,11 @@ void screenshots(MainWindow& w, const QString& dir)
 	save(w.findChild<QWidget*>(QStringLiteral("credentialDialog")), dir, QStringLiteral("dialog-zugangsdaten.png"));
 	if (auto* d = w.findChild<QWidget*>(QStringLiteral("credentialDialog")))
 		d->close();
+	w.patchdayForFirstTargets(25);
+	pump(1500);
+	save(w.findChild<QWidget*>(QStringLiteral("patchdayDialog")), dir, QStringLiteral("patchday.png"));
+	if (auto* d = w.findChild<QWidget*>(QStringLiteral("patchdayDialog")))
+		d->close();
 	w.detachTabAt(1);
 	pump(400);
 	save(w.detachedWindow(), dir, QStringLiteral("abgerissenes-fenster.png"));
@@ -68,6 +75,10 @@ std::int32_t rjRunApplication()
 	static char* argv[] = { name, nullptr };
 	QApplication app(argc, argv);
 	QApplication::setApplicationName(QStringLiteral("remotejoe"));
+	// Deutsche Texte für Qt-Standarddialoge, falls installiert.
+	static QTranslator qtDe;
+	if (qtDe.load(QStringLiteral("qtbase_de"), QLibraryInfo::path(QLibraryInfo::TranslationsPath)))
+		QApplication::installTranslator(&qtDe);
 	const QString shots = qEnvironmentVariable("RJ_SCREENSHOTS");
 	const bool demo = !shots.isEmpty() || qEnvironmentVariableIsSet("RJ_DEMO");
 	RjBackend backend;

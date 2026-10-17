@@ -60,6 +60,15 @@ pub mod qobject {
         #[cxx_name = "closeSession"]
         fn close_session(self: Pin<&mut RjBackend>, session: u64);
         #[qinvokable]
+        #[cxx_name = "startPatchday"]
+        fn start_patchday(self: Pin<&mut RjBackend>, ids_json: &QString, execute: bool) -> QString;
+        #[qinvokable]
+        #[cxx_name = "patchdayJson"]
+        fn patchday_json(self: &RjBackend) -> QString;
+        #[qinvokable]
+        #[cxx_name = "cancelPatchTarget"]
+        fn cancel_patch_target(self: &RjBackend, id: &QString);
+        #[qinvokable]
         #[cxx_name = "acceptHostKey"]
         fn accept_host_key(self: &RjBackend, host: &QString, port: u32, key: &QString) -> bool;
         #[qinvokable]
@@ -240,6 +249,27 @@ impl qobject::RjBackend {
     fn close_session(self: Pin<&mut Self>, session: u64) {
         if let Some(a) = self.app_mut() {
             a.close_session(session);
+        }
+    }
+
+    fn start_patchday(self: Pin<&mut Self>, ids_json: &QString, execute: bool) -> QString {
+        let ids: Vec<Uuid> = serde_json::from_str::<Vec<String>>(&ids_json.to_string()).unwrap_or_default().iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
+        q(match self.app_mut().map(|a| a.start_patchday(&ids, execute)) {
+            Some(Ok(n)) => format!("{n} Ziele gestartet"),
+            Some(Err(e)) => e,
+            None => String::new(),
+        })
+    }
+
+    fn patchday_json(&self) -> QString {
+        q(self.app().map(|a| a.patchday_json()).unwrap_or_else(|| "[]".into()))
+    }
+
+    fn cancel_patch_target(&self, id: &QString) {
+        if let (Some(a), Some(u)) = (self.app(), uuid(id)) {
+            if let Some(p) = &a.patchday {
+                p.cancel(u);
+            }
         }
     }
 

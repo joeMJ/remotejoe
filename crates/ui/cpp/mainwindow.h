@@ -28,6 +28,8 @@ public:
 	QWidget* detachedWindow() const;
 	void showCredentialChoiceForScreenshot();
 	void detachTabAt(int index);
+	void openPatchday(const QStringList& ids);
+	void patchdayForFirstTargets(int n);
 	QTreeView* tree() const { return m_tree; }
 	int treeRowCount() const;
 

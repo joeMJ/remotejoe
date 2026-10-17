@@ -1,0 +1,21 @@
+#!/bin/bash
+# Attrappe von pwsh für Tests: liest das Kennwort (Base64) aus der ersten
+# Zeile, meldet „bereit“ und beantwortet jeden Befehl mit Einträgen in
+# getrennten Strömen. Das Kennwort steht nie auf der Befehlszeile.
+read -r pw
+expected=$(printf '%s' "${RJ_FAKE_EXPECT:-}" | base64 -w0)
+if [ -n "$RJ_FAKE_EXPECT" ] && [ "$pw" != "$expected" ]; then
+  echo '{"ready":false,"error":"Anmeldung abgelehnt"}'
+  exit 2
+fi
+echo '{"ready":true}'
+while read -r id code; do
+  cmd=$(printf '%s' "$code" | base64 -d)
+  esc=${cmd//\"/\\\"}
+  echo "{\"id\":\"$id\",\"stream\":\"output\",\"text\":\"Ergebnis: $esc\"}"
+  echo "{\"id\":\"$id\",\"stream\":\"warning\",\"text\":\"Warnung äöü\"}"
+  echo "{\"id\":\"$id\",\"stream\":\"error\",\"text\":\"Fehler 🚀\"}"
+  echo "{\"id\":\"$id\",\"stream\":\"progress\",\"text\":\"50 %\"}"
+  echo "{\"id\":\"$id\",\"stream\":\"verbose\",\"text\":\"ausführlich\"}"
+  echo "{\"id\":\"$id\",\"end\":true,\"ok\":true}"
+done

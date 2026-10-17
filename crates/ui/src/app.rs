@@ -38,6 +38,7 @@ pub struct App {
     /// Zuletzt abgelehnte Rückfrage zu einem Host-Schlüssel eines Sprungservers.
     hop_question: std::sync::Arc<std::sync::Mutex<Option<HostKeyQuestion>>>,
     session_tunnels: std::collections::HashMap<SessionId, (Uuid, String, u16)>,
+    pub patchday: Option<rj_tasks::patchday::Patchday>,
 }
 
 impl App {
@@ -65,6 +66,7 @@ impl App {
             known_hosts,
             hop_question,
             session_tunnels: Default::default(),
+            patchday: None,
             sessions: Manager::new(Manager::default_worker_dir(), reconnect),
             config,
             config_path,
@@ -327,6 +329,40 @@ impl App {
                 Ok(TunnelSpec::Wireguard { config: rj_tunnel::wireguard::WgConfig::parse(&text).map_err(|e| e.to_string())? })
             }
         }
+    }
+
+    /// Patchday für mehrere Ziele starten (Trockenlauf, wenn `execute` falsch).
+    pub fn start_patchday(&mut self, ids: &[Uuid], execute: bool) -> Result<usize, String> {
+        let mut targets = Vec::new();
+        let mut jobs = std::collections::HashMap::new();
+        for id in ids {
+            let Some(t) = self.target(*id).cloned() else { continue };
+            targets.push((t.id, rj_core::charset::mark_visible(&t.name, false).into_owned()));
+            if self.demo {
+                continue;
+            }
+            if let Ok(CredentialResolution::Found(r)) = resolve_credential(&self.index, t.id) {
+                if let Ok(c) = self.payload(&r, t.protocol) {
+                    let transport = rj_core::inherit::resolve_psrp_transport(&self.index, t.id).ok().flatten();
+                    jobs.insert(t.id, crate::patch::JobSpec { protocol: t.protocol, host: t.host.clone(), port: t.effective_port(), credentials: c, transport });
+                }
+            }
+        }
+        if targets.is_empty() {
+            return Err("Keine Ziele ausgewählt".into());
+        }
+        let n = targets.len();
+        let exec: std::sync::Arc<dyn rj_tasks::patchday::Executor> = if self.demo {
+            std::sync::Arc::new(crate::patch::DemoExecutor)
+        } else {
+            std::sync::Arc::new(crate::patch::AppExecutor { jobs, execute, full_upgrade: false, known_hosts: self.known_hosts.clone() })
+        };
+        self.patchday = Some(rj_tasks::patchday::Patchday::start(targets, 4, exec));
+        Ok(n)
+    }
+
+    pub fn patchday_json(&self) -> String {
+        self.patchday.as_ref().map(|p| serde_json::to_string(&p.rows()).unwrap_or_default()).unwrap_or_else(|| "[]".into())
     }
 
     /// Host-Schlüssel eines Sprungservers nach Zustimmung merken.

@@ -5,6 +5,7 @@
 pub mod app;
 pub mod bridge;
 pub mod keys;
+pub mod patch;
 pub mod sessions;
 pub mod texts;
 pub mod theme;

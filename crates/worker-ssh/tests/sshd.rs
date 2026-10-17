@@ -391,3 +391,33 @@ fn worker_process_end_to_end() {
     assert!(wait(&mut sup, &mut |m, _| matches!(m, FromWorker::State(SessionState::Connected))), "Neu verbinden");
     sup.shutdown();
 }
+
+/// apt im Trockenlauf über SSH mit sudo (Kennwort per Makro-Engine).
+#[test]
+fn apt_dry_run_over_ssh() {
+    let _g = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(f) = fixture() else { return };
+    let c = f.connect(Fix::pw()).unwrap();
+    let (mut sh, _, _) = shell(&f, &c, 200, 50);
+    struct Log(Vec<String>);
+    impl rj_tasks::apt::Progress for Log {
+        fn phase(&mut self, p: &str) {
+            self.0.push(format!("Phase {p}"));
+        }
+        fn log(&mut self, l: &str) {
+            self.0.push(l.to_string());
+        }
+    }
+    let mut log = Log(Vec::new());
+    let creds = |n: &str| (n == "password").then(|| Secret::from_str_exact(PASSWORD));
+    let handle = f.rt.handle().clone();
+    let r = {
+        let mut io = BlockingShell { rt: handle, shell: &mut sh };
+        rj_tasks::apt::run(&mut io, &creds, false, false, &mut log)
+    };
+    eprintln!("apt-Protokoll:\n{}", log.0.join("\n"));
+    let report = r.expect("Trockenlauf läuft durch");
+    eprintln!("APT {} Aktualisierungen, Neustart nötig: {}", report.updates.len(), report.reboot_required);
+    assert!(!report.upgraded);
+    assert!(!log.0.join("\n").contains(PASSWORD));
+}

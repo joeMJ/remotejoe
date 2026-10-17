@@ -63,6 +63,14 @@ impl Sshd {
             pid = d.join("sshd.pid").display(),
             ak = d.join("authorized_keys").display(),
         );
+        // Netz-Proxy der Testumgebung an die Sitzungen weiterreichen (z. B. für apt).
+        let proxies: Vec<String> = ["http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
+            .iter()
+            .filter_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty() && !v.contains('"')).map(|v| format!("{k}=\"{v}\"")))
+            .collect();
+        if !proxies.is_empty() {
+            cfg.push_str(&format!("SetEnv {}\n", proxies.join(" ")));
+        }
         for l in extra {
             cfg.push_str(l);
             cfg.push('\n');
@@ -181,7 +189,10 @@ pub fn ensure_user() -> Result<(), Skip> {
         run("useradd", &["-m", "-s", "/bin/bash", USER], None)?;
     }
     run("chpasswd", &[], Some(format!("{USER}:{PASSWORD}\n").as_bytes()))?;
-    let sudoers = format!("{USER} ALL=(ALL) ALL\nDefaults:{USER} timestamp_timeout=0\n");
+    let sudoers = format!(
+        "{USER} ALL=(ALL) ALL\nDefaults:{USER} timestamp_timeout=0\n\
+         Defaults:{USER} env_keep += \"http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY\"\n"
+    );
     fs::write("/etc/sudoers.d/rjtest-remotejoe", sudoers).map_err(|e| Skip(e.to_string()))?;
     set_mode(Path::new("/etc/sudoers.d/rjtest-remotejoe"), 0o440);
     *done = true;

@@ -2311,6 +2311,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
@@ -2352,13 +2353,29 @@ dependencies = [
  "remotejoe-ipc",
  "remotejoe-kdbx",
  "remotejoe-supervisor",
+ "remotejoe-tasks",
  "remotejoe-tunnel",
+ "remotejoe-worker-psrp",
  "remotejoe-worker-ssh",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "remotejoe-worker-psrp"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "remotejoe-core",
+ "remotejoe-ipc",
+ "remotejoe-supervisor",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]

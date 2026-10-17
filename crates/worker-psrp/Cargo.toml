@@ -1,0 +1,27 @@
+[package]
+name = "remotejoe-worker-psrp"
+description = "PowerShell-Remoting über einen lokalen pwsh (WinRM oder SSH)"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_psrp"
+
+[[bin]]
+name = "rj-worker-psrp"
+path = "src/main.rs"
+
+[dependencies]
+remotejoe-core = { path = "../core" }
+remotejoe-ipc = { path = "../ipc" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+base64 = "0.22"
+
+[dev-dependencies]
+remotejoe-supervisor = { path = "../supervisor" }

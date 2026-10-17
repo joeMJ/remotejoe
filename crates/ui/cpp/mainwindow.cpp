@@ -31,6 +31,10 @@
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QStyleFactory>
 #include <QtWidgets/QTabBar>
+#include <QtWidgets/QPlainTextEdit>
+#include <QtWidgets/QProgressBar>
+#include <QtWidgets/QPushButton>
+#include <QtWidgets/QTableWidget>
 #include <QtWidgets/QVBoxLayout>
 
 QElapsedTimer MainWindow::startClock;
@@ -154,6 +158,8 @@ public:
 		remember = new QCheckBox(T(b, "dialog.credential.remember"), this);
 		lay->addWidget(remember);
 		auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+		buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Verbinden"));
+		buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Abbrechen"));
 		connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
 		connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 		lay->addWidget(buttons);
@@ -162,7 +168,148 @@ public:
 	QCheckBox* remember;
 };
 
+/// Patchday: Zustand je Ziel, Fortschritt, Protokoll, Abbruch.
+class PatchdayDialog : public QDialog
+{
+public:
+	PatchdayDialog(RjBackend* b, const QStringList& ids, QWidget* parent)
+	  : QDialog(parent)
+	  , m_backend(b)
+	  , m_ids(ids)
+	{
+		setWindowTitle(QStringLiteral("Patchday"));
+		resize(900, 600);
+		auto* lay = new QVBoxLayout(this);
+		m_table = new QTableWidget(0, 4, this);
+		m_table->setHorizontalHeaderLabels({ QStringLiteral("Ziel"), QStringLiteral("Zustand"), QStringLiteral("Anzahl"), QStringLiteral("Fortschritt") });
+		m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+		m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+		m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+		m_table->verticalHeader()->setDefaultSectionSize(30);
+		m_log = new QPlainTextEdit(this);
+		m_log->setReadOnly(true);
+		m_log->setMaximumHeight(160);
+		auto* buttons = new QDialogButtonBox(this);
+		auto* run = buttons->addButton(QStringLiteral("Ausführen …"), QDialogButtonBox::ActionRole);
+		auto* cancel = buttons->addButton(QStringLiteral("Ziel abbrechen"), QDialogButtonBox::ActionRole);
+		buttons->addButton(QDialogButtonBox::Close)->setText(QStringLiteral("Schließen"));
+		lay->addWidget(new QLabel(QStringLiteral("Trockenlauf: Aktualisierungen werden nur aufgelistet. Ausführen erst auf Befehl."), this));
+		lay->addWidget(m_table, 1);
+		lay->addWidget(m_log);
+		lay->addWidget(buttons);
+		connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+		connect(run, &QPushButton::clicked, this, [this] {
+			if (QMessageBox::question(this, windowTitle(), QStringLiteral("Aktualisierungen auf %1 Zielen jetzt installieren?").arg(m_ids.size())) == QMessageBox::Yes)
+				m_backend->startPatchday(QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(m_ids)).toJson(QJsonDocument::Compact)), true);
+		});
+		connect(cancel, &QPushButton::clicked, this, [this] {
+			const int r = m_table->currentRow();
+			if (r >= 0)
+				m_backend->cancelPatchTarget(m_table->item(r, 0)->data(Qt::UserRole).toString());
+		});
+		connect(m_table, &QTableWidget::currentCellChanged, this, [this] { refresh(); });
+		connect(&m_timer, &QTimer::timeout, this, [this] { refresh(); });
+		m_timer.start(400);
+		refresh();
+	}
+
+	void refresh()
+	{
+		const QJsonArray rows = QJsonDocument::fromJson(m_backend->patchdayJson().toUtf8()).array();
+		m_table->setRowCount(rows.size());
+		for (int i = 0; i < rows.size(); ++i)
+		{
+			const QJsonObject r = rows[i].toObject();
+			auto set = [&](int col, const QString& text) {
+				auto* it = m_table->item(i, col);
+				if (!it)
+				{
+					it = new QTableWidgetItem;
+					m_table->setItem(i, col, it);
+				}
+				it->setText(text);
+				return it;
+			};
+			set(0, r.value(QStringLiteral("name")).toString())->setData(Qt::UserRole, r.value(QStringLiteral("target")).toString());
+			QString state = r.value(QStringLiteral("label")).toString();
+			if (r.contains(QStringLiteral("detail")))
+				state += QStringLiteral(": ") + r.value(QStringLiteral("detail")).toString();
+			set(1, state);
+			set(2, r.value(QStringLiteral("count")).isNull() ? QString() : QString::number(r.value(QStringLiteral("count")).toInt()));
+			auto* bar = qobject_cast<QProgressBar*>(m_table->cellWidget(i, 3));
+			if (!bar)
+			{
+				bar = new QProgressBar(m_table);
+				m_table->setCellWidget(i, 3, bar);
+			}
+			bar->setValue(r.value(QStringLiteral("percent")).toInt());
+			if (i == m_table->currentRow())
+			{
+				QStringList log;
+				for (const QJsonValue& l : r.value(QStringLiteral("log")).toArray())
+					log << l.toString();
+				if (m_log->toPlainText() != log.join(QLatin1Char('\n')))
+					m_log->setPlainText(log.join(QLatin1Char('\n')));
+			}
+		}
+	}
+
+private:
+	RjBackend* m_backend;
+	QStringList m_ids;
+	QTableWidget* m_table;
+	QPlainTextEdit* m_log;
+	QTimer m_timer;
+};
+
+/// Ziel-IDs der Auswahl (Ordner schließen ihre Ziele ein).
+QStringList selectedTargets(QTreeView* tree, QStandardItemModel* model)
+{
+	QStringList ids;
+	std::function<void(const QModelIndex&)> collect = [&](const QModelIndex& i) {
+		if (!i.data(RoleFolder).toBool())
+		{
+			const QString id = i.data(RoleId).toString();
+			if (!ids.contains(id))
+				ids << id;
+			return;
+		}
+		for (int r = 0; r < model->rowCount(i); ++r)
+			collect(model->index(r, 0, i));
+	};
+	for (const QModelIndex& i : tree->selectionModel()->selectedIndexes())
+		collect(i);
+	return ids;
+}
+
 } // namespace
+
+void MainWindow::openPatchday(const QStringList& ids)
+{
+	const QString res = m_backend->startPatchday(QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(ids)).toJson(QJsonDocument::Compact)), false);
+	statusBar()->showMessage(res, 5000);
+	auto* d = new PatchdayDialog(m_backend, ids, this);
+	d->setAttribute(Qt::WA_DeleteOnClose);
+	d->setObjectName(QStringLiteral("patchdayDialog"));
+	d->show();
+}
+
+void MainWindow::patchdayForFirstTargets(int n)
+{
+	QStringList ids;
+	std::function<void(const QModelIndex&)> walk = [&](const QModelIndex& parent) {
+		for (int r = 0; r < m_model->rowCount(parent) && ids.size() < n; ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			if (i.data(RoleFolder).toBool())
+				walk(i);
+			else
+				ids << i.data(RoleId).toString();
+		}
+	};
+	walk(QModelIndex());
+	openPatchday(ids);
+}
 
 MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
   : QMainWindow(parent)
@@ -186,6 +333,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_tree->setUniformRowHeights(true);
 	m_tree->setIconSize(QSize(22, 22));
 	m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
+	m_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
 	m_tree->setAccessibleName(QStringLiteral("Verbindungsbaum"));
 	leftLay->addWidget(m_search);
 	leftLay->addWidget(m_tree, 1);
@@ -457,6 +605,7 @@ void MainWindow::showProperties(const QString& id)
 		form->addRow(QString::fromUtf8(k[1]) + QLatin1Char(':'), l);
 	}
 	auto* b = new QDialogButtonBox(QDialogButtonBox::Close, &d);
+	b->button(QDialogButtonBox::Close)->setText(QStringLiteral("Schließen"));
 	connect(b, &QDialogButtonBox::rejected, &d, &QDialog::reject);
 	form->addRow(b);
 	d.exec();
@@ -467,7 +616,8 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 	const QModelIndex i = m_tree->indexAt(pos);
 	if (!i.isValid())
 		return;
-	m_tree->setCurrentIndex(i);
+	if (!m_tree->selectionModel()->isSelected(i))
+		m_tree->setCurrentIndex(i);
 	const QString id = i.data(RoleId).toString();
 	QMenu menu(this);
 	if (!i.data(RoleFolder).toBool())
@@ -480,9 +630,13 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 			if (tab && s && m_backend->tileSession(s, tab))
 				rebuildTabs();
 		});
-		QMenu* tasks = menu.addMenu(T(m_backend, "ctx.tasks"));
-		tasks->addAction(T(m_backend, "ctx.tasks.updates"));
 	}
+	QMenu* tasks = menu.addMenu(T(m_backend, "ctx.tasks"));
+	tasks->addAction(T(m_backend, "ctx.tasks.updates"), this, [this] {
+		const QStringList ids = selectedTargets(m_tree, m_model);
+		if (!ids.isEmpty())
+			openPatchday(ids);
+	});
 	menu.addAction(T(m_backend, "ctx.properties"), this, [this, id] { showProperties(id); });
 	menu.exec(m_tree->viewport()->mapToGlobal(pos));
 }
