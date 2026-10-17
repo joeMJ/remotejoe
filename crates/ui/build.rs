@@ -3,7 +3,7 @@
 use cxx_qt_build::CxxQtBuilder;
 
 fn main() {
-    let mut b = CxxQtBuilder::new().qt_module("Widgets").qt_module("Svg").qt_module("Network");
+    let mut b = CxxQtBuilder::new().qt_module("Gui").qt_module("Widgets").qt_module("Svg").qt_module("Network");
     // Linux: Meldung von logind über das Aufwachen aus dem Standby (D-Bus).
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         b = b.qt_module("DBus");

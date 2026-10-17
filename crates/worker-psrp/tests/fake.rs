@@ -1,4 +1,5 @@
 //! PowerShell-Sitzung gegen eine Attrappe von pwsh (kein echtes Windows).
+#![cfg(unix)] // die Attrappe `fake-pwsh` ist ein Shell-Skript
 
 use rj_core::{PsrpTransport, Secret, WinrmAuth};
 use rj_psrp::*;

@@ -1,4 +1,5 @@
 //! Hyper-V über die pwsh-Attrappe (kein echter Hyper-V-Host).
+#![cfg(unix)] // die Attrappe `fake-pwsh` ist ein Shell-Skript
 
 use rj_core::{PsrpTransport, Secret, WinrmAuth};
 use rj_psrp::hyperv::{self, HvAction};

@@ -1,5 +1,6 @@
 //! Tests gegen einen lokal gestarteten xrdp mit Xvnc-Sitzung (Testkit).
 //! Ohne xrdp oder ohne Root-Rechte werden die Tests mit Hinweis übersprungen.
+#![cfg(unix)] // setzt xrdp und libc::kill voraus; unter Windows nicht übersetzbar
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
