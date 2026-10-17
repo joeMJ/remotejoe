@@ -566,7 +566,7 @@ impl App {
     /// Gespeicherte Fensterlage als JSON (`saved` false, solange noch nie gespeichert wurde).
     pub fn window_state_json(&self) -> String {
         let w = &self.config.window;
-        json!({ "saved": w.saved, "x": w.x, "y": w.y, "width": w.width, "height": w.height, "maximized": w.maximized, "tree_width": w.tree_width }).to_string()
+        json!({ "saved": w.saved, "x": w.x, "y": w.y, "width": w.width, "height": w.height, "maximized": w.maximized, "tree_width": w.tree_width, "compact": w.compact, "tree_hidden": w.tree_hidden }).to_string()
     }
 
     /// Merkt Größe, Lage und Baumbreite des Hauptfensters (beim Beenden); nicht im Demomodus.
@@ -586,6 +586,8 @@ impl App {
             maximized: v.get("maximized").and_then(|x| x.as_bool()).unwrap_or(false),
             tree_width: tree,
             saved: true,
+            compact: v.get("compact").and_then(|x| x.as_bool()).unwrap_or(false),
+            tree_hidden: v.get("tree_hidden").and_then(|x| x.as_bool()).unwrap_or(false),
         };
         if !self.demo {
             if let Some(cp) = self.config_path.clone() {

@@ -26,7 +26,10 @@
 #include <QtGui/QShortcut>
 #include <QtSvg/QSvgRenderer>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QAbstractButton>
 #include <QtWidgets/QCheckBox>
+#include <QtWidgets/QToolButton>
+#include <QtGui/QScreen>
 #include <QtWidgets/QComboBox>
 #include <QtCore/QPointer>
 #include <QtWidgets/QFileDialog>
@@ -325,6 +328,34 @@ void MainWindow::patchdayForFirstTargets(int n)
 namespace {
 /// Breite des Randes, an dem das Fenster in der Größe verändert wird (Pixel).
 constexpr int kResizeBorder = 5;
+
+/// Kleiner Schiebeschalter für die Fußzeile.
+class SwitchButton : public QAbstractButton
+{
+public:
+	explicit SwitchButton(QWidget* parent)
+	  : QAbstractButton(parent)
+	{
+		setCheckable(true);
+		setFixedSize(26, 12);
+		setCursor(Qt::PointingHandCursor);
+		setFocusPolicy(Qt::NoFocus);
+	}
+
+protected:
+	void paintEvent(QPaintEvent*) override
+	{
+		QPainter p(this);
+		p.setRenderHint(QPainter::Antialiasing);
+		const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+		p.setPen(Qt::NoPen);
+		p.setBrush(isChecked() ? palette().highlight() : palette().mid());
+		p.drawRoundedRect(r, r.height() / 2, r.height() / 2);
+		const qreal d = r.height() - 4;
+		p.setBrush(palette().base());
+		p.drawEllipse(QRectF(isChecked() ? r.right() - d - 2 : r.left() + 2, r.top() + 2, d, d));
+	}
+};
 } // namespace
 
 MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
@@ -351,17 +382,32 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	}
 
 	auto* left = new QWidget(this);
-	auto* leftLay = new QVBoxLayout(left);
+	m_leftPane = left;
+	auto* leftOuter = new QVBoxLayout(left);
+	leftOuter->setContentsMargins(0, 0, 0, 0);
+	leftOuter->setSpacing(0);
+	// Im Platzsparmodus mit angepinntem Baum steht hier Logo, Name und Version über dem Baum.
+	m_brandSlot = new QWidget(left);
+	m_brandSlotLay = new QVBoxLayout(m_brandSlot);
+	m_brandSlotLay->setContentsMargins(0, 0, 0, 0);
+	m_brandSlot->hide();
+	m_brandSlot->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+	auto* leftInner = new QWidget(left);
+	m_leftInner = leftInner;
+	leftOuter->addWidget(m_brandSlot);
+	leftOuter->addWidget(leftInner, 1);
+	leftOuter->addStretch(0);
+	auto* leftLay = new QVBoxLayout(leftInner);
 	leftLay->setContentsMargins(4, 4, 4, 4);
-	m_search = new QLineEdit(left);
+	m_search = new QLineEdit(leftInner);
 	m_search->setPlaceholderText(T(m_backend, "search.placeholder"));
 	m_search->setClearButtonEnabled(true);
 	m_search->setMinimumHeight(32);
 	m_search->setAccessibleName(T(m_backend, "search.placeholder"));
-	m_viewBox = new QComboBox(left);
+	m_viewBox = new QComboBox(leftInner);
 	m_viewBox->setAccessibleName(T(m_backend, "view.label"));
-	m_bar = new ActionBar(m_backend, left);
-	auto* tree = new RjTree(left);
+	m_bar = new ActionBar(m_backend, leftInner);
+	auto* tree = new RjTree(leftInner);
 	m_tree = tree;
 	tree->setDragEnabled(true);
 	tree->setAcceptDrops(true);
@@ -445,6 +491,32 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	setCentralWidget(split);
 
 	buildMenus();
+	// Hamburger-Menü (Platzsparmodus): dieselben Menüs; die Kürzel gelten auch bei verborgener Menüzeile.
+	m_burgerMenu = new QMenu(this);
+	for (QAction* a : m_menuBar->actions())
+		if (a->menu())
+			m_burgerMenu->addMenu(a->menu());
+	{
+		std::function<void(QMenu*)> carry = [&](QMenu* m) {
+			for (QAction* a : m->actions())
+			{
+				if (a->menu())
+					carry(a->menu());
+				else if (!a->shortcut().isEmpty())
+					addAction(a);
+			}
+		};
+		for (QAction* a : m_menuBar->actions())
+			if (a->menu())
+				carry(a->menu());
+	}
+	m_tabs->tabBar()->installEventFilter(this);
+	m_fitTimer.setSingleShot(true);
+	m_fitTimer.setInterval(300);
+	connect(&m_fitTimer, &QTimer::timeout, this, &MainWindow::fitToScreen);
+	connect(qApp, &QGuiApplication::screenAdded, this, [this] { screenLayoutChanged(); });
+	connect(qApp, &QGuiApplication::screenRemoved, this, [this] { screenLayoutChanged(); });
+	connect(qApp, &QGuiApplication::primaryScreenChanged, this, [this] { screenLayoutChanged(); });
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 	// Hell/Dunkel des Desktops live übernehmen (ab Qt 6.5; unter Ubuntu 24.04 mit Qt 6.4 gilt es beim Start).
 	connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] { applyAppearance(); });
@@ -455,17 +527,18 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_connInfo = new QWidget(this);
 	{
 		auto* l = new QHBoxLayout(m_connInfo);
-		l->setContentsMargins(0, 0, 8, 0);
-		l->setSpacing(6);
+		l->setContentsMargins(0, 0, 4, 0);
+		l->setSpacing(3);
 		auto add = [&](QLabel*& icon, QLabel*& text, const char* tip) {
 			icon = new QLabel(m_connInfo);
-			icon->setFixedSize(18, 18);
+			icon->setFixedSize(11, 11);
+			icon->setScaledContents(true);
 			text = new QLabel(m_connInfo);
 			text->setToolTip(T(m_backend, tip));
 			icon->setToolTip(T(m_backend, tip));
 			l->addWidget(icon);
 			l->addWidget(text);
-			l->addSpacing(10);
+			l->addSpacing(6);
 		};
 		add(m_ciProtoIcon, m_ciProto, "ci.tip.type");
 		add(m_ciTargetIcon, m_ciTarget, "ci.tip.target");
@@ -565,7 +638,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	auto* busy = new QProgressBar(m_jobsBox);
 	busy->setRange(0, 0);
 	busy->setMaximumWidth(120);
-	busy->setMaximumHeight(16);
+	busy->setMaximumHeight(8);
 	m_jobsLabel = new QLabel(m_jobsBox);
 	auto* cancelJob = new QPushButton(T(m_backend, "jobs.cancel"), m_jobsBox);
 	cancelJob->setObjectName(QStringLiteral("cancelJob"));
@@ -580,6 +653,41 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	jl->addWidget(cancelJob);
 	statusBar()->addPermanentWidget(m_jobsBox);
 	m_jobsBox->hide();
+	// Fußzeile (kompakt): Baum-Knopf, Hinweise der vorderen Sitzung in der Mitte, rechts der Schalter.
+	statusBar()->setSizeGripEnabled(false);
+	{
+		// Fußzeile nur halb so hoch wie üblich: kleinere Schrift, keine Ränder.
+		QFont sf = statusBar()->font();
+		sf.setPointSizeF(sf.pointSizeF() * 0.8);
+		statusBar()->setFont(sf);
+		statusBar()->setContentsMargins(0, 0, 0, 0);
+	}
+	m_treeButton = new QToolButton(this);
+	m_treeButton->setAutoRaise(true);
+	m_treeButton->setFocusPolicy(Qt::NoFocus);
+	m_treeButton->setObjectName(QStringLiteral("statusTreeButton"));
+	connect(m_treeButton, &QToolButton::clicked, this, [this] { setTreeVisible(m_treeHidden); });
+	statusBar()->insertPermanentWidget(0, m_treeButton);
+	m_noticeLabel = new QLabel(this);
+	m_noticeLabel->setAlignment(Qt::AlignCenter);
+	m_noticeLabel->setObjectName(QStringLiteral("statusNotice"));
+	m_noticeLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+	statusBar()->insertPermanentWidget(1, m_noticeLabel, 1);
+	{
+		auto* box = new QWidget(this);
+		auto* bl = new QHBoxLayout(box);
+		bl->setContentsMargins(6, 0, 4, 0);
+		bl->setSpacing(5);
+		auto* lab = new QLabel(T(m_backend, "status.compact"), box);
+		m_compactSwitch = new SwitchButton(box);
+		bl->addWidget(lab);
+		bl->addWidget(m_compactSwitch);
+		box->setToolTip(T(m_backend, "status.compact.tip"));
+		m_compactSwitch->setAccessibleName(T(m_backend, "status.compact"));
+		connect(m_compactSwitch, &QAbstractButton::toggled, this, [this](bool on) { setCompact(on); });
+		statusBar()->addPermanentWidget(box);
+	}
+	setTreeVisible(true);
 	// Leerlauf: Eingaben überall im Programm zählen.
 	m_activityClock.start();
 	qApp->installEventFilter(this);
@@ -655,6 +763,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		rebuildTabs();
 	});
 	connect(m_tabs, &QTabWidget::currentChanged, this, [this](int) {
+		updateNotice();
 		if (auto t = currentTab())
 			m_backend->activateTab(t);
 		updateStatus();
@@ -795,6 +904,13 @@ void MainWindow::buildMenus()
 		if (m_backend->detachTab(currentTab()))
 			rebuildTabs();
 	});
+	view->addSeparator();
+	view->addAction(T(m_backend, "menu.view.tree"), QKeySequence(Qt::Key_F9), this, [this] { setTreeVisible(m_treeHidden); });
+	m_compactAction = view->addAction(T(m_backend, "menu.view.compact"));
+	m_compactAction->setShortcut(QKeySequence(Qt::Key_F10));
+	m_compactAction->setCheckable(true);
+	connect(m_compactAction, &QAction::triggered, this, [this](bool on) { setCompact(on); });
+	view->addAction(T(m_backend, "menu.view.reset_window"), this, [this] { resetWindow(); });
 	help = m_menuBar->addMenu(T(m_backend, "menu.help"));
 	help->addAction(T(m_backend, "menu.help.update"), this, [this] { openUpdateTab(); });
 	help->addAction(T(m_backend, "menu.help.help"), QKeySequence::HelpContents, this, [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kHelpUrl))); });
@@ -906,9 +1022,15 @@ void MainWindow::applyTheme(bool dark)
   "QTabBar::tab:selected { background: %6; color: %7; border-top: 3px solid %2; padding-top: 3px; }"
 	  "QTabBar::tab:!selected { margin-top: 3px; }"
 	  "QTabBar::tab:!selected:hover { background: %8; color: %7; }"
-	  "QLabel#paneHeader { font-weight: bold; padding: 4px; }"
+	  "QLabel#paneHeader { font-weight: bold; padding: 1px 4px; }"
 	  "QLabel#paneNotice { color: %1; padding: 4px; }"
 	  "QPushButton { min-height: 30px; padding: 2px 12px; }"
+	  "QPushButton#paneBtn { min-height: 16px; padding: 0 8px; }"
+	  "QStatusBar { padding: 0; margin: 0; } QStatusBar::item { border: none; }"
+	  "QStatusBar QLabel { padding: 0; margin: 0; }"
+	  "QStatusBar QPushButton { min-height: 12px; padding: 0 6px; }"
+	  "QToolButton#statusTreeButton { padding: 0 6px; margin: 0; min-height: 0; }"
+	  "QLabel#statusNotice { color: %1; }"
 	  "QLabel#fieldError, QLabel#dirtyLabel { color: %1; font-weight: bold; }"
 	  "QFrame#actionBar { border: 2px solid %2; border-radius: 4px; }"
 	  "QFrame#securityBar { border: 2px solid %2; border-radius: 4px; }"
@@ -1943,12 +2065,12 @@ void MainWindow::updateConnInfo()
 	if (c != m_ciColor)
 	{
 		m_ciColor = c;
-		m_ciTargetIcon->setPixmap(svgPixmap(kSvgTarget, c, 16));
-		m_ciSinceIcon->setPixmap(svgPixmap(kSvgClock, c, 16));
-		m_ciUserIcon->setPixmap(svgPixmap(kSvgUser, c, 16));
+		m_ciTargetIcon->setPixmap(svgPixmap(kSvgTarget, c, 22));
+		m_ciSinceIcon->setPixmap(svgPixmap(kSvgClock, c, 22));
+		m_ciUserIcon->setPixmap(svgPixmap(kSvgUser, c, 22));
 	}
 	const QString proto = i.value(QStringLiteral("protocol")).toString();
-	m_ciProtoIcon->setPixmap(protocolIcon(proto, QString(), false).pixmap(16, 16));
+	m_ciProtoIcon->setPixmap(protocolIcon(proto, QString(), false).pixmap(22, 22));
 	m_ciProto->setText(protocolName(proto));
 	const int port = i.value(QStringLiteral("port")).toInt();
 	const QString host = i.value(QStringLiteral("host")).toString();
@@ -2067,6 +2189,7 @@ void MainWindow::handleEvents(const QString& json)
 			{
 				if (p)
 					p->setNotice(e.value(QStringLiteral("text")).toString());
+				updateNotice();
 				statusBar()->showMessage(e.value(QStringLiteral("text")).toString(), 8000);
 			}
 			else if (t == QLatin1String("clipboard"))
@@ -2209,6 +2332,24 @@ void MainWindow::configureTabBar(QTabWidget* tabs)
 
 bool MainWindow::eventFilter(QObject* o, QEvent* e)
 {
+	if (m_compact && m_tabs && o == m_tabs->tabBar() && e->type() == QEvent::Resize)
+		QTimer::singleShot(0, this, [this] { syncStripHeight(); });
+	// Platzsparmodus: die freie Fläche der Tab-Leiste ist die Titelzeile (Ziehen, Doppelklick maximiert).
+	if (m_compact && m_tabs && o == m_tabs->tabBar() && (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonDblClick))
+	{
+		auto* me = static_cast<QMouseEvent*>(e);
+		if (me->button() == Qt::LeftButton && m_tabs->tabBar()->tabAt(me->position().toPoint()) < 0)
+		{
+			if (e->type() == QEvent::MouseButtonDblClick)
+			{
+				toggleMaximized(this);
+				m_titleBar->updateState();
+			}
+			else if (windowHandle())
+				windowHandle()->startSystemMove();
+			return true;
+		}
+	}
 	if (e->type() == QEvent::ToolTip)
 		if (auto* bar = qobject_cast<QTabBar*>(o))
 		{
@@ -2456,7 +2597,14 @@ void MainWindow::restoreWindowState()
 	const int h = s.value(QStringLiteral("height")).toInt();
 	if (w < 400 || h < 300)
 		return;
-	resize(w, h);
+	// Nie größer als der sichtbare Bereich des Bildschirms (Dock, Monitorwechsel).
+	QSize size(w, h);
+	if (QScreen* sc = QGuiApplication::primaryScreen())
+	{
+		const QRect a = sc->availableGeometry();
+		size = size.boundedTo(a.size());
+	}
+	resize(size);
 	// Unter Wayland darf eine Anwendung ihre Lage nicht selbst setzen; dort gilt nur die Größe.
 	// Sonst nur, wenn die Lage auf einem vorhandenen Bildschirm liegt.
 	const QPoint pos(s.value(QStringLiteral("x")).toInt(), s.value(QStringLiteral("y")).toInt());
@@ -2464,9 +2612,12 @@ void MainWindow::restoreWindowState()
 		move(pos);
 	const int tree = s.value(QStringLiteral("tree_width")).toInt();
 	if (m_split && tree >= 100)
-		m_split->setSizes({ tree, qMax(200, w - tree) });
+		m_split->setSizes({ tree, qMax(200, size.width() - tree) });
 	if (s.value(QStringLiteral("maximized")).toBool())
 		setWindowState(windowState() | Qt::WindowMaximized);
+	setTreeVisible(!s.value(QStringLiteral("tree_hidden")).toBool());
+	setCompact(s.value(QStringLiteral("compact")).toBool());
+	fitToScreen();
 }
 
 void MainWindow::saveWindowState()
@@ -2479,8 +2630,206 @@ void MainWindow::saveWindowState()
 	o.insert(QStringLiteral("width"), g.width());
 	o.insert(QStringLiteral("height"), g.height());
 	o.insert(QStringLiteral("maximized"), isMaximized());
-	o.insert(QStringLiteral("tree_width"), m_split && !m_split->sizes().isEmpty() ? m_split->sizes().first() : 280);
+	// Bei eingeklapptem Baum bleibt die zuletzt gemerkte Breite erhalten.
+	if (m_split && !m_split->sizes().isEmpty() && m_split->sizes().first() >= 100)
+		m_treeWidth = m_split->sizes().first();
+	o.insert(QStringLiteral("tree_width"), m_treeWidth);
+	o.insert(QStringLiteral("compact"), m_compact);
+	o.insert(QStringLiteral("tree_hidden"), m_treeHidden);
 	m_backend->saveWindowState(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+}
+
+void MainWindow::screenLayoutChanged()
+{
+	// Mehrere Signale beim Umstecken des Docks: erst nach kurzer Ruhe prüfen.
+	m_fitTimer.start();
+}
+
+void MainWindow::fitToScreen()
+{
+	if (isMaximized() || isFullScreen())
+		return;
+	QScreen* sc = screen();
+	const QRect frame = frameGeometry();
+	// Liegt das Fenster auf keinem Bildschirm mehr (Monitor abgesteckt), auf den Hauptbildschirm holen.
+	bool onScreen = false;
+	for (QScreen* x : QGuiApplication::screens())
+		if (x->availableGeometry().intersects(QRect(frame.center() - QPoint(20, 20), QSize(40, 40))))
+		{
+			sc = x;
+			onScreen = true;
+			break;
+		}
+	if (!onScreen || !sc)
+		sc = QGuiApplication::primaryScreen();
+	if (!sc)
+		return;
+	const QRect a = sc->availableGeometry();
+	const QSize extra = frame.size() - size();
+	const QSize maxSize = a.size() - extra;
+	QSize target = size().boundedTo(maxSize).expandedTo(QSize(400, 300));
+	if (target != size())
+		resize(target);
+	if (QGuiApplication::platformName() == QLatin1String("wayland"))
+		return;
+	QRect f = frameGeometry();
+	if (!onScreen)
+		f.moveTopLeft(a.topLeft());
+	// Mindestens die Titelzeile muss im sichtbaren Bereich liegen.
+	if (f.right() > a.right())
+		f.moveRight(a.right());
+	if (f.bottom() > a.bottom())
+		f.moveBottom(a.bottom());
+	if (f.left() < a.left())
+		f.moveLeft(a.left());
+	if (f.top() < a.top())
+		f.moveTop(a.top());
+	if (f.topLeft() != frameGeometry().topLeft())
+		move(f.topLeft() + (pos() - frameGeometry().topLeft()));
+}
+
+void MainWindow::resetWindow()
+{
+	if (isMaximized() || isFullScreen())
+		showNormal();
+	QScreen* sc = screen() ? screen() : QGuiApplication::primaryScreen();
+	const QRect a = sc ? sc->availableGeometry() : QRect(0, 0, 1280, 800);
+	m_treeWidth = 280;
+	setTreeVisible(true);
+	setCompact(false);
+	resize(QSize(1280, 800).boundedTo(a.size() - (frameGeometry().size() - size())));
+	if (m_split)
+		m_split->setSizes({ 280, qMax(200, width() - 280) });
+	if (QGuiApplication::platformName() != QLatin1String("wayland"))
+		move(a.center() - QPoint(width() / 2, height() / 2));
+	statusBar()->showMessage(T(m_backend, "status.window.reset"), 6000);
+}
+
+void MainWindow::setTreeVisible(bool on)
+{
+	if (!on && m_split && !m_split->sizes().isEmpty() && m_split->sizes().first() >= 100 && !m_treeHidden && m_leftInner->isVisible())
+		m_treeWidth = m_split->sizes().first();
+	m_treeHidden = !on;
+	if (m_treeButton)
+	{
+		m_treeButton->setText(on ? QStringLiteral("\u00ab") : QStringLiteral("\u00bb"));
+		const QString tip = T(m_backend, on ? "status.tree.hide" : "status.tree.show");
+		m_treeButton->setToolTip(tip);
+		m_treeButton->setAccessibleName(tip);
+	}
+	placeBrand();
+}
+
+void MainWindow::setCompact(bool on)
+{
+	if (m_compactSwitch && m_compactSwitch->isChecked() != on)
+	{
+		QSignalBlocker b(m_compactSwitch);
+		m_compactSwitch->setChecked(on);
+	}
+	if (m_compactAction && m_compactAction->isChecked() != on)
+		m_compactAction->setChecked(on);
+	if (m_compact == on && m_titleBar->controls()->parentWidget() != m_titleBar)
+		return;
+	m_compact = on;
+	QWidget* top = m_menuBar->parentWidget();
+	if (on)
+	{
+		top->hide();
+		m_titleBar->controls()->setBurgerMenu(m_burgerMenu);
+		m_titleBar->controls()->setBurgerVisible(true);
+		m_tabs->setCornerWidget(m_titleBar->controls(), Qt::TopRightCorner);
+		m_titleBar->controls()->show();
+	}
+	else
+	{
+		m_tabs->setCornerWidget(nullptr, Qt::TopRightCorner);
+		m_brandSlotLay->removeWidget(m_titleBar->brand());
+		m_titleBar->restoreParts();
+		m_brandSlot->hide();
+		top->show();
+	}
+	placeBrand();
+	m_titleBar->updateState();
+}
+
+/// Baum und Logo-Streifen anordnen. Im Platzsparmodus steht Logo, Name und Version oben in der linken
+/// Spalte; bei eingeklapptem Baum bleibt von ihr nur dieser Streifen, und die Tabs rücken daneben.
+void MainWindow::placeBrand()
+{
+	if (!m_leftPane || !m_split)
+		return;
+	const bool on = !m_treeHidden;
+	if (!m_compact)
+	{
+		m_leftPane->setMinimumWidth(0);
+		m_leftPane->setMaximumWidth(QWIDGETSIZE_MAX);
+		m_leftInner->setVisible(true);
+		m_leftPane->setVisible(on);
+		if (on)
+			m_split->setSizes({ m_treeWidth, qMax(200, m_split->width() - m_treeWidth) });
+		return;
+	}
+	BrandStrip* brand = m_titleBar->brand();
+	const int bh = m_tabs->tabBar()->height();
+	const int h = qMax(32, bh > 20 ? bh : m_tabs->tabBar()->sizeHint().height());
+	brand->setFixedHeight(h);
+	m_titleBar->controls()->setFixedHeight(h);
+	brand->setStyleSheet(QStringLiteral("QWidget#brandStrip { background: palette(button); border-bottom: 1px solid palette(mid); }"
+	                                    "QWidget#brandStrip QLabel { background: transparent; }"));
+	brand->setAttribute(Qt::WA_StyledBackground, true);
+	if (brand->parentWidget() != m_brandSlot)
+	{
+		brand->setParent(m_brandSlot);
+		m_brandSlotLay->addWidget(brand);
+	}
+	brand->show();
+	m_brandSlot->show();
+	m_leftPane->show();
+	m_leftInner->setVisible(on);
+	if (on)
+	{
+		m_leftPane->setMinimumWidth(0);
+		m_leftPane->setMaximumWidth(QWIDGETSIZE_MAX);
+		m_split->setSizes({ m_treeWidth, qMax(200, m_split->width() - m_treeWidth) });
+	}
+	else
+	{
+		const int w = brand->sizeHint().width();
+		m_leftPane->setFixedWidth(w);
+		m_split->setSizes({ w, qMax(200, m_split->width() - w) });
+	}
+	QTimer::singleShot(0, this, [this] { syncStripHeight(); });
+}
+
+/// Logo-Streifen und Fensterknöpfe so hoch wie die Tab-Leiste, damit alles auf einer Linie liegt.
+void MainWindow::syncStripHeight()
+{
+	if (!m_compact)
+		return;
+	const int bh = m_tabs->tabBar()->height();
+	const int h = qMax(32, bh > 20 ? bh : m_tabs->tabBar()->sizeHint().height());
+	if (m_titleBar->brand()->height() != h)
+		m_titleBar->brand()->setFixedHeight(h);
+	if (m_titleBar->controls()->height() != h)
+		m_titleBar->controls()->setFixedHeight(h);
+}
+
+/// Hinweis der vorderen Sitzung in der Mitte der Fußzeile (statt der orangen Zeile in der Sitzung).
+void MainWindow::updateNotice()
+{
+	if (!m_noticeLabel)
+		return;
+	QString text;
+	if (QWidget* cur = m_tabs->currentWidget())
+		for (SessionPane* p : std::as_const(m_panes))
+			if (p && (p == cur || cur->isAncestorOf(p)) && !p->notice().isEmpty())
+			{
+				text = p->notice();
+				break;
+			}
+	m_noticeLabel->setText(text);
+	m_noticeLabel->setToolTip(text);
 }
 
 void MainWindow::closeEvent(QCloseEvent* e)

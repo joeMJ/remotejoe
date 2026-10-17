@@ -2,6 +2,8 @@
 
 #include "editor.h"
 #include "mainwindow.h"
+#include "titlebar.h"
+#include <QtWidgets/QTabBar>
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
 #include <QtCore/QDir>
@@ -59,6 +61,20 @@ void screenshots(MainWindow& w, const QString& dir)
 	w.tabs()->setCurrentIndex(0);
 	pump(300);
 	save(&w, dir, QStringLiteral("hauptfenster-hell.png"));
+	if (qEnvironmentVariableIsSet("RJ_SHOT_COMPACT"))
+	{
+		// Zur Prüfung des Platzsparmodus (nicht Teil der Dokumentationsbilder).
+		w.setCompact(true);
+		pump(500);
+		save(&w, dir, QStringLiteral("kompakt-baum.png"));
+		w.setTreeVisible(false);
+		pump(500);
+		save(&w, dir, QStringLiteral("kompakt-ohne-baum.png"));
+		w.setTreeVisible(true);
+		w.setCompact(false);
+		pump(500);
+		save(&w, dir, QStringLiteral("normal-nach-kompakt.png"));
+	}
 	w.applyTheme(true);
 	pump(300);
 	save(&w, dir, QStringLiteral("hauptfenster-dunkel.png"));
@@ -333,8 +349,11 @@ std::int32_t rjRunApplication()
 	backend.init(demo);
 	MainWindow w(&backend);
 	w.applyTheme(qEnvironmentVariable("REMOTEJOE_THEME") == QLatin1String("dark"));
-	if (!demo)
+	// --fenster-zuruecksetzen: gespeicherte Größe und Lage ignorieren (Standardgröße, Mitte des Bildschirms).
+	if (!demo && !qEnvironmentVariableIsSet("RJ_RESET_WINDOW"))
 		w.restoreWindowState();
+	else if (!demo)
+		w.resetWindow();
 	w.show();
 	// Echter Start: zuerst die Entsperrmaske für die Schlüsseldatenbank.
 	if (!demo)

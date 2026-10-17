@@ -100,11 +100,15 @@ pub struct WindowState {
     pub tree_width: u32,
     /// Wurde beim Beenden gespeichert; vorher gelten die Voreinstellungen des Fensters nicht.
     pub saved: bool,
+    /// Platzsparmodus: Menü im Hamburger-Knopf, Tabs in der Titelzeile.
+    pub compact: bool,
+    /// Baum eingeklappt.
+    pub tree_hidden: bool,
 }
 
 impl Default for WindowState {
     fn default() -> Self {
-        WindowState { x: 100, y: 100, width: 1280, height: 800, maximized: false, tree_width: 280, saved: false }
+        WindowState { x: 100, y: 100, width: 1280, height: 800, maximized: false, tree_width: 280, saved: false, compact: false, tree_hidden: false }
     }
 }
 
@@ -274,6 +278,22 @@ mod tests {
         assert_eq!(c, Config::default());
         assert_eq!(c.connection.connect_timeout_secs, 15);
         assert_eq!(c.connection.keepalive_secs, 30);
+    }
+
+    #[test]
+    fn window_state_old_file_and_new_fields() {
+        // Alte Konfiguration ohne Platzsparmodus und Baumzustand lädt mit Voreinstellung.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        std::fs::write(&p, "[window]\nx = 5\ny = 6\nwidth = 900\nheight = 700\nsaved = true\n").unwrap();
+        let c = Config::load(&p).unwrap();
+        assert!(c.window.saved && !c.window.compact && !c.window.tree_hidden);
+        let mut c = c;
+        c.window.compact = true;
+        c.window.tree_hidden = true;
+        c.save(&p).unwrap();
+        let again = Config::load(&p).unwrap();
+        assert!(again.window.compact && again.window.tree_hidden);
     }
 
     #[test]

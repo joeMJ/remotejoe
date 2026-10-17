@@ -48,6 +48,15 @@ public:
 	void tryKeyringUnlock();
 	void forgetKeyring();
 	void saveWindowState();
+	/// Platzsparmodus: Menü im Hamburger-Knopf, Tabs in der Titelzeile.
+	void setCompact(bool on);
+	bool compact() const { return m_compact; }
+	/// Baum links ein- oder ausklappen.
+	void setTreeVisible(bool on);
+	/// Fenster auf den sichtbaren Bildschirmbereich begrenzen und zurück ins Bild holen.
+	void fitToScreen();
+	/// Größe, Lage und Baumbreite auf die Voreinstellung setzen (Ansicht → Fenster zurücksetzen).
+	void resetWindow();
 	void setFilter(const QString& text);
 	/// Ersten Hypervisor im Baum aufklappen (lädt die Gäste).
 	void expandFirstHypervisor();
@@ -111,6 +120,10 @@ public:
 
 private:
 	void buildMenus();
+	void placeBrand();
+	void syncStripHeight();
+	void updateNotice();
+	void screenLayoutChanged();
 	void reloadTree();
 	void poll();
 	void rebuildTabs();
@@ -183,6 +196,20 @@ private:
 	class QPushButton* m_emptyButton = nullptr;
 	TitleBar* m_titleBar = nullptr;
 	QMenuBar* m_menuBar = nullptr;
+	// Platzsparmodus, Baum und Fußzeile.
+	bool m_compact = false;
+	bool m_treeHidden = false;
+	int m_treeWidth = 280;
+	QWidget* m_leftPane = nullptr;
+	QWidget* m_leftInner = nullptr;
+	QWidget* m_brandSlot = nullptr;
+	class QVBoxLayout* m_brandSlotLay = nullptr;
+	QMenu* m_burgerMenu = nullptr;
+	QAction* m_compactAction = nullptr;
+	class QAbstractButton* m_compactSwitch = nullptr;
+	class QToolButton* m_treeButton = nullptr;
+	class QLabel* m_noticeLabel = nullptr;
+	QTimer m_fitTimer;
 	QWidget* m_emptyHint = nullptr;
 	bool m_macroShelfOpen = false;
 	QStandardItemModel* m_model;

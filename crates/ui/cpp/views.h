@@ -137,6 +137,7 @@ public:
 	            QWidget* parent = nullptr);
 	void setState(const QString& state, const QString& detail);
 	void setNotice(const QString& text);
+	QString notice() const { return m_noticeText; }
 	FrameView* frame() const { return m_frame; }
 	TerminalView* terminal() const { return m_terminal; }
 	QWidget* view() const;
@@ -184,6 +185,7 @@ private:
 	QPushButton* m_macroCancel = nullptr;
 	QLabel* m_header;
 	QLabel* m_notice;
+	QString m_noticeText;
 	QPushButton* m_reconnect;
 	SecurityBar* m_security;
 	ActionBar* m_ask;

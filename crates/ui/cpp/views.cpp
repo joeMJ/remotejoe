@@ -841,6 +841,15 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 		m_back->setEnabled(false);
 		m_forward->setEnabled(false);
 	}
+	// Schmale Kopfzeile: kleinere Schaltflächen und Schrift.
+	m_header->setMinimumHeight(18);
+	for (auto* b : headRow->findChildren<QPushButton*>())
+	{
+		b->setObjectName(QStringLiteral("paneBtn"));
+		QFont bf = b->font();
+		bf.setPointSizeF(bf.pointSizeF() * 0.9);
+		b->setFont(bf);
+	}
 	lay->addWidget(headRow);
 	lay->addWidget(m_notice);
 	lay->addWidget(m_security);
@@ -963,8 +972,8 @@ void SessionPane::showWebMenu(const QJsonObject& e)
 
 void SessionPane::setNotice(const QString& text)
 {
-	m_notice->setText(text);
-	m_notice->setVisible(!text.isEmpty());
+	// Der Hinweis erscheint in der Fußzeile des Hauptfensters, nicht in der Sitzung.
+	m_noticeText = text;
 }
 
 void SessionPane::fillMacroMenu()
