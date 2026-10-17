@@ -589,6 +589,31 @@ impl App {
         Ok(n)
     }
 
+    /// Patchday-Zeilen für die Anzeige: ohne Protokolle (außer für das
+    /// gewählte Ziel), mit letzter Protokollzeile. Hat sich seit `since`
+    /// nichts geändert, nur `{"unchanged":true}`.
+    pub fn patchday_view(&self, selected: Option<Uuid>, since: u64) -> serde_json::Value {
+        let Some(p) = &self.patchday else { return json!({ "version": 0, "rows": [] }) };
+        let v = p.version();
+        if v == since {
+            return json!({ "unchanged": true, "version": v });
+        }
+        let rows: Vec<_> = p
+            .rows()
+            .into_iter()
+            .map(|r| {
+                let mut o = serde_json::to_value(&r).unwrap_or_default();
+                o["last"] = json!(r.log.last());
+                o["finished"] = json!(r.state.finished());
+                if Some(r.target) != selected {
+                    o.as_object_mut().map(|m| m.remove("log"));
+                }
+                o
+            })
+            .collect();
+        json!({ "version": v, "rows": rows })
+    }
+
     pub fn patchday_json(&self) -> String {
         self.patchday.as_ref().map(|p| serde_json::to_string(&p.rows()).unwrap_or_default()).unwrap_or_else(|| "[]".into())
     }
@@ -767,16 +792,7 @@ impl App {
         let Some(vault) = &self.vault else { return };
         let mut monitors = Vec::new();
         for d in &self.index.snmp_devices {
-            let Ok(c) = vault.resolve(&d.credential) else { continue };
-            let credentials = match d.version {
-                rj_core::SnmpVersion::V2c => rj_snmp::Credentials::V2c { community: c.data.password.clone() },
-                rj_core::SnmpVersion::V3 => rj_snmp::Credentials::V3 {
-                    user: c.data.username.clone(),
-                    auth: rj_snmp::AuthProto::Sha1,
-                    auth_password: c.data.password.clone(),
-                    privacy: Some((rj_snmp::PrivProto::Aes128, c.data.password.clone())),
-                },
-            };
+            let Some(credentials) = snmp_credentials(vault, d) else { continue };
             let dev = rj_snmp::Device { host: d.host.clone(), port: d.port.unwrap_or(161), credentials, timeout: Duration::from_secs(3) };
             monitors.push((d.id, rj_snmp::Monitor::new(dev)));
         }
@@ -832,6 +848,31 @@ impl App {
         let list: Vec<_> = v.unassigned().into_iter().map(|e| json!({ "uuid": e.uuid, "title": e.title, "group": e.group_path.join("/") })).collect();
         serde_json::Value::Array(list).to_string()
     }
+}
+
+/// Zugang zu einem SNMP-Gerät aus der KDBX: v2c Community; v3 Benutzer,
+/// Kennwort zur Authentisierung und – getrennt – zur Verschlüsselung.
+pub fn snmp_credentials(vault: &Vault, d: &rj_core::SnmpDevice) -> Option<rj_snmp::Credentials> {
+    let c = vault.resolve(&d.credential).ok()?;
+    Some(match d.version {
+        rj_core::SnmpVersion::V2c => rj_snmp::Credentials::V2c { community: c.data.password.clone() },
+        rj_core::SnmpVersion::V3 => {
+            let auth = match d.auth_proto.unwrap_or(rj_core::SnmpAuth::Sha1) {
+                rj_core::SnmpAuth::Md5 => rj_snmp::AuthProto::Md5,
+                rj_core::SnmpAuth::Sha1 => rj_snmp::AuthProto::Sha1,
+                rj_core::SnmpAuth::Sha256 => rj_snmp::AuthProto::Sha256,
+            };
+            let privacy = match d.priv_proto.unwrap_or(rj_core::SnmpPriv::Aes128) {
+                rj_core::SnmpPriv::None => None,
+                p => {
+                    let proto = if p == rj_core::SnmpPriv::Des { rj_snmp::PrivProto::Des } else { rj_snmp::PrivProto::Aes128 };
+                    let pw = vault.field(c.uuid, rj_core::SNMP_PRIV_FIELD).unwrap_or_else(|| c.data.password.clone());
+                    Some((proto, pw))
+                }
+            };
+            rj_snmp::Credentials::V3 { user: c.data.username.clone(), auth, auth_password: c.data.password.clone(), privacy }
+        }
+    })
 }
 
 fn set_target_credential(idx: &mut Index, target: Uuid, name: &str) {
@@ -952,5 +993,50 @@ mod tunnel_tests {
             std::thread::sleep(Duration::from_millis(10));
         };
         assert!(error.contains("Tunnel „VPN“"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod patchday_tests {
+    use super::*;
+
+    /// 25 Ziele mit Attrappe: Anzeige-Daten bleiben schnell und klein,
+    /// unveränderte Stände werden nicht neu geliefert, Abbruch je Ziel.
+    #[test]
+    fn view_is_cheap_and_cancel_per_target() {
+        let mut app = App::new(true);
+        let mut ids = Vec::new();
+        app.index.for_each_target(|t| ids.push(t.id));
+        ids.truncate(25);
+        assert_eq!(app.start_patchday(&ids, false).unwrap(), 25);
+        let victim = ids[20];
+        app.patchday.as_ref().unwrap().cancel(victim);
+        let mut since = 0;
+        let mut worst = Duration::ZERO;
+        let mut unchanged = 0;
+        let mut largest = 0;
+        let start = std::time::Instant::now();
+        while !app.patchday.as_ref().unwrap().finished() {
+            let t = std::time::Instant::now();
+            let v = app.patchday_view(Some(ids[0]), since);
+            worst = worst.max(t.elapsed());
+            if v["unchanged"] == true {
+                unchanged += 1;
+            } else {
+                since = v["version"].as_u64().unwrap();
+                largest = largest.max(v.to_string().len());
+                // Protokoll nur für das gewählte Ziel.
+                let rows = v["rows"].as_array().unwrap();
+                assert_eq!(rows.iter().filter(|r| r.get("log").is_some()).count(), 1);
+            }
+            assert!(start.elapsed() < Duration::from_secs(60));
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        println!("MESSWERT Patchday 25 Ziele: längste Aufbereitung {} µs, größte Antwort {largest} Bytes, {unchanged} Takte ohne Änderung, Dauer {:.1} s", worst.as_micros(), start.elapsed().as_secs_f64());
+        assert!(worst < Duration::from_millis(20), "Aufbereitung zu langsam: {worst:?}");
+        let rows = app.patchday.as_ref().unwrap().rows();
+        let r = rows.iter().find(|r| r.target == victim).unwrap();
+        assert_eq!(r.state, rj_tasks::patchday::JobState::Cancelled);
+        assert!(rows.iter().filter(|r| r.target != victim).all(|r| r.state != rj_tasks::patchday::JobState::Cancelled));
     }
 }

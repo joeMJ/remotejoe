@@ -82,6 +82,8 @@ impl rustls::client::danger::ServerCertVerifier for Verifier {
 pub struct Conn {
     pub reader: Box<dyn Read + Send>,
     pub writer: Box<dyn Write + Send>,
+    /// Zugrunde liegender Socket, um die Verbindung von außen zu schließen.
+    pub socket: Option<TcpStream>,
 }
 
 struct Pipe {
@@ -134,7 +136,7 @@ pub fn connect(base: &Base, check: &CertCheck, timeout: Duration) -> io::Result<
     let sock = TcpStream::connect_timeout(&addr, timeout)?;
     sock.set_nodelay(true).ok();
     if !base.tls {
-        return Ok(Conn { reader: Box::new(sock.try_clone()?), writer: Box::new(sock) });
+        return Ok(Conn { reader: Box::new(sock.try_clone()?), socket: sock.try_clone().ok(), writer: Box::new(sock) });
     }
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let verifier = Arc::new(Verifier { provider: provider.clone(), check: check.clone() });
@@ -178,7 +180,7 @@ pub fn connect(base: &Base, check: &CertCheck, timeout: Duration) -> io::Result<
             }
         }
     });
-    Ok(Conn { reader: Box::new(Pipe { rx, buf: Vec::new(), pos: 0 }), writer: Box::new(TlsWriter { conn, sock: s }) })
+    Ok(Conn { reader: Box::new(Pipe { rx, buf: Vec::new(), pos: 0 }), socket: s.try_clone().ok(), writer: Box::new(TlsWriter { conn, sock: s }) })
 }
 
 /// HTTP-Antwort.
@@ -256,6 +258,8 @@ pub fn request(base: &Base, check: &CertCheck, method: &str, path: &str, headers
 pub struct WebSocket {
     pub reader: BufReader<Box<dyn Read + Send>>,
     pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    /// Zugrunde liegender Socket (zum Schließen von außen).
+    pub socket: Option<TcpStream>,
 }
 
 pub fn websocket(base: &Base, check: &CertCheck, path: &str, headers: &[(&str, String)], timeout: Duration) -> io::Result<WebSocket> {
@@ -282,7 +286,7 @@ pub fn websocket(base: &Base, check: &CertCheck, path: &str, headers: &[(&str, S
     if hs.iter().find(|(k, _)| k.eq_ignore_ascii_case("sec-websocket-accept")).map(|(_, v)| v.as_str()) != Some(accept.as_str()) {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Websocket-Antwort ungültig"));
     }
-    Ok(WebSocket { reader: r, writer: Arc::new(Mutex::new(c.writer)) })
+    Ok(WebSocket { reader: r, writer: Arc::new(Mutex::new(c.writer)), socket: c.socket })
 }
 
 /// SHA-1 für den Websocket-Handschlag (RFC 6455, Abschnitt 4.2.2).

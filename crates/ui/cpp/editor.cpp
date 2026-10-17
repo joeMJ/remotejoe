@@ -1250,6 +1250,173 @@ void PropertiesTab::requestClose(std::function<void()> close)
 	           });
 }
 
+// ------------------------------------------------------------------ SnmpTab
+
+SnmpTab::SnmpTab(RjBackend* backend, QWidget* parent)
+  : QWidget(parent)
+  , m_backend(backend)
+{
+	setProperty("editor", true);
+	setObjectName(QStringLiteral("snmpTab"));
+	auto* split = new QHBoxLayout(this);
+	auto* left = new QVBoxLayout;
+	m_list = new QListWidget(this);
+	m_list->setAccessibleName(rjText(backend, "snmp.title"));
+	auto* add = new QPushButton(rjText(backend, "snmp.new"), this);
+	auto* del = new QPushButton(rjText(backend, "snmp.delete"), this);
+	left->addWidget(m_list, 1);
+	left->addWidget(add);
+	left->addWidget(del);
+	split->addLayout(left, 1);
+	auto* f = new QFormLayout;
+	auto line = [&](const char* label, bool secret) {
+		auto* e = new QLineEdit(this);
+		if (secret)
+			e->setEchoMode(QLineEdit::Password);
+		auto* l = new QLabel(rjText(backend, label), this);
+		l->setBuddy(e);
+		f->addRow(l, e);
+		return e;
+	};
+	m_name = line("snmp.name", false);
+	m_host = line("edit.host", false);
+	m_port = line("edit.port", false);
+	m_port->setPlaceholderText(rjText(backend, "edit.port.default").arg(161));
+	m_version = new QComboBox(this);
+	m_version->addItem(QStringLiteral("v2c"), QStringLiteral("v2c"));
+	m_version->addItem(QStringLiteral("v3"), QStringLiteral("v3"));
+	f->addRow(rjText(backend, "snmp.version"), m_version);
+	m_community = line("snmp.community", true);
+	m_user = line("snmp.user", false);
+	m_auth = new QComboBox(this);
+	for (const char* a : { "sha1", "sha256", "md5" })
+		m_auth->addItem(QString::fromLatin1(a).toUpper(), QString::fromLatin1(a));
+	f->addRow(rjText(backend, "snmp.auth"), m_auth);
+	m_authPw = line("snmp.auth_password", true);
+	m_priv = new QComboBox(this);
+	m_priv->addItem(QStringLiteral("AES-128"), QStringLiteral("aes128"));
+	m_priv->addItem(QStringLiteral("DES"), QStringLiteral("des"));
+	m_priv->addItem(rjText(backend, "snmp.priv.none"), QStringLiteral("none"));
+	f->addRow(rjText(backend, "snmp.priv"), m_priv);
+	m_privPw = line("snmp.priv_password", true);
+	m_message = new QLabel(this);
+	m_message->setWordWrap(true);
+	f->addRow(m_message);
+	auto* saveB = new QPushButton(rjText(backend, "edit.save"), this);
+	f->addRow(QString(), saveB);
+	split->addLayout(f, 2);
+	auto updateVersion = [this] {
+		const bool v3 = m_version->currentData().toString() == QLatin1String("v3");
+		m_community->setEnabled(!v3);
+		for (QWidget* w : { static_cast<QWidget*>(m_user), static_cast<QWidget*>(m_auth), static_cast<QWidget*>(m_authPw), static_cast<QWidget*>(m_priv),
+		                    static_cast<QWidget*>(m_privPw) })
+			w->setEnabled(v3);
+		m_privPw->setEnabled(v3 && m_priv->currentData().toString() != QLatin1String("none"));
+	};
+	connect(m_version, &QComboBox::currentIndexChanged, this, updateVersion);
+	connect(m_priv, &QComboBox::currentIndexChanged, this, updateVersion);
+	connect(m_list, &QListWidget::currentRowChanged, this, &SnmpTab::showDevice);
+	connect(add, &QPushButton::clicked, this, [this] {
+		m_list->setCurrentRow(-1);
+		showDevice(-1);
+		m_name->setFocus();
+	});
+	connect(del, &QPushButton::clicked, this, [this] {
+		if (m_current.isEmpty())
+			return;
+		edit({ { QStringLiteral("op"), QStringLiteral("snmp_delete") }, { QStringLiteral("id"), m_current } });
+		edit({ { QStringLiteral("op"), QStringLiteral("save") } });
+		reload();
+	});
+	connect(saveB, &QPushButton::clicked, this, &SnmpTab::save);
+	updateVersion();
+	reload();
+}
+
+QString SnmpTab::edit(const QJsonObject& cmd)
+{
+	return m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact)));
+}
+
+void SnmpTab::reload()
+{
+	m_devices = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("snmp_list") } }).toUtf8()).array();
+	m_list->clear();
+	for (const QJsonValue& d : m_devices)
+		m_list->addItem(d.toObject().value(QStringLiteral("name")).toString() + QStringLiteral("  (") + d.toObject().value(QStringLiteral("version")).toString() + QLatin1Char(')'));
+	int row = -1;
+	for (int i = 0; i < m_devices.size(); ++i)
+		if (m_devices[i].toObject().value(QStringLiteral("id")).toString() == m_current)
+			row = i;
+	m_list->setCurrentRow(row);
+	showDevice(row);
+}
+
+void SnmpTab::showDevice(int row)
+{
+	const QJsonObject d = row >= 0 && row < m_devices.size() ? m_devices[row].toObject() : QJsonObject();
+	m_current = d.value(QStringLiteral("id")).toString();
+	m_name->setText(d.value(QStringLiteral("name")).toString());
+	m_host->setText(d.value(QStringLiteral("host")).toString());
+	m_port->setText(d.value(QStringLiteral("port")).isDouble() ? QString::number(d.value(QStringLiteral("port")).toInt()) : QString());
+	m_version->setCurrentIndex(qMax(0, m_version->findData(d.value(QStringLiteral("version")).toString(QStringLiteral("v2c")))));
+	m_user->setText(d.value(QStringLiteral("username")).toString());
+	m_auth->setCurrentIndex(qMax(0, m_auth->findData(d.value(QStringLiteral("auth_proto")).toString())));
+	m_priv->setCurrentIndex(qMax(0, m_priv->findData(d.value(QStringLiteral("priv_proto")).toString())));
+	// Kennwörter werden nie angezeigt; leer lassen heißt „unverändert“.
+	const QString keep = m_current.isEmpty() ? QString() : rjText(m_backend, "edit.cred.password.keep");
+	for (QLineEdit* e : { m_community, m_authPw, m_privPw })
+	{
+		e->clear();
+		e->setPlaceholderText(keep);
+	}
+	m_message->clear();
+}
+
+void SnmpTab::save()
+{
+	QJsonObject cmd{ { QStringLiteral("op"), QStringLiteral("snmp_save") },
+		             { QStringLiteral("name"), m_name->text() },
+		             { QStringLiteral("host"), m_host->text() },
+		             { QStringLiteral("version"), m_version->currentData().toString() },
+		             { QStringLiteral("username"), m_user->text() },
+		             { QStringLiteral("auth_proto"), m_auth->currentData().toString() },
+		             { QStringLiteral("priv_proto"), m_priv->currentData().toString() } };
+	if (!m_current.isEmpty())
+		cmd.insert(QStringLiteral("id"), m_current);
+	if (!m_port->text().isEmpty())
+		cmd.insert(QStringLiteral("port"), m_port->text());
+	// Kennwörter unverändert übergeben (kein Trimmen, keine Normalisierung).
+	const char* keys[] = { "community", "auth_password", "priv_password" };
+	QLineEdit* fields[] = { m_community, m_authPw, m_privPw };
+	for (int i = 0; i < 3; ++i)
+		if (!fields[i]->text().isEmpty())
+			cmd.insert(QString::fromLatin1(keys[i]), fields[i]->text());
+	QString json = QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact));
+	const QJsonObject r = parse(m_backend->edit(json));
+	json.fill(QLatin1Char(' '));
+	wipeSecrets();
+	if (r.contains(QStringLiteral("error")))
+	{
+		m_message->setText(rjText(m_backend, "edit.error").arg(r.value(QStringLiteral("error")).toString()));
+		return;
+	}
+	m_current = r.value(QStringLiteral("id")).toString();
+	reload();
+	m_message->setText(rjText(m_backend, "status.saved"));
+	emit status(rjText(m_backend, "status.saved"));
+}
+
+void SnmpTab::wipeSecrets()
+{
+	for (QLineEdit* e : { m_community, m_authPw, m_privPw })
+	{
+		QString t = e->text();
+		t.fill(QLatin1Char(' '));
+		e->clear();
+	}
+}
+
 // ------------------------------------------------------------ UnlockOverlay
 
 UnlockOverlay::UnlockOverlay(RjBackend* backend, QWidget* parent)

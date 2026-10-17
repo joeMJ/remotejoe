@@ -190,6 +190,7 @@ enum EntryOp {
     Create { uuid: Uuid, data: CredentialData },
     Update { uuid: Uuid, data: CredentialData },
     Attach { uuid: Uuid, name: String, data: Secret },
+    Field { uuid: Uuid, name: String, data: Secret },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -501,6 +502,15 @@ impl Vault {
                 e.remove_attachment_by_name(name);
                 e.add_attachment(name.clone(), Value::protected(data.as_bytes().to_vec()));
             }
+            EntryOp::Field { uuid, name, data } => {
+                let id = EntryId::from_uuid(*uuid);
+                if !Self::in_own_group(db, id) {
+                    return Err(VaultError::ForeignEntry(*uuid));
+                }
+                let mut e = db.entry_mut(id).ok_or(VaultError::NoSuchEntry(*uuid))?;
+                // Vorher in `record` auf UTF-8 geprüft; keine Ersetzung.
+                e.set(name, Value::protected(data.as_str().unwrap_or_default().to_string()));
+            }
         }
         Ok(())
     }
@@ -508,6 +518,11 @@ impl Vault {
     fn record(&mut self, op: EntryOp) -> Result<(), VaultError> {
         if let EntryOp::Create { data, .. } | EntryOp::Update { data, .. } = &op {
             if data.password.as_str().is_none() || data.otp.as_ref().is_some_and(|o| o.as_str().is_none()) {
+                return Err(VaultError::PasswordEncoding);
+            }
+        }
+        if let EntryOp::Field { data, .. } = &op {
+            if data.as_str().is_none() {
                 return Err(VaultError::PasswordEncoding);
             }
         }
@@ -531,6 +546,21 @@ impl Vault {
     /// Fügt einen Anhang hinzu oder ersetzt ihn.
     pub fn set_attachment(&mut self, uuid: Uuid, name: &str, data: Secret) -> Result<(), VaultError> {
         self.record(EntryOp::Attach { uuid, name: name.to_string(), data })
+    }
+
+    /// Setzt ein geschütztes Zusatzfeld (nur in der Gruppe `remotejoe`).
+    pub fn set_protected_field(&mut self, uuid: Uuid, name: &str, data: Secret) -> Result<(), VaultError> {
+        self.record(EntryOp::Field { uuid, name: name.to_string(), data })
+    }
+
+    /// Liest ein Zusatzfeld (geschützt oder nicht), byte-genau.
+    pub fn field(&self, uuid: Uuid, name: &str) -> Option<Secret> {
+        let id = EntryId::from_uuid(uuid);
+        if Self::in_recycle_bin(&self.db, id) {
+            return None;
+        }
+        let e = self.db.entry(id)?;
+        e.fields.get(name).map(|v| Secret::from_bytes(v.get().clone().into_bytes()))
     }
 
     /// Einträge, auf die kein Verweis des Index zeigt („Nicht zugeordnet“).

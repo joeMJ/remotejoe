@@ -456,11 +456,42 @@ pub struct SnmpDevice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     pub version: SnmpVersion,
-    /// KDBX-Eintrag mit Community bzw. v3-Benutzer und Schlüsseln.
+    /// KDBX-Eintrag mit Community bzw. v3-Benutzer und Schlüsseln: v2c
+    /// Community im Kennwortfeld; v3 Benutzername, Kennwort zur
+    /// Authentisierung im Kennwortfeld, Kennwort zur Verschlüsselung im
+    /// geschützten Feld `SNMP-Verschlüsselung` (fehlt es, gilt das Kennwort
+    /// zur Authentisierung).
     pub credential: CredentialRef,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interfaces: Vec<u32>,
+    /// v3: Verfahren der Authentisierung (Vorgabe SHA-1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_proto: Option<SnmpAuth>,
+    /// v3: Verfahren der Verschlüsselung (Vorgabe AES-128).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priv_proto: Option<SnmpPriv>,
 }
+
+/// SNMPv3-Authentisierung.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SnmpAuth {
+    Md5,
+    Sha1,
+    Sha256,
+}
+
+/// SNMPv3-Verschlüsselung.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SnmpPriv {
+    None,
+    Des,
+    Aes128,
+}
+
+/// Geschütztes KDBX-Feld mit dem SNMPv3-Kennwort zur Verschlüsselung.
+pub const SNMP_PRIV_FIELD: &str = "SNMP-Verschlüsselung";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

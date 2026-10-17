@@ -21,6 +21,8 @@ const VNCTICKET: &str = "PVEVNC:Attr+appe/=";
 
 #[derive(Default)]
 struct Log {
+    /// Offene Konsolen-Websockets (für die Prüfung auf Reste).
+    open_ws: usize,
     actions: Vec<String>,
     logins: usize,
     expire_next: bool,
@@ -133,7 +135,9 @@ fn handle(mut s: TcpStream, log: Arc<Mutex<Log>>) {
             let key = req.header("sec-websocket-key").unwrap().to_string();
             let accept = base64::engine::general_purpose::STANDARD.encode(sha1_ws(&key));
             let _ = write!(s, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nSec-WebSocket-Protocol: binary\r\n\r\n");
+            log.lock().unwrap().open_ws += 1;
             rfb_over_ws(r, s);
+            log.lock().unwrap().open_ws -= 1;
         } else {
             respond(&mut s, 404, json!({"message": "unbekannt"}));
         }
@@ -325,4 +329,46 @@ fn console_bridge_carries_rfb() {
         assert!(std::time::Instant::now() < deadline, "kein Bild über die Brücke: {px:?}");
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn vnc_params(port: u16, password: Secret) -> VncParams {
+    VncParams {
+        host: "127.0.0.1".into(),
+        port,
+        username: None,
+        password: Some(password),
+        shared: true,
+        view_only: false,
+        clipboard: ClipboardDirection::Off,
+        clipboard_limit: 1 << 20,
+        prefer_tls: false,
+        known_certs: None,
+        connect_timeout: Duration::from_secs(15),
+        extended_clipboard: false,
+    }
+}
+
+/// „Neu verbinden“ einer Konsole: alte Brücke verwerfen (schließt Websocket
+/// und Client-Verbindung sofort), Konsole neu öffnen, neu verbinden.
+#[test]
+fn reconnect_reopens_console_without_leftovers() {
+    let (url, log) = server();
+    let c = password_client(&url, PASSWORD);
+    let g = c.guests().unwrap();
+    let first = c.console(&g[0]).unwrap();
+    let vnc1 = VncClient::connect(&vnc_params(first.port, first.password.clone()), Arc::new(|_| false)).unwrap();
+    assert_eq!(vnc1.name, "vm100");
+    assert_eq!(log.lock().unwrap().open_ws, 1);
+    let (port1, done1) = (first.port, first.finished_flag());
+    drop(first);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !(done1.load(std::sync::atomic::Ordering::SeqCst) && log.lock().unwrap().open_ws == 0) {
+        assert!(std::time::Instant::now() < deadline, "Reste der alten Brücke: Faden fertig {}, offene Websockets {}", done1.load(std::sync::atomic::Ordering::SeqCst), log.lock().unwrap().open_ws);
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(TcpStream::connect(("127.0.0.1", port1)).is_err(), "alter Brückenport nimmt noch Verbindungen an");
+    let second = c.console(&g[0]).unwrap();
+    let vnc2 = VncClient::connect(&vnc_params(second.port, second.password.clone()), Arc::new(|_| false)).unwrap();
+    assert_eq!(vnc2.name, "vm100");
+    assert_eq!(log.lock().unwrap().open_ws, 1, "genau eine Konsole offen");
 }

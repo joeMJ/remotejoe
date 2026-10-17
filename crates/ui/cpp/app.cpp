@@ -59,7 +59,11 @@ void screenshots(MainWindow& w, const QString& dir)
 		d->close();
 	w.patchdayForFirstTargets(25);
 	pump(1500);
+	QString patchday;
 	save(w.findChild<QWidget*>(QStringLiteral("patchdayDialog")), dir, QStringLiteral("patchday.png"));
+	// Lauf über alle 25 Ziele beobachten, dann Messwerte festhalten.
+	pump(6000);
+	patchday = w.patchdayMeasurement();
 	if (auto* d = w.findChild<QWidget*>(QStringLiteral("patchdayDialog")))
 		d->close();
 	// Bearbeiten: Eigenschaften-Tab, Zugangsdaten-Auswahl, Hinzufügen-Menü, Entsperren.
@@ -90,7 +94,7 @@ void screenshots(MainWindow& w, const QString& dir)
 	save(w.detachedWindow(), dir, QStringLiteral("abgerissenes-fenster.png"));
 	QFile f(QDir(dir).filePath(QStringLiteral("messwerte.txt")));
 	if (f.open(QIODevice::WriteOnly))
-		f.write(QStringLiteral("erstes_zeichnen_ms=%1\nbaum_eintraege=%2\n").arg(w.firstPaintMs).arg(w.treeRowCount()).toUtf8());
+		f.write((QStringLiteral("erstes_zeichnen_ms=%1\nbaum_eintraege=%2\n").arg(w.firstPaintMs).arg(w.treeRowCount()) + patchday).toUtf8());
 	std::fprintf(stderr, "Erstes Zeichnen nach %lld ms, Baumeinträge: %d\n", (long long)w.firstPaintMs, w.treeRowCount());
 }
 

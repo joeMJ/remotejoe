@@ -376,4 +376,33 @@ mod tests {
         assert_eq!((g.node.as_str(), g.kind, g.vmid), ("pve1", rj_proxmox::GuestKind::Lxc, 200));
         assert!(guest_of("pve1/storage/1").is_none());
     }
+
+    /// Hyper-V-Konsole: RDP auf die Adresse des Gasts mit den Zugangsdaten
+    /// des Hyper-V-Hosts (kein VMConnect).
+    #[test]
+    fn hyperv_console_is_rdp_to_guest() {
+        use rj_kdbx::{CredentialData, KdfChoice, MasterKey, Vault};
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = Vault::create(&dir.path().join("t.kdbx"), MasterKey::password("pw"), KdfChoice::Weak, rj_core::config::IndexStorage::KdbxCustomData);
+        let e = v
+            .add_credential(CredentialData { title: "Host".into(), username: "EXAMPLE\\hvadmin".into(), password: Secret::from_str_exact("geheim"), ..Default::default() })
+            .unwrap();
+        let mut idx = rj_core::Index::default();
+        let mut t = rj_core::Target::new("hv01", Protocol::Hyperv, "hv01.example.test");
+        t.settings.credentials.insert("default".into(), rj_core::CredentialRef { entry: e, last_title: None });
+        let tid = t.id;
+        idx.root.children.push(rj_core::Node::Target(t));
+        let mut app = App::new(false);
+        app.index = idx;
+        app.vault = Some(v);
+        app.sessions = crate::sessions::Manager::new(std::path::PathBuf::from("/nicht/vorhanden"), crate::sessions::Reconnect { auto: false, max: Duration::from_secs(60) });
+        let r: serde_json::Value = serde_json::from_str(&app.guest_console(tid, "6f1c0000-0000-4000-8000-000000000001", "vm-01", "192.0.2.15", 1024, 768)).unwrap();
+        let s = r["session"].as_u64().unwrap_or_else(|| panic!("{r}"));
+        let spec = app.sessions.spec(s).unwrap();
+        assert_eq!(spec.protocol, Protocol::Rdp);
+        assert_eq!((spec.request.host.as_str(), spec.request.port), ("192.0.2.15", 3389));
+        assert_eq!((spec.credentials.username.as_str(), spec.credentials.domain.as_deref()), ("hvadmin", Some("EXAMPLE")));
+        // Ohne gemeldete Adresse keine Konsole.
+        assert!(app.guest_console(tid, "x", "vm-02", "", 1024, 768).contains("error"));
+    }
 }

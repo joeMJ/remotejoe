@@ -296,6 +296,11 @@ impl App {
         if let Some(Value::String(pw)) = c.get_mut("credential").and_then(|x| x.get_mut("password")) {
             zeroize::Zeroize::zeroize(pw);
         }
+        for k in ["community", "auth_password", "priv_password"] {
+            if let Some(Value::String(pw)) = c.get_mut(k) {
+                zeroize::Zeroize::zeroize(pw);
+            }
+        }
         r
     }
 
@@ -305,7 +310,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("editor") | Some("check_text") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -394,6 +399,24 @@ impl App {
             },
             "undo_label" => Ok(json!({ "label": self.history.last_label() })),
             "jobs" => Ok(self.jobs.json()),
+            "patchday" => Ok(self.patchday_view(id_of(&c, "selected"), c.get("since").and_then(Value::as_u64).unwrap_or(0))),
+            "snmp_list" => Ok(json!(self
+                .index
+                .snmp_devices
+                .iter()
+                .map(|d| json!({
+                    "id": d.id, "name": d.name, "host": d.host, "port": d.port, "version": d.version,
+                    "auth_proto": d.auth_proto.unwrap_or(rj_core::SnmpAuth::Sha1),
+                    "priv_proto": d.priv_proto.unwrap_or(rj_core::SnmpPriv::Aes128),
+                    "username": self.vault.as_ref().and_then(|v| v.credential(d.credential.entry)).map(|c| c.data.username),
+                }))
+                .collect::<Vec<_>>())),
+            "snmp_save" => self.op_snmp_save(&c),
+            "snmp_delete" => self.simple("SNMP-Gerät löschen", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                idx.snmp_devices.retain(|d| d.id != id);
+                Ok(json!({ "ok": true }))
+            }),
             "cancel_job" => {
                 let job = c.get("job").and_then(Value::as_u64).unwrap_or(0);
                 if self.jobs.cancel(job) {
@@ -723,6 +746,66 @@ impl App {
             return Err("Objekt nicht gefunden".into());
         }
         Ok(())
+    }
+
+    /// SNMP-Gerät anlegen oder ändern. Geheimnisse (Community, Kennwort zur
+    /// Authentisierung, Kennwort zur Verschlüsselung) gehen in einen eigenen
+    /// KDBX-Eintrag; leere Kennwortfelder lassen den bisherigen Wert.
+    fn op_snmp_save(&mut self, c: &Value) -> Result<Value, String> {
+        let name = str_of(c, "name").filter(|n| !n.is_empty()).ok_or("Name darf nicht leer sein")?.to_string();
+        let host = str_of(c, "host").unwrap_or_default().to_string();
+        if let Some(e) = validate_connection(Protocol::Ssh, &host, c.get("port"), None).into_values().next() {
+            return Err(e);
+        }
+        let version: rj_core::SnmpVersion = serde_json::from_value(c.get("version").cloned().unwrap_or(json!("v2c"))).map_err(|_| "Version ungültig")?;
+        let auth_proto: Option<rj_core::SnmpAuth> = c.get("auth_proto").and_then(|v| serde_json::from_value(v.clone()).ok());
+        let priv_proto: Option<rj_core::SnmpPriv> = c.get("priv_proto").and_then(|v| serde_json::from_value(v.clone()).ok());
+        let port = c.get("port").and_then(|p| p.as_u64().or_else(|| p.as_str().and_then(|s| s.parse().ok()))).map(|p| p as u16);
+        let existing = id_of(c, "id").and_then(|id| self.index.snmp_devices.iter().find(|d| d.id == id).cloned());
+        let vault = self.vault.as_mut().ok_or("KDBX ist gesperrt")?;
+        // Kennwörter byte-genau, nie getrimmt.
+        let secret = |k: &str| str_of(c, k).filter(|s| !s.is_empty()).map(Secret::from_str_exact);
+        let (main_pw, priv_pw) = match version {
+            rj_core::SnmpVersion::V2c => (secret("community"), None),
+            rj_core::SnmpVersion::V3 => (secret("auth_password"), secret("priv_password")),
+        };
+        let username = if version == rj_core::SnmpVersion::V3 { str_of(c, "username").unwrap_or_default().to_string() } else { String::new() };
+        let title = format!("SNMP {name}");
+        let entry = match existing.as_ref().map(|d| d.credential.entry).filter(|e| vault.is_own_entry(*e)) {
+            Some(e) => {
+                let old = vault.credential(e).ok_or("Eintrag nicht in der KDBX")?;
+                let data = CredentialData { title: title.clone(), username, password: main_pw.unwrap_or(old.data.password.clone()), ..old.data };
+                vault.update_credential(e, data).map_err(|e| e.to_string())?;
+                e
+            }
+            None => vault
+                .add_credential(CredentialData { title: title.clone(), username, password: main_pw.unwrap_or_default(), ..Default::default() })
+                .map_err(|e| e.to_string())?,
+        };
+        if let Some(p) = priv_pw {
+            vault.set_protected_field(entry, rj_core::SNMP_PRIV_FIELD, p).map_err(|e| e.to_string())?;
+        }
+        let before = self.index.clone();
+        let dev = rj_core::SnmpDevice {
+            id: existing.as_ref().map(|d| d.id).unwrap_or_else(Uuid::new_v4),
+            name,
+            host,
+            port,
+            version,
+            credential: CredentialRef { entry, last_title: Some(title) },
+            interfaces: existing.as_ref().map(|d| d.interfaces.clone()).unwrap_or_default(),
+            auth_proto,
+            priv_proto,
+        };
+        let id = dev.id;
+        match self.index.snmp_devices.iter_mut().find(|d| d.id == id) {
+            Some(d) => *d = dev,
+            None => self.index.snmp_devices.push(dev),
+        }
+        self.commit("SNMP-Gerät speichern", before);
+        let saved: Value = serde_json::from_str(&self.save_with(None)).unwrap_or_default();
+        self.start_snmp();
+        Ok(json!({ "id": id, "save": saved }))
     }
 
     /// Speichern mit Konfliktbehandlung. Antwort: `{"saved":bool}`,

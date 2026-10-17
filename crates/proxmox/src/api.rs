@@ -251,6 +251,10 @@ pub struct ConsoleBridge {
     /// Kennwort für die VNC-Anmeldung.
     pub password: Secret,
     stop: Arc<AtomicBool>,
+    /// Sockets der Brücke (Websocket zum Host, Verbindung des VNC-Clients),
+    /// damit das Verwerfen der Brücke beide sofort schließt.
+    sockets: Arc<Mutex<Vec<TcpStream>>>,
+    done: Arc<AtomicBool>,
 }
 
 impl ConsoleBridge {
@@ -258,29 +262,51 @@ impl ConsoleBridge {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let port = listener.local_addr()?.port();
         let stop = Arc::new(AtomicBool::new(false));
-        let stop2 = stop.clone();
+        let done = Arc::new(AtomicBool::new(false));
+        let sockets = Arc::new(Mutex::new(ws.socket.as_ref().and_then(|s| s.try_clone().ok()).into_iter().collect::<Vec<_>>()));
+        let (stop2, done2, sockets2) = (stop.clone(), done.clone(), sockets.clone());
         thread::spawn(move || {
-            let Ok((sock, _)) = listener.accept() else { return };
-            if stop2.load(Ordering::SeqCst) {
-                return;
+            let accepted = listener.accept();
+            drop(listener);
+            if let Ok((sock, _)) = accepted {
+                if !stop2.load(Ordering::SeqCst) {
+                    let _ = sock.set_nodelay(true);
+                    if let Ok(c) = sock.try_clone() {
+                        sockets2.lock().unwrap_or_else(|e| e.into_inner()).push(c);
+                    }
+                    bridge(sock, ws, stop2);
+                }
             }
-            let _ = sock.set_nodelay(true);
-            bridge(sock, ws, stop2);
+            done2.store(true, Ordering::SeqCst);
         });
-        Ok(ConsoleBridge { port, password, stop })
+        Ok(ConsoleBridge { port, password, stop, sockets, done })
+    }
+
+    /// Ist die Brücke vollständig beendet (Faden fertig, Sockets geschlossen)?
+    pub fn finished(&self) -> bool {
+        self.done.load(Ordering::SeqCst)
+    }
+
+    /// Beobachter für das Ende der Brücke (bleibt nach dem Verwerfen gültig).
+    pub fn finished_flag(&self) -> Arc<AtomicBool> {
+        self.done.clone()
     }
 }
 
 impl Drop for ConsoleBridge {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        // Laufende Verbindungen schließen, damit keine Reste bleiben.
+        for s in self.sockets.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
         // Wartenden accept() lösen.
         let _ = TcpStream::connect(("127.0.0.1", self.port));
     }
 }
 
 fn bridge(sock: TcpStream, ws: net::WebSocket, stop: Arc<AtomicBool>) {
-    let net::WebSocket { mut reader, writer } = ws;
+    let net::WebSocket { mut reader, writer, .. } = ws;
     let Ok(mut sock_r) = sock.try_clone() else { return };
     let mut sock_w = sock;
     let w2 = writer.clone();

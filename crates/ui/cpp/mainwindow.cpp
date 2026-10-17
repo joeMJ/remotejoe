@@ -251,11 +251,12 @@ public:
 	  , m_ids(ids)
 	{
 		setWindowTitle(QStringLiteral("Patchday"));
-		resize(900, 600);
+		resize(980, 600);
 		auto* lay = new QVBoxLayout(this);
-		m_table = new QTableWidget(0, 4, this);
-		m_table->setHorizontalHeaderLabels({ QStringLiteral("Ziel"), QStringLiteral("Zustand"), QStringLiteral("Anzahl"), QStringLiteral("Fortschritt") });
+		m_table = new QTableWidget(0, 5, this);
+		m_table->setHorizontalHeaderLabels({ QStringLiteral("Ziel"), QStringLiteral("Zustand"), QStringLiteral("Anzahl"), QStringLiteral("Fortschritt"), QString() });
 		m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+		m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
 		m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
 		m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
 		m_table->verticalHeader()->setDefaultSectionSize(30);
@@ -264,7 +265,7 @@ public:
 		m_log->setMaximumHeight(160);
 		auto* buttons = new QDialogButtonBox(this);
 		auto* run = buttons->addButton(QStringLiteral("Ausführen …"), QDialogButtonBox::ActionRole);
-		auto* cancel = buttons->addButton(QStringLiteral("Ziel abbrechen"), QDialogButtonBox::ActionRole);
+		auto* cancel = buttons->addButton(QStringLiteral("Ziel abbrechen (Entf)"), QDialogButtonBox::ActionRole);
 		buttons->addButton(QDialogButtonBox::Close)->setText(QStringLiteral("Schließen"));
 		lay->addWidget(new QLabel(QStringLiteral("Trockenlauf: Aktualisierungen werden nur aufgelistet. Ausführen erst auf Befehl."), this));
 		lay->addWidget(m_table, 1);
@@ -275,24 +276,55 @@ public:
 			if (QMessageBox::question(this, windowTitle(), QStringLiteral("Aktualisierungen auf %1 Zielen jetzt installieren?").arg(m_ids.size())) == QMessageBox::Yes)
 				m_backend->startPatchday(QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(m_ids)).toJson(QJsonDocument::Compact)), true);
 		});
-		connect(cancel, &QPushButton::clicked, this, [this] {
+		auto cancelCurrent = [this] {
 			const int r = m_table->currentRow();
 			if (r >= 0)
-				m_backend->cancelPatchTarget(m_table->item(r, 0)->data(Qt::UserRole).toString());
+				cancelRow(r);
+		};
+		connect(cancel, &QPushButton::clicked, this, cancelCurrent);
+		auto* del = new QShortcut(QKeySequence(Qt::Key_Delete), m_table);
+		del->setContext(Qt::WidgetShortcut);
+		connect(del, &QShortcut::activated, this, cancelCurrent);
+		connect(m_table, &QTableWidget::currentCellChanged, this, [this] {
+			m_version = 0;
+			refresh();
 		});
-		connect(m_table, &QTableWidget::currentCellChanged, this, [this] { refresh(); });
 		connect(&m_timer, &QTimer::timeout, this, [this] { refresh(); });
-		m_timer.start(400);
+		m_timer.start(250);
+		refresh();
+	}
+
+	/// Längste Dauer eines Neuzeichnens (für die Messung).
+	qint64 maxRefreshMs = 0;
+	int refreshes = 0;
+
+	void cancelRow(int r)
+	{
+		if (auto* it = m_table->item(r, 0))
+			m_backend->cancelPatchTarget(it->data(Qt::UserRole).toString());
+		m_version = 0;
 		refresh();
 	}
 
 	void refresh()
 	{
-		const QJsonArray rows = QJsonDocument::fromJson(m_backend->patchdayJson().toUtf8()).array();
-		m_table->setRowCount(rows.size());
+		QElapsedTimer t;
+		t.start();
+		const QString selected = m_table->currentRow() >= 0 && m_table->item(m_table->currentRow(), 0) ? m_table->item(m_table->currentRow(), 0)->data(Qt::UserRole).toString() : QString();
+		QJsonObject cmd{ { QStringLiteral("op"), QStringLiteral("patchday") }, { QStringLiteral("since"), double(m_version) } };
+		if (!selected.isEmpty())
+			cmd.insert(QStringLiteral("selected"), selected);
+		const QJsonObject v = QJsonDocument::fromJson(m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact))).toUtf8()).object();
+		if (v.value(QStringLiteral("unchanged")).toBool())
+			return;
+		m_version = qint64(v.value(QStringLiteral("version")).toDouble());
+		const QJsonArray rows = v.value(QStringLiteral("rows")).toArray();
+		if (m_table->rowCount() != rows.size())
+			m_table->setRowCount(rows.size());
 		for (int i = 0; i < rows.size(); ++i)
 		{
 			const QJsonObject r = rows[i].toObject();
+			// Nur geänderte Zellen anfassen: ruhiges Bild auch bei vielen Zielen.
 			auto set = [&](int col, const QString& text) {
 				auto* it = m_table->item(i, col);
 				if (!it)
@@ -300,13 +332,16 @@ public:
 					it = new QTableWidgetItem;
 					m_table->setItem(i, col, it);
 				}
-				it->setText(text);
+				if (it->text() != text)
+					it->setText(text);
 				return it;
 			};
 			set(0, r.value(QStringLiteral("name")).toString())->setData(Qt::UserRole, r.value(QStringLiteral("target")).toString());
 			QString state = r.value(QStringLiteral("label")).toString();
-			if (r.contains(QStringLiteral("detail")))
+			if (r.value(QStringLiteral("detail")).isString())
 				state += QStringLiteral(": ") + r.value(QStringLiteral("detail")).toString();
+			else if (r.value(QStringLiteral("last")).isString())
+				state += QStringLiteral(" – ") + r.value(QStringLiteral("last")).toString();
 			set(1, state);
 			set(2, r.value(QStringLiteral("count")).isNull() ? QString() : QString::number(r.value(QStringLiteral("count")).toInt()));
 			auto* bar = qobject_cast<QProgressBar*>(m_table->cellWidget(i, 3));
@@ -315,8 +350,18 @@ public:
 				bar = new QProgressBar(m_table);
 				m_table->setCellWidget(i, 3, bar);
 			}
-			bar->setValue(r.value(QStringLiteral("percent")).toInt());
-			if (i == m_table->currentRow())
+			if (bar->value() != r.value(QStringLiteral("percent")).toInt())
+				bar->setValue(r.value(QStringLiteral("percent")).toInt());
+			auto* stop = qobject_cast<QPushButton*>(m_table->cellWidget(i, 4));
+			if (!stop)
+			{
+				stop = new QPushButton(QStringLiteral("Abbrechen"), m_table);
+				stop->setAccessibleName(QStringLiteral("Abbrechen: ") + r.value(QStringLiteral("name")).toString());
+				connect(stop, &QPushButton::clicked, this, [this, i] { cancelRow(i); });
+				m_table->setCellWidget(i, 4, stop);
+			}
+			stop->setEnabled(!r.value(QStringLiteral("finished")).toBool());
+			if (r.contains(QStringLiteral("log")))
 			{
 				QStringList log;
 				for (const QJsonValue& l : r.value(QStringLiteral("log")).toArray())
@@ -325,6 +370,8 @@ public:
 					m_log->setPlainText(log.join(QLatin1Char('\n')));
 			}
 		}
+		++refreshes;
+		maxRefreshMs = qMax(maxRefreshMs, t.elapsed());
 	}
 
 private:
@@ -333,6 +380,7 @@ private:
 	QTableWidget* m_table;
 	QPlainTextEdit* m_log;
 	QTimer m_timer;
+	qint64 m_version = 0;
 };
 
 /// Ziel-IDs der Auswahl (Ordner schließen ihre Ziele ein).
@@ -365,6 +413,13 @@ void MainWindow::openPatchday(const QStringList& ids)
 	d->setAttribute(Qt::WA_DeleteOnClose);
 	d->setObjectName(QStringLiteral("patchdayDialog"));
 	d->show();
+}
+
+QString MainWindow::patchdayMeasurement() const
+{
+	auto* d = findChild<QDialog*>(QStringLiteral("patchdayDialog"));
+	auto* p = d ? static_cast<PatchdayDialog*>(d) : nullptr;
+	return p ? QStringLiteral("patchday_neuzeichnen_max_ms=%1\npatchday_neuzeichnen_anzahl=%2\n").arg(p->maxRefreshMs).arg(p->refreshes) : QString();
 }
 
 void MainWindow::patchdayForFirstTargets(int n)
@@ -553,6 +608,13 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(m_search, &QLineEdit::textChanged, this, [this] { m_filterTimer.start(); });
 	connect(&m_filterTimer, &QTimer::timeout, this, &MainWindow::reloadTree);
 	connect(m_tabs, &QTabWidget::tabCloseRequested, this, [this](int i) {
+		if (auto* st = qobject_cast<SnmpTab*>(m_tabs->widget(i)))
+		{
+			st->wipeSecrets();
+			m_tabs->removeTab(i);
+			st->deleteLater();
+			return;
+		}
 		if (auto* ed = qobject_cast<PropertiesTab*>(m_tabs->widget(i)))
 		{
 			m_tabs->setCurrentWidget(ed);
@@ -665,6 +727,17 @@ void MainWindow::buildMenus()
 	editMenu->addAction(T(m_backend, "menu.edit.view.delete"), this, [this] { viewCommand(QStringLiteral("delete")); });
 	QMenu* extras = menuBar()->addMenu(T(m_backend, "menu.extras"));
 	extras->addAction(T(m_backend, "menu.extras.idle"), this, [this] { idleSettings(); });
+	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] {
+		for (int i = 0; i < m_tabs->count(); ++i)
+			if (qobject_cast<SnmpTab*>(m_tabs->widget(i)))
+			{
+				m_tabs->setCurrentIndex(i);
+				return;
+			}
+		auto* t = new SnmpTab(m_backend, m_tabs);
+		connect(t, &SnmpTab::status, this, [this](const QString& m) { statusBar()->showMessage(m, 5000); });
+		m_tabs->setCurrentIndex(m_tabs->addTab(t, T(m_backend, "snmp.title")));
+	});
 	QMenu* view = menuBar()->addMenu(T(m_backend, "menu.view"));
 	const char* modes[] = { "single", "one_by_two", "two_by_two", "free" };
 	int n = 1;
@@ -1462,6 +1535,8 @@ void MainWindow::lockNow(bool alreadyLocked)
 			w->hide();
 	for (auto* ed : findChildren<PropertiesTab*>())
 		ed->wipeSecrets();
+	for (auto* st : findChildren<SnmpTab*>())
+		st->wipeSecrets();
 	reloadTree();
 	statusBar()->showMessage(T(m_backend, "status.locked"));
 	showUnlock(true);

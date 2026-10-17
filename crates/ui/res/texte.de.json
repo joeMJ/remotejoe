@@ -227,5 +227,18 @@
   "jobs.running": "%1 (seit %2 s)",
   "jobs.more": "%1 Hintergrundaufgaben",
   "status.locked.idle": "Nach Leerlauf gesperrt",
-  "status.resumed": "Aufgewacht: abgebrochene Verbindungen werden neu aufgebaut"
+  "status.resumed": "Aufgewacht: abgebrochene Verbindungen werden neu aufgebaut",
+  "snmp.title": "SNMP-Geräte",
+  "menu.extras.snmp": "&SNMP-Geräte …",
+  "snmp.new": "&Neues Gerät",
+  "snmp.delete": "Gerät &löschen",
+  "snmp.name": "&Name",
+  "snmp.version": "Version",
+  "snmp.community": "&Community (v2c)",
+  "snmp.user": "&Benutzer (v3)",
+  "snmp.auth": "Authentisierung",
+  "snmp.auth_password": "Kennwort &Authentisierung",
+  "snmp.priv": "Verschlüsselung",
+  "snmp.priv.none": "keine",
+  "snmp.priv_password": "Kennwort &Verschlüsselung"
 }

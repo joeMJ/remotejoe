@@ -2,6 +2,7 @@
 // Bearbeiten im Hauptfenster: Leiste für Rückfragen, Eigenschaften-Tab und
 // Abdeckung zum Entsperren. Keine eigenen Fenster der obersten Ebene.
 
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QSet>
 #include <QtWidgets/QFrame>
@@ -153,6 +154,40 @@ private:
 	QTableWidget* m_fields = nullptr;
 	// Übergeordneter Ordner
 	QComboBox* m_parent = nullptr;
+};
+
+/// SNMP-Geräte verwalten (Tab): Community bzw. v3-Benutzer mit getrennten
+/// Kennwörtern für Authentisierung und Verschlüsselung.
+class SnmpTab : public QWidget
+{
+	Q_OBJECT
+public:
+	explicit SnmpTab(RjBackend* backend, QWidget* parent = nullptr);
+	void reload();
+	void wipeSecrets();
+
+signals:
+	void status(const QString& text);
+
+private:
+	void showDevice(int row);
+	void save();
+	QString edit(const QJsonObject& cmd);
+	RjBackend* m_backend;
+	QJsonArray m_devices;
+	QListWidget* m_list;
+	QLineEdit* m_name;
+	QLineEdit* m_host;
+	QLineEdit* m_port;
+	QComboBox* m_version;
+	QLineEdit* m_community;
+	QLineEdit* m_user;
+	QComboBox* m_auth;
+	QLineEdit* m_authPw;
+	QComboBox* m_priv;
+	QLineEdit* m_privPw;
+	QLabel* m_message;
+	QString m_current;
 };
 
 /// Abdeckung des Hauptfensters zum Entsperren der KDBX.

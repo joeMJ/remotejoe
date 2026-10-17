@@ -2,7 +2,7 @@
 //! Fortschritt, Protokoll und Abbruch je Ziel.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use serde::Serialize;
@@ -62,11 +62,13 @@ pub struct JobHandle {
     rows: Arc<Mutex<Vec<JobRow>>>,
     index: usize,
     cancel: Arc<AtomicBool>,
+    version: Arc<AtomicU64>,
 }
 
 impl JobHandle {
     fn with<R>(&self, f: impl FnOnce(&mut JobRow) -> R) -> R {
         let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        self.version.fetch_add(1, Ordering::SeqCst);
         f(&mut rows[self.index])
     }
 
@@ -114,6 +116,8 @@ pub struct Patchday {
     peak: Arc<AtomicUsize>,
     threads: Vec<std::thread::JoinHandle<()>>,
     done: Arc<(Mutex<usize>, Condvar)>,
+    /// Zähler, der bei jeder Änderung einer Zeile steigt (für sparsames Neuzeichnen).
+    version: Arc<AtomicU64>,
 }
 
 impl Patchday {
@@ -131,13 +135,15 @@ impl Patchday {
         let running = Arc::new(AtomicUsize::new(0));
         let peak = Arc::new(AtomicUsize::new(0));
         let done = Arc::new((Mutex::new(0usize), Condvar::new()));
+        let version = Arc::new(AtomicU64::new(1));
         let mut threads = Vec::new();
         for _ in 0..parallel.clamp(1, 64).min(n.max(1)) {
-            let (queue, rows, cancels, exec, running, peak, done) = (queue.clone(), rows.clone(), cancels.clone(), exec.clone(), running.clone(), peak.clone(), done.clone());
+            let (queue, rows, cancels, exec, running, peak, done, version) =
+                (queue.clone(), rows.clone(), cancels.clone(), exec.clone(), running.clone(), peak.clone(), done.clone(), version.clone());
             let ids: Vec<Uuid> = targets.iter().map(|t| t.0).collect();
             threads.push(std::thread::spawn(move || loop {
                 let Some(i) = queue.lock().unwrap_or_else(|e| e.into_inner()).pending.pop_front() else { break };
-                let job = JobHandle { rows: rows.clone(), index: i, cancel: cancels[i].clone() };
+                let job = JobHandle { rows: rows.clone(), index: i, cancel: cancels[i].clone(), version: version.clone() };
                 if job.cancelled() {
                     job.set_state(JobState::Cancelled);
                 } else {
@@ -165,7 +171,12 @@ impl Patchday {
                 cv.notify_all();
             }));
         }
-        Patchday { rows, cancels, running, peak, threads, done }
+        Patchday { rows, cancels, running, peak, threads, done, version }
+    }
+
+    /// Änderungszähler; gleich bleibender Wert heißt: nichts neu zu zeichnen.
+    pub fn version(&self) -> u64 {
+        self.version.load(Ordering::SeqCst)
     }
 
     pub fn rows(&self) -> Vec<JobRow> {
@@ -178,6 +189,7 @@ impl Patchday {
         let rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(i) = rows.iter().position(|r| r.target == target) {
             self.cancels[i].store(true, Ordering::Relaxed);
+            self.version.fetch_add(1, Ordering::SeqCst);
         }
     }
 

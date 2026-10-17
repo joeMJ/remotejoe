@@ -38,6 +38,8 @@ public:
 	void detachTabAt(int index);
 	void openPatchday(const QStringList& ids);
 	void patchdayForFirstTargets(int n);
+	/// Messwerte der Patchday-Ansicht (längstes Neuzeichnen, Anzahl).
+	QString patchdayMeasurement() const;
 	QTreeView* tree() const { return m_tree; }
 	int treeRowCount() const;
 	/// Eigenschaften-Tab öffnen (oder vorhandenen zeigen).

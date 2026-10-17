@@ -196,6 +196,10 @@ impl Manager {
         self.sessions.get(&s).map(|x| x.spec.protocol)
     }
 
+    pub(crate) fn spec(&self, s: SessionId) -> Option<&ConnectSpec> {
+        self.sessions.get(&s).map(|x| &x.spec)
+    }
+
     /// Alle offenen Sitzungen.
     pub fn ids(&self) -> Vec<SessionId> {
         let mut v: Vec<SessionId> = self.sessions.keys().copied().collect();
