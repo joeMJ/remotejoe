@@ -27,6 +27,10 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "isDemo"]
         fn is_demo(self: &RjBackend) -> bool;
+        /// Ist eine Schlüsseldatenbank entsperrt (oder läuft die Vorführung)?
+        #[qinvokable]
+        #[cxx_name = "isVaultOpen"]
+        fn is_vault_open(self: &RjBackend) -> bool;
         #[qinvokable]
         #[cxx_name = "treeJson"]
         fn tree_json(self: &RjBackend, filter: &QString) -> QString;
@@ -59,6 +63,9 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "closeSession"]
         fn close_session(self: Pin<&mut RjBackend>, session: u64);
+        #[qinvokable]
+        #[cxx_name = "detectFields"]
+        fn detect_fields(self: Pin<&mut RjBackend>, id: &QString, url: &QString, ignore_certificate: bool) -> QString;
         #[qinvokable]
         #[cxx_name = "importPreview"]
         fn import_preview(self: Pin<&mut RjBackend>, path: &QString) -> QString;
@@ -216,6 +223,10 @@ impl qobject::RjBackend {
         self.app().is_some_and(|a| a.demo)
     }
 
+    fn is_vault_open(&self) -> bool {
+        self.app().is_some_and(|a| a.demo || (a.vault.is_some() && !a.locked))
+    }
+
     fn tree_json(&self, filter: &QString) -> QString {
         q(self.app().map(|a| a.tree_json(&filter.to_string())).unwrap_or_else(|| "[]".into()))
     }
@@ -322,6 +333,14 @@ impl qobject::RjBackend {
         if let Some(a) = self.app_mut() {
             a.close_session(session);
         }
+    }
+
+    fn detect_fields(self: Pin<&mut Self>, id: &QString, url: &QString, ignore_certificate: bool) -> QString {
+        let (id, url) = (id.to_string(), url.to_string());
+        q(match (uuid::Uuid::parse_str(&id), self.app_mut()) {
+            (Ok(t), Some(a)) => a.detect_fields(t, &url, ignore_certificate),
+            _ => serde_json::json!({ "error": "Ziel nicht gefunden" }).to_string(),
+        })
     }
 
     fn import_preview(self: Pin<&mut Self>, path: &QString) -> QString {

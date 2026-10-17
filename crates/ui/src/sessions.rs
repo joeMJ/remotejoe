@@ -73,6 +73,10 @@ pub enum UiEvent {
     WebStatus { s: SessionId, title: String, loading: bool, progress: u8, error: Option<String>, back: bool, forward: bool },
     /// Menü des Web-Workers (Kontextmenü oder Auswahlliste) an Bildpunkt `x`, `y`.
     WebMenu { s: SessionId, id: u32, kind: String, x: i32, y: i32, items: serde_json::Value },
+    /// Felder und Knöpfe einer Web-Seite (Antwort auf „Felder erkennen“): `users`, `passwords`, `submits`.
+    WebFields { s: SessionId, fields: serde_json::Value },
+    /// Ergebnis von „Felder erkennen“ für ein Ziel (`error`: Grund, wenn nichts erkannt wurde).
+    FieldsDetected { target: String, error: Option<String>, fields: serde_json::Value },
     Bell { s: SessionId },
     Unlocked { targets: usize },
     /// „Alle im Ordner verbinden“ ist abgeschlossen.
@@ -508,7 +512,7 @@ impl Manager {
             return Err("Keine Web-Sitzung".into());
         }
         let op = cmd.get("op").and_then(|v| v.as_str()).unwrap_or("");
-        if !matches!(op, "nav" | "focus" | "edit" | "menu") {
+        if !matches!(op, "nav" | "focus" | "edit" | "menu" | "detect") {
             return Err(format!("Unbekannter Web-Befehl „{op}“"));
         }
         self.send(s, &ToWorker::Custom(cmd.to_string().into_bytes()));
@@ -906,6 +910,23 @@ fn web_event(s: SessionId, bytes: &[u8]) -> Option<UiEvent> {
             y: v.get("y").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
             items: v.get("items").cloned().unwrap_or_default(),
         }),
+        "fields" => {
+            // Beschriftungen sichtbar machen (versteckte Zeichen markieren); Selektoren bleiben unverändert.
+            let list = |k: &str| -> serde_json::Value {
+                let items = v.get(k).and_then(|x| x.as_array()).cloned().unwrap_or_default();
+                serde_json::Value::Array(
+                    items
+                        .into_iter()
+                        .map(|i| {
+                            let sel = i.get("selector").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+                            let label = i.get("label").and_then(|x| x.as_str()).map(|t| rj_core::charset::mark_visible(t, false).into_owned()).unwrap_or_default();
+                            serde_json::json!({ "selector": sel, "label": label })
+                        })
+                        .collect(),
+                )
+            };
+            Some(UiEvent::WebFields { s, fields: serde_json::json!({ "users": list("users"), "passwords": list("passwords"), "submits": list("submits") }) })
+        }
         _ => None,
     }
 }

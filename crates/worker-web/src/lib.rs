@@ -22,8 +22,6 @@ pub enum WebError {
     CredentialsInUrl,
     #[error("Kennwort ist kein gültiges UTF-8 und kann nicht in ein Formular eingetragen werden")]
     PasswordNotUtf8,
-    #[error("Für die Formular-Anmeldung fehlt der Selektor des Kennwortfelds")]
-    NoPasswordSelector,
 }
 
 /// Formular-Anmeldung: CSS-Selektoren oder ein eigenes Skript.
@@ -142,16 +140,19 @@ el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('
     let body = if let Some(custom) = l.script.as_ref().filter(|s| !s.trim().is_empty()) {
         format!("var rj={{username:u,password:p,fill:function(s,v){{return fill(q(s),v);}}}};var r=(function(rj){{{custom}\n}})(rj);return r===undefined?'{RESULT_OK}':String(r);")
     } else {
-        let psel = js_opt(&l.password_selector);
-        if psel == "null" {
-            return Err(WebError::NoPasswordSelector);
-        }
+        // Leere Selektoren: automatische Erkennung (sichtbares Kennwortfeld, davor liegendes
+        // Textfeld als Benutzerfeld, Knopf im selben Formular).
         format!(
-            "var us={us},ps={psel},ss={ss};var pe=q(ps);if(!pe)return '{RESULT_NO_PASSWORD_FIELD}';\
-var ue=q(us);if(us&&!ue)return '{RESULT_NO_USERNAME_FIELD}';if(ue)fill(ue,u);fill(pe,p);\
-var se=q(ss);if(se){{se.click();}}else if(pe.form){{if(pe.form.requestSubmit)pe.form.requestSubmit();else pe.form.submit();}}\
+            "var us={us},ps={ps},ss={ss};function vis(e){{var r=e.getBoundingClientRect(),c=getComputedStyle(e);return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none'&&!e.disabled;}}\
+var pe=ps?q(ps):([].slice.call(document.querySelectorAll('input[type=password]')).filter(vis)[0]||null);if(!pe)return '{RESULT_NO_PASSWORD_FIELD}';\
+var ue=null;if(us){{ue=q(us);if(!ue)return '{RESULT_NO_USERNAME_FIELD}';}}else{{var all=[].slice.call((pe.form||document).querySelectorAll('input')).filter(vis),i=all.indexOf(pe);\
+for(i=i-1;i>=0;i--){{var t=(all[i].type||'text').toLowerCase();if(['text','email','tel','search','url'].indexOf(t)>=0){{ue=all[i];break;}}}}}}\
+if(ue)fill(ue,u);fill(pe,p);\
+var se=ss?q(ss):(pe.form?pe.form.querySelector('[type=submit],button:not([type=button]):not([type=reset])'):null);\
+if(se){{se.click();}}else if(pe.form){{if(pe.form.requestSubmit)pe.form.requestSubmit();else pe.form.submit();}}\
 return '{RESULT_OK}';",
             us = js_opt(&l.username_selector),
+            ps = js_opt(&l.password_selector),
             ss = js_opt(&l.submit_selector),
         )
     };
@@ -218,8 +219,8 @@ impl LoginFlow {
         let r = result.trim_matches('"');
         match r {
             RESULT_OK => FlowAction::None,
-            RESULT_NO_PASSWORD_FIELD => FlowAction::Notice("Kennwortfeld nicht gefunden (Selektor prüfen).".into()),
-            RESULT_NO_USERNAME_FIELD => FlowAction::Notice("Benutzerfeld nicht gefunden (Selektor prüfen).".into()),
+            RESULT_NO_PASSWORD_FIELD => FlowAction::Notice("Auf dieser Seite wurde kein Kennwortfeld gefunden (bei Bedarf unter Verbindung „Felder erkennen“ oder den Selektor eintragen).".into()),
+            RESULT_NO_USERNAME_FIELD => FlowAction::Notice("Das eingetragene Benutzerfeld wurde nicht gefunden (Selektor unter Verbindung prüfen oder leeren für die Automatik).".into()),
             other if other.starts_with("rj:fertig") => {
                 self.done = true;
                 FlowAction::None
@@ -312,6 +313,8 @@ pub enum WebCommand {
     Focus { on: bool },
     /// Bearbeiten: Kopieren, Ausschneiden, Einfügen, Alles auswählen.
     Edit { action: EditAction },
+    /// Eingabefelder und Knöpfe der Seite erfassen (Antwort: `WebEvent::Fields`).
+    Detect,
     /// Auswahl in einem Menü des Workers (`index` bei Auswahllisten,
     /// `action` beim Kontextmenü; beides leer: abgebrochen).
     Menu {
@@ -362,7 +365,50 @@ pub enum WebEvent {
     /// Menü an der Stelle `x`, `y` (Bildpunkte der Seite) anzeigen;
     /// `kind`: `context` oder `option` (Auswahlliste).
     Menu { id: u32, kind: String, x: i32, y: i32, items: Vec<MenuEntry> },
+    /// Gefundene Felder der Seite (Antwort auf `WebCommand::Detect`).
+    Fields { users: Vec<FieldCandidate>, passwords: Vec<FieldCandidate>, submits: Vec<FieldCandidate> },
 }
+
+/// Gefundenes Feld oder gefundener Knopf mit Selektor und lesbarer Beschriftung.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldCandidate {
+    pub selector: String,
+    pub label: String,
+}
+
+/// Skript (eigene Welt des Workers), das die sichtbaren Eingabefelder und Knöpfe der Seite
+/// als JSON-Text liefert: `{users, passwords, submits}`, je Eintrag `{selector, label}`.
+/// Werte der Felder werden nie gelesen.
+pub const DETECT_SCRIPT: &str = r####"(function(){
+function vis(e){var r=e.getBoundingClientRect(),c=getComputedStyle(e);return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none'&&!e.disabled;}
+function esc(s){return(window.CSS&&CSS.escape)?CSS.escape(s):s.replace(/[^a-zA-Z0-9_-]/g,'\\$&');}
+function uniq(q){try{return document.querySelectorAll(q).length===1;}catch(x){return false;}}
+function sel(el){
+ if(el.id){var a='#'+esc(el.id);if(uniq(a))return a;}
+ var n=el.getAttribute('name');
+ if(n){var b=el.tagName.toLowerCase()+'[name="'+n.replace(/"/g,'\\"')+'"]';if(uniq(b))return b;}
+ var p=[],e=el;
+ while(e&&e.nodeType===1&&e!==document.body){var i=1,s=e;while((s=s.previousElementSibling))if(s.tagName===e.tagName)i++;p.unshift(e.tagName.toLowerCase()+':nth-of-type('+i+')');e=e.parentElement;}
+ return 'body > '+p.join(' > ');
+}
+function lab(el){
+ var t=el.getAttribute('aria-label')||el.getAttribute('placeholder')||'';
+ if(!t&&el.id){var l=document.querySelector('label[for="'+el.id.replace(/"/g,'')+'"]');if(l)t=l.textContent;}
+ if(!t)t=el.getAttribute('name')||el.id||el.type||el.tagName;
+ return String(t).trim().slice(0,40);
+}
+var us=[],ps=[],ss=[];
+[].slice.call(document.querySelectorAll('input')).filter(vis).forEach(function(e){
+ var t=(e.type||'text').toLowerCase();
+ if(t==='password')ps.push({selector:sel(e),label:lab(e)});
+ else if(['text','email','tel','search','url'].indexOf(t)>=0)us.push({selector:sel(e),label:lab(e)});
+});
+[].slice.call(document.querySelectorAll('button,input[type=submit],input[type=button],a[role=button]')).filter(vis).forEach(function(e){
+ var t=String(e.value||e.textContent||e.getAttribute('aria-label')||'').trim().slice(0,40);
+ ss.push({selector:sel(e),label:t||sel(e)});
+});
+return JSON.stringify({users:us,passwords:ps,submits:ss});
+})()"####;
 
 impl WebEvent {
     pub fn to_bytes(&self) -> Vec<u8> {

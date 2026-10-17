@@ -287,6 +287,31 @@ QString PropertiesTab::title() const
 	return m_data.value(QStringLiteral("name_check")).toObject().value(QStringLiteral("marked")).toString() + (isDirty() ? QStringLiteral(" •") : QString());
 }
 
+void PropertiesTab::setDetectedFields(const QJsonObject& e)
+{
+	if (!m_detectButton)
+		return;
+	m_detectButton->setEnabled(true);
+	const QString error = e.value(QStringLiteral("error")).toString();
+	if (!error.isEmpty())
+	{
+		m_detectStatus->setText(rjText(m_backend, "edit.web.detect.error").arg(error));
+		return;
+	}
+	const QJsonObject f = e.value(QStringLiteral("fields")).toObject();
+	const auto load = [&f](const char* key) {
+		QList<QPair<QString, QString>> list;
+		for (const QJsonValue& v : f.value(QLatin1String(key)).toArray())
+			list.append({ v.toObject().value(QStringLiteral("label")).toString(), v.toObject().value(QStringLiteral("selector")).toString() });
+		return list;
+	};
+	m_candidates[QStringLiteral("user_selector")] = load("users");
+	m_candidates[QStringLiteral("password_selector")] = load("passwords");
+	m_candidates[QStringLiteral("submit_selector")] = load("submits");
+	const int u = m_candidates.value(QStringLiteral("user_selector")).size(), p = m_candidates.value(QStringLiteral("password_selector")).size(), s = m_candidates.value(QStringLiteral("submit_selector")).size();
+	m_detectStatus->setText(u + p + s == 0 ? rjText(m_backend, "edit.web.detect.none") : rjText(m_backend, "edit.web.detect.found").arg(u).arg(p).arg(s));
+}
+
 void PropertiesTab::reload()
 {
 	m_data = parse(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), m_id } }));
@@ -562,10 +587,63 @@ QWidget* PropertiesTab::pageConnection()
 			if (proto == QLatin1String("web"))
 				if (auto* ue = qobject_cast<QLineEdit*>(m_opts.value(QStringLiteral("url"))); ue && ue->text().isEmpty())
 					ue->setPlaceholderText(m_data.value(QStringLiteral("default_url")).toString().isEmpty() ? QStringLiteral("https://rechner/") : m_data.value(QStringLiteral("default_url")).toString());
+			check("ignore_certificate", "edit.opt.ignore_certificate");
+			if (proto == QLatin1String("web"))
+			{
+				auto* help = new QLabel(rjText(m_backend, "edit.web.help"), w);
+				help->setWordWrap(true);
+				f->addRow(QString(), help);
+			}
 			text("user_selector", "edit.opt.user_selector");
 			text("password_selector", "edit.opt.password_selector");
 			text("submit_selector", "edit.opt.submit_selector");
-			check("ignore_certificate", "edit.opt.ignore_certificate");
+			for (const char* key : { "user_selector", "password_selector", "submit_selector" })
+			{
+				auto* e = qobject_cast<QLineEdit*>(m_opts.value(QString::fromLatin1(key)));
+				if (!e)
+					continue;
+				e->setPlaceholderText(rjText(m_backend, "edit.web.auto"));
+				// Pfeil im Feld: gefundene Elemente zur Auswahl (nach „Felder erkennen“).
+				QAction* arrow = e->addAction(style()->standardIcon(QStyle::SP_ArrowDown), QLineEdit::TrailingPosition);
+				arrow->setToolTip(rjText(m_backend, "edit.web.detect"));
+				const QString k = QString::fromLatin1(key);
+				connect(arrow, &QAction::triggered, this, [this, e, k] {
+					QMenu menu(e);
+					menu.addAction(rjText(m_backend, "edit.web.dropdown.auto"), [e] { e->clear(); });
+					menu.addSeparator();
+					const auto items = m_candidates.value(k);
+					if (items.isEmpty())
+						menu.addAction(rjText(m_backend, "edit.web.dropdown.empty"))->setEnabled(false);
+					for (const auto& c : items)
+					{
+						QString label = c.first == c.second ? c.second : QStringLiteral("%1   (%2)").arg(c.first, c.second);
+						menu.addAction(label, [e, sel = c.second] { e->setText(sel); });
+					}
+					menu.exec(e->mapToGlobal(QPoint(0, e->height())));
+				});
+			}
+			if (proto == QLatin1String("web"))
+			{
+				m_detectButton = new QPushButton(rjText(m_backend, "edit.web.detect"), w);
+				m_detectButton->setObjectName(QStringLiteral("detectFields"));
+				m_detectStatus = new QLabel(w);
+				m_detectStatus->setWordWrap(true);
+				m_detectStatus->setObjectName(QStringLiteral("detectStatus"));
+				f->addRow(QString(), m_detectButton);
+				f->addRow(QString(), m_detectStatus);
+				connect(m_detectButton, &QPushButton::clicked, this, [this] {
+					auto* urlEdit = qobject_cast<QLineEdit*>(m_opts.value(QStringLiteral("url")));
+					auto* certCheck = qobject_cast<QCheckBox*>(m_opts.value(QStringLiteral("ignore_certificate")));
+					const QJsonObject r = QJsonDocument::fromJson(m_backend->detectFields(m_id, urlEdit ? urlEdit->text().trimmed() : QString(), certCheck && certCheck->isChecked()).toUtf8()).object();
+					if (r.contains(QStringLiteral("error")))
+					{
+						m_detectStatus->setText(rjText(m_backend, "edit.web.detect.error").arg(r.value(QStringLiteral("error")).toString()));
+						return;
+					}
+					m_detectButton->setEnabled(false);
+					m_detectStatus->setText(rjText(m_backend, "edit.web.detect.running"));
+				});
+			}
 		}
 	}
 	// PowerShell-Transport und SNMP (vererbbar).

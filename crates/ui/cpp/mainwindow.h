@@ -53,7 +53,7 @@ public:
 	/// Eigenschaften-Tab öffnen (oder vorhandenen zeigen).
 	PropertiesTab* openProperties(const QString& id, const QString& category = QString());
 	/// Für Bildschirmfotos: Eigenschaften des ersten Ziels, Hinzufügen-Menü, Entsperren.
-	PropertiesTab* openFirstTargetProperties();
+	PropertiesTab* openFirstTargetProperties(const QString& protocol = QStringLiteral("rdp"));
 	QMenu* popupAddMenu();
 	BulkAddTab* openBulkAdd(const QString& parentId);
 	void showUnlock(bool locked);
@@ -148,6 +148,8 @@ private:
 	RjBackend* m_backend;
 	QLineEdit* m_search;
 	QTreeView* m_tree;
+	class QLabel* m_emptyLabel = nullptr;
+	class QPushButton* m_emptyButton = nullptr;
 	QWidget* m_emptyHint = nullptr;
 	bool m_macroShelfOpen = false;
 	QStandardItemModel* m_model;

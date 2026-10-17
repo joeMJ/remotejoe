@@ -467,12 +467,16 @@ fn tiles_render_independently() {
 
 /// Startet den Worker gegen `url` (Anmeldeseite) und wartet auf die Anmeldung.
 fn login_run(display: &str, data: &std::path::Path, url: &str, accept: bool, ignore: bool, rx: &mpsc::Receiver<(String, String)>) -> (Option<String>, Sess) {
+    login_run_with(display, data, url, accept, ignore, serde_json::json!({"username_selector": "#user", "password_selector": "#pw", "submit_selector": "#go"}), rx)
+}
+
+fn login_run_with(display: &str, data: &std::path::Path, url: &str, accept: bool, ignore: bool, login: serde_json::Value, rx: &mpsc::Receiver<(String, String)>) -> (Option<String>, Sess) {
     let opts = serde_json::json!({
         "url": url,
         "allow_http": true,
         "ignore_certificate": ignore,
         "profile": "6f1c0000-0000-4000-8000-0000000000aa",
-        "login": {"username_selector": "#user", "password_selector": "#pw", "submit_selector": "#go"}
+        "login": login
     });
     let mut s = Sess::start(display, data, opts, 800, 600, accept);
     let deadline = Instant::now() + Duration::from_secs(if accept { 60 } else { 8 });
@@ -569,4 +573,31 @@ fn form_login_and_certificate_warning_offscreen() {
     assert_eq!(viewable_windows(&display), 0);
     drop(s);
     drop(x);
+}
+
+#[test]
+fn auto_login_and_field_detection_offscreen() {
+    let Some(x) = xvfb() else { return };
+    let data = tempfile::tempdir().unwrap();
+    let (port, rx) = http_server();
+    let url = format!("http://127.0.0.1:{port}/");
+
+    // Ohne Selektoren erkennt das Anmeldeskript Benutzerfeld, Kennwortfeld und Knopf selbst.
+    let (posted, s) = login_run_with(&x.display, data.path(), &url, true, false, serde_json::json!({"username_selector": null, "password_selector": null, "submit_selector": null}), &rx);
+    expect_login(&posted, &s);
+    drop(s);
+
+    // „Felder erkennen“: der Worker meldet die sichtbaren Felder mit Selektor und Beschriftung.
+    let opts = serde_json::json!({"url": url, "allow_http": true, "profile": "erkennen", "login": {}});
+    let mut s = Sess::start(&x.display, data.path(), opts, 800, 600, true);
+    assert!(s.wait(60, |s| s.custom.iter().any(|c| c["ev"] == "status" && c["loading"] == false)), "Seite nicht geladen: {:?}", s.log);
+    s.command(serde_json::json!({"op": "detect"}));
+    assert!(s.wait(20, |s| s.custom.iter().any(|c| c["ev"] == "fields")), "keine Felder gemeldet: {:?}", s.custom);
+    let f = s.custom.iter().find(|c| c["ev"] == "fields").unwrap().clone();
+    let sel = |k: &str| -> Vec<String> { f[k].as_array().unwrap().iter().map(|e| e["selector"].as_str().unwrap().to_string()).collect() };
+    assert_eq!(sel("users"), ["#user"], "{f}");
+    assert_eq!(sel("passwords"), ["#pw"], "{f}");
+    assert!(sel("submits").contains(&"#go".to_string()), "{f}");
+    // Werte der Felder werden nie gelesen.
+    assert!(!f.to_string().contains(PASSWORD), "{f}");
 }

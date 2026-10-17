@@ -4,6 +4,8 @@
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QMap>
+#include <QtCore/QPair>
 #include <QtCore/QSet>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QWidget>
@@ -124,6 +126,8 @@ class PropertiesTab : public QWidget
 public:
 	PropertiesTab(RjBackend* backend, const QString& id, QWidget* parent = nullptr);
 	QString nodeId() const { return m_id; }
+	/// Ergebnis von „Felder erkennen“ (Ereignis `fields_detected`) in die Auswahllisten übernehmen.
+	void setDetectedFields(const QJsonObject& e);
 	QString title() const;
 	bool isDirty() const { return !m_dirty.isEmpty(); }
 	/// Schließen; bei ungespeicherten Änderungen wird in der Leiste gefragt.
@@ -172,6 +176,10 @@ private:
 
 	RjBackend* m_backend;
 	QString m_id;
+	class QPushButton* m_detectButton = nullptr;
+	class QLabel* m_detectStatus = nullptr;
+	// Gefundene Elemente je Option (`user_selector`, `password_selector`, `submit_selector`): Beschriftung, Selektor.
+	QMap<QString, QList<QPair<QString, QString>>> m_candidates;
 	QJsonObject m_data;
 	QSet<QString> m_dirty;
 	bool m_loading = false;

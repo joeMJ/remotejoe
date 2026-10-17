@@ -407,6 +407,18 @@ impl Worker {
                 NavAction::Reload => v.reload(),
                 NavAction::Stop => v.stop_loading(),
             },
+            WebCommand::Detect => {
+                let me = self.clone();
+                v.evaluate_javascript(rj_web::DETECT_SCRIPT, None, None, None::<&gtk::gio::Cancellable>, move |r| {
+                    let text = match r {
+                        Ok(v) => v.to_str().to_string(),
+                        Err(_) => String::new(),
+                    };
+                    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                    let list = |k: &str| -> Vec<rj_web::FieldCandidate> { parsed.get(k).and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or_default() };
+                    me.send(FromWorker::Custom(WebEvent::Fields { users: list("users"), passwords: list("passwords"), submits: list("submits") }.to_bytes()));
+                });
+            }
             WebCommand::Focus { on } => self.focus(on),
             WebCommand::Edit { action } => self.schedule_edit(action),
             WebCommand::Menu { id, index, action } => {
@@ -613,6 +625,10 @@ impl Worker {
             return;
         };
         self.0.inject_pending.set(false);
+        // Ohne Zugangsdaten gibt es nichts einzutragen (z. B. beim Erkennen der Felder).
+        if c.username.is_empty() && c.password.0.is_empty() {
+            return;
+        }
         let Some(login) = self.0.flow.borrow().login().cloned() else { return };
         let user = match &c.domain {
             Some(d) if !d.is_empty() && !c.username.contains('@') && !c.username.contains('\\') => format!("{d}\\{}", c.username),

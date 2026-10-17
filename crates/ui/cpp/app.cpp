@@ -138,6 +138,23 @@ void screenshots(MainWindow& w, const QString& dir)
 			QMetaObject::invokeMethod(r, "click");
 		pump(300);
 		save(ed, dir, QStringLiteral("zugangsdaten-auswahl.png"));
+		w.tabs()->removeTab(w.tabs()->indexOf(ed));
+		ed->deleteLater();
+	}
+	// Web-Ziel: Anmeldefelder mit Automatik, Auswahl im Feld und „Felder erkennen“.
+	if (PropertiesTab* web = w.openFirstTargetProperties(QStringLiteral("web")))
+	{
+		web->selectCategory(QStringLiteral("connection"));
+		QJsonObject found{ { QStringLiteral("target"), web->nodeId() },
+			               { QStringLiteral("fields"),
+			                 QJsonObject{ { QStringLiteral("users"), QJsonArray{ QJsonObject{ { QStringLiteral("label"), QStringLiteral("Benutzername") }, { QStringLiteral("selector"), QStringLiteral("#username") } } } },
+			                              { QStringLiteral("passwords"), QJsonArray{ QJsonObject{ { QStringLiteral("label"), QStringLiteral("Kennwort") }, { QStringLiteral("selector"), QStringLiteral("#password") } } } },
+			                              { QStringLiteral("submits"), QJsonArray{ QJsonObject{ { QStringLiteral("label"), QStringLiteral("Anmelden") }, { QStringLiteral("selector"), QStringLiteral("#login") } } } } } } };
+		web->setDetectedFields(found);
+		pump(300);
+		save(web, dir, QStringLiteral("web-verbindung.png"));
+		w.tabs()->removeTab(w.tabs()->indexOf(web));
+		web->deleteLater();
 	}
 	if (QMenu* m = w.popupAddMenu())
 	{
@@ -298,6 +315,9 @@ std::int32_t rjRunApplication()
 	MainWindow w(&backend);
 	w.applyTheme(qEnvironmentVariable("REMOTEJOE_THEME") == QLatin1String("dark"));
 	w.show();
+	// Echter Start: zuerst die Entsperrmaske für die Schlüsseldatenbank.
+	if (!demo)
+		w.showUnlock(false);
 	if (useSingle)
 		QObject::connect(&single.server, &QLocalServer::newConnection, &w, [&w] {
 			while (QLocalSocket* c = single.server.nextPendingConnection())

@@ -355,14 +355,20 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		auto* el = new QVBoxLayout(m_emptyHint);
 		el->setContentsMargins(12, 12, 12, 12);
 		el->addStretch(1);
-		auto* t = new QLabel(T(m_backend, "tree.empty"), m_emptyHint);
-		t->setWordWrap(true);
-		t->setAlignment(Qt::AlignCenter);
-		el->addWidget(t);
-		auto* b = new QPushButton(T(m_backend, "tree.empty.add"), m_emptyHint);
-		el->addWidget(b, 0, Qt::AlignHCenter);
+		m_emptyLabel = new QLabel(T(m_backend, "tree.empty"), m_emptyHint);
+		m_emptyLabel->setWordWrap(true);
+		m_emptyLabel->setAlignment(Qt::AlignCenter);
+		el->addWidget(m_emptyLabel);
+		m_emptyButton = new QPushButton(T(m_backend, "tree.empty.add"), m_emptyHint);
+		el->addWidget(m_emptyButton, 0, Qt::AlignHCenter);
 		el->addStretch(2);
-		connect(b, &QPushButton::clicked, this, [this] { popupAddMenu(); });
+		// Ohne entsperrte Schlüsseldatenbank führt der Knopf zum Entsperren, sonst zum Hinzufügen.
+		connect(m_emptyButton, &QPushButton::clicked, this, [this] {
+			if (m_backend->isVaultOpen())
+				popupAddMenu();
+			else
+				showUnlock(false);
+		});
 		m_emptyHint->hide();
 		m_tree->viewport()->installEventFilter(this);
 	}
@@ -852,7 +858,11 @@ void MainWindow::updateEmptyHint()
 	for (int r = 0; r < m_model->rowCount(); ++r)
 		if (m_model->index(r, 0).data(RoleMacro).toInt() == 1)
 			--rows;
-	m_emptyHint->setVisible(rows <= 0 && m_search->text().isEmpty());
+	// Zustand des Hinweises: gesperrt (keine Datenbank entsperrt) oder leer (entsperrt, keine Ziele).
+	const bool open = m_backend->isVaultOpen();
+	m_emptyLabel->setText(T(m_backend, open ? "tree.empty" : "tree.locked"));
+	m_emptyButton->setText(T(m_backend, open ? "tree.empty.add" : "tree.locked.open"));
+	m_emptyHint->setVisible((rows <= 0 || !open) && m_search->text().isEmpty());
 	m_emptyHint->raise();
 }
 
@@ -1806,6 +1816,12 @@ void MainWindow::handleEvents(const QString& json)
 				else
 					statusBar()->showMessage(T(m_backend, "web.status.loaded").arg(p->title()), 3000);
 			}
+			else if (t == QLatin1String("fields_detected"))
+			{
+				for (auto* ed : findChildren<PropertiesTab*>())
+					if (ed->nodeId() == e.value(QStringLiteral("target")).toString())
+						ed->setDetectedFields(e);
+			}
 			else if (t == QLatin1String("web_menu") && p)
 				p->showWebMenu(e);
 			else if (t == QLatin1String("tree_changed"))
@@ -2217,13 +2233,13 @@ BulkAddTab* MainWindow::openBulkAdd(const QString& parentId)
 	return t;
 }
 
-PropertiesTab* MainWindow::openFirstTargetProperties()
+PropertiesTab* MainWindow::openFirstTargetProperties(const QString& protocol)
 {
 	std::function<QString(const QModelIndex&)> walk = [&](const QModelIndex& parent) -> QString {
 		for (int r = 0; r < m_model->rowCount(parent); ++r)
 		{
 			const QModelIndex i = m_model->index(r, 0, parent);
-			if (!i.data(RoleFolder).toBool() && i.data(RoleProtocol).toString() == QLatin1String("rdp"))
+			if (!i.data(RoleFolder).toBool() && i.data(RoleProtocol).toString() == protocol)
 				return i.data(RoleId).toString();
 			const QString f = walk(i);
 			if (!f.isEmpty())

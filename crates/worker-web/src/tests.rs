@@ -30,7 +30,9 @@ fn script_escapes_password_and_never_touches_url() {
     assert!(s.contains(r#"p="a\"b'c\\d</script>\u2028e"#), "{}", s.as_str());
     assert!(s.contains("\u{308}🚀 \""), "Kennwort unverändert (kein NFC, nicht getrimmt)");
     assert!(!s.contains("location") && !s.contains("href"), "keine Navigation mit Kennwort");
-    assert!(login_script(&FormLogin::default(), "a", &Secret::from_str_exact("x")).is_err());
+    // Ohne Selektoren sucht das Skript die Felder selbst.
+    let auto = login_script(&FormLogin::default(), "a", &Secret::from_str_exact("x")).unwrap();
+    assert!(auto.contains("input[type=password]") && auto.contains("requestSubmit"), "{}", &*auto);
     assert_eq!(login_script(&l, "a", &Secret::from_bytes(vec![0xff])), Err(WebError::PasswordNotUtf8));
 }
 

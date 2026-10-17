@@ -21,6 +21,19 @@ use crate::sessions::{ConnectSpec, Manager, Reconnect, UiEvent};
 use crate::tree::{self, Light};
 use crate::workspace::{Arrangement, SessionId, Workspace};
 
+/// Unsichtbare Web-Sitzung, die die Felder einer Anmeldeseite erfasst.
+struct FieldProbe {
+    s: SessionId,
+    target: Uuid,
+    started: std::time::Instant,
+    saw_loading: bool,
+    /// Nächster Zeitpunkt für die Abfrage der Felder (nach dem Laden, mit Wiederholung für Seiten, die spät aufbauen).
+    next_detect: Option<std::time::Instant>,
+    attempts: u32,
+}
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub struct App {
     pub config: Config,
     pub config_path: Option<PathBuf>,
@@ -33,6 +46,8 @@ pub struct App {
     unlocking: Option<Receiver<Result<(Vault, crate::vaultlock::VaultLock), String>>>,
     /// Sperre der geöffneten Schlüsseldatenbank (fällt mit dem Tresor weg).
     vault_lock: Option<crate::vaultlock::VaultLock>,
+    /// Laufendes „Felder erkennen“ (unsichtbare Web-Sitzung ohne Tab).
+    probe: Option<FieldProbe>,
     /// Laufende Makros und ihr Eingabekanal an die Sitzungen.
     pub(crate) macro_runs: Vec<crate::macro_run::RunningMacro>,
     pub(crate) macro_input_tx: mpsc::Sender<(SessionId, Vec<u8>)>,
@@ -135,6 +150,7 @@ impl App {
             workspace: Workspace::default(),
             unlocking: None,
             vault_lock: None,
+            probe: None,
             lights: Default::default(),
             update: Default::default(),
         };
@@ -584,10 +600,9 @@ impl App {
                 if let Some(u) = sel(&o.url) {
                     w["url"] = json!(u);
                 }
+                // Leere Selektoren: Der Worker erkennt die Felder selbst (Automatik).
                 let (user, pw, submit) = (sel(&o.user_selector), sel(&o.password_selector), sel(&o.submit_selector));
-                if user.is_some() || pw.is_some() || submit.is_some() {
-                    w["login"] = json!({ "username_selector": user, "password_selector": pw, "submit_selector": submit });
-                }
+                w["login"] = json!({ "username_selector": user, "password_selector": pw, "submit_selector": submit });
                 w
             }
             ProtocolOptions::Rdp(o) => serde_json::to_value(o).unwrap_or_default(),
@@ -604,6 +619,109 @@ impl App {
 
     /// Verbindet ein Ziel. Ergebnis als JSON: `{"session":n}`,
     /// `{"ambiguous":[…]}`, `{"missing":{…}}` oder `{"error":"…"}`.
+    /// „Felder erkennen“: öffnet das Web-Ziel unsichtbar (ohne Tab, ohne Zugangsdaten), liest die
+    /// Eingabefelder und Knöpfe der Seite aus und meldet sie als `FieldsDetected`. Adresse und
+    /// Zertifikatsoption kommen aus dem Formular (noch nicht gespeichert).
+    pub fn detect_fields(&mut self, target: Uuid, url: &str, ignore_certificate: bool) -> String {
+        let Some(Node::Target(t)) = rj_core::edit::node(&self.index, target).cloned() else {
+            return json!({ "error": "Ziel nicht gefunden" }).to_string();
+        };
+        if t.protocol != Protocol::Web {
+            return json!({ "error": "Felder erkennen gibt es nur für Web-Ziele" }).to_string();
+        }
+        if url.trim().is_empty() {
+            return json!({ "error": "Bitte zuerst die Adresse (URL) eintragen" }).to_string();
+        }
+        if rj_tunnel::plan(&self.index, target).is_some() {
+            return json!({ "error": "Das Ziel verwendet einen Tunnel; Felder erkennen geht nur ohne Tunnel. Die Felder lassen sich von Hand eintragen." }).to_string();
+        }
+        if let Some(old) = self.probe.take() {
+            self.sessions.close(old.s);
+        }
+        let mut options: serde_json::Value = serde_json::from_str(&self.options_json(&t)).unwrap_or_else(|_| json!({}));
+        options["url"] = json!(url.trim());
+        options["ignore_certificate"] = json!(ignore_certificate);
+        options["profile"] = json!(format!("{target}-erkennen"));
+        let (host, port) = Self::endpoint_of(&t);
+        let spec = ConnectSpec {
+            target,
+            title: t.name.clone(),
+            protocol: Protocol::Web,
+            request: ConnectRequest {
+                host,
+                port,
+                width: 1024,
+                height: 768,
+                options_json: options.to_string(),
+                connect_timeout_secs: self.config.connection.connect_timeout_secs,
+                keepalive_secs: self.config.connection.keepalive_secs,
+            },
+            credentials: CredentialPayload { username: String::new(), domain: None, password: SecretBytes(Vec::new()), private_key: None },
+        };
+        let s = self.sessions.open(spec);
+        self.probe = Some(FieldProbe { s, target, started: std::time::Instant::now(), saw_loading: false, next_detect: None, attempts: 0 });
+        json!({ "ok": true }).to_string()
+    }
+
+    /// Wertet die Ereignisse der unsichtbaren Erkennungssitzung aus und blendet sie vor der Oberfläche aus.
+    fn process_probe(&mut self, out: &mut Vec<UiEvent>) {
+        let Some(mut p) = self.probe.take() else { return };
+        let mut done: Option<(Option<String>, serde_json::Value)> = None;
+        let mut keep = Vec::with_capacity(out.len());
+        for ev in out.drain(..) {
+            match ev {
+                UiEvent::WebFields { s, fields } if s == p.s => {
+                    let empty = ["users", "passwords", "submits"].iter().all(|k| fields.get(*k).and_then(|v| v.as_array()).is_none_or(|a| a.is_empty()));
+                    if empty && p.attempts < 4 {
+                        p.next_detect = Some(std::time::Instant::now() + Duration::from_millis(1500));
+                    } else {
+                        done = Some((None, fields));
+                    }
+                }
+                UiEvent::WebStatus { s, loading, error, .. } if s == p.s => {
+                    if let Some(e) = error {
+                        done = Some((Some(e), json!({})));
+                    } else if loading {
+                        p.saw_loading = true;
+                    } else if p.saw_loading && p.next_detect.is_none() && p.attempts == 0 {
+                        // Kurz warten: Seiten bauen ihr Formular oft erst nach dem Laden auf.
+                        p.next_detect = Some(std::time::Instant::now() + Duration::from_millis(600));
+                    }
+                }
+                UiEvent::State { s, state, detail } if s == p.s => {
+                    if matches!(state.as_str(), "failed" | "disconnected" | "crashed") {
+                        done = Some((Some(if detail.is_empty() { "Die Seite konnte nicht geladen werden".to_string() } else { detail }), json!({})));
+                    }
+                }
+                UiEvent::Question { s, .. } if s == p.s => {
+                    done = Some((Some("Das Zertifikat der Seite ist nicht vertrauenswürdig. Zertifikatsprüfung abschalten oder die Seite zuerst normal verbinden und das Zertifikat annehmen.".into()), json!({})));
+                }
+                // Alles Übrige der Erkennungssitzung (Bilder, Titel, Hinweise …) ist für die Oberfläche ohne Belang.
+                UiEvent::SharedFrame { s, .. } | UiEvent::Frame { s, .. } | UiEvent::Title { s, .. } | UiEvent::Notice { s, .. } | UiEvent::Terminal { s } if s == p.s => {}
+                other => keep.push(other),
+            }
+        }
+        *out = keep;
+        if done.is_none() {
+            if let Some(at) = p.next_detect.filter(|at| std::time::Instant::now() >= *at) {
+                let _ = at;
+                p.next_detect = None;
+                p.attempts += 1;
+                let _ = self.sessions.web_command(p.s, &json!({ "op": "detect" }));
+            }
+            if done.is_none() && p.started.elapsed() > PROBE_TIMEOUT {
+                done = Some((Some("Zeitüberschreitung: Die Seite hat nicht rechtzeitig geantwortet".into()), json!({})));
+            }
+        }
+        match done {
+            Some((error, fields)) => {
+                self.sessions.close(p.s);
+                out.push(UiEvent::FieldsDetected { target: p.target.to_string(), error, fields });
+            }
+            None => self.probe = Some(p),
+        }
+    }
+
     pub fn connect(&mut self, target: Uuid, credential: Option<&str>, remember: bool, width: u32, height: u32) -> String {
         let Some(t) = self.target(target).cloned() else { return json!({ "error": "Ziel nicht gefunden" }).to_string() };
         let resolved = match credential {
@@ -967,6 +1085,7 @@ impl App {
 
     pub fn poll(&mut self) -> Vec<UiEvent> {
         let mut out = self.sessions.poll(Duration::from_millis(0));
+        self.process_probe(&mut out);
         // Eingaben laufender Makros an die Sitzungen weitergeben, beendete Makros melden.
         while let Ok((s, bytes)) = self.macro_input_rx.try_recv() {
             self.sessions.send_bytes(s, bytes);
@@ -1447,10 +1566,10 @@ mod web_options_tests {
         assert_eq!(v["login"]["username_selector"], "#user");
         assert_eq!(v["login"]["password_selector"], "#pw");
         assert!(v["login"]["submit_selector"].is_null());
-        // Ohne Selektoren und Adresse: kein `login`, keine `url`.
+        // Ohne Selektoren und Adresse: `login` ohne Selektoren (Automatik), keine `url`.
         t.options = ProtocolOptions::Web(WebOptions::default());
         let v: serde_json::Value = serde_json::from_str(&app.options_json(&t)).unwrap();
-        assert!(v.get("login").is_none() && v.get("url").is_none());
+        assert!(v["login"]["password_selector"].is_null() && v["login"]["username_selector"].is_null() && v.get("url").is_none());
         assert_eq!(v["ignore_certificate"], false);
     }
 }
