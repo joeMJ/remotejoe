@@ -738,9 +738,20 @@ void MainWindow::applyTheme(bool dark)
 	pal.setColor(QPalette::ToolTipBase, c("base"));
 	pal.setColor(QPalette::ToolTipText, c("text"));
 	qApp->setPalette(pal);
+	// Trennlinie der Tabs: Mischung aus Text- und Fensterfarbe, in beiden Schemata gut sichtbar.
+	const QColor textColor = c("text"), windowColor = c("window");
+	const QColor tabLine((textColor.red() * 55 + windowColor.red() * 45) / 100, (textColor.green() * 55 + windowColor.green() * 45) / 100,
+	                     (textColor.blue() * 55 + windowColor.blue() * 45) / 100);
 	qApp->setStyleSheet(QStringLiteral(
 	  "QTreeView::item { min-height: 28px; padding: 2px; }"
-	  "QTabBar::tab { min-height: 30px; padding: 4px 12px; }"
+	  // Tabs: der aktive Tab hat Akzentbalken, kräftige Schrift und den Hintergrund der Fläche darunter;
+	  // inaktive Tabs sind abgesetzt (Schaltflächenfarbe, Nebentext) und durch Linien klar getrennt.
+	  "QTabWidget::pane { border: 1px solid %3; border-top: 2px solid %2; top: -1px; }"
+	  "QTabBar::tab { min-height: 30px; padding: 4px 14px; margin-right: 2px; background: %4; color: %5; border: 1px solid %3; border-bottom: none; "
+	  "border-top-left-radius: 4px; border-top-right-radius: 4px; }"
+	  "QTabBar::tab:selected { background: %6; color: %7; font-weight: bold; border-top: 3px solid %2; padding-top: 3px; }"
+	  "QTabBar::tab:!selected { margin-top: 3px; }"
+	  "QTabBar::tab:!selected:hover { background: %8; color: %7; }"
 	  "QLabel#paneHeader { font-weight: bold; padding: 4px; }"
 	  "QLabel#paneNotice { color: %1; padding: 4px; }"
 	  "QPushButton { min-height: 30px; padding: 2px 12px; }"
@@ -754,7 +765,8 @@ void MainWindow::applyTheme(bool dark)
 	  "QFrame#unlockBox { border: 2px solid %2; border-radius: 6px; padding: 12px; }"
 	  "*[rjDirty=\"true\"] { border: 2px solid %2; }"
 	  "QRadioButton[rjDirty=\"true\"], QCheckBox[rjDirty=\"true\"] { border: none; font-weight: bold; color: %2; }")
-	                      .arg(c("warning").name(), c("highlight").name()));
+	                      .arg(c("warning").name(), c("highlight").name())
+	                      .arg(tabLine.name(), c("button").name(), c("muted").name(), c("base").name(), c("text").name(), c("alternate").name()));
 }
 
 void MainWindow::reloadTree()
