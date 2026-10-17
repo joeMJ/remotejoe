@@ -227,6 +227,23 @@ pub enum ClipboardDirection {
     Both,
 }
 
+/// Grafikkanal (RDPGFX) einer RDP-Verbindung. GNOME-Remote-Desktop verlangt ihn; `Auto` versucht
+/// es zuerst ohne und bei einem Abbruch im Verbindungsaufbau einmal mit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GfxMode {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl GfxMode {
+    pub fn is_auto(&self) -> bool {
+        *self == GfxMode::Auto
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RdpOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,6 +259,8 @@ pub struct RdpOptions {
     pub keyboard_layout: Option<String>,
     #[serde(default)]
     pub ignore_certificate: bool,
+    #[serde(default, skip_serializing_if = "GfxMode::is_auto")]
+    pub gfx: GfxMode,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -256,6 +275,9 @@ pub struct SshOptions {
     pub osc52_read: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keepalive_secs: Option<u32>,
+    /// Ältere, unsichere SSH-Verfahren zusätzlich zulassen (für alte Geräte).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_algorithms: bool,
 }
 
 fn yes() -> bool {
@@ -650,5 +672,21 @@ impl Index {
             out.insert(d.credential.entry);
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod gfx_tests {
+    use super::*;
+
+    #[test]
+    fn gfx_option_defaults_to_auto_and_is_not_written_then() {
+        let o: RdpOptions = serde_json::from_str("{}").unwrap();
+        assert_eq!(o.gfx, GfxMode::Auto);
+        assert!(!serde_json::to_string(&o).unwrap().contains("gfx"));
+        let o: RdpOptions = serde_json::from_str(r#"{"gfx":"on"}"#).unwrap();
+        assert_eq!(o.gfx, GfxMode::On);
+        assert!(serde_json::to_string(&o).unwrap().contains(r#""gfx":"on""#));
+        assert!(serde_json::from_str::<RdpOptions>(r#"{"gfx":"x"}"#).is_err());
     }
 }

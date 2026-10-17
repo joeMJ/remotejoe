@@ -1,19 +1,16 @@
-//! Update über das Hauptprogramm gegen die Gitea-Attrappe: Zugriffsschlüssel
-//! aus einem Eintrag der Schlüsseldatenbank, Prüfen und Installieren als
-//! Hintergrundaufgabe, Rückfrage bei offenen Sitzungen.
+//! Update über das Hauptprogramm gegen eine Attrappe: Prüfen und Installieren als
+//! Hintergrundaufgabe, Rückfrage bei offenen Sitzungen. Die Quelle ist im Programm fest
+//! GitHub; der Test setzt sie über `source_override` auf die Attrappe.
 
 use std::time::{Duration, Instant};
 
-use rj_core::Secret;
-use rj_kdbx::{CredentialData, KdfChoice, MasterKey, Vault};
 use rj_testkit::gitea::GiteaMock;
 use rj_ui::app::App;
 use rj_ui::sessions::UiEvent;
+use rj_update::release::{Source, SourceKind};
 use rj_update::sign::{self, SIG, SUMS};
 use rj_update::{archive, asset_name, install};
 use serde_json::{json, Value};
-
-const TOKEN: &str = "gitea-Prüfschlüssel ä\"'\\";
 
 fn wait_result(app: &mut App, kind: &str) -> Value {
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -35,7 +32,7 @@ fn edit(app: &mut App, v: Value) -> Value {
 }
 
 #[test]
-fn check_and_install_with_token_from_vault() {
+fn check_and_install_from_the_fixed_source() {
     let dir = tempfile::tempdir().unwrap();
     // Paket 9.0.0 mit eigenem Testschlüssel.
     let key = sign::generate().unwrap();
@@ -47,17 +44,12 @@ fn check_and_install_with_token_from_vault() {
     let mock = GiteaMock::start("team/remotejoe");
     {
         let mut st = mock.state.lock().unwrap();
-        st.token = Some(TOKEN.into());
         st.files.insert(name.clone(), data);
         st.files.insert(SUMS.into(), sums.clone().into_bytes());
         st.files.insert(SIG.into(), sign::sign(&key, sums.as_bytes()).into_bytes());
     }
     mock.set_release("v9.0.0", "Änderungen\n- Update-Tab", &[&name, SUMS, SIG]);
 
-    let mut vault = Vault::create(&dir.path().join("t.kdbx"), MasterKey::password("pw"), KdfChoice::Weak, rj_core::config::IndexStorage::KdbxCustomData);
-    let entry = vault
-        .add_credential(CredentialData { title: "Gitea-Zugriff".into(), username: "update".into(), password: Secret::from_str_exact(TOKEN), ..Default::default() })
-        .unwrap();
     let mut app = App::new(false);
     app.config_path = None;
     let target = dir.path().join("remotejoe");
@@ -66,29 +58,25 @@ fn check_and_install_with_token_from_vault() {
     app.update.dir_override = Some(target.clone());
     app.update.key_override = Some(sign::public_key_text(&key.verifying_key()));
 
-    // Voreinstellung: die öffentlichen Veröffentlichungen auf GitHub.
+    // Die Quelle ist fest GitHub; im Status steht keine Quelle zur Auswahl mehr.
     let st = app.update_status();
-    assert_eq!((st["source"].as_str(), st["repo"].as_str()), (Some("github"), Some("joeMJ/remotejoe")), "{st}");
-    // Ohne Quelle: Fehler; nur https außer 127.0.0.1.
-    edit(&mut app, json!({"op": "update_settings", "source": ""}));
-    assert!(edit(&mut app, json!({"op": "update_check"}))["error"].as_str().unwrap().contains("Quelle"));
-    let r = edit(&mut app, json!({"op": "update_settings", "source": "gitea", "base_url": "http://git.example.test", "repo": "team/remotejoe"}));
-    assert!(r["error"].as_str().unwrap().contains("https"), "{r}");
-    let r = edit(&mut app, json!({"op": "update_settings", "source": "gitea", "base_url": mock.base, "repo": "team/remotejoe", "token_entry": entry.to_string()}));
-    assert_eq!(r["source"], "gitea", "{r}");
-    assert!(!r.to_string().contains(TOKEN));
-
-    // Gesperrte Schlüsseldatenbank: klare Meldung, keine Anfrage.
-    assert!(edit(&mut app, json!({"op": "update_check"}))["error"].as_str().unwrap().contains("gesperrt"));
-    app.vault = Some(vault);
-    assert_eq!(app.update_status()["token_title"], "Gitea-Zugriff");
+    assert!(st.get("source").is_none() && st.get("repo").is_none() && st.get("token_entry").is_none(), "{st}");
+    assert_eq!(rj_ui::update::github_source().repo, "joeMJ/remotejoe");
+    assert_eq!(rj_ui::update::github_source().kind, SourceKind::Github);
+    // Nur die Prüfung beim Start ist einstellbar.
+    let r = edit(&mut app, json!({"op": "update_settings", "check_on_start": true, "source": "gitea", "repo": "fremd/repo"}));
+    assert_eq!(r["check_on_start"], true, "{r}");
+    assert!(app.config.update.check_on_start);
+    // Die Vorführquelle gibt es nur im Vorführbetrieb.
+    assert!(edit(&mut app, json!({"op": "update_demo_source", "base_url": mock.base}))["error"].is_string());
+    app.update.source_override = Some(Source { kind: SourceKind::Gitea, base_url: mock.base.clone(), repo: "team/remotejoe".into() });
 
     edit(&mut app, json!({"op": "update_check"}));
     let r = wait_result(&mut app, "update_check");
     assert_eq!(r["state"], "newer", "{r}");
     assert_eq!(r["found"]["version"], "9.0.0");
     assert_eq!(r["found"]["notes"], "Änderungen\n- Update-Tab");
-    assert!(mock.state.lock().unwrap().requests.iter().any(|(p, h)| p.ends_with("/releases/latest") && h.contains(&("authorization".into(), format!("token {TOKEN}")))));
+    assert!(mock.state.lock().unwrap().requests.iter().any(|(p, h)| p.ends_with("/releases/latest") && !h.iter().any(|(k, _)| k == "authorization")), "keine Zugangsdaten an die Quelle");
 
     // Offene Sitzung: erst Bestätigung.
     app.sessions.open_demo_frame("rdp-001", 8, 8, 1);

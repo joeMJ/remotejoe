@@ -5,6 +5,7 @@
 #include "rjrdp.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <freerdp/channels/channels.h>
@@ -12,6 +13,8 @@
 #include <freerdp/client/channels.h>
 #include <freerdp/client/cliprdr.h>
 #include <freerdp/client/disp.h>
+#include <freerdp/client/rdpgfx.h>
+#include <freerdp/gdi/gfx.h>
 #include <freerdp/event.h>
 #include <freerdp/freerdp.h>
 #include <freerdp/gdi/gdi.h>
@@ -26,6 +29,7 @@ struct rj_rdp
 	CliprdrClientContext* cliprdr;
 	DispClientContext* disp;
 	uint32_t server_clip_flags;
+	int gfx;
 	char error[512];
 };
 
@@ -152,6 +156,20 @@ static UINT rj_cliprdr_server_file_response(CliprdrClientContext* c,
 	return CHANNEL_RC_OK;
 }
 
+/* Diagnoseschalter (nur Umgebungsvariablen, zum Eingrenzen von Verbindungsfehlern):
+ *   RJ_RDP_NODISP=1        Display Control und dynamische Auflösung nicht anbieten
+ *   RJ_RDP_GFX=1           Grafikkanal (RDPGFX) anbieten
+ *   RJ_RDP_SEC=nla|tls|rdp nur diesen Sicherheitsmodus erlauben
+ *   RJ_RDP_NOAUTODETECT=1  Netzwerkerkennung (Auto-Detect) nicht anbieten
+ *   RJ_RDP_NOHEARTBEAT=1   Heartbeat-PDU nicht anbieten
+ *   RJ_RDP_NOSKIPJOIN=1    „Kanalbeitritt überspringen“ nicht anbieten
+ *   RJ_RDP_LEGACY=1        alle drei zugleich (klassischer Ablauf) */
+static int rj_env_is(const char* name, const char* value)
+{
+	const char* v = getenv(name);
+	return v && strcmp(v, value) == 0;
+}
+
 static void rj_channel_connected(void* ctx, const ChannelConnectedEventArgs* e)
 {
 	rj_rdp* rdp = owner_of((rdpContext*)ctx);
@@ -175,6 +193,10 @@ static void rj_channel_connected(void* ctx, const ChannelConnectedEventArgs* e)
 	{
 		rdp->disp = (DispClientContext*)e->pInterface;
 	}
+	else if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0 && rdp->gfx)
+	{
+		gdi_graphics_pipeline_init(((rdpContext*)ctx)->gdi, (RdpgfxClientContext*)e->pInterface);
+	}
 }
 
 static void rj_channel_disconnected(void* ctx, const ChannelDisconnectedEventArgs* e)
@@ -186,6 +208,8 @@ static void rj_channel_disconnected(void* ctx, const ChannelDisconnectedEventArg
 		rdp->cliprdr = NULL;
 	else if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0)
 		rdp->disp = NULL;
+	else if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0 && rdp->gfx)
+		gdi_graphics_pipeline_uninit(((rdpContext*)ctx)->gdi, (RdpgfxClientContext*)e->pInterface);
 }
 
 /* ---------- Bild ---------- */
@@ -403,6 +427,45 @@ int rj_rdp_connect(rj_rdp* rdp, const rj_params* p)
 		default:
 			break;
 	}
+	/* Diagnose: Umgebungsvariablen überschreiben einzelne Voreinstellungen. */
+	if (rj_env_is("RJ_RDP_NODISP", "1"))
+	{
+		ok &= freerdp_settings_set_bool(s, FreeRDP_SupportDisplayControl, FALSE);
+		ok &= freerdp_settings_set_bool(s, FreeRDP_DynamicResolutionUpdate, FALSE);
+		fprintf(stderr, "[remotejoe-rdp] Diagnose: Display Control aus\n");
+	}
+	if (rj_env_is("RJ_RDP_NOAUTODETECT", "1") || rj_env_is("RJ_RDP_LEGACY", "1"))
+	{
+		ok &= freerdp_settings_set_bool(s, FreeRDP_NetworkAutoDetect, FALSE);
+		ok &= freerdp_settings_set_uint32(s, FreeRDP_ConnectionType, CONNECTION_TYPE_LAN);
+		fprintf(stderr, "[remotejoe-rdp] Diagnose: Auto-Detect aus\n");
+	}
+	if (rj_env_is("RJ_RDP_NOHEARTBEAT", "1") || rj_env_is("RJ_RDP_LEGACY", "1"))
+	{
+		ok &= freerdp_settings_set_bool(s, FreeRDP_SupportHeartbeatPdu, FALSE);
+		fprintf(stderr, "[remotejoe-rdp] Diagnose: Heartbeat aus\n");
+	}
+	if (rj_env_is("RJ_RDP_NOSKIPJOIN", "1") || rj_env_is("RJ_RDP_LEGACY", "1"))
+	{
+		ok &= freerdp_settings_set_bool(s, FreeRDP_SupportSkipChannelJoin, FALSE);
+		fprintf(stderr, "[remotejoe-rdp] Diagnose: Kanalbeitritt wird nicht übersprungen\n");
+	}
+	rdp->gfx = p->gfx || rj_env_is("RJ_RDP_GFX", "1");
+	if (rdp->gfx)
+	{
+		ok &= freerdp_settings_set_bool(s, FreeRDP_SupportGraphicsPipeline, TRUE);
+		ok &= freerdp_settings_set_bool(s, FreeRDP_GfxH264, FALSE);
+		ok &= freerdp_settings_set_bool(s, FreeRDP_GfxAVC444, FALSE);
+		ok &= freerdp_settings_set_bool(s, FreeRDP_GfxAVC444v2, FALSE);
+		fprintf(stderr, "[remotejoe-rdp] Grafikkanal an\n");
+	}
+	if (rj_env_is("RJ_RDP_SEC", "nla") || rj_env_is("RJ_RDP_SEC", "tls") || rj_env_is("RJ_RDP_SEC", "rdp"))
+	{
+		nla = rj_env_is("RJ_RDP_SEC", "nla");
+		tls = rj_env_is("RJ_RDP_SEC", "tls");
+		rdpsec = rj_env_is("RJ_RDP_SEC", "rdp");
+		fprintf(stderr, "[remotejoe-rdp] Diagnose: Sicherheitsmodus %s\n", getenv("RJ_RDP_SEC"));
+	}
 	if (rj_is_local_account(p))
 		ok &= freerdp_settings_set_string(s, FreeRDP_AuthenticationPackageList, "!kerberos");
 	ok &= freerdp_settings_set_bool(s, FreeRDP_NlaSecurity, nla);
@@ -475,6 +538,15 @@ int rj_rdp_resize(rj_rdp* rdp, uint32_t width, uint32_t height)
 		return -1;
 	DISPLAY_CONTROL_MONITOR_LAYOUT l = { 0 };
 	l.Flags = DISPLAY_CONTROL_MONITOR_PRIMARY;
+	/* MS-RDPEDISP / GNOME-Remote-Desktop: Breite gerade, Breite und Höhe 200 bis 8192. */
+	if (width < 200)
+		width = 200;
+	if (height < 200)
+		height = 200;
+	if (width > 8192)
+		width = 8192;
+	if (height > 8192)
+		height = 8192;
 	l.Width = width & ~1u;
 	l.Height = height;
 	l.DesktopScaleFactor = 100;

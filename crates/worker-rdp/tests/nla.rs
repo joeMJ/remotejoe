@@ -34,6 +34,7 @@ fn params(port: u16, password: &str) -> RdpParams {
         keyboard_layout: 0x0407,
         config_path: Some(tempfile::tempdir().unwrap().keep().display().to_string()),
         timeout_ms: 15000,
+        gfx: false,
     }
 }
 

@@ -36,6 +36,7 @@ mod imp {
         keyboard_layout: Option<String>,
         config_path: Option<String>,
         clipboard_audit: bool,
+        gfx: rj_core::model::GfxMode,
     }
 
     fn layout_id(s: &str) -> u32 {
@@ -93,6 +94,8 @@ mod imp {
         last: Option<(ConnectRequest, CredentialPayload)>,
         connected_at: Option<Instant>,
         clip_notice_sent: bool,
+        /// Text, der vor der Freigabe der Zwischenablage angeboten wurde; geht nach "bereit" hinaus.
+        clip_wait: Option<String>,
     }
 
     impl Worker {
@@ -103,10 +106,12 @@ mod imp {
         fn connect(&mut self, req: ConnectRequest, cred: CredentialPayload) {
             self.send(FromWorker::State(SessionState::Connecting));
             let opts: Options = serde_json::from_str(&req.options_json).unwrap_or_default();
-            let out = self.out.clone();
-            let answers = self.answers.clone();
-            let next = Arc::new(Mutex::new(1u32));
-            let session = RdpSession::new(move |c: &CertInfo| {
+            let (out0, answers0) = (self.out.clone(), self.answers.clone());
+            let make_session = || {
+                let out = out0.clone();
+                let answers = answers0.clone();
+                let next = Arc::new(Mutex::new(1u32));
+                RdpSession::new(move |c: &CertInfo| {
                 let mut n = next.lock().unwrap_or_else(|e| e.into_inner());
                 let id = *n;
                 *n += 1;
@@ -138,8 +143,12 @@ mod imp {
                         Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return CertDecision::Reject,
                     }
                 }
-            });
-            let mut session = match session {
+                })
+            };
+            // `Auto`: erst ohne Grafikkanal; scheitert der Aufbau, einmal mit (GNOME-Remote-Desktop).
+            let mut gfx_on = opts.gfx == rj_core::model::GfxMode::On;
+            loop {
+            let mut session = match make_session() {
                 Ok(s) => s,
                 Err(e) => return self.send(FromWorker::State(SessionState::Failed { reason: e.to_string() })),
             };
@@ -159,6 +168,7 @@ mod imp {
                 keyboard_layout: opts.keyboard_layout.as_deref().map(layout_id).unwrap_or(0x0407),
                 config_path: opts.config_path.clone().or_else(|| rj_core::config::data_dir().map(|d| d.join("freerdp").display().to_string())),
                 timeout_ms: req.connect_timeout_secs.max(1) * 1000,
+                gfx: gfx_on,
             };
             if params.ignore_certificate {
                 self.send(FromWorker::Notice("Zertifikatsprüfung ist für dieses Ziel abgeschaltet.".into()));
@@ -170,8 +180,19 @@ mod imp {
                     self.clip_notice_sent = params.clipboard == ClipboardDirection::Off;
                     self.last = Some((req, cred));
                     self.send(FromWorker::State(SessionState::Connected));
+                    return;
                 }
-                Err(e) => self.send(FromWorker::State(SessionState::Failed { reason: e.to_string() })),
+                Err(e) => {
+                    let text = e.to_string();
+                    if opts.gfx == rj_core::model::GfxMode::Auto && !gfx_on && text.contains("ERRCONNECT_CONNECT_TRANSPORT_FAILED") {
+                        gfx_on = true;
+                        self.send(FromWorker::Notice("Der Server hat den Aufbau ohne Grafikkanal abgebrochen. Neuer Versuch mit Grafikkanal (GFX).".into()));
+                        continue;
+                    }
+                    self.send(FromWorker::State(SessionState::Failed { reason: text }));
+                    return;
+                }
+            }
             }
         }
 
@@ -244,12 +265,22 @@ mod imp {
                 }
                 ToWorker::Clipboard(data) => {
                     let Some(s) = self.session.as_mut() else { return true };
+                    if !s.clipboard_ready() {
+                        // Kanal noch nicht bereit: merken statt melden.
+                        if let ClipData::Text(t) = data {
+                            self.clip_wait = Some(t);
+                        }
+                        return true;
+                    }
                     let r = match data {
                         ClipData::Text(t) => s.offer_text(&t),
                         ClipData::Files(files) => s.offer_files(files.into_iter().map(|f| (f.name, f.data)).collect()),
                     };
+                    // Gesperrte Richtung ist Absicht des Nutzers, keine Störung: keine Meldung.
                     if let Err(e) = r {
-                        self.send(FromWorker::Notice(e.to_string()));
+                        if !matches!(e, rj_rdp::session::RdpError::ClipUnavailable) {
+                            self.send(FromWorker::Notice(e.to_string()));
+                        }
                     }
                 }
             }
@@ -300,7 +331,7 @@ mod imp {
     }
 
     fn run(out: Sender, rx: Receiver<ToWorker>, answers: Arc<Mutex<Receiver<(u32, bool)>>>) {
-        let mut w = Worker { out, answers, session: None, fb: None, serial: 0, last: None, connected_at: None, clip_notice_sent: false };
+        let mut w = Worker { out, answers, session: None, fb: None, serial: 0, last: None, connected_at: None, clip_notice_sent: false, clip_wait: None };
         let mut pending = (None, None);
         let mut events = Vec::new();
         loop {
@@ -320,7 +351,11 @@ mod imp {
                 match ev {
                     RdpEvent::Frame { x, y, w: fw, h } => w.frame(x, y, fw, h),
                     RdpEvent::Resized { .. } => {}
-                    RdpEvent::ClipReady => {}
+                    RdpEvent::ClipReady => {
+                        if let (Some(t), Some(s)) = (w.clip_wait.take(), w.session.as_mut()) {
+                            let _ = s.offer_text(&t);
+                        }
+                    }
                     RdpEvent::ClipText(t) => w.send(FromWorker::Clipboard(ClipData::Text(t))),
                     RdpEvent::ClipFiles(files) => w.send(FromWorker::Clipboard(ClipData::Files(
                         files.into_iter().filter(|(d, _)| !d.is_dir).map(|(d, data)| ClipFile { name: d.name, data }).collect(),

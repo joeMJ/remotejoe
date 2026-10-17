@@ -21,6 +21,10 @@ use webkit2gtk::{
     WebContext, WebContextExt, WebView, WebViewExt, WebsiteDataManager, WebsiteDataManagerExt,
 };
 
+/// Anmeldung: Suche nach dem Kennwortfeld wiederholen (Abstand und Anzahl; zusammen 10 Sekunden).
+const LOGIN_RETRY_EVERY: Duration = Duration::from_millis(500);
+const LOGIN_RETRIES: u32 = 20;
+
 /// Takt, in dem geänderte Bereiche in den Bildspeicher kopiert werden (höchstens 60 Bilder/s).
 const RENDER_TICK: Duration = Duration::from_millis(16);
 /// Größenänderungen erst nach dieser Pause übernehmen.
@@ -117,6 +121,11 @@ struct Inner {
     next_menu: Cell<u32>,
     last_error: RefCell<Option<String>>,
     started: Instant,
+    /// Zeitprotokoll der Sitzung (Seitenwechsel, Skriptläufe; nie Eingaben oder Kennwörter).
+    trace_path: RefCell<Option<std::path::PathBuf>>,
+    load_started: Cell<Option<Instant>>,
+    /// Ein Anmeldeskript läuft (oder wartet auf das Formular): kein zweiter Lauf, kein doppeltes Abschicken.
+    login_busy: Cell<bool>,
     /// Zurückgestellte Eingaben (Zeitpunkt, frühestens ausführen).
     deferred: RefCell<VecDeque<(Instant, Deferred)>>,
     last_click: Cell<Option<Instant>>,
@@ -150,10 +159,22 @@ impl Worker {
             next_menu: Cell::new(1),
             last_error: RefCell::new(None),
             started: Instant::now(),
+            trace_path: RefCell::new(None),
+            load_started: Cell::new(None),
+            login_busy: Cell::new(false),
             deferred: RefCell::new(VecDeque::new()),
             last_click: Cell::new(None),
             last_key: Cell::new(None),
         }))
+    }
+
+    /// Zeile ins Zeitprotokoll `protokoll.log` im Profilordner (nur Adresse ohne Anfrageteil).
+    fn trace(&self, text: &str) {
+        use std::io::Write;
+        let Some(path) = self.0.trace_path.borrow().clone() else { return };
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "[+{:>8.3} s] {text}", self.0.started.elapsed().as_secs_f64());
+        }
     }
 
     fn send(&self, m: FromWorker) {
@@ -214,6 +235,13 @@ impl Worker {
         let key = opts.profile.clone().unwrap_or_else(|| format!("{}-{}", url.host, url.port));
         let profile = profile_dir(&base, &key);
         std::fs::create_dir_all(&profile).map_err(|e| format!("Profil: {e}"))?;
+        let trace = profile.join("protokoll.log");
+        // Das Protokoll ist nur für die letzten Sitzungen gedacht.
+        if std::fs::metadata(&trace).is_ok_and(|m| m.len() > 200_000) {
+            let _ = std::fs::remove_file(&trace);
+        }
+        *self.0.trace_path.borrow_mut() = Some(trace);
+        self.trace(&format!("—— Sitzung geöffnet: {} ——", url.host));
         *self.0.flow.borrow_mut() = LoginFlow::new(opts.login.clone());
         self.0.ignore_cert.set(opts.ignore_certificate);
         if let Some(old) = self.0.page.borrow_mut().take() {
@@ -255,7 +283,17 @@ impl Worker {
         view.connect_load_changed(move |v, ev| {
             if ev == LoadEvent::Started {
                 *me.0.last_error.borrow_mut() = None;
+                me.0.load_started.set(Some(Instant::now()));
             }
+            let shown = v.uri().map(|u| trace_uri(&u)).unwrap_or_default();
+            let name = match ev {
+                LoadEvent::Started => "Ladebeginn",
+                LoadEvent::Redirected => "Weiterleitung",
+                LoadEvent::Committed => "Antwort beginnt",
+                _ => "Ladeende",
+            };
+            let dur = if ev == LoadEvent::Finished { me.0.load_started.get().map(|t| format!(" nach {} ms", t.elapsed().as_millis())).unwrap_or_default() } else { String::new() };
+            me.trace(&format!("{name}{dur}: {shown}"));
             me.status(v);
             if ev == LoadEvent::Finished {
                 let uri = v.uri().map(|u| u.to_string()).unwrap_or_default();
@@ -263,6 +301,7 @@ impl Worker {
                 match action {
                     FlowAction::InjectLogin => me.inject(),
                     FlowAction::Notice(n) => me.send(FromWorker::Notice(n)),
+                    FlowAction::CheckRejected => me.check_rejected(),
                     FlowAction::None => {}
                 }
             }
@@ -272,6 +311,7 @@ impl Worker {
             // Abbruch durch eine neue Navigation ist kein Fehler.
             if !err.matches(webkit2gtk::NetworkError::Cancelled) {
                 let host = check_url(uri).map(|u| u.host).unwrap_or_default();
+                me.trace(&format!("Laden fehlgeschlagen: {host}: {}", err.message()));
                 *me.0.last_error.borrow_mut() = Some(format!("{host}: {}", err.message()));
                 me.status(v);
             }
@@ -630,6 +670,10 @@ impl Worker {
             return;
         }
         let Some(login) = self.0.flow.borrow().login().cloned() else { return };
+        if self.0.login_busy.replace(true) {
+            self.trace("Anmeldeskript läuft bereits: zweiter Lauf übersprungen");
+            return;
+        }
         let user = match &c.domain {
             Some(d) if !d.is_empty() && !c.username.contains('@') && !c.username.contains('\\') => format!("{d}\\{}", c.username),
             _ => c.username.clone(),
@@ -637,21 +681,64 @@ impl Worker {
         let pw = Secret::from_bytes(c.password.0.clone());
         match login_script(&login, &user, &pw) {
             Ok(script) => {
-                let me = self.clone();
-                page.view.evaluate_javascript(&script, None, None, None::<&gtk::gio::Cancellable>, move |r| {
-                    let text = match r {
-                        Ok(v) => v.to_str().to_string(),
-                        Err(e) => e.message().to_string(),
-                    };
-                    let action = me.0.flow.borrow_mut().script_result(&text);
-                    if let FlowAction::Notice(n) = action {
-                        me.send(FromWorker::Notice(n));
-                    }
-                });
+                self.trace("Anmeldeskript gestartet");
+                self.run_login(script, 0)
             }
-            Err(e) => self.send(FromWorker::Notice(e.to_string())),
+            Err(e) => {
+                self.0.login_busy.set(false);
+                self.send(FromWorker::Notice(e.to_string()))
+            }
         }
     }
+
+    /// Zwei Sekunden nach dem Laden prüfen, ob nach dem Abschicken wieder ein Kennwortfeld da ist.
+    fn check_rejected(&self) {
+        let me = self.clone();
+        glib::timeout_add_local_once(Duration::from_secs(2), move || {
+            let Some(page) = me.page() else { return };
+            let me2 = me.clone();
+            page.view.evaluate_javascript(&presence_script(), None, None, None::<&gtk::gio::Cancellable>, move |r| {
+                let text = r.map(|v| v.to_str().to_string()).unwrap_or_default();
+                me2.trace(&format!("Prüfung nach dem Abschicken: {text}"));
+                if let FlowAction::Notice(n) = me2.0.flow.borrow_mut().rejected_check(&text) {
+                    me2.send(FromWorker::Notice(n));
+                }
+            });
+        });
+    }
+
+    /// Führt das Anmeldeskript aus. Seiten, die ihr Formular erst nach dem Laden aufbauen, brauchen
+    /// Zeit: Wird kein Kennwortfeld gefunden, wird alle 500 ms erneut gesucht, höchstens 10 Sekunden.
+    fn run_login(&self, script: zeroize::Zeroizing<String>, tries: u32) {
+        let Some(page) = self.page() else {
+            self.0.login_busy.set(false);
+            return;
+        };
+        let me = self.clone();
+        let again = script.clone();
+        page.view.evaluate_javascript(&script, None, None, None::<&gtk::gio::Cancellable>, move |r| {
+            let text = match r {
+                Ok(v) => v.to_str().to_string(),
+                Err(e) => e.message().to_string(),
+            };
+            if text.trim_matches('"') == RESULT_NO_PASSWORD_FIELD && tries < LOGIN_RETRIES {
+                glib::timeout_add_local_once(LOGIN_RETRY_EVERY, move || me.run_login(again, tries + 1));
+                return;
+            }
+            me.0.login_busy.set(false);
+            // Ergebnisse sind feste Kennungen (rj:…) oder Meldungen ohne Eingabewerte.
+            me.trace(&format!("Anmeldeskript nach {} Wiederholungen: {}", tries, text.chars().take(80).collect::<String>()));
+            let action = me.0.flow.borrow_mut().script_result(&text);
+            if let FlowAction::Notice(n) = action {
+                me.send(FromWorker::Notice(n));
+            }
+        });
+    }
+}
+
+/// Adresse für das Protokoll: ohne Anfrageteil und Anker (können Kennungen enthalten).
+fn trace_uri(u: &str) -> String {
+    u.split(['?', '#']).next().unwrap_or("").to_string()
 }
 
 fn button_mask(n: u32) -> u32 {

@@ -1,8 +1,7 @@
 # Updates
 
-remotejoe kann neue Versionen selbst finden, laden und installieren. Standardquelle sind die
-Veröffentlichungen dieses Repositorys auf GitHub (`joeMJ/remotejoe`); einstellbar ist auch ein
-eigener Gitea-Server oder ein anderes GitHub-Repository. Jedes Paket ist mit einem
+remotejoe kann neue Versionen selbst finden, laden und installieren. Quelle sind die
+Veröffentlichungen dieses Repositorys auf GitHub (`joeMJ/remotejoe`). Jedes Paket ist mit einem
 Ed25519-Schlüssel signiert; das Programm installiert nur, was mit dem eingebauten öffentlichen
 Schlüssel signiert ist und dessen Prüfsumme stimmt.
 
@@ -26,41 +25,27 @@ Schlüsseldatenbank bleiben). Offline aus einem Ordner mit den drei Dateien eine
 
 Die Pakete werden unter Ubuntu 26.04 gebaut; für 24.04 gibt es keine Prüfung.
 
-### Quelle einstellen
+### Updates im Programm
 
-**Hilfe → Nach Updates suchen …** öffnet den Tab „Programm-Update“.
+**Hilfe → Nach Updates suchen …** öffnet den Tab „Programm-Update“. Die Quelle ist fest: die
+öffentlichen Veröffentlichungen von `joeMJ/remotejoe` auf GitHub; Zugangsdaten braucht es nicht.
+Im Tab gibt es:
 
-| Feld | Bedeutung |
+| Bedienelement | Bedeutung |
 |---|---|
-| Quelle | GitHub (Voreinstellung), Gitea oder Keine |
-| Gitea-Adresse | Basisadresse des Servers, z. B. `https://git.example.test` (bei GitHub leer lassen) |
-| Repository | `besitzer/name`; Voreinstellung `joeMJ/remotejoe` |
-| Zugriffsschlüssel | Eintrag der Schlüsseldatenbank, dessen **Kennwort** der Zugriffsschlüssel (Token) ist; für das öffentliche Repository nicht nötig |
-| Beim Start im Hintergrund prüfen | Voreinstellung aus; prüft einmal je Start, ohne den Start zu verzögern (mit Zugriffsschlüssel erst nach dem Entsperren) |
+| Jetzt prüfen | fragt die neueste Veröffentlichung ab |
+| Herunterladen und installieren | lädt, prüft und installiert die gefundene Version |
+| Später | schließt den Tab |
+| Beim Start im Hintergrund prüfen | Voreinstellung aus; prüft einmal je Start, ohne den Start zu verzögern |
 
-„Einstellungen speichern“ schreibt die Werte in `config.toml`, Abschnitt `[update]`. Der
-Zugriffsschlüssel steht nie in der Konfiguration, sondern nur als Verweis auf den Eintrag
-(`token_entry`, UUID).
+Die Einstellung steht in `config.toml`, Abschnitt `[update]`:
 
 ```toml
 [update]
-source = "github"            # Voreinstellung; "gitea" oder "" (keine Quelle)
-base_url = ""                # nur bei Gitea
-repo = "joeMJ/remotejoe"
-token_entry = "0b5c…"        # nur für private Repositorys: Eintrag in der KDBX
 check_on_start = false
 ```
 
-### Zugriffsschlüssel anlegen (nur für private Quellen)
-
-- **Gitea:** Einstellungen → Anwendungen → „Zugriffstoken generieren“, Berechtigung
-  `read:repository` genügt. Das Token als Kennwort eines neuen KDBX-Eintrags speichern (z. B.
-  „Gitea Updates“) und im Tab auswählen.
-- **GitHub (privates Repository):** Fein granulares Token mit Leserecht auf „Contents“ des
-  Repositorys; ebenso als Kennwort eines KDBX-Eintrags.
-
-Der Schlüssel wird byte-genau übertragen (keine Kürzung, keine Umkodierung) und erscheint nie in
-Protokollen, Fehlermeldungen oder im Tab.
+Ältere Einträge für Quelle, Adresse oder Zugriffsschlüssel werden ignoriert.
 
 ### Prüfen und installieren
 

@@ -7,7 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
@@ -111,6 +111,7 @@ pub struct CellView {
 /// Terminal.
 pub struct Terminal {
     term: Term<Listener>,
+    config: Config,
     parser: Processor,
     events: Listener,
     scheme: Scheme,
@@ -179,8 +180,17 @@ fn palette(c: Color, fg: bool, bold: bool, s: &Scheme) -> Rgb {
     }
 }
 
+/// Zeilen im Rücklauf (Scrollback): Vorgabe, Mindest- und Höchstwert.
+pub const HISTORY_DEFAULT: usize = 10_000;
+pub const HISTORY_MIN: usize = 100;
+pub const HISTORY_MAX: usize = 200_000;
+
 impl Terminal {
     pub fn new(cols: usize, rows: usize, osc52: Osc52Policy) -> Self {
+        Self::with_history(cols, rows, osc52, HISTORY_DEFAULT)
+    }
+
+    pub fn with_history(cols: usize, rows: usize, osc52: Osc52Policy, history: usize) -> Self {
         let events = Listener::default();
         let osc = match (osc52.allow_write, osc52.allow_read_with_prompt) {
             (true, true) => Osc52::CopyPaste,
@@ -188,9 +198,38 @@ impl Terminal {
             (false, true) => Osc52::OnlyPaste,
             (false, false) => Osc52::Disabled,
         };
-        let config = Config { osc52: osc, ..Config::default() };
-        let term = Term::new(config, &Size { cols, rows }, events.clone());
-        Terminal { term, parser: Processor::new(), events, scheme: Scheme::default() }
+        let config = Config { osc52: osc, scrolling_history: history.clamp(HISTORY_MIN, HISTORY_MAX), ..Config::default() };
+        let term = Term::new(config.clone(), &Size { cols, rows }, events.clone());
+        Terminal { term, config, parser: Processor::new(), events, scheme: Scheme::default() }
+    }
+
+    /// Größe des Rücklaufs ändern (wirkt sofort; ältere Zeilen darüber hinaus fallen weg).
+    pub fn set_history(&mut self, lines: usize) {
+        self.config.scrolling_history = lines.clamp(HISTORY_MIN, HISTORY_MAX);
+        self.term.set_options(self.config.clone());
+    }
+
+    /// Anzeige um `lines` Zeilen zurück (positiv) oder vor (negativ) verschieben.
+    pub fn scroll(&mut self, lines: i32) {
+        self.term.scroll_display(Scroll::Delta(lines));
+    }
+
+    pub fn scroll_page(&mut self, back: bool) {
+        self.term.scroll_display(if back { Scroll::PageUp } else { Scroll::PageDown });
+    }
+
+    pub fn scroll_bottom(&mut self) {
+        self.term.scroll_display(Scroll::Bottom);
+    }
+
+    /// Wie viele Zeilen die Anzeige hinter dem Ende liegt (0: am Ende).
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    /// Zeilen im Rücklauf.
+    pub fn history_size(&self) -> usize {
+        self.term.grid().history_size()
     }
 
     /// Neues Farbschema; gilt für alle Zellen beim nächsten Zeichnen.
@@ -223,8 +262,13 @@ impl Terminal {
         self.term.screen_lines()
     }
 
+    /// Zeile des Puffers für eine Zeile der Anzeige (berücksichtigt das Zurückblättern).
+    fn line(&self, row: usize) -> Line {
+        Line(row as i32 - self.display_offset() as i32)
+    }
+
     pub fn cell(&self, row: usize, col: usize) -> CellView {
-        let c = &self.term.grid()[Line(row as i32)][Column(col)];
+        let c = &self.term.grid()[self.line(row)][Column(col)];
         let bold = c.flags.contains(Flags::BOLD);
         CellView {
             ch: c.c,
@@ -243,7 +287,7 @@ impl Terminal {
     pub fn line_text(&self, row: usize) -> String {
         let mut s = String::new();
         for col in 0..self.columns() {
-            let c = &self.term.grid()[Line(row as i32)][Column(col)];
+            let c = &self.term.grid()[self.line(row)][Column(col)];
             if c.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
                 continue;
             }
@@ -279,7 +323,8 @@ impl Terminal {
 
     /// Auswahl von (Zeile, Spalte) bis (Zeile, Spalte) einschließlich.
     pub fn select(&mut self, start: (usize, usize), end: (usize, usize)) {
-        let p = |(r, c): (usize, usize)| Point::new(Line(r as i32), Column(c));
+        let off = self.display_offset() as i32;
+        let p = |(r, c): (usize, usize)| Point::new(Line(r as i32 - off), Column(c));
         let mut sel = Selection::new(SelectionType::Simple, p(start), Side::Left);
         sel.update(p(end), Side::Right);
         self.term.selection = Some(sel);
@@ -404,5 +449,45 @@ mod tests {
         // 256-Farben-Würfel und 24-Bit-Farben bleiben unverändert.
         assert_eq!(t.cell(0, 2).fg, Rgb { r: 255, g: 0, b: 0 });
         assert_eq!(t.cell(0, 3).fg, Rgb { r: 10, g: 20, b: 30 });
+    }
+
+    #[test]
+    fn scrolling_back_shows_history_and_returns_to_the_end() {
+        let mut t = Terminal::with_history(10, 3, Osc52Policy::default(), 1000);
+        for i in 0..20 {
+            t.feed(format!("zeile{i}\r\n").as_bytes());
+        }
+        assert_eq!(t.display_offset(), 0);
+        let bottom = t.screen_text();
+        assert!(t.history_size() >= 17);
+        t.scroll(5);
+        assert_eq!(t.display_offset(), 5);
+        assert_ne!(t.screen_text(), bottom);
+        assert_eq!(t.line_text(0), "zeile13", "{:?}", t.screen_text());
+        t.scroll(-2);
+        assert_eq!(t.display_offset(), 3);
+        t.scroll_page(true);
+        assert_eq!(t.display_offset(), 6);
+        t.scroll_bottom();
+        assert_eq!(t.display_offset(), 0);
+        assert_eq!(t.screen_text(), bottom);
+        // Auswahl folgt der Anzeige: markiert den Text, der gerade zu sehen ist.
+        t.scroll(5);
+        t.select((0, 0), (0, 6));
+        assert_eq!(t.selection_text().as_deref(), Some("zeile13"));
+    }
+
+    #[test]
+    fn history_size_can_be_changed_and_is_limited() {
+        let mut t = Terminal::with_history(10, 3, Osc52Policy::default(), 5);
+        for i in 0..400 {
+            t.feed(format!("z{i}\r\n").as_bytes());
+        }
+        assert!(t.history_size() <= HISTORY_MIN, "Mindestwert gilt");
+        t.set_history(300);
+        for i in 0..400 {
+            t.feed(format!("y{i}\r\n").as_bytes());
+        }
+        assert!(t.history_size() > HISTORY_MIN && t.history_size() <= 300);
     }
 }

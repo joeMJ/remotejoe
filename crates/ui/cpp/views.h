@@ -1,6 +1,7 @@
 #pragma once
 // Darstellung einer Sitzung: Bild (RDP/VNC) oder Terminal (SSH), mit Kopfzeile.
 
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QFile>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
@@ -31,8 +32,11 @@ public:
 	/// Schließt eine nicht verwendete Kennung.
 	static void closeHandle(std::int64_t fd);
 	void damage(int x, int y, int w, int h);
+	/// Blauen Rahmen beim Tastaturfokus zeigen (Einstellung unter Extras → Darstellung).
+	static void setFocusFrame(bool on) { s_focusFrame = on; }
 	/// Web-Sitzung: Fokuswechsel an den Worker melden.
 	void setWeb(bool web) { m_web = web; }
+	inline static bool s_focusFrame = true;
 	/// Bildpunkt der Gegenstelle in Koordinaten dieses Widgets.
 	QPoint toLocal(const QPoint& remote) const;
 
@@ -87,7 +91,7 @@ protected:
 	void mouseMoveEvent(QMouseEvent*) override;
 	void mouseReleaseEvent(QMouseEvent*) override;
 	void resizeEvent(QResizeEvent*) override;
-	/// Strg + Mausrad ändert die Schriftgröße.
+	/// Mausrad blättert im Rücklauf (bei less/top: Pfeiltasten); Strg + Mausrad ändert die Schriftgröße.
 	void wheelEvent(QWheelEvent*) override;
 	bool focusNextPrevChild(bool) override { return false; }
 
@@ -102,6 +106,7 @@ private:
 	QSize m_lastSize;
 	QColor m_selection;
 	int m_wheel = 0;
+	int m_scrollAcc = 0;
 };
 
 /// Rahmen um eine Sitzung mit Kopfzeile, Zustand und „Neu verbinden“.
@@ -140,6 +145,11 @@ private:
 	void webCommand(const QString& json);
 	QString m_pageTitle;
 	QString m_stateText;
+	/// Ladezustand der Webseite für „lädt seit N s“ in der Kopfzeile.
+	bool m_loading = false;
+	int m_progress = 0;
+	QElapsedTimer m_loadClock;
+	QTimer m_loadTick;
 	QPushButton* m_back = nullptr;
 	QPushButton* m_forward = nullptr;
 	QPushButton* m_reload = nullptr;

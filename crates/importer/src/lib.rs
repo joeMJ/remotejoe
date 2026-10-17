@@ -1,9 +1,10 @@
-//! Import aus Remote Desktop Manager (`.rdm` XML, JSON-Export) und Royal TS
+//! Import aus Remote Desktop Manager (`.rdm` XML, JSON-Export, `.csv`) und Royal TS
 //! (`.rtsz` ZIP mit JSON, `.rtsx` XML).
 //!
 //! Ablauf: Lesen in ein Zwischenmodell → Plan mit Vorschau und Bericht →
 //! Übernahme in Index und KDBX. Kennwörter wandern nur in die KDBX.
 
+pub mod csv;
 pub mod plan;
 pub mod rdm;
 pub mod royal;
@@ -98,6 +99,7 @@ pub fn read_file(path: &std::path::Path) -> Result<SourceDocument, ImportError> 
     match ext.as_str() {
         "rtsz" => royal::read_rtsz(&bytes),
         "rtsx" => royal::read_rtsx(text(&bytes, &name)?),
+        "csv" => csv::read_csv(text(&bytes, &name)?),
         "json" => rdm::read_json(text(&bytes, &name)?),
         _ => rdm::read_xml(text(&bytes, &name)?),
     }

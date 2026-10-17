@@ -107,6 +107,12 @@ pub struct TermSnapshot {
     pub rows: usize,
     pub cursor: (usize, usize),
     pub cursor_visible: bool,
+    /// Bildschirm-Programm (less, top): kein Rücklauf, das Mausrad sendet Pfeiltasten.
+    pub alt_screen: bool,
+    /// Zeilen, um die die Anzeige zurückgeblättert ist (0: am Ende).
+    pub scroll_offset: usize,
+    /// Zeilen im Rücklauf.
+    pub history: usize,
     /// Hintergrund-, Vordergrund- und Cursorfarbe des Schemas (`#rrggbb`).
     pub bg: String,
     pub fg: String,
@@ -162,6 +168,7 @@ pub struct Manager {
     pub question_timeout: Duration,
     /// Farben aller Terminals (auch neuer).
     scheme: Scheme,
+    scrollback: usize,
     /// Abzweig der Terminalausgabe für laufende Makros.
     macro_taps: HashMap<SessionId, std::sync::mpsc::Sender<Vec<u8>>>,
 }
@@ -208,6 +215,7 @@ impl Manager {
             questions: BTreeMap::new(),
             question_timeout: QUESTION_TIMEOUT,
             scheme: Scheme::default(),
+            scrollback: rj_ssh::terminal::HISTORY_DEFAULT,
             macro_taps: HashMap::new(),
         }
     }
@@ -220,6 +228,29 @@ impl Manager {
             }
         }
         self.scheme = scheme;
+    }
+
+    /// Größe des Rücklaufs aller Terminals (wirkt sofort und für neue).
+    pub fn set_scrollback(&mut self, lines: usize) {
+        for x in self.sessions.values_mut() {
+            if let Some(t) = x.term.as_mut() {
+                t.set_history(lines);
+            }
+        }
+        self.scrollback = lines;
+    }
+
+    /// Terminal-Anzeige um `lines` zurück (positiv) oder vor (negativ) blättern.
+    pub fn scroll_terminal(&mut self, s: SessionId, lines: i32) {
+        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.term.as_mut()) {
+            t.scroll(lines);
+        }
+    }
+
+    pub fn scroll_terminal_page(&mut self, s: SessionId, back: bool) {
+        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.term.as_mut()) {
+            t.scroll_page(back);
+        }
     }
 
     /// Ordner der Worker: neben dem Hauptprogramm.
@@ -321,7 +352,7 @@ impl Manager {
         self.next += 1;
         let scheme = self.scheme.clone();
         let term = (spec.protocol == Protocol::Ssh).then(|| {
-            let mut t = Terminal::new(spec.request.width as usize, spec.request.height as usize, osc52_policy(&spec.request.options_json));
+            let mut t = Terminal::with_history(spec.request.width as usize, spec.request.height as usize, osc52_policy(&spec.request.options_json), self.scrollback);
             t.set_scheme(scheme);
             t
         });
@@ -460,6 +491,10 @@ impl Manager {
             if down {
                 let bytes = crate::keys::terminal_bytes(qt_key, modifiers, text, false);
                 if !bytes.is_empty() {
+                    // Eingabe springt ans Ende zurück.
+                    if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.term.as_mut()) {
+                        t.scroll_bottom();
+                    }
                     self.send(s, &ToWorker::Input(InputEvent::Bytes(bytes)));
                 }
             }
@@ -499,6 +534,9 @@ impl Manager {
 
     /// Einfügen ins Terminal (mit Klammerung) bzw. Zwischenablage anbieten (RDP/VNC).
     pub fn paste(&mut self, s: SessionId, text: &str) {
+        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.term.as_mut()) {
+            t.scroll_bottom();
+        }
         let bytes = self.sessions.get(&s).and_then(|x| x.term.as_ref()).map(|t| t.paste_bytes(text));
         match bytes {
             Some(b) => self.send(s, &ToWorker::Input(InputEvent::Bytes(b))),
@@ -576,7 +614,7 @@ impl Manager {
             lines.push(runs);
         }
         let sc = t.scheme();
-        Some(TermSnapshot { cols: t.columns(), rows: t.rows(), cursor: t.cursor(), cursor_visible: t.cursor_visible(), bg: hex(sc.bg), fg: hex(sc.fg), cursor_color: hex(sc.cursor), lines })
+        Some(TermSnapshot { cols: t.columns(), rows: t.rows(), cursor: t.cursor(), cursor_visible: t.cursor_visible() && t.display_offset() == 0, alt_screen: t.alt_screen(), scroll_offset: t.display_offset(), history: t.history_size(), bg: hex(sc.bg), fg: hex(sc.fg), cursor_color: hex(sc.cursor), lines })
     }
 
     pub fn disconnect(&mut self, s: SessionId) {

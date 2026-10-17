@@ -12,6 +12,6 @@ fn main() {
         .qrc("res/remotejoe.qrc")
         .include_dir("cpp")
         .file("src/bridge.rs")
-        .cpp_files(["cpp/mainwindow.h", "cpp/mainwindow.cpp", "cpp/editor.h", "cpp/editor.cpp", "cpp/views.cpp", "cpp/app.cpp"])
+        .cpp_files(["cpp/mainwindow.h", "cpp/mainwindow.cpp", "cpp/editor.h", "cpp/editor.cpp", "cpp/views.cpp", "cpp/titlebar.h", "cpp/titlebar.cpp", "cpp/appearance.h", "cpp/appearance.cpp", "cpp/app.cpp"])
         .build();
 }

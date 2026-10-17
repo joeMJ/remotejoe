@@ -161,7 +161,7 @@ impl AppExecutor {
         }
         auth.push(Auth::Password(pw.clone()));
         auth.push(Auth::KeyboardInteractive(pw.clone()));
-        let params = SshParams { host: spec.host.clone(), port: spec.port, user: spec.credentials.username.clone(), auth, connect_timeout: Duration::from_secs(15), keepalive: Duration::from_secs(30) };
+        let params = SshParams { host: spec.host.clone(), port: spec.port, user: spec.credentials.username.clone(), auth, connect_timeout: Duration::from_secs(15), keepalive: Duration::from_secs(30), legacy: false };
         let conn = rt
             .block_on(SshConnection::connect(&params, self.known_hosts.clone(), ask))
             .map_err(|e| match e {

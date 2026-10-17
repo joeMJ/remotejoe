@@ -26,6 +26,10 @@ class UnlockOverlay;
 class QComboBox;
 class QMenu;
 class QAction;
+class QEvent;
+class QMouseEvent;
+class QMenuBar;
+class TitleBar;
 
 class MainWindow : public QMainWindow
 {
@@ -33,8 +37,12 @@ class MainWindow : public QMainWindow
 public:
 	explicit MainWindow(RjBackend* backend, QWidget* parent = nullptr);
 	~MainWindow() override;
+	TitleBar* titleBar() const { return m_titleBar; }
 
 	void applyTheme(bool dark);
+	/// Fensterlage aus der Konfiguration herstellen (vor dem Zeigen) bzw. beim Beenden merken.
+	void restoreWindowState();
+	void saveWindowState();
 	void setFilter(const QString& text);
 	/// Ersten Hypervisor im Baum aufklappen (lädt die Gäste).
 	void expandFirstHypervisor();
@@ -66,6 +74,9 @@ public:
 	void showEmptyTreeForScreenshot();
 	/// Wählt den ersten Tab mit einer Web-Sitzung; `false`, wenn es keinen gibt.
 	bool showWebTabForScreenshot();
+	/// Nur für Bildschirmfotos: Darstellungs-Tab öffnen; Über-Dialog erzeugen (nicht modal gezeigt).
+	void appearanceForScreenshot() { openAppearance(); }
+	QWidget* aboutForScreenshot();
 	/// Update-Tab mit einer Prüfung gegen `base` (lokale Attrappe).
 	void updateForScreenshot(const QString& base);
 	QTabWidget* tabs() const { return m_tabs; }
@@ -77,6 +88,9 @@ public:
 protected:
 	void paintEvent(QPaintEvent*) override;
 	void closeEvent(QCloseEvent*) override;
+	void mouseMoveEvent(QMouseEvent*) override;
+	void mousePressEvent(QMouseEvent*) override;
+	void changeEvent(QEvent*) override;
 	bool eventFilter(QObject*, QEvent*) override;
 
 private slots:
@@ -141,6 +155,9 @@ private:
 	void updateEmptyHint();
 	void updateConnInfo();
 	void openTerminalSettings();
+	void openAppearance();
+	/// Schema und Fokusrahmen aus den Einstellungen anwenden.
+	void applyAppearance();
 	void openMacroTab(const QString& id);
 	void addMacroShelf();
 	void macroContextMenu(const QModelIndex& index, const QPoint& globalPos);
@@ -149,8 +166,11 @@ private:
 	RjBackend* m_backend;
 	QLineEdit* m_search;
 	QTreeView* m_tree;
+	class QSplitter* m_split = nullptr;
 	class QLabel* m_emptyLabel = nullptr;
 	class QPushButton* m_emptyButton = nullptr;
+	TitleBar* m_titleBar = nullptr;
+	QMenuBar* m_menuBar = nullptr;
 	QWidget* m_emptyHint = nullptr;
 	bool m_macroShelfOpen = false;
 	QStandardItemModel* m_model;

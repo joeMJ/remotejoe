@@ -27,7 +27,30 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "isDemo"]
         fn is_demo(self: &RjBackend) -> bool;
+        /// Auswahl und Werte der Darstellung (Farbschema, Fokusrahmen) als JSON.
+        #[qinvokable]
+        #[cxx_name = "appearanceJson"]
+        fn appearance_json(self: &RjBackend) -> QString;
+        /// Farbschema und/oder Fokusrahmen ändern (JSON), speichern; liefert `appearanceJson`.
+        #[qinvokable]
+        #[cxx_name = "setAppearance"]
+        fn set_appearance(self: Pin<&mut RjBackend>, change: &QString) -> QString;
+        /// Programmversion (aus `Cargo.toml`), z. B. `0.1.1`.
+        #[qinvokable]
+        #[cxx_name = "appVersion"]
+        fn app_version(self: &RjBackend) -> QString;
         /// Ist eine Schlüsseldatenbank entsperrt (oder läuft die Vorführung)?
+        /// Ungespeicherte Änderungen in der Schlüsseldatenbank (Index, Zugangsdaten, Import).
+        /// Gemerkte Fensterlage (JSON) lesen bzw. beim Beenden speichern.
+        #[qinvokable]
+        #[cxx_name = "windowStateJson"]
+        fn window_state_json(self: &RjBackend) -> QString;
+        #[qinvokable]
+        #[cxx_name = "saveWindowState"]
+        fn save_window_state(self: Pin<&mut RjBackend>, state: &QString);
+        #[qinvokable]
+        #[cxx_name = "hasUnsavedChanges"]
+        fn has_unsaved_changes(self: &RjBackend) -> bool;
         #[qinvokable]
         #[cxx_name = "isVaultOpen"]
         fn is_vault_open(self: &RjBackend) -> bool;
@@ -125,6 +148,13 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "terminalJson"]
         fn terminal_json(self: &RjBackend, session: u64) -> QString;
+        /// Terminal zurück- (positiv) oder vorblättern, in Zeilen.
+        #[qinvokable]
+        #[cxx_name = "terminalScroll"]
+        fn terminal_scroll(self: Pin<&mut RjBackend>, session: u64, lines: i32);
+        #[qinvokable]
+        #[cxx_name = "terminalScrollPage"]
+        fn terminal_scroll_page(self: Pin<&mut RjBackend>, session: u64, back: bool);
         #[qinvokable]
         #[cxx_name = "selectText"]
         fn select_text(self: Pin<&mut RjBackend>, session: u64, r0: u32, c0: u32, r1: u32, c1: u32) -> QString;
@@ -221,6 +251,25 @@ impl qobject::RjBackend {
 
     fn is_demo(&self) -> bool {
         self.app().is_some_and(|a| a.demo)
+    }
+
+    fn app_version(&self) -> QString {
+        q(env!("CARGO_PKG_VERSION").to_string())
+    }
+
+    fn window_state_json(&self) -> QString {
+        q(self.app().map(|a| a.window_state_json()).unwrap_or_else(|| "{}".into()))
+    }
+
+    fn save_window_state(self: Pin<&mut Self>, state: &QString) {
+        let s = state.to_string();
+        if let Some(a) = self.app_mut() {
+            a.set_window_state(&s);
+        }
+    }
+
+    fn has_unsaved_changes(&self) -> bool {
+        self.app().is_some_and(|a| a.has_unsaved_changes())
     }
 
     fn is_vault_open(&self) -> bool {
@@ -462,6 +511,18 @@ impl qobject::RjBackend {
         q(self.app().and_then(|a| a.sessions.terminal(session)).map(|s| serde_json::to_string(&s).unwrap_or_default()).unwrap_or_default())
     }
 
+    fn terminal_scroll(self: Pin<&mut Self>, session: u64, lines: i32) {
+        if let Some(a) = self.app_mut() {
+            a.sessions.scroll_terminal(session, lines);
+        }
+    }
+
+    fn terminal_scroll_page(self: Pin<&mut Self>, session: u64, back: bool) {
+        if let Some(a) = self.app_mut() {
+            a.sessions.scroll_terminal_page(session, back);
+        }
+    }
+
     fn select_text(self: Pin<&mut Self>, session: u64, r0: u32, c0: u32, r1: u32, c1: u32) -> QString {
         q(self.app_mut().and_then(|a| a.sessions.select(session, (r0 as usize, c0 as usize), (r1 as usize, c1 as usize))).unwrap_or_default())
     }
@@ -539,8 +600,20 @@ impl qobject::RjBackend {
     }
 
     fn palette_json(&self) -> QString {
-        let p = if crate::theme::system_prefers_dark() { crate::theme::DARK } else { crate::theme::LIGHT };
-        q(serde_json::to_string(&p).unwrap_or_default())
+        q(crate::appearance::palette_json(self.app()).to_string())
+    }
+
+    fn appearance_json(&self) -> QString {
+        q(self.app().map(|a| a.appearance_json().to_string()).unwrap_or_else(|| "{}".into()))
+    }
+
+    fn set_appearance(self: Pin<&mut Self>, change: &QString) -> QString {
+        let c: serde_json::Value = serde_json::from_str(&change.to_string()).unwrap_or_default();
+        q(match self.app_mut().map(|a| a.set_appearance(&c)) {
+            Some(Ok(v)) => v.to_string(),
+            Some(Err(e)) => serde_json::json!({ "error": e }).to_string(),
+            None => "{}".into(),
+        })
     }
 
     fn unassigned_json(&self) -> QString {

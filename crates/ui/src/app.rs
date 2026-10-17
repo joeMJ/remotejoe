@@ -30,6 +30,8 @@ struct FieldProbe {
     /// Nächster Zeitpunkt für die Abfrage der Felder (nach dem Laden, mit Wiederholung für Seiten, die spät aufbauen).
     next_detect: Option<std::time::Instant>,
     attempts: u32,
+    /// Letzter Stand der gefundenen Felder (wird bei Zeitablauf geliefert, wenn nie ein Kennwortfeld erschien).
+    last: Option<serde_json::Value>,
 }
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -157,6 +159,7 @@ impl App {
         // Gespeicherte Farben gelten schon für das erste Terminal.
         let scheme = app.terminal_scheme();
         app.sessions.set_scheme(scheme);
+        app.sessions.set_scrollback(app.config.terminal.clamped_scrollback());
         app
     }
 
@@ -254,6 +257,7 @@ impl App {
         json!({
             "font_family": t.font_family.clone().unwrap_or_default(),
             "font_size": t.clamped_size(),
+            "scrollback": t.clamped_scrollback(),
             "scheme": t.scheme,
             "custom": t.has_overrides(),
             "fg": to_hex(e.fg),
@@ -291,6 +295,12 @@ impl App {
             }
             t.font_size = sz as f32;
         }
+        if let Some(n) = v.get("scrollback").and_then(|x| x.as_u64()) {
+            if n < termcolors::SCROLLBACK_MIN as u64 || n > termcolors::SCROLLBACK_MAX as u64 {
+                return json!({ "error": format!("Der Rücklauf muss zwischen {} und {} Zeilen liegen.", termcolors::SCROLLBACK_MIN, termcolors::SCROLLBACK_MAX) }).to_string();
+            }
+            t.scrollback = n as usize;
+        }
         if let Some(id) = v.get("scheme").and_then(|x| x.as_str()) {
             if termcolors::preset(id).is_none() {
                 return json!({ "error": format!("Unbekanntes Farbschema „{id}“") }).to_string();
@@ -318,6 +328,7 @@ impl App {
         self.config.terminal = t;
         let scheme = self.terminal_scheme();
         self.sessions.set_scheme(scheme);
+        self.sessions.set_scrollback(self.config.terminal.clamped_scrollback());
         if !self.demo {
             if let Some(cp) = self.config_path.clone() {
                 let _ = self.config.save(&cp);
@@ -493,6 +504,42 @@ impl App {
         }
     }
 
+    /// Gespeicherte Fensterlage als JSON (`saved` false, solange noch nie gespeichert wurde).
+    pub fn window_state_json(&self) -> String {
+        let w = &self.config.window;
+        json!({ "saved": w.saved, "x": w.x, "y": w.y, "width": w.width, "height": w.height, "maximized": w.maximized, "tree_width": w.tree_width }).to_string()
+    }
+
+    /// Merkt Größe, Lage und Baumbreite des Hauptfensters (beim Beenden); nicht im Demomodus.
+    pub fn set_window_state(&mut self, state: &str) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(state) else { return };
+        let n = |k: &str| v.get(k).and_then(|x| x.as_i64());
+        let (Some(x), Some(y), Some(w), Some(h)) = (n("x"), n("y"), n("width"), n("height")) else { return };
+        if !(400..=20000).contains(&w) || !(300..=20000).contains(&h) {
+            return;
+        }
+        let tree = n("tree_width").unwrap_or(280).clamp(100, 2000) as u32;
+        self.config.window = rj_core::config::WindowState {
+            x: x.clamp(-20000, 20000) as i32,
+            y: y.clamp(-20000, 20000) as i32,
+            width: w as u32,
+            height: h as u32,
+            maximized: v.get("maximized").and_then(|x| x.as_bool()).unwrap_or(false),
+            tree_width: tree,
+            saved: true,
+        };
+        if !self.demo {
+            if let Some(cp) = self.config_path.clone() {
+                let _ = self.config.save(&cp);
+            }
+        }
+    }
+
+    /// Es gibt Änderungen, die noch nicht in die Datei geschrieben sind.
+    pub fn has_unsaved_changes(&self) -> bool {
+        !self.demo && self.vault.as_ref().is_some_and(|v| v.is_dirty())
+    }
+
     pub fn save(&mut self) -> Result<bool, String> {
         match self.vault.as_mut() {
             Some(v) => v.save(None).map_err(|e| e.to_string()),
@@ -659,7 +706,7 @@ impl App {
             credentials: CredentialPayload { username: String::new(), domain: None, password: SecretBytes(Vec::new()), private_key: None },
         };
         let s = self.sessions.open(spec);
-        self.probe = Some(FieldProbe { s, target, started: std::time::Instant::now(), saw_loading: false, next_detect: None, attempts: 0 });
+        self.probe = Some(FieldProbe { s, target, started: std::time::Instant::now(), saw_loading: false, next_detect: None, attempts: 0, last: None });
         json!({ "ok": true }).to_string()
     }
 
@@ -671,8 +718,11 @@ impl App {
         for ev in out.drain(..) {
             match ev {
                 UiEvent::WebFields { s, fields } if s == p.s => {
-                    let empty = ["users", "passwords", "submits"].iter().all(|k| fields.get(*k).and_then(|v| v.as_array()).is_none_or(|a| a.is_empty()));
-                    if empty && p.attempts < 4 {
+                    // Erst ein Kennwortfeld beendet die Suche; Knöpfe oder Textfelder allein können vor dem
+                    // Aufbau des Formulars stehen (Seiten, die ihr Formular nachladen).
+                    let has_password = fields.get("passwords").and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty());
+                    if !has_password && p.attempts < 7 {
+                        p.last = Some(fields);
                         p.next_detect = Some(std::time::Instant::now() + Duration::from_millis(1500));
                     } else {
                         done = Some((None, fields));
@@ -710,7 +760,10 @@ impl App {
                 let _ = self.sessions.web_command(p.s, &json!({ "op": "detect" }));
             }
             if done.is_none() && p.started.elapsed() > PROBE_TIMEOUT {
-                done = Some((Some("Zeitüberschreitung: Die Seite hat nicht rechtzeitig geantwortet".into()), json!({})));
+                done = Some(match p.last.take() {
+                    Some(fields) => (None, fields),
+                    None => (Some("Zeitüberschreitung: Die Seite hat nicht rechtzeitig geantwortet".into()), json!({})),
+                });
             }
         }
         match done {
@@ -884,6 +937,7 @@ impl App {
                         auth,
                         connect_timeout: Duration::from_secs(self.config.connection.connect_timeout_secs as u64),
                         keepalive: Duration::from_secs(self.config.connection.keepalive_secs as u64),
+                        legacy: false,
                     });
                 }
                 Ok(TunnelSpec::Ssh { hops: out })

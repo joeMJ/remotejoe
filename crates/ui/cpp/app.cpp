@@ -216,6 +216,16 @@ void screenshots(MainWindow& w, const QString& dir)
 		pump(2500);
 		save(&w, dir, QStringLiteral("update-tab.png"));
 	}
+	// Darstellung und Über-Dialog.
+	w.appearanceForScreenshot();
+	pump(300);
+	save(w.tabs()->currentWidget(), dir, QStringLiteral("darstellung.png"));
+	if (QWidget* about = w.aboutForScreenshot())
+	{
+		pump(300);
+		save(about, dir, QStringLiteral("ueber.png"));
+		about->close();
+	}
 	w.tabs()->setCurrentIndex(0);
 	w.detachTabAt(1);
 	pump(400);
@@ -323,6 +333,8 @@ std::int32_t rjRunApplication()
 	backend.init(demo);
 	MainWindow w(&backend);
 	w.applyTheme(qEnvironmentVariable("REMOTEJOE_THEME") == QLatin1String("dark"));
+	if (!demo)
+		w.restoreWindowState();
 	w.show();
 	// Echter Start: zuerst die Entsperrmaske für die Schlüsseldatenbank.
 	if (!demo)

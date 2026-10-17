@@ -47,6 +47,7 @@ impl Fix {
             auth,
             connect_timeout: Duration::from_secs(15),
             keepalive: Duration::from_secs(30),
+            legacy: false,
         }
     }
 

@@ -65,15 +65,20 @@ Entfernt Programm, Starter und Symbole. Einstellungen (`~/.config/remotejoe`) un
 
 - **Baum links, Sitzungen rechts:** Ordner und Ziele in fester Reihenfolge, Suche über Namen
   und Hosts (Strg+F). Sitzungen in Tabs, gekachelt (1×2, 2×2, frei) oder als eigenes Fenster.
-- **RDP** mit Zwischenablage (Text in beide Richtungen, Dateien Ziel → Host), NLA.
+- **RDP** mit Zwischenablage (Text in beide Richtungen, Dateien Ziel → Host), NLA und Grafikkanal
+  (GFX; `Automatisch` wiederholt einen abgebrochenen Aufbau einmal mit GFX, GNOME-Remote-Desktop verlangt ihn).
 - **SSH** mit Terminal, Zwischenablage (geschütztes Einfügen; OSC 52: Schreiben erlaubt, Lesen nur nach Nachfrage),
-  Host-Schlüssel-Prüfung im OpenSSH-Format, Schlüssel aus KDBX-Anhängen.
+  Host-Schlüssel-Prüfung im OpenSSH-Format, Schlüssel aus KDBX-Anhängen. Das Mausrad blättert im
+  Rücklauf (einstellbar bis 200 000 Zeilen). Für alte Geräte lässt sich je Ziel „Unsichere ältere
+  SSH-Verfahren zulassen“ einschalten (SHA-1-Schlüsselaustausch, CBC, HMAC-SHA1, DSA).
 - **VNC** (eigene Umsetzung) mit TLS (VeNCrypt), Zertifikatsprüfung per Fingerabdruck und
   UTF-8-Zwischenablage.
 - **Web** im Tab wie RDP und VNC, auch gekachelt: Die Seite wird im Worker ohne eigenes
   Fenster gerendert (WebKitGTK); Zurück, Vor, Neu laden in der Kopfzeile, Seitentitel als
   Tab-Titel, Zwischenablage über das Hauptprogramm, eigenes Browserprofil je Ziel und
-  automatische Formular-Anmeldung. Unter Windows noch nicht verfügbar.
+  automatische Formular-Anmeldung mit „Felder erkennen“ (auch bei Seiten, die ihr Formular erst nach
+  dem Laden aufbauen). Anmeldung und Seitenwechsel werden je Ziel mit Zeiten protokolliert
+  (`protokoll.log` im Profilordner, ohne Eingaben). Unter Windows noch nicht verfügbar.
 - **PowerShell-Remoting** (WinRM oder SSH) über ein lokal installiertes PowerShell 7.
 - **Proxmox VE und Hyper-V:** Ziele im Baum aufklappen, Gäste starten, herunterfahren, neu
   starten, ausschalten und deren Konsole öffnen.
@@ -82,16 +87,21 @@ Entfernt Programm, Starter und Symbole. Einstellungen (`~/.config/remotejoe`) un
 - **Aufgaben:** Aktualisierungen prüfen und einspielen (apt über SSH, Windows Update über
   PowerShell), als „Patchday“ für viele Ziele parallel.
 - **SNMP-Ampel** am Baum (CPU, Speicher, Schnittstellen) mit Verlauf.
-- **Import** aus Remote Desktop Manager (`.rdm`, JSON) und Royal TS (`.rtsz`, `.rtsx`).
+- **Import** aus Remote Desktop Manager (`.rdm`, JSON, CSV) und Royal TS (`.rtsz`, `.rtsx`). Eine
+  RDM-CSV enthält Kennwörter im Klartext: Sie werden nur in die Schlüsseldatenbank übernommen, der
+  Import weist darauf hin, die Datei danach sicher zu löschen.
 - **Bearbeiten im Hauptfenster:** Ordner und Ziele anlegen, ändern, verschieben, duplizieren
   und löschen im Eigenschaften-Tab, Vorlagen je Zieltyp, Favoriten, Ansichten (z. B.
   „Patchday“), „Auf Unterobjekte anwenden“, Rückgängig.
 - **Mehrere Ziele auf einmal anlegen:** ein Host pro Zeile (bis 500), Namensmuster mit
   `{host}` und `{nr}`, Vorlage und Zugangsdaten, Vorschau mit Hinweisen je Zeile; alles als eine
   rückgängig machbare Aktion.
+- **Eigene Titelleiste** mit Logo, Name und Version, **Darstellung** (System hell/dunkel oder eigene
+  Paletten, Fokusrahmen abschaltbar) und **Über**-Dialog; die Fenstergröße wird beim Beenden gemerkt,
+  und bei ungespeicherten Änderungen fragt das Programm nach.
 - **Keine Dialogfenster:** Rückfragen, Hinweise und Fehlermeldungen erscheinen als Leiste im
   Tab oder im Hauptfenster; Import-Vorschau und Patchday sind Tabs.
-- **Updates** aus den Veröffentlichungen dieses Repositorys (oder einer eigenen Quelle):
+- **Updates** aus den Veröffentlichungen dieses Repositorys auf GitHub:
   Hilfe → Nach Updates suchen …; Pakete sind mit Ed25519 signiert und werden vor der
   Installation geprüft (siehe [`docs/UPDATE.md`](docs/UPDATE.md)).
 - **Alle im Ordner verbinden**, neu verbinden oder trennen (gestaffelt, höchstens 4
@@ -166,12 +176,23 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
 9. **Fußzeile:** zeigt für die vordere Sitzung den Verbindungstyp, das Ziel, seit wann und als wer
    Sie verbunden sind.
 10. **Terminal:** **Extras → Terminal …** (Schrift, Größe, Farbschema mit Catppuccin und weiteren
-    Schemata, eigene Farben); Strg + Mausrad ändert die Schriftgröße direkt im Terminal.
+    Schemata, eigene Farben, Größe des Rücklaufs); das Mausrad blättert im Rücklauf (3 Zeilen je
+    Raste, Umschalt + Bild↑/↓ seitenweise; bei `less`/`top` senden sie Pfeiltasten), Strg + Mausrad
+    ändert die Schriftgröße direkt im Terminal.
 11. **Makros** (SSH): Im Baum liegt das Fach **Makros**; Makros werden Zielen oder Ordnern
     zugeordnet (vererbt). In der Kopfzeile jeder SSH-Sitzung legt **Makro anlegen** ein Makro für
     dieses Ziel an, **Makro ausführen ▾** startet eines der zugeordneten. Schritte sind „Senden“
     und „Warten auf“ (Text oder regulärer Ausdruck, Zeitlimit, Fehlermuster); das Kennwort kommt
     als Platzhalter aus den Zugangsdaten der Sitzung und steht nie im Protokoll.
+
+12. **Hilfe** enthält „Nach Updates suchen …“, „Hilfe“ (diese Anleitung auf GitHub) und „Über
+    remotejoe …“; die **Darstellung** (Farbschema, Fokusrahmen) steht im Menü Extras.
+
+<p align="center">
+  <img src="docs/screenshots/darstellung.png" alt="Darstellung: Farbschema und Fokusrahmen" width="520">
+  &nbsp;
+  <img src="docs/screenshots/ueber.png" alt="Über remotejoe" width="360">
+</p>
 
 Zum Ausprobieren ohne eigene Daten: `remotejoe --demo` (erfundene Ziele, Vorführsitzungen).
 
@@ -190,6 +211,13 @@ connect_all_parallel = 4
 [security]
 lock_after_idle_mins = 0      # 0 = aus
 disconnect_on_lock = false
+
+[update]
+check_on_start = false        # beim Start im Hintergrund prüfen
+
+[appearance]
+scheme = "system"             # system, hell, dunkel oder datei:<Name>
+focus_frame = true
 ```
 
 ## Bauen unter Ubuntu 24.04

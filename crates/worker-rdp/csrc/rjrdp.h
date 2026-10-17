@@ -56,6 +56,7 @@ typedef struct
 	uint32_t keyboard_layout;
 	const char* config_path;
 	uint32_t timeout_ms;
+	int gfx; /* 1: Grafikkanal (RDPGFX) anbieten */
 } rj_params;
 
 rj_rdp* rj_rdp_new(const rj_callbacks* cb);

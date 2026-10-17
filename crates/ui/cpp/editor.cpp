@@ -572,11 +572,23 @@ QWidget* PropertiesTab::pageConnection()
 			text("height", "edit.opt.height");
 			text("keyboard_layout", "edit.opt.keyboard_layout");
 			check("ignore_certificate", "edit.opt.ignore_certificate");
+			if (proto == QLatin1String("rdp"))
+			{
+				auto* g = new QComboBox(w);
+				g->addItem(rjText(m_backend, "edit.opt.gfx.auto"), QStringLiteral("auto"));
+				g->addItem(rjText(m_backend, "edit.opt.gfx.on"), QStringLiteral("on"));
+				g->addItem(rjText(m_backend, "edit.opt.gfx.off"), QStringLiteral("off"));
+				g->setCurrentIndex(qMax(0, g->findData(o.value(QStringLiteral("gfx")).toString(QStringLiteral("auto")))));
+				track(g, QStringLiteral("options"));
+				f->addRow(rjText(m_backend, "edit.opt.gfx"), g);
+				m_opts.insert(QStringLiteral("gfx"), g);
+			}
 		}
 		else if (proto == QLatin1String("ssh"))
 		{
 			text("term", "edit.opt.term");
 			text("keepalive_secs", "edit.opt.keepalive_secs");
+			check("legacy_algorithms", "edit.opt.legacy_algorithms");
 		}
 		else if (proto == QLatin1String("vnc"))
 			check("view_only", "edit.opt.view_only");
@@ -1148,6 +1160,14 @@ QJsonObject PropertiesTab::collect() const
 			}
 			else if (auto* c = qobject_cast<QCheckBox*>(i.value()))
 				o.insert(i.key(), c->isChecked());
+			else if (auto* cb = qobject_cast<QComboBox*>(i.value()))
+			{
+				const QString v = cb->currentData().toString();
+				if (v == QLatin1String("auto"))
+					o.remove(i.key());
+				else
+					o.insert(i.key(), v);
+			}
 		}
 		if (m_clip)
 			o.insert(QStringLiteral("clipboard"), m_clip->currentData().toString());
@@ -2069,6 +2089,10 @@ TerminalSettingsTab::TerminalSettingsTab(RjBackend* backend, QWidget* parent)
 	m_size = new QSpinBox(this);
 	m_size->setRange(6, 40);
 	m_size->setSuffix(QStringLiteral(" pt"));
+	m_scrollback = new QSpinBox(this);
+	m_scrollback->setRange(100, 200000);
+	m_scrollback->setSingleStep(1000);
+	m_scrollback->setSuffix(rjText(backend, "term.scrollback.suffix"));
 	m_scheme = new QComboBox(this);
 	for (const QJsonValue& sv : std::as_const(m_schemes))
 		m_scheme->addItem(sv.toObject().value(QStringLiteral("label")).toString(), sv.toObject().value(QStringLiteral("id")).toString());
@@ -2078,6 +2102,7 @@ TerminalSettingsTab::TerminalSettingsTab(RjBackend* backend, QWidget* parent)
 	f->addRow(QString(), m_system);
 	f->addRow(new QLabel(rjText(backend, "term.font"), this), m_font);
 	f->addRow(new QLabel(rjText(backend, "term.size"), this), m_size);
+	f->addRow(new QLabel(rjText(backend, "term.scrollback"), this), m_scrollback);
 	f->addRow(new QLabel(rjText(backend, "term.scheme"), this), m_scheme);
 	f->addRow(QString(), m_custom);
 	const char* keys[4] = { "fg", "bg", "cursor", "selection" };
@@ -2131,6 +2156,10 @@ TerminalSettingsTab::TerminalSettingsTab(RjBackend* backend, QWidget* parent)
 		if (!m_updating)
 			send({ { QStringLiteral("font_size"), value } });
 	});
+	connect(m_scrollback, &QSpinBox::editingFinished, this, [this] {
+		if (!m_updating)
+			send({ { QStringLiteral("scrollback"), m_scrollback->value() } });
+	});
 	connect(m_scheme, &QComboBox::activated, this, [this](int i) {
 		if (!m_updating)
 			send({ { QStringLiteral("scheme"), m_scheme->itemData(i).toString() } });
@@ -2139,6 +2168,7 @@ TerminalSettingsTab::TerminalSettingsTab(RjBackend* backend, QWidget* parent)
 		send({ { QStringLiteral("scheme"), QStringLiteral("standard-dunkel") },
 		       { QStringLiteral("font_family"), QString() },
 		       { QStringLiteral("font_size"), 11 },
+		       { QStringLiteral("scrollback"), 10000 },
 		       { QStringLiteral("fg"), QString() },
 		       { QStringLiteral("bg"), QString() },
 		       { QStringLiteral("cursor"), QString() },
@@ -2170,6 +2200,7 @@ void TerminalSettingsTab::show(const QJsonObject& s)
 	m_font->setEnabled(!family.isEmpty());
 	m_font->setCurrentFont(family.isEmpty() ? QFontDatabase::systemFont(QFontDatabase::FixedFont) : QFont(family));
 	m_size->setValue(qRound(s.value(QStringLiteral("font_size")).toDouble(11.0)));
+	m_scrollback->setValue(s.value(QStringLiteral("scrollback")).toInt(10000));
 	m_scheme->setCurrentIndex(qMax(0, m_scheme->findData(s.value(QStringLiteral("scheme")).toString())));
 	m_custom->setVisible(s.value(QStringLiteral("custom")).toBool());
 	const char* keys[4] = { "fg", "bg", "cursor", "selection" };
@@ -3284,26 +3315,9 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 	auto* lay = new QVBoxLayout(this);
 	m_bar = new ActionBar(backend, this);
 	lay->addWidget(m_bar);
-	auto* src = new QGroupBox(T("update.source"), this);
-	auto* form = new QFormLayout(src);
-	m_source = new QComboBox(src);
-	m_source->addItem(T("update.source.none"), QString());
-	m_source->addItem(QStringLiteral("Gitea"), QStringLiteral("gitea"));
-	m_source->addItem(T("update.source.github"), QStringLiteral("github"));
-	m_base = new QLineEdit(src);
-	m_base->setPlaceholderText(QStringLiteral("https://git.example.test"));
-	m_repo = new QLineEdit(src);
-	m_repo->setPlaceholderText(T("update.repo.placeholder"));
-	m_token = new QComboBox(src);
-	m_onStart = new QCheckBox(T("update.on_start"), src);
-	auto* save = new QPushButton(T("update.save"), src);
-	form->addRow(T("update.source.kind"), m_source);
-	form->addRow(T("update.base_url"), m_base);
-	form->addRow(T("update.repo"), m_repo);
-	form->addRow(T("update.token"), m_token);
-	form->addRow(QString(), m_onStart);
-	form->addRow(QString(), save);
-	lay->addWidget(src);
+	// Die Quelle ist fest (GitHub); einstellbar ist nur die Prüfung beim Start.
+	m_onStart = new QCheckBox(T("update.on_start"), this);
+	lay->addWidget(m_onStart);
 	m_current = new QLabel(this);
 	m_found = new QLabel(this);
 	m_state = new QLabel(this);
@@ -3331,7 +3345,7 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 		row->addWidget(b);
 	row->addStretch(1);
 	lay->addLayout(row);
-	connect(save, &QPushButton::clicked, this, [this] { saveSettings(); });
+	connect(m_onStart, &QCheckBox::toggled, this, [this] { saveSettings(); });
 	connect(m_check, &QPushButton::clicked, this, [this] { check(); });
 	connect(m_install, &QPushButton::clicked, this, [this] { install(false); });
 	connect(m_later, &QPushButton::clicked, this, [this] { emit closeRequested(); });
@@ -3340,6 +3354,9 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 		setBusy(false, m_backend->text(QStringLiteral("update.cancelled")));
 	});
 	connect(m_restart, &QPushButton::clicked, this, [this] {
+		// Erst schließen (fragt bei ungespeicherten Änderungen nach); bei „Abbrechen“ bleibt alles, wie es ist.
+		if (QWidget* w = window(); w && !w->close())
+			return;
 		// Neue Fassung starten; sie wartet, bis diese Instanz ihre Sperre freigibt.
 		QProcess p;
 		p.setProgram(m_program);
@@ -3347,11 +3364,7 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 		env.insert(QStringLiteral("RJ_RESTART_WAIT"), QStringLiteral("1"));
 		p.setProcessEnvironment(env);
 		if (p.startDetached())
-		{
-			if (QWidget* w = window())
-				w->close();
 			qApp->quit();
-		}
 		else
 			m_state->setText(m_backend->text(QStringLiteral("update.restart.failed")));
 	});
@@ -3361,23 +3374,8 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 void UpdateTab::refresh()
 {
 	const QJsonObject s = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_status\"}")).toUtf8()).object();
-	m_source->setCurrentIndex(qMax(0, m_source->findData(s.value(QStringLiteral("source")).toString())));
-	m_base->setText(s.value(QStringLiteral("base_url")).toString());
-	m_repo->setText(s.value(QStringLiteral("repo")).toString());
+	const QSignalBlocker block(m_onStart);
 	m_onStart->setChecked(s.value(QStringLiteral("check_on_start")).toBool());
-	m_token->clear();
-	m_token->addItem(m_backend->text(QStringLiteral("update.token.none")), QString());
-	const QString chosen = s.value(QStringLiteral("token_entry")).toString();
-	for (const QJsonValue& v : s.value(QStringLiteral("entries")).toArray())
-	{
-		const QJsonObject e = v.toObject();
-		const QString group = e.value(QStringLiteral("group")).toString();
-		m_token->addItem(group.isEmpty() ? e.value(QStringLiteral("title")).toString() : group + QStringLiteral(" / ") + e.value(QStringLiteral("title")).toString(),
-		                 e.value(QStringLiteral("uuid")).toString());
-	}
-	if (!chosen.isEmpty() && m_token->findData(chosen) < 0)
-		m_token->addItem(s.value(QStringLiteral("locked")).toBool() ? m_backend->text(QStringLiteral("update.token.locked")) : chosen, chosen);
-	m_token->setCurrentIndex(qMax(0, m_token->findData(chosen)));
 	m_current->setText(m_backend->text(QStringLiteral("update.current")).arg(s.value(QStringLiteral("current")).toString(), s.value(QStringLiteral("platform")).toString()));
 	const QJsonObject f = s.value(QStringLiteral("found")).toObject();
 	if (!f.isEmpty())
@@ -3398,16 +3396,10 @@ void UpdateTab::saveSettings()
 {
 	QJsonObject o;
 	o.insert(QStringLiteral("op"), QStringLiteral("update_settings"));
-	o.insert(QStringLiteral("source"), m_source->currentData().toString());
-	o.insert(QStringLiteral("base_url"), m_base->text());
-	o.insert(QStringLiteral("repo"), m_repo->text());
-	o.insert(QStringLiteral("token_entry"), m_token->currentData().toString());
 	o.insert(QStringLiteral("check_on_start"), m_onStart->isChecked());
 	const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact))).toUtf8()).object();
 	if (r.contains(QStringLiteral("error")))
 		m_state->setText(r.value(QStringLiteral("error")).toString());
-	else
-		m_state->setText(m_backend->text(QStringLiteral("update.saved")));
 }
 
 void UpdateTab::setBusy(bool busy, const QString& text)

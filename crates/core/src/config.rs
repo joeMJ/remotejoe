@@ -42,32 +42,34 @@ pub struct Config {
     pub security: SecurityDefaults,
     /// Schrift und Farben des SSH-Terminals.
     pub terminal: crate::termcolors::TerminalSettings,
-    /// Update-Quelle (Voreinstellung: GitHub, `joeMJ/remotejoe`).
+    /// Update-Einstellungen (Quelle fest: GitHub).
     pub update: UpdateSettings,
+    /// Farbschema und Fokusrahmen.
+    pub appearance: AppearanceSettings,
 }
 
-/// Einstellungen der Update-Funktion. Der Zugriffsschlüssel steht nie hier,
-/// sondern als Eintrag in der Schlüsseldatenbank (`token_entry`).
+/// Darstellung: Farbschema (`system`, `hell`, `dunkel` oder `datei:<Name>` für eine eigene Palette)
+/// und der Rahmen um die Sitzung mit dem Tastaturfokus.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct UpdateSettings {
-    /// `gitea`, `github` oder leer (keine Quelle).
-    pub source: String,
-    /// Gitea: Basisadresse, z. B. `https://git.example.test`; GitHub: leer.
-    pub base_url: String,
-    /// Repository `besitzer/name`.
-    pub repo: String,
-    /// KDBX-Eintrag, dessen Kennwort der Zugriffsschlüssel ist.
-    pub token_entry: Option<uuid::Uuid>,
-    /// Beim Start im Hintergrund prüfen (Voreinstellung aus).
-    pub check_on_start: bool,
+pub struct AppearanceSettings {
+    pub scheme: String,
+    pub focus_frame: bool,
 }
 
-impl Default for UpdateSettings {
-    /// Voreinstellung: die öffentlichen Veröffentlichungen von remotejoe auf GitHub.
+impl Default for AppearanceSettings {
     fn default() -> Self {
-        UpdateSettings { source: "github".into(), base_url: String::new(), repo: "joeMJ/remotejoe".into(), token_entry: None, check_on_start: false }
+        AppearanceSettings { scheme: "system".into(), focus_frame: true }
     }
+}
+
+/// Einstellungen der Update-Funktion. Die Quelle ist fest: die Veröffentlichungen von remotejoe auf
+/// GitHub (`joeMJ/remotejoe`); ältere Einträge für Quelle, Adresse und Zugriffsschlüssel werden ignoriert.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// Beim Start im Hintergrund prüfen (Voreinstellung aus).
+    pub check_on_start: bool,
 }
 
 impl Default for Config {
@@ -81,6 +83,7 @@ impl Default for Config {
             security: SecurityDefaults::default(),
             terminal: Default::default(),
             update: UpdateSettings::default(),
+            appearance: AppearanceSettings::default(),
         }
     }
 }
@@ -95,11 +98,13 @@ pub struct WindowState {
     pub maximized: bool,
     /// Breite des Baums in Bildpunkten.
     pub tree_width: u32,
+    /// Wurde beim Beenden gespeichert; vorher gelten die Voreinstellungen des Fensters nicht.
+    pub saved: bool,
 }
 
 impl Default for WindowState {
     fn default() -> Self {
-        WindowState { x: 100, y: 100, width: 1280, height: 800, maximized: false, tree_width: 280 }
+        WindowState { x: 100, y: 100, width: 1280, height: 800, maximized: false, tree_width: 280, saved: false }
     }
 }
 

@@ -52,6 +52,20 @@ fn flow_limits_attempts() {
 }
 
 #[test]
+fn flow_checks_for_rejection_after_submit_without_resubmitting() {
+    let mut f = LoginFlow::new(Some(FormLogin::default()));
+    assert_eq!(f.page_loaded(""), FlowAction::None, "leere Startseite zählt nicht");
+    assert_eq!(f.page_loaded("about:blank"), FlowAction::None);
+    assert_eq!(f.page_loaded("https://web.example.test/"), FlowAction::InjectLogin);
+    assert_eq!(f.script_result("\"rj:ok\""), FlowAction::None);
+    assert_eq!(f.page_loaded("https://web.example.test/"), FlowAction::CheckRejected);
+    assert_eq!(f.rejected_check("\"rj:kennwortfeld-weg\""), FlowAction::None);
+    assert!(matches!(f.rejected_check("\"rj:kennwortfeld-da\""), FlowAction::Notice(m) if m.contains("abgelehnt")));
+    assert_eq!(f.page_loaded("https://web.example.test/"), FlowAction::None, "kein erneutes Abschicken, keine zweite Meldung");
+    assert!(presence_script().contains("input[type=password]"));
+}
+
+#[test]
 fn certificates_warn_and_remember() {
     let dir = tempfile::tempdir().unwrap();
     let mut c = AcceptedCerts::load(dir.path());

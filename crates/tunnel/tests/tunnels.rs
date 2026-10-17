@@ -23,6 +23,7 @@ fn params(port: u16) -> SshParams {
         auth: vec![Auth::Password(Secret::from_str_exact(PASSWORD))],
         connect_timeout: Duration::from_secs(15),
         keepalive: Duration::from_secs(30),
+        legacy: false,
     }
 }
 

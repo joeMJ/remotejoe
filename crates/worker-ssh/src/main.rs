@@ -20,6 +20,8 @@ struct Options {
     known_hosts: Option<String>,
     /// Ziel hinter einem Tunnel: Host-Schlüssel wird unter diesem Namen (`host:port`) geprüft.
     host_key_alias: Option<String>,
+    /// Ältere, unsichere Verfahren zusätzlich anbieten (Option am Ziel).
+    legacy_algorithms: bool,
 }
 
 fn main() {
@@ -168,6 +170,7 @@ async fn establish(
         auth,
         connect_timeout: Duration::from_secs(r.connect_timeout_secs.max(1) as u64),
         keepalive: Duration::from_secs(r.keepalive_secs.max(1) as u64),
+        legacy: opts.legacy_algorithms,
     };
     let conn = match opts.host_key_alias.as_deref().and_then(|a| a.rsplit_once(':')).and_then(|(h, p)| Some((h.to_string(), p.parse::<u16>().ok()?))) {
         Some((alias_host, alias_port)) => {

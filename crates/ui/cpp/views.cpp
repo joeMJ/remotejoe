@@ -165,7 +165,7 @@ void FrameView::paintEvent(QPaintEvent*)
 	}
 	p.setRenderHint(QPainter::SmoothPixmapTransform);
 	p.drawImage(target(), m_image);
-	if (hasFocus())
+	if (hasFocus() && s_focusFrame)
 	{
 		p.setPen(QPen(palette().highlight().color(), 2));
 		p.drawRect(rect().adjusted(1, 1, -1, -1));
@@ -319,7 +319,27 @@ void TerminalView::wheelEvent(QWheelEvent* e)
 {
 	if (!(e->modifiers() & Qt::ControlModifier))
 	{
-		e->ignore();
+		// Drei Zeilen je Raste (120); feine Räder und Touchpads liefern Bruchteile.
+		m_scrollAcc += e->angleDelta().y();
+		const int lines = m_scrollAcc / 40;
+		if (lines != 0)
+		{
+			m_scrollAcc -= lines * 40;
+			if (m_snap.value(QStringLiteral("alt_screen")).toBool())
+			{
+				// Bildschirm-Programme (less, top) haben keinen Rücklauf: Pfeiltasten senden.
+				const int key = lines > 0 ? Qt::Key_Up : Qt::Key_Down;
+				for (int i = 0; i < qAbs(lines); ++i)
+					m_backend->keyEvent(m_session, std::uint32_t(key), 0, QString(), true);
+			}
+			else
+			{
+				m_selStart = m_selEnd = QPoint(-1, -1);
+				m_backend->terminalScroll(m_session, lines);
+				refresh();
+			}
+		}
+		e->accept();
 		return;
 	}
 	// Feine Räder liefern Bruchteile: erst bei einer ganzen Raste (120) ändern.
@@ -400,6 +420,20 @@ void TerminalView::paintEvent(QPaintEvent*)
 			}
 		}
 	}
+	const int back = m_snap.value(QStringLiteral("scroll_offset")).toInt();
+	if (back > 0)
+	{
+		// Marke oben rechts: Anzeige liegt im Rücklauf.
+		const QString text = m_backend->text(QStringLiteral("term.scrolled")).arg(back);
+		QFont lf = m_font;
+		lf.setBold(true);
+		p.setFont(lf);
+		const QRect tr = QFontMetrics(lf).boundingRect(text).adjusted(-8, -3, 8, 3);
+		const QRect box(width() - tr.width() - 6, 4, tr.width(), tr.height());
+		p.fillRect(box, QColor(0, 0, 0, 170));
+		p.setPen(QColor(255, 255, 255));
+		p.drawText(box, Qt::AlignCenter, text);
+	}
 	const QJsonArray cur = m_snap.value(QStringLiteral("cursor")).toArray();
 	if (m_snap.value(QStringLiteral("cursor_visible")).toBool() && cur.size() == 2)
 	{
@@ -423,6 +457,14 @@ void TerminalView::paintEvent(QPaintEvent*)
 void TerminalView::keyPressEvent(QKeyEvent* e)
 {
 	const auto mods = e->modifiers();
+	if ((mods & Qt::ShiftModifier) && !(mods & Qt::ControlModifier) && (e->key() == Qt::Key_PageUp || e->key() == Qt::Key_PageDown) &&
+	    !m_snap.value(QStringLiteral("alt_screen")).toBool())
+	{
+		m_selStart = m_selEnd = QPoint(-1, -1);
+		m_backend->terminalScrollPage(m_session, e->key() == Qt::Key_PageUp);
+		refresh();
+		return;
+	}
 	if ((mods & Qt::ControlModifier) && (mods & Qt::ShiftModifier))
 	{
 		if (e->key() == Qt::Key_V)
@@ -496,6 +538,7 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
   , m_session(session)
   , m_title(title)
 {
+	connect(&m_loadTick, &QTimer::timeout, this, &SessionPane::updateHeader);
 	auto* lay = new QVBoxLayout(this);
 	lay->setContentsMargins(2, 2, 2, 2);
 	lay->setSpacing(2);
@@ -613,7 +656,11 @@ void SessionPane::updateHeader()
 	QString text = m_title;
 	if (!m_pageTitle.isEmpty())
 		text += QStringLiteral(" · ") + m_pageTitle;
-	m_header->setText(text + QStringLiteral(" — ") + m_stateText);
+	text += QStringLiteral(" — ") + m_stateText;
+	if (m_loading)
+		text += QStringLiteral(" · ")
+		  + m_backend->text(QStringLiteral("web.header.loading")).arg(m_loadClock.elapsed() / 1000).arg(m_progress);
+	m_header->setText(text);
 }
 
 void SessionPane::webCommand(const QString& json)
@@ -624,6 +671,16 @@ void SessionPane::webCommand(const QString& json)
 void SessionPane::setWebStatus(const QJsonObject& e)
 {
 	m_pageTitle = e.value(QStringLiteral("title")).toString();
+	const bool loading = e.value(QStringLiteral("loading")).toBool();
+	m_progress = e.value(QStringLiteral("progress")).toInt();
+	if (loading && !m_loading)
+	{
+		m_loadClock.start();
+		m_loadTick.start(1000);
+	}
+	else if (!loading)
+		m_loadTick.stop();
+	m_loading = loading;
 	if (m_back)
 	{
 		m_back->setEnabled(e.value(QStringLiteral("back")).toBool());

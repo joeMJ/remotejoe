@@ -129,26 +129,47 @@ pub const RESULT_OK: &str = "rj:ok";
 pub const RESULT_NO_PASSWORD_FIELD: &str = "rj:kein-kennwortfeld";
 pub const RESULT_NO_USERNAME_FIELD: &str = "rj:kein-benutzerfeld";
 
+/// Hilfsfunktionen: Suche auch in offenen Webkomponenten (Shadow-DOM) und gleichartigen Rahmen.
+const HELPERS: &str = r####"function roots(){var r=[document],i=0;while(i<r.length&&r.length<200){var d=r[i++],els;try{els=d.querySelectorAll('*');}catch(x){continue;}
+for(var k=0;k<els.length;k++){var e=els[k];if(e.shadowRoot)r.push(e.shadowRoot);var t=e.tagName;if(t==='IFRAME'||t==='FRAME'){try{if(e.contentDocument)r.push(e.contentDocument);}catch(x){}}}}return r;}
+function qa(s){var out=[];roots().forEach(function(d){try{[].push.apply(out,d.querySelectorAll(s));}catch(x){}});return out;}
+function q(s){if(!s)return null;var e=null;try{e=document.querySelector(s);}catch(x){}if(e)return e;var a=qa(s);return a.length?a[0]:null;}
+function vis(e){var w=(e.ownerDocument&&e.ownerDocument.defaultView)||window,r=e.getBoundingClientRect(),c=w.getComputedStyle(e);return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none'&&!e.disabled;}
+var BTNRE=/^(anmelden|anmeldung|login|log in|sign in|einloggen)$/i;
+function btn(pe){var box=pe.form||pe.getRootNode();if(!box.querySelector)return null;
+var s=box.querySelector('[type=submit],button:not([type=button]):not([type=reset])');if(s)return s;
+var c=[].slice.call(box.querySelectorAll('button,input[type=button],a,div,span,[role=button]'));
+for(var i=0;i<c.length;i++){var t=String(c[i].value||c[i].textContent||'').replace(/\s+/g,' ').trim();if(BTNRE.test(t)&&vis(c[i]))return c[i];}return null;}
+function fill(el,v){if(!el)return false;el.focus();var p=Object.getPrototypeOf(el);var d=Object.getOwnPropertyDescriptor(p,'value');
+if(d&&d.set){d.set.call(el,v);}else{el.value=v;}
+el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));return true;}"####;
+
+/// Ergebnisse der Prüfung, ob nach dem Abschicken wieder ein Kennwortfeld sichtbar ist.
+pub const RESULT_PASSWORD_VISIBLE: &str = "rj:kennwortfeld-da";
+
+/// Prüfskript ohne Zugangsdaten: ist ein sichtbares Kennwortfeld vorhanden?
+pub fn presence_script() -> String {
+    format!("(function(){{{HELPERS}return qa('input[type=password]').filter(vis).length?'{RESULT_PASSWORD_VISIBLE}':'rj:kennwortfeld-weg';}})()")
+}
+
 /// Erzeugt das Anmeldeskript. Der Text enthält das Kennwort und wird nach
 /// Gebrauch überschrieben.
 pub fn login_script(l: &FormLogin, username: &str, password: &Secret) -> Result<Zeroizing<String>, WebError> {
     let pw = password.as_str().ok_or(WebError::PasswordNotUtf8)?;
-    let helpers = "function q(s){return s?document.querySelector(s):null;}\
-function fill(el,v){if(!el)return false;el.focus();var p=Object.getPrototypeOf(el);var d=Object.getOwnPropertyDescriptor(p,'value');\
-if(d&&d.set){d.set.call(el,v);}else{el.value=v;}\
-el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));return true;}";
+    // Hilfsfunktionen: Suche auch in offenen Webkomponenten (Shadow-DOM) und gleichartigen Rahmen.
+    let helpers = HELPERS;
     let body = if let Some(custom) = l.script.as_ref().filter(|s| !s.trim().is_empty()) {
         format!("var rj={{username:u,password:p,fill:function(s,v){{return fill(q(s),v);}}}};var r=(function(rj){{{custom}\n}})(rj);return r===undefined?'{RESULT_OK}':String(r);")
     } else {
         // Leere Selektoren: automatische Erkennung (sichtbares Kennwortfeld, davor liegendes
         // Textfeld als Benutzerfeld, Knopf im selben Formular).
         format!(
-            "var us={us},ps={ps},ss={ss};function vis(e){{var r=e.getBoundingClientRect(),c=getComputedStyle(e);return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none'&&!e.disabled;}}\
-var pe=ps?q(ps):([].slice.call(document.querySelectorAll('input[type=password]')).filter(vis)[0]||null);if(!pe)return '{RESULT_NO_PASSWORD_FIELD}';\
-var ue=null;if(us){{ue=q(us);if(!ue)return '{RESULT_NO_USERNAME_FIELD}';}}else{{var all=[].slice.call((pe.form||document).querySelectorAll('input')).filter(vis),i=all.indexOf(pe);\
+            "var us={us},ps={ps},ss={ss};\
+var pe=ps?q(ps):(qa('input[type=password]').filter(vis)[0]||null);if(!pe)return '{RESULT_NO_PASSWORD_FIELD}';\
+var ue=null;if(us){{ue=q(us);if(!ue)return '{RESULT_NO_USERNAME_FIELD}';}}else{{var box=pe.form||pe.getRootNode(),all=[].slice.call(box.querySelectorAll('input')).filter(vis),i=all.indexOf(pe);\
 for(i=i-1;i>=0;i--){{var t=(all[i].type||'text').toLowerCase();if(['text','email','tel','search','url'].indexOf(t)>=0){{ue=all[i];break;}}}}}}\
 if(ue)fill(ue,u);fill(pe,p);\
-var se=ss?q(ss):(pe.form?pe.form.querySelector('[type=submit],button:not([type=button]):not([type=reset])'):null);\
+var se=ss?q(ss):btn(pe);\
 if(se){{se.click();}}else if(pe.form){{if(pe.form.requestSubmit)pe.form.requestSubmit();else pe.form.submit();}}\
 return '{RESULT_OK}';",
             us = js_opt(&l.username_selector),
@@ -178,6 +199,8 @@ pub enum FlowAction {
     InjectLogin,
     /// Hinweis an die Oberfläche.
     Notice(String),
+    /// Nach dem Abschicken prüfen, ob wieder ein Kennwortfeld erscheint (Anmeldung abgelehnt?).
+    CheckRejected,
 }
 
 /// Ablauf der Formular-Anmeldung: höchstens ein Versuch je Seitenaufruf
@@ -188,19 +211,26 @@ pub struct LoginFlow {
     login: Option<FormLogin>,
     attempts: u32,
     done: bool,
+    /// Formular wurde abgeschickt; kein weiterer Versuch, nur Prüfung auf Ablehnung.
+    submitted: bool,
+    rejected_noted: bool,
 }
 
 impl LoginFlow {
     pub const MAX_ATTEMPTS: u32 = 3;
 
     pub fn new(login: Option<FormLogin>) -> Self {
-        LoginFlow { login, attempts: 0, done: false }
+        LoginFlow { login, attempts: 0, done: false, submitted: false, rejected_noted: false }
     }
 
     pub fn page_loaded(&mut self, url: &str) -> FlowAction {
         let Some(l) = &self.login else { return FlowAction::None };
-        if self.done {
+        // Die leere Startseite (vor dem ersten Laden) zählt nicht.
+        if url.is_empty() || url == "about:blank" {
             return FlowAction::None;
+        }
+        if self.done {
+            return if self.submitted && !self.rejected_noted { FlowAction::CheckRejected } else { FlowAction::None };
         }
         if let Some(m) = l.url_contains.as_ref().filter(|m| !m.is_empty()) {
             if !url.contains(m.as_str()) {
@@ -218,8 +248,14 @@ impl LoginFlow {
     pub fn script_result(&mut self, result: &str) -> FlowAction {
         let r = result.trim_matches('"');
         match r {
-            RESULT_OK => FlowAction::None,
-            RESULT_NO_PASSWORD_FIELD => FlowAction::Notice("Auf dieser Seite wurde kein Kennwortfeld gefunden (bei Bedarf unter Verbindung „Felder erkennen“ oder den Selektor eintragen).".into()),
+            RESULT_OK => {
+                // Einmal eingetragen und abgeschickt: auf späteren Seiten nicht erneut versuchen
+                // (eine abgelehnte Anmeldung darf kein Konto sperren).
+                self.done = true;
+                self.submitted = true;
+                FlowAction::None
+            }
+            RESULT_NO_PASSWORD_FIELD => FlowAction::Notice("Auf dieser Seite wurde auch nach 10 Sekunden kein Kennwortfeld gefunden (bei Bedarf unter Verbindung „Felder erkennen“ oder den Selektor eintragen).".into()),
             RESULT_NO_USERNAME_FIELD => FlowAction::Notice("Das eingetragene Benutzerfeld wurde nicht gefunden (Selektor unter Verbindung prüfen oder leeren für die Automatik).".into()),
             other if other.starts_with("rj:fertig") => {
                 self.done = true;
@@ -227,6 +263,15 @@ impl LoginFlow {
             }
             other => FlowAction::Notice(format!("Anmeldeskript meldet: {}", rj_core::charset::mark_visible(other, false))),
         }
+    }
+
+    /// Ergebnis der Prüfung nach `CheckRejected`.
+    pub fn rejected_check(&mut self, result: &str) -> FlowAction {
+        if result.trim_matches('"') != RESULT_PASSWORD_VISIBLE || self.rejected_noted {
+            return FlowAction::None;
+        }
+        self.rejected_noted = true;
+        FlowAction::Notice("Nach dem Abschicken zeigt die Seite wieder ein Kennwortfeld: Die Anmeldung wurde vermutlich abgelehnt oder die Seite hat neu geladen. Es wird nicht erneut abgeschickt; bitte Zugangsdaten prüfen oder von Hand anmelden.".into())
     }
 
     pub fn login(&self) -> Option<&FormLogin> {
@@ -380,34 +425,47 @@ pub struct FieldCandidate {
 /// als JSON-Text liefert: `{users, passwords, submits}`, je Eintrag `{selector, label}`.
 /// Werte der Felder werden nie gelesen.
 pub const DETECT_SCRIPT: &str = r####"(function(){
-function vis(e){var r=e.getBoundingClientRect(),c=getComputedStyle(e);return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none'&&!e.disabled;}
+function roots(){var r=[document],i=0;while(i<r.length&&r.length<200){var d=r[i++],els;try{els=d.querySelectorAll('*');}catch(x){continue;}
+ for(var k=0;k<els.length;k++){var e=els[k];if(e.shadowRoot)r.push(e.shadowRoot);var t=e.tagName;if(t==='IFRAME'||t==='FRAME'){try{if(e.contentDocument)r.push(e.contentDocument);}catch(x){}}}}return r;}
+function qa(s){var out=[];roots().forEach(function(d){try{[].push.apply(out,d.querySelectorAll(s));}catch(x){}});return out;}
+function vis(e){var w=(e.ownerDocument&&e.ownerDocument.defaultView)||window,r=e.getBoundingClientRect(),c=w.getComputedStyle(e);return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none'&&!e.disabled;}
 function esc(s){return(window.CSS&&CSS.escape)?CSS.escape(s):s.replace(/[^a-zA-Z0-9_-]/g,'\\$&');}
-function uniq(q){try{return document.querySelectorAll(q).length===1;}catch(x){return false;}}
+function uniq(el,q){try{return el.getRootNode().querySelectorAll(q).length===1;}catch(x){return false;}}
 function sel(el){
- if(el.id){var a='#'+esc(el.id);if(uniq(a))return a;}
+ var root=el.getRootNode();
+ if(el.id){var a='#'+esc(el.id);if(uniq(el,a))return a;}
  var n=el.getAttribute('name');
- if(n){var b=el.tagName.toLowerCase()+'[name="'+n.replace(/"/g,'\\"')+'"]';if(uniq(b))return b;}
+ if(n){var b=el.tagName.toLowerCase()+'[name="'+n.replace(/"/g,'\\"')+'"]';if(uniq(el,b))return b;}
+ if(root!==document){return el.tagName.toLowerCase()+(el.type?'[type="'+el.type+'"]':'');}
  var p=[],e=el;
  while(e&&e.nodeType===1&&e!==document.body){var i=1,s=e;while((s=s.previousElementSibling))if(s.tagName===e.tagName)i++;p.unshift(e.tagName.toLowerCase()+':nth-of-type('+i+')');e=e.parentElement;}
  return 'body > '+p.join(' > ');
 }
 function lab(el){
  var t=el.getAttribute('aria-label')||el.getAttribute('placeholder')||'';
- if(!t&&el.id){var l=document.querySelector('label[for="'+el.id.replace(/"/g,'')+'"]');if(l)t=l.textContent;}
+ if(!t&&el.id){try{var l=el.getRootNode().querySelector('label[for="'+el.id.replace(/"/g,'')+'"]');if(l)t=l.textContent;}catch(x){}}
  if(!t)t=el.getAttribute('name')||el.id||el.type||el.tagName;
  return String(t).trim().slice(0,40);
 }
 var us=[],ps=[],ss=[];
-[].slice.call(document.querySelectorAll('input')).filter(vis).forEach(function(e){
+qa('input').filter(vis).forEach(function(e){
  var t=(e.type||'text').toLowerCase();
  if(t==='password')ps.push({selector:sel(e),label:lab(e)});
  else if(['text','email','tel','search','url'].indexOf(t)>=0)us.push({selector:sel(e),label:lab(e)});
 });
-[].slice.call(document.querySelectorAll('button,input[type=submit],input[type=button],a[role=button]')).filter(vis).forEach(function(e){
+qa('button,input[type=submit],input[type=button],a[role=button]').filter(vis).forEach(function(e){
  var t=String(e.value||e.textContent||e.getAttribute('aria-label')||'').trim().slice(0,40);
  ss.push({selector:sel(e),label:t||sel(e)});
 });
-return JSON.stringify({users:us,passwords:ps,submits:ss});
+var BTNRE=/^(anmelden|anmeldung|login|log in|sign in|einloggen)$/i,have=ss.map(function(x){return x.selector;});
+qa('div,span,a,td').filter(vis).forEach(function(e){
+ var t=String(e.textContent||'').replace(/\s+/g,' ').trim();
+ if(BTNRE.test(t)){var k=sel(e);if(have.indexOf(k)<0){have.push(k);ss.push({selector:k,label:t});}}
+});
+// Eigene Ausgabe statt JSON.stringify: Seiten mit prototype.js (toJSON an Array/String) verpacken sonst doppelt.
+function q2(v){return '"'+String(v).replace(/[\\"\u0000-\u001f\u2028\u2029]/g,function(c){return '\\u'+('0000'+c.charCodeAt(0).toString(16)).slice(-4);})+'"';}
+function lst(a){var o=[];for(var i=0;i<a.length;i++)o.push('{"selector":'+q2(a[i].selector)+',"label":'+q2(a[i].label)+'}');return '['+o.join(',')+']';}
+return '{"users":'+lst(us)+',"passwords":'+lst(ps)+',"submits":'+lst(ss)+'}';
 })()"####;
 
 impl WebEvent {

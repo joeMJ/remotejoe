@@ -3,6 +3,7 @@
 //! und sprechen über das QObject `RjBackend` (cxx-qt) mit Rust.
 
 pub mod alloc;
+pub mod appearance;
 pub mod app;
 pub mod bridge;
 pub mod editor;

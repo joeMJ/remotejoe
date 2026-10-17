@@ -1,4 +1,6 @@
 #include "mainwindow.h"
+#include "titlebar.h"
+#include "appearance.h"
 #include <algorithm>
 
 #include "editor.h"
@@ -29,10 +31,14 @@
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QMenu>
+#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QMenuBar>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QStyleFactory>
+#include <QtGui/QStyleHints>
+#include <QtGui/QDesktopServices>
+#include <QtGui/QWindow>
 #include <QtWidgets/QTabBar>
 #include <QtGui/QHelpEvent>
 #include <QtWidgets/QToolTip>
@@ -310,12 +316,33 @@ void MainWindow::patchdayForFirstTargets(int n)
 	openPatchday(ids);
 }
 
+namespace {
+/// Breite des Randes, an dem das Fenster in der Größe verändert wird (Pixel).
+constexpr int kResizeBorder = 5;
+} // namespace
+
 MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
   : QMainWindow(parent)
   , m_backend(backend)
 {
-	setWindowTitle(T(m_backend, "app.title"));
+	const QString version = m_backend->appVersion();
+	setWindowTitle(QStringLiteral("%1 V %2").arg(T(m_backend, "app.title"), version));
 	resize(1280, 800);
+	// Eigene Titelleiste (links Logo, Name, Version): gleiches Aussehen unter Ubuntu und Windows.
+	setWindowFlag(Qt::FramelessWindowHint, true);
+	setMouseTracking(true);
+	setContentsMargins(kResizeBorder, kResizeBorder, kResizeBorder, kResizeBorder);
+	{
+		auto* top = new QWidget(this);
+		auto* tl = new QVBoxLayout(top);
+		tl->setContentsMargins(0, 0, 0, 0);
+		tl->setSpacing(0);
+		m_titleBar = new TitleBar(this, T(m_backend, "app.title"), version, top);
+		m_menuBar = new QMenuBar(top);
+		tl->addWidget(m_titleBar);
+		tl->addWidget(m_menuBar);
+		setMenuWidget(top);
+	}
 
 	auto* left = new QWidget(this);
 	auto* leftLay = new QVBoxLayout(left);
@@ -408,9 +435,12 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	split->addWidget(m_tabs);
 	split->setStretchFactor(1, 1);
 	split->setSizes({ 300, 980 });
+	m_split = split;
 	setCentralWidget(split);
 
 	buildMenus();
+	connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] { applyAppearance(); });
+	FrameView::setFocusFrame(parseObject(m_backend->appearanceJson()).value(QStringLiteral("focus_frame")).toBool(true));
 	statusBar()->showMessage(T(m_backend, "status.ready"));
 	// Fußzeile rechts: womit, wohin, seit wann, als wer.
 	m_connInfo = new QWidget(this);
@@ -650,12 +680,12 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::buildMenus()
 {
-	QMenu* file = menuBar()->addMenu(T(m_backend, "menu.file"));
+	QMenu* file = m_menuBar->addMenu(T(m_backend, "menu.file"));
 	file->addAction(T(m_backend, "menu.file.new"), this, [this] { m_overlay->openNew(); });
 	file->addAction(T(m_backend, "menu.file.open"), QKeySequence::Open, this, [this] { showUnlock(false); });
 	file->addAction(T(m_backend, "menu.file.import"), this, [this] {
 		const QString path = QFileDialog::getOpenFileName(this, T(m_backend, "menu.file.import"), QString(),
-		                                                  QStringLiteral("Remote Desktop Manager / Royal TS (*.rdm *.json *.rtsz *.rtsx);;Alle Dateien (*)"));
+		                                                  QStringLiteral("Remote Desktop Manager / Royal TS (*.rdm *.json *.csv *.rtsz *.rtsx);;Alle Dateien (*)"));
 		if (path.isEmpty())
 			return;
 		const QJsonObject r = parseObject(m_backend->importPreview(path));
@@ -676,7 +706,7 @@ void MainWindow::buildMenus()
 	file->addAction(T(m_backend, "menu.file.lock"), QKeySequence(QStringLiteral("Ctrl+L")), this, [this] { lockNow(false); });
 	file->addSeparator();
 	file->addAction(T(m_backend, "menu.file.quit"), QKeySequence::Quit, this, &QWidget::close);
-	QMenu* editMenu = menuBar()->addMenu(T(m_backend, "menu.edit"));
+	QMenu* editMenu = m_menuBar->addMenu(T(m_backend, "menu.edit"));
 	m_undoAction = editMenu->addAction(T(m_backend, "menu.edit.undo.none") + QStringLiteral("\tCtrl+Z"), this, [this] { undo(); });
 	connect(editMenu, &QMenu::aboutToShow, this, [this] {
 		const QString label = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("undo_label") } })).value(QStringLiteral("label")).toString();
@@ -702,7 +732,7 @@ void MainWindow::buildMenus()
 	editMenu->addAction(T(m_backend, "menu.edit.view.new"), this, [this] { viewCommand(QStringLiteral("new")); });
 	editMenu->addAction(T(m_backend, "menu.edit.view.rename"), this, [this] { viewCommand(QStringLiteral("rename")); });
 	editMenu->addAction(T(m_backend, "menu.edit.view.delete"), this, [this] { viewCommand(QStringLiteral("delete")); });
-	QMenu* extras = menuBar()->addMenu(T(m_backend, "menu.extras"));
+	QMenu* extras = m_menuBar->addMenu(T(m_backend, "menu.extras"));
 	extras->addAction(T(m_backend, "menu.extras.idle"), this, [this] { idleSettings(); });
 	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] {
 		for (int i = 0; i < m_tabs->count(); ++i)
@@ -716,8 +746,9 @@ void MainWindow::buildMenus()
 		m_tabs->setCurrentIndex(m_tabs->addTab(t, T(m_backend, "snmp.title")));
 	});
 	extras->addAction(T(m_backend, "menu.extras.terminal"), this, [this] { openTerminalSettings(); });
+	extras->addAction(T(m_backend, "menu.extras.appearance"), this, [this] { openAppearance(); });
 	QMenu* help = nullptr;
-	QMenu* view = menuBar()->addMenu(T(m_backend, "menu.view"));
+	QMenu* view = m_menuBar->addMenu(T(m_backend, "menu.view"));
 	const char* modes[] = { "single", "one_by_two", "two_by_two", "free" };
 	int n = 1;
 	for (const char* m : modes)
@@ -737,17 +768,29 @@ void MainWindow::buildMenus()
 		if (m_backend->detachTab(currentTab()))
 			rebuildTabs();
 	});
-	help = menuBar()->addMenu(T(m_backend, "menu.help"));
+	help = m_menuBar->addMenu(T(m_backend, "menu.help"));
 	help->addAction(T(m_backend, "menu.help.update"), this, [this] { openUpdateTab(); });
+	help->addAction(T(m_backend, "menu.help.help"), QKeySequence::HelpContents, this, [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kHelpUrl))); });
+	help->addSeparator();
+	// Das einzige Popup des Programms: „Über remotejoe“.
+	help->addAction(T(m_backend, "menu.help.about"), this, [this] {
+		auto* d = new AboutDialog(m_backend, m_backend->appVersion(), this);
+		d->open();
+	});
+}
+
+QWidget* MainWindow::aboutForScreenshot()
+{
+	auto* d = new AboutDialog(m_backend, m_backend->appVersion(), this);
+	d->show();
+	return d;
 }
 
 void MainWindow::updateForScreenshot(const QString& base)
 {
 	QJsonObject o;
-	o.insert(QStringLiteral("op"), QStringLiteral("update_settings"));
-	o.insert(QStringLiteral("source"), QStringLiteral("gitea"));
+	o.insert(QStringLiteral("op"), QStringLiteral("update_demo_source"));
 	o.insert(QStringLiteral("base_url"), base);
-	o.insert(QStringLiteral("repo"), QStringLiteral("team/remotejoe"));
 	m_backend->edit(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
 	openUpdateTab();
 	if (auto* u = findChild<UpdateTab*>())
@@ -769,27 +812,57 @@ void MainWindow::applyTheme(bool dark)
 {
 	qApp->setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
 	QJsonObject p = parseObject(m_backend->paletteJson());
-	if (dark != (QColor(p.value(QStringLiteral("base")).toString()).lightness() < 128))
+	if (p.value(QStringLiteral("mode")).toString() != QLatin1String("system") && qEnvironmentVariableIsSet("REMOTEJOE_THEME") && dark != (QColor(p.value(QStringLiteral("base")).toString()).lightness() < 128))
 	{
 		// Gegenteiliges Schema erzwingen (für Bildschirmfotos).
 		qputenv("REMOTEJOE_THEME", dark ? "dark" : "light");
 		p = parseObject(m_backend->paletteJson());
 	}
-	auto c = [&](const char* k) { return QColor(p.value(QString::fromLatin1(k)).toString()); };
-	QPalette pal;
-	pal.setColor(QPalette::Window, c("window"));
-	pal.setColor(QPalette::WindowText, c("text"));
-	pal.setColor(QPalette::Base, c("base"));
-	pal.setColor(QPalette::AlternateBase, c("alternate"));
-	pal.setColor(QPalette::Text, c("text"));
-	pal.setColor(QPalette::PlaceholderText, c("muted"));
-	pal.setColor(QPalette::Button, c("button"));
-	pal.setColor(QPalette::ButtonText, c("text"));
-	pal.setColor(QPalette::Highlight, c("highlight"));
-	pal.setColor(QPalette::HighlightedText, c("highlight_text"));
-	pal.setColor(QPalette::Link, c("link"));
-	pal.setColor(QPalette::ToolTipBase, c("base"));
-	pal.setColor(QPalette::ToolTipText, c("text"));
+	// „System“: Farben aus der Stilpalette (hell oder dunkel und Akzentfarbe vom Desktop);
+	// sonst ein Standardschema oder eine eigene Palette.
+	const bool system = p.value(QStringLiteral("mode")).toString() == QLatin1String("system");
+	QPalette pal = system ? qApp->style()->standardPalette() : QPalette();
+	auto c = [&](const char* k) -> QColor {
+		if (system)
+		{
+			const QString key = QString::fromLatin1(k);
+			if (key == QLatin1String("window"))
+				return pal.color(QPalette::Window);
+			if (key == QLatin1String("text"))
+				return pal.color(QPalette::WindowText);
+			if (key == QLatin1String("base"))
+				return pal.color(QPalette::Base);
+			if (key == QLatin1String("alternate"))
+				return pal.color(QPalette::AlternateBase);
+			if (key == QLatin1String("muted"))
+				return pal.color(QPalette::PlaceholderText);
+			if (key == QLatin1String("button"))
+				return pal.color(QPalette::Button);
+			if (key == QLatin1String("highlight"))
+				return pal.color(QPalette::Highlight);
+			if (key == QLatin1String("highlight_text"))
+				return pal.color(QPalette::HighlightedText);
+			if (key == QLatin1String("link"))
+				return pal.color(QPalette::Link);
+		}
+		return QColor(p.value(QString::fromLatin1(k)).toString());
+	};
+	if (!system)
+	{
+		pal.setColor(QPalette::Window, c("window"));
+		pal.setColor(QPalette::WindowText, c("text"));
+		pal.setColor(QPalette::Base, c("base"));
+		pal.setColor(QPalette::AlternateBase, c("alternate"));
+		pal.setColor(QPalette::Text, c("text"));
+		pal.setColor(QPalette::PlaceholderText, c("muted"));
+		pal.setColor(QPalette::Button, c("button"));
+		pal.setColor(QPalette::ButtonText, c("text"));
+		pal.setColor(QPalette::Highlight, c("highlight"));
+		pal.setColor(QPalette::HighlightedText, c("highlight_text"));
+		pal.setColor(QPalette::Link, c("link"));
+		pal.setColor(QPalette::ToolTipBase, c("base"));
+		pal.setColor(QPalette::ToolTipText, c("text"));
+	}
 	qApp->setPalette(pal);
 	// Trennlinie der Tabs: Mischung aus Text- und Fensterfarbe, in beiden Schemata gut sichtbar.
 	const QColor textColor = c("text"), windowColor = c("window");
@@ -802,7 +875,8 @@ void MainWindow::applyTheme(bool dark)
 	  "QTabWidget::pane { border: 1px solid %3; border-top: 2px solid %2; top: -1px; }"
 	  "QTabBar::tab { min-height: 30px; min-width: 70px; max-width: 230px; padding: 4px 16px 4px 12px; margin-right: 2px; background: %4; color: %5; border: 1px solid %3; border-bottom: none; "
 	  "border-top-left-radius: 4px; border-top-right-radius: 4px; }"
-	  "QTabBar::tab:selected { background: %6; color: %7; border-top: 3px solid %2; padding-top: 3px; }"
+	  "QTabBar::close-button { subcontrol-position: right; margin-right: 8px; }"
+  "QTabBar::tab:selected { background: %6; color: %7; border-top: 3px solid %2; padding-top: 3px; }"
 	  "QTabBar::tab:!selected { margin-top: 3px; }"
 	  "QTabBar::tab:!selected:hover { background: %8; color: %7; }"
 	  "QLabel#paneHeader { font-weight: bold; padding: 4px; }"
@@ -1666,6 +1740,30 @@ QWidget* MainWindow::detachedWindow() const
 	return nullptr;
 }
 
+void MainWindow::applyAppearance()
+{
+	const QJsonObject a = parseObject(m_backend->appearanceJson());
+	FrameView::setFocusFrame(a.value(QStringLiteral("focus_frame")).toBool(true));
+	applyTheme(qEnvironmentVariable("REMOTEJOE_THEME") == QLatin1String("dark"));
+	for (auto* w : findChildren<QWidget*>())
+		if (dynamic_cast<FrameView*>(w))
+			w->update();
+}
+
+void MainWindow::openAppearance()
+{
+	for (int i = 0; i < m_tabs->count(); ++i)
+		if (qobject_cast<AppearanceTab*>(m_tabs->widget(i)))
+		{
+			m_tabs->setCurrentIndex(i);
+			return;
+		}
+	auto* t = new AppearanceTab(m_backend, m_tabs);
+	connect(t, &AppearanceTab::appearanceChanged, this, [this] { applyAppearance(); });
+	connect(t, &ToolTab::status, this, [this](const QString& text) { statusBar()->showMessage(text, 6000); });
+	m_tabs->setCurrentIndex(m_tabs->addTab(t, T(m_backend, "appearance.title")));
+}
+
 void MainWindow::openTerminalSettings()
 {
 	for (int i = 0; i < m_tabs->count(); ++i)
@@ -2092,8 +2190,134 @@ void MainWindow::paintEvent(QPaintEvent* e)
 		firstPaintMs = startClock.elapsed();
 }
 
+// Rand, an dem die Größe verändert wird (das Fenster hat keinen Systemrahmen).
+static Qt::Edges edgesAt(const QWidget* w, const QPoint& p)
+{
+	Qt::Edges e;
+	if (p.x() < kResizeBorder)
+		e |= Qt::LeftEdge;
+	if (p.x() >= w->width() - kResizeBorder)
+		e |= Qt::RightEdge;
+	if (p.y() < kResizeBorder)
+		e |= Qt::TopEdge;
+	if (p.y() >= w->height() - kResizeBorder)
+		e |= Qt::BottomEdge;
+	return e;
+}
+
+static Qt::CursorShape cursorFor(Qt::Edges e)
+{
+	if (e == (Qt::LeftEdge | Qt::TopEdge) || e == (Qt::RightEdge | Qt::BottomEdge))
+		return Qt::SizeFDiagCursor;
+	if (e == (Qt::RightEdge | Qt::TopEdge) || e == (Qt::LeftEdge | Qt::BottomEdge))
+		return Qt::SizeBDiagCursor;
+	if (e & (Qt::LeftEdge | Qt::RightEdge))
+		return Qt::SizeHorCursor;
+	if (e & (Qt::TopEdge | Qt::BottomEdge))
+		return Qt::SizeVerCursor;
+	return Qt::ArrowCursor;
+}
+
+void MainWindow::mouseMoveEvent(QMouseEvent* e)
+{
+	const Qt::Edges edges = isMaximized() || isFullScreen() ? Qt::Edges() : edgesAt(this, e->position().toPoint());
+	setCursor(cursorFor(edges));
+	QMainWindow::mouseMoveEvent(e);
+}
+
+void MainWindow::mousePressEvent(QMouseEvent* e)
+{
+	if (e->button() == Qt::LeftButton && !isMaximized() && !isFullScreen())
+	{
+		const Qt::Edges edges = edgesAt(this, e->position().toPoint());
+		if (edges && windowHandle())
+		{
+			windowHandle()->startSystemResize(edges);
+			e->accept();
+			return;
+		}
+	}
+	QMainWindow::mousePressEvent(e);
+}
+
+void MainWindow::changeEvent(QEvent* e)
+{
+	QMainWindow::changeEvent(e);
+	if (e->type() == QEvent::WindowStateChange)
+	{
+		// Maximiert: kein Rand zum Ziehen.
+		const int m = isMaximized() || isFullScreen() ? 0 : kResizeBorder;
+		setContentsMargins(m, m, m, m);
+		if (m_titleBar)
+			m_titleBar->updateState();
+	}
+}
+
+void MainWindow::restoreWindowState()
+{
+	const QJsonObject s = parseObject(m_backend->windowStateJson());
+	if (!s.value(QStringLiteral("saved")).toBool())
+		return;
+	const int w = s.value(QStringLiteral("width")).toInt();
+	const int h = s.value(QStringLiteral("height")).toInt();
+	if (w < 400 || h < 300)
+		return;
+	resize(w, h);
+	// Unter Wayland darf eine Anwendung ihre Lage nicht selbst setzen; dort gilt nur die Größe.
+	// Sonst nur, wenn die Lage auf einem vorhandenen Bildschirm liegt.
+	const QPoint pos(s.value(QStringLiteral("x")).toInt(), s.value(QStringLiteral("y")).toInt());
+	if (QGuiApplication::platformName() != QLatin1String("wayland") && QGuiApplication::screenAt(pos + QPoint(40, 40)))
+		move(pos);
+	const int tree = s.value(QStringLiteral("tree_width")).toInt();
+	if (m_split && tree >= 100)
+		m_split->setSizes({ tree, qMax(200, w - tree) });
+	if (s.value(QStringLiteral("maximized")).toBool())
+		setWindowState(windowState() | Qt::WindowMaximized);
+}
+
+void MainWindow::saveWindowState()
+{
+	// Bei maximiertem Fenster die normale Größe merken, damit sie nach dem Verkleinern stimmt.
+	const QRect g = (isMaximized() || isFullScreen()) ? normalGeometry() : geometry();
+	QJsonObject o;
+	o.insert(QStringLiteral("x"), g.x());
+	o.insert(QStringLiteral("y"), g.y());
+	o.insert(QStringLiteral("width"), g.width());
+	o.insert(QStringLiteral("height"), g.height());
+	o.insert(QStringLiteral("maximized"), isMaximized());
+	o.insert(QStringLiteral("tree_width"), m_split && !m_split->sizes().isEmpty() ? m_split->sizes().first() : 280);
+	m_backend->saveWindowState(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+}
+
 void MainWindow::closeEvent(QCloseEvent* e)
 {
+	// Ungespeicherte Änderungen (zum Beispiel ein Import) gehen sonst beim Beenden verloren.
+	if (m_backend->hasUnsavedChanges())
+	{
+		QMessageBox box(QMessageBox::Warning, T(m_backend, "close.unsaved.title"), T(m_backend, "close.unsaved.text"),
+		                QMessageBox::NoButton, this);
+		auto* save = box.addButton(T(m_backend, "close.unsaved.save"), QMessageBox::AcceptRole);
+		auto* discard = box.addButton(T(m_backend, "close.unsaved.discard"), QMessageBox::DestructiveRole);
+		box.addButton(T(m_backend, "close.unsaved.cancel"), QMessageBox::RejectRole);
+		box.setDefaultButton(save);
+		box.exec();
+		if (box.clickedButton() == save)
+		{
+			const QString r = m_backend->save();
+			if (r.startsWith(QStringLiteral("Speichern fehlgeschlagen")))
+			{
+				statusBar()->showMessage(r, 10000);
+				e->ignore();
+				return;
+			}
+		}
+		else if (box.clickedButton() != discard)
+		{
+			e->ignore();
+			return;
+		}
+	}
+	saveWindowState();
 	for (auto& w : m_windows)
 		if (w)
 			w->close();

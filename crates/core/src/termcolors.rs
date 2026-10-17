@@ -157,7 +157,14 @@ pub struct TerminalSettings {
     pub background: Option<String>,
     pub cursor: Option<String>,
     pub selection: Option<String>,
+    /// Zeilen im Rücklauf (Mausrad zurückblättern).
+    pub scrollback: usize,
 }
+
+/// Grenzen und Vorgabe des Rücklaufs (Zeilen).
+pub const SCROLLBACK_DEFAULT: usize = 10_000;
+pub const SCROLLBACK_MIN: usize = 100;
+pub const SCROLLBACK_MAX: usize = 200_000;
 
 impl Default for TerminalSettings {
     fn default() -> Self {
@@ -169,6 +176,7 @@ impl Default for TerminalSettings {
             background: None,
             cursor: None,
             selection: None,
+            scrollback: SCROLLBACK_DEFAULT,
         }
     }
 }
@@ -184,6 +192,11 @@ pub struct EffectiveScheme {
 }
 
 impl TerminalSettings {
+    /// Rücklauf im erlaubten Bereich.
+    pub fn clamped_scrollback(&self) -> usize {
+        self.scrollback.clamp(SCROLLBACK_MIN, SCROLLBACK_MAX)
+    }
+
     /// Schriftgröße im erlaubten Bereich.
     pub fn clamped_size(&self) -> f32 {
         if self.font_size.is_finite() { self.font_size.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX) } else { FONT_SIZE_DEFAULT }

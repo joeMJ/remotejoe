@@ -300,10 +300,6 @@ private:
 	void install(bool confirm);
 	void setBusy(bool busy, const QString& text = QString());
 	RjBackend* m_backend;
-	QComboBox* m_source;
-	QLineEdit* m_base;
-	QLineEdit* m_repo;
-	QComboBox* m_token;
 	QCheckBox* m_onStart;
 	QLabel* m_current;
 	QLabel* m_found;
@@ -483,6 +479,7 @@ private:
 	QFontComboBox* m_font;
 	QCheckBox* m_system;
 	QSpinBox* m_size;
+	QSpinBox* m_scrollback;
 	QComboBox* m_scheme;
 	QLineEdit* m_hex[4];
 	QLabel* m_swatch[4];

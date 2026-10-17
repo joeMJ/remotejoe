@@ -39,6 +39,8 @@ pub struct RdpParams {
     pub keyboard_layout: u32,
     pub config_path: Option<String>,
     pub timeout_ms: u32,
+    /// Grafikkanal (RDPGFX) anbieten; GNOME-Remote-Desktop verlangt ihn.
+    pub gfx: bool,
 }
 
 /// Angaben zu einem Serverzertifikat.
@@ -347,6 +349,7 @@ impl RdpSession {
             keyboard_layout: p.keyboard_layout,
             config_path: config.as_ptr(),
             timeout_ms: p.timeout_ms,
+            gfx: p.gfx as i32,
         };
         // SAFETY: alle Zeiger leben bis zum Ende des Aufrufs.
         let rc = unsafe { ffi::rj_rdp_connect(self.raw, &params) };

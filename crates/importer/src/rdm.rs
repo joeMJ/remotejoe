@@ -43,7 +43,7 @@ fn is_credential(kind: &str) -> bool {
 }
 
 /// Ordnerkette aus einem Gruppenpfad anlegen; liefert die ID des letzten Ordners.
-fn ensure_path(doc: &mut SourceDocument, seen: &mut HashSet<String>, path: &str, order: &mut i64) -> Option<String> {
+pub(crate) fn ensure_path(doc: &mut SourceDocument, seen: &mut HashSet<String>, path: &str, order: &mut i64) -> Option<String> {
     let mut parent: Option<String> = None;
     let mut acc = String::new();
     for part in path.split('\\').filter(|p| !p.is_empty()) {

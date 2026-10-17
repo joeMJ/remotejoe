@@ -63,6 +63,8 @@ pub struct SshParams {
     pub auth: Vec<Auth>,
     pub connect_timeout: Duration,
     pub keepalive: Duration,
+    /// Ältere, unsichere Verfahren zusätzlich anbieten (SHA-1-Schlüsselaustausch, CBC, HMAC-SHA1, DSA).
+    pub legacy: bool,
 }
 
 struct Handler {
@@ -140,6 +142,36 @@ fn pw_str(s: &Secret) -> Result<String, SshError> {
     s.as_str().map(str::to_string).ok_or(SshError::PasswordEncoding)
 }
 
+/// Verfahren, die wir anbieten: die Standardliste, dazu `ecdh-sha2-nistp256/384/521` (kein Mangel,
+/// aber manche Geräte können nur diese). Mit `legacy` zusätzlich ältere Verfahren, ganz hinten.
+fn preferred(legacy: bool) -> russh::Preferred {
+    use russh::{cipher, kex, mac};
+    fn add<T: Clone + PartialEq>(list: &mut Vec<T>, extra: impl IntoIterator<Item = T>) {
+        for e in extra {
+            if !list.contains(&e) {
+                list.push(e);
+            }
+        }
+    }
+    let mut p = russh::Preferred::DEFAULT;
+    let mut k = p.kex.to_vec();
+    add(&mut k, [kex::ECDH_SHA2_NISTP256, kex::ECDH_SHA2_NISTP384, kex::ECDH_SHA2_NISTP521]);
+    if legacy {
+        add(&mut k, [kex::DH_GEX_SHA1, kex::DH_G14_SHA1, kex::DH_G1_SHA1]);
+        let mut c = p.cipher.to_vec();
+        add(&mut c, [cipher::AES_128_CBC, cipher::AES_192_CBC, cipher::AES_256_CBC]);
+        p.cipher = c.into();
+        let mut m = p.mac.to_vec();
+        add(&mut m, [mac::HMAC_SHA1, mac::HMAC_SHA1_ETM]);
+        p.mac = m.into();
+        let mut keys = p.key.to_vec();
+        add(&mut keys, [russh::keys::Algorithm::Dsa]);
+        p.key = keys.into();
+    }
+    p.kex = k.into();
+    p
+}
+
 impl SshConnection {
     /// Baut die Verbindung über TCP auf und meldet an.
     pub async fn connect(params: &SshParams, known: KnownHosts, ask: HostKeyAsk) -> Result<Self, SshError> {
@@ -162,6 +194,7 @@ impl SshConnection {
             keepalive_max: 3,
             inactivity_timeout: None,
             nodelay: true,
+            preferred: preferred(params.legacy),
             ..Default::default()
         });
         let asking = Arc::new(std::sync::Mutex::new(AskClock::default()));
@@ -350,5 +383,21 @@ impl rj_tasks::macros::MacroIo for BlockingShell<'_> {
                 Err(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "Verbindung beendet"))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod preferred_tests {
+    use super::preferred;
+    use russh::{cipher, kex};
+
+    #[test]
+    fn ecdh_is_always_offered_and_weak_methods_only_on_request() {
+        let p = preferred(false);
+        assert!(p.kex.contains(&kex::ECDH_SHA2_NISTP256) && p.kex.contains(&kex::ECDH_SHA2_NISTP521));
+        assert!(!p.kex.contains(&kex::DH_G14_SHA1) && !p.cipher.contains(&cipher::AES_128_CBC));
+        let l = preferred(true);
+        assert!(l.kex.contains(&kex::DH_G14_SHA1) && l.cipher.contains(&cipher::AES_128_CBC));
+        assert_eq!(l.kex.iter().position(|k| *k == kex::MLKEM768X25519_SHA256), p.kex.iter().position(|k| *k == kex::MLKEM768X25519_SHA256), "Reihenfolge der sicheren bleibt");
     }
 }

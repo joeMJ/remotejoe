@@ -287,3 +287,16 @@ timeout 3 bash -c '</dev/tcp/ZIEL/3389' && echo offen || echo geschlossen
   Ausgabe des Einrichtungsskripts. Zertifikatsprüfung nur für Testziele abschalten.
 - **Lokales Konto:** Für den Fernzugriff mit einem lokalen Administratorkonto setzt `Enable-PSRemoting`
   `LocalAccountTokenFilterPolicy`. Besser ist ein Domänenkonto mit Kerberos.
+
+## Ubuntu-Ziele über RDP (GNOME-Remote-Desktop)
+
+Bei Ubuntu mit GNOME-Remote-Desktop (Einstellung „Remote-Desktop“ bzw. „Remote-Anmeldung“) trennt der
+Server den Aufbau, wenn der Client den Grafikkanal (RDPGFX) nicht anbietet. FreeRDP meldet dann
+„expected PDU_TYPE_DEMAND_ACTIVE, got PDU_TYPE_DEACTIVATE_ALL“, im Tab steht
+`ERRCONNECT_CONNECT_TRANSPORT_FAILED`; im Journal des Servers (`journalctl -u gnome-remote-desktop`)
+steht „Client did not advertise support for the Graphics Pipeline“.
+
+remotejoe versucht den Aufbau deshalb bei der Voreinstellung **Automatisch** (Eigenschaften →
+Verbindung → „Grafikkanal (GFX)“) nach diesem Abbruch einmal mit Grafikkanal und zeigt einen Hinweis im
+Tab. Wer es von Anfang an will, stellt „Immer an“ ein. Die Monitorgröße wird dabei auf Breite gerade und
+200 bis 8192, Höhe 200 bis 8192 begrenzt (so verlangt es der Server).

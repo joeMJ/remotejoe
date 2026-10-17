@@ -594,6 +594,7 @@ impl App {
             }
             "update_status" => Ok(self.update_status()),
             "update_settings" => self.update_settings(&c),
+            "update_demo_source" => self.update_demo_source(str_of(&c, "base_url").unwrap_or_default()),
             "update_check" => self.update_check(),
             "update_install" => self.update_install(c.get("confirm").and_then(Value::as_bool).unwrap_or(false)),
             "update_cancel" => Ok(self.update_cancel()),

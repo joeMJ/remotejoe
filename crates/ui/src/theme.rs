@@ -48,6 +48,129 @@ pub const DARK: Palette = Palette {
     ok: "#7ed387",
 };
 
+/// Farben einer Palette mit eigenem Speicher (für Paletten aus Dateien).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PaletteData {
+    pub window: String,
+    pub base: String,
+    pub alternate: String,
+    pub text: String,
+    pub muted: String,
+    pub highlight: String,
+    pub highlight_text: String,
+    pub button: String,
+    pub link: String,
+    pub warning: String,
+    pub error: String,
+    pub ok: String,
+}
+
+impl From<Palette> for PaletteData {
+    fn from(p: Palette) -> Self {
+        let s = |x: &str| x.to_string();
+        PaletteData {
+            window: s(p.window),
+            base: s(p.base),
+            alternate: s(p.alternate),
+            text: s(p.text),
+            muted: s(p.muted),
+            highlight: s(p.highlight),
+            highlight_text: s(p.highlight_text),
+            button: s(p.button),
+            link: s(p.link),
+            warning: s(p.warning),
+            error: s(p.error),
+            ok: s(p.ok),
+        }
+    }
+}
+
+/// Eigene Palette aus `<Konfigurationsordner>/paletten/<Name>.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomPalette {
+    /// Dateiname ohne `.json`; Auswahlkennung ist `datei:<id>`.
+    pub id: String,
+    pub name: String,
+    pub dark: bool,
+    pub colors: PaletteData,
+}
+
+fn valid_hex(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Liest die Paletten aus einem Ordner. Fehlende Farben kommen aus dem hellen bzw. dunklen
+/// Standardschema (`"dark": true`); ungültige Dateien werden übersprungen und als Hinweis
+/// gemeldet, ebenso zu geringer Kontrast (kein Zwang).
+pub fn load_custom(dir: &std::path::Path) -> (Vec<CustomPalette>, Vec<String>) {
+    let mut out = Vec::new();
+    let mut notes = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else { return (out, notes) };
+    let mut files: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+    files.sort();
+    for path in files.into_iter().take(50) {
+        let id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) if t.len() <= 64 * 1024 => t,
+            _ => {
+                notes.push(format!("{id}.json: nicht lesbar oder zu groß"));
+                continue;
+            }
+        };
+        let v: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                notes.push(format!("{id}.json: kein gültiges JSON ({e})"));
+                continue;
+            }
+        };
+        let dark = v.get("dark").and_then(|x| x.as_bool()).unwrap_or(false);
+        let mut c: PaletteData = if dark { DARK } else { LIGHT }.into();
+        let mut ok = true;
+        for (key, slot) in [
+            ("window", &mut c.window),
+            ("base", &mut c.base),
+            ("alternate", &mut c.alternate),
+            ("text", &mut c.text),
+            ("muted", &mut c.muted),
+            ("highlight", &mut c.highlight),
+            ("highlight_text", &mut c.highlight_text),
+            ("button", &mut c.button),
+            ("link", &mut c.link),
+            ("warning", &mut c.warning),
+            ("error", &mut c.error),
+            ("ok", &mut c.ok),
+        ] {
+            if let Some(val) = v.get(key) {
+                match val.as_str().filter(|h| valid_hex(h)) {
+                    Some(h) => *slot = h.to_lowercase(),
+                    None => {
+                        notes.push(format!("{id}.json: „{key}“ ist keine Farbe der Form #rrggbb"));
+                        ok = false;
+                    }
+                }
+            }
+        }
+        if !ok {
+            continue;
+        }
+        for (fg, bg, what) in [(&c.text, &c.base, "Text/Grund"), (&c.text, &c.window, "Text/Fenster"), (&c.muted, &c.base, "Nebentext"), (&c.highlight_text, &c.highlight, "Auswahl")] {
+            let ratio = contrast(fg, bg);
+            if ratio < 4.5 {
+                notes.push(format!("{id}.json: Hinweis, geringer Kontrast bei {what} ({ratio:.1} : 1, empfohlen mindestens 4,5 : 1)"));
+            }
+        }
+        let name = v.get("name").and_then(|x| x.as_str()).map(|n| rj_core::charset::mark_visible(n, false).into_owned()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| id.clone());
+        out.push(CustomPalette { id, name, dark, colors: c });
+    }
+    (out, notes)
+}
+
+/// Ordner für eigene Paletten.
+pub fn custom_dir() -> Option<std::path::PathBuf> {
+    rj_core::config::config_dir().map(|d| d.join("paletten"))
+}
+
 fn channel(hex: &str, i: usize) -> f64 {
     let v = u8::from_str_radix(&hex[1 + i * 2..3 + i * 2], 16).unwrap_or(0) as f64 / 255.0;
     if v <= 0.03928 {
@@ -121,6 +244,24 @@ mod tests {
                 assert!(c >= min, "{name} {what}: {c:.2} < {min}");
             }
         }
+    }
+
+    #[test]
+    fn custom_palettes_are_read_checked_and_bad_ones_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gut.json"), r##"{"name":"Mein Schema","dark":true,"base":"#101010","highlight":"#ff8800"}"##).unwrap();
+        std::fs::write(dir.path().join("kaputt.json"), "{ nicht json").unwrap();
+        std::fs::write(dir.path().join("farbe.json"), r#"{"text":"rot"}"#).unwrap();
+        std::fs::write(dir.path().join("flau.json"), r##"{"text":"#cccccc","base":"#ffffff"}"##).unwrap();
+        std::fs::write(dir.path().join("anderes.txt"), "x").unwrap();
+        let (list, notes) = load_custom(dir.path());
+        let ids: Vec<_> = list.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["flau", "gut"], "{notes:?}");
+        let gut = list.iter().find(|p| p.id == "gut").unwrap();
+        assert_eq!((gut.name.as_str(), gut.dark, gut.colors.base.as_str(), gut.colors.text.as_str()), ("Mein Schema", true, "#101010", DARK.text));
+        assert!(notes.iter().any(|n| n.starts_with("kaputt.json")) && notes.iter().any(|n| n.starts_with("farbe.json")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.starts_with("flau.json") && n.contains("Kontrast")), "{notes:?}");
+        assert!(load_custom(&dir.path().join("fehlt")).0.is_empty());
     }
 
     #[test]
