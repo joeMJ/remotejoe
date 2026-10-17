@@ -351,6 +351,16 @@ const char* rj_rdp_last_error(rj_rdp* rdp)
 	return rdp ? rdp->error : "";
 }
 
+/* Lokales Konto: ohne Domäne (leer oder ".") und ohne "@" bzw. "\\" im Benutzernamen.
+ * Dafür gibt es kein Kerberos; der Versuch kostet nur ein bis zwei Sekunden. */
+static BOOL rj_is_local_account(const rj_params* p)
+{
+	const char* d = p->domain;
+	if (d && *d && strcmp(d, ".") != 0)
+		return FALSE;
+	return (p->username && !strchr(p->username, '@') && !strchr(p->username, '\\')) ? TRUE : FALSE;
+}
+
 int rj_rdp_connect(rj_rdp* rdp, const rj_params* p)
 {
 	rdpSettings* s = rdp->context->settings;
@@ -393,6 +403,8 @@ int rj_rdp_connect(rj_rdp* rdp, const rj_params* p)
 		default:
 			break;
 	}
+	if (rj_is_local_account(p))
+		ok &= freerdp_settings_set_string(s, FreeRDP_AuthenticationPackageList, "!kerberos");
 	ok &= freerdp_settings_set_bool(s, FreeRDP_NlaSecurity, nla);
 	ok &= freerdp_settings_set_bool(s, FreeRDP_TlsSecurity, tls);
 	ok &= freerdp_settings_set_bool(s, FreeRDP_RdpSecurity, rdpsec);

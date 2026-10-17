@@ -509,6 +509,13 @@ QWidget* PropertiesTab::pageConnection()
 		f->addRow(pl, m_port);
 		m_errors.insert(QStringLiteral("port"), errorLabel(w));
 		f->addRow(QString(), m_errors.value(QStringLiteral("port")));
+		if (proto == QLatin1String("web"))
+		{
+			// Bei Web genügt die Adresse (URL); Host und Port werden daraus abgeleitet.
+			for (QWidget* x : { static_cast<QWidget*>(m_host), static_cast<QWidget*>(m_hostWarn), static_cast<QWidget*>(m_errors.value(QStringLiteral("host"))),
+			                    static_cast<QWidget*>(m_port), static_cast<QWidget*>(m_errors.value(QStringLiteral("port"))) })
+				f->setRowVisible(x, false);
+		}
 		// Protokollspezifische Felder (Zwischenablage auf eigener Seite).
 		const QJsonObject o = m_data.value(QStringLiteral("options")).toObject();
 		auto text = [&](const char* key, const char* label) {
@@ -546,6 +553,10 @@ QWidget* PropertiesTab::pageConnection()
 		else if (proto == QLatin1String("web") || proto == QLatin1String("proxmox"))
 		{
 			text("url", "edit.opt.url");
+			// Ziele, die bisher nur einen Host haben: daraus ergibt sich der Vorschlag für die Adresse.
+			if (proto == QLatin1String("web"))
+				if (auto* ue = qobject_cast<QLineEdit*>(m_opts.value(QStringLiteral("url"))); ue && ue->text().isEmpty())
+					ue->setPlaceholderText(m_data.value(QStringLiteral("default_url")).toString().isEmpty() ? QStringLiteral("https://rechner/") : m_data.value(QStringLiteral("default_url")).toString());
 			text("user_selector", "edit.opt.user_selector");
 			text("password_selector", "edit.opt.password_selector");
 			text("submit_selector", "edit.opt.submit_selector");
@@ -589,6 +600,13 @@ QWidget* PropertiesTab::pageConnection()
 	f->addRow(rjText(m_backend, "edit.psrp.auth"), m_psrpAuth);
 	f->addRow(rjText(m_backend, "edit.port"), m_psrpPort);
 	f->addRow(QString(), m_psrpVerify);
+	{
+		// PowerShell-Transport gilt für PowerShell- und Hyper-V-Ziele sowie als vererbbare Einstellung an Ordnern.
+		const QString pn = target ? m_data.value(QStringLiteral("protocol")).toString() : QString();
+		const bool showPs = !target || pn == QLatin1String("psrp") || pn == QLatin1String("hyperv");
+		for (QWidget* x : { static_cast<QWidget*>(m_psrp), static_cast<QWidget*>(m_psrpAuth), static_cast<QWidget*>(m_psrpPort), static_cast<QWidget*>(m_psrpVerify) })
+			f->setRowVisible(x, showPs);
+	}
 	m_snmp = new QComboBox(w);
 	m_snmp->addItem(rjText(m_backend, "edit.inherit"), QStringLiteral("inherit"));
 	m_snmp->addItem(rjText(m_backend, "edit.none"), QStringLiteral("none"));

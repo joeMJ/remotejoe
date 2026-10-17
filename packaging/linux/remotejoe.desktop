@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=remotejoe
+GenericName=Verbindungsmanager
+Comment=RDP, SSH, VNC, Web, Proxmox, Hyper-V und PowerShell in einem Fenster
+Exec=remotejoe
+Icon=remotejoe
+Terminal=false
+Categories=Network;RemoteAccess;
+StartupWMClass=remotejoe

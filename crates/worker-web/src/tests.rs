@@ -114,3 +114,12 @@ console.log(JSON.stringify({{ r, user: els['#user']._v, pw: els['#pw']._v, log }
         }
     }
 }
+
+#[test]
+fn ignore_certificate_option_is_read_from_the_target() {
+    let o: WebOptions = serde_json::from_str(r##"{"url":"https://192.0.2.10/","ignore_certificate":true,"login":{"username_selector":"#u"}}"##).unwrap();
+    assert!(o.ignore_certificate);
+    assert_eq!(o.login.unwrap().username_selector.as_deref(), Some("#u"));
+    // Ohne Angabe wird nicht übergangen.
+    assert!(!serde_json::from_str::<WebOptions>("{}").unwrap().ignore_certificate);
+}

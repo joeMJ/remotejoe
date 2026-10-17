@@ -11,6 +11,7 @@ pub mod model;
 pub mod schema;
 pub mod secret;
 pub mod termcolors;
+pub mod weburl;
 
 pub use model::*;
 pub use secret::Secret;

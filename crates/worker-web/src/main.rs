@@ -44,7 +44,7 @@ fn main() {
         }
     });
     let proxy = event_loop.create_proxy();
-    let mut st = State { out, proxy, view: None, window: None, context: None, flow: LoginFlow::new(None), creds: None, inject_pending: false };
+    let mut st = State { out, proxy, view: None, window: None, context: None, flow: LoginFlow::new(None), creds: None, inject_pending: false, ignore_cert: false };
     #[cfg(target_os = "linux")]
     let mut tls = tls::Pending::default();
     event_loop.run(move |event, target, flow| {
@@ -65,7 +65,7 @@ fn main() {
                     }
                     #[cfg(target_os = "linux")]
                     if let Some(v) = &st.view {
-                        tls.attach(v, st.out.clone());
+                        tls.attach(v, st.out.clone(), st.ignore_cert);
                     }
                 }
                 #[cfg(target_os = "linux")]
@@ -100,6 +100,8 @@ struct State {
     flow: LoginFlow,
     creds: Option<CredentialPayload>,
     inject_pending: bool,
+    /// Zertifikatsfehler ohne Rückfrage übergehen (Option des Ziels).
+    ignore_cert: bool,
 }
 
 impl State {
@@ -118,6 +120,7 @@ impl State {
         let profile = profile_dir(&base, &key);
         std::fs::create_dir_all(&profile).map_err(|e| format!("Profil: {e}"))?;
         self.flow = LoginFlow::new(opts.login.clone());
+        self.ignore_cert = opts.ignore_certificate;
         self.view = None;
         self.send(FromWorker::State(SessionState::Connecting));
         let window = WindowBuilder::new()
@@ -147,6 +150,7 @@ impl State {
         self.context = Some(ctx);
         self.send(FromWorker::State(SessionState::Connected));
         self.send(FromWorker::Log(format!("Web-Sitzung geöffnet: {}", url.host)));
+        self.send(FromWorker::Notice(format!("Die Webseite läuft in einem eigenen Fenster „remotejoe – {}“.", url.host)));
         Ok(())
     }
 
@@ -237,7 +241,7 @@ mod tls {
     }
 
     impl Pending {
-        pub fn attach(&mut self, v: &wry::WebView, out: Sender) {
+        pub fn attach(&mut self, v: &wry::WebView, out: Sender, ignore: bool) {
             let wk = v.webview();
             let profile = wk
                 .website_data_manager()
@@ -248,6 +252,11 @@ mod tls {
             let next = self.next.clone();
             wk.connect_load_failed_with_tls_errors(move |view, uri, cert, flags| {
                 let host = glib::Uri::parse(uri, glib::UriFlags::NONE).ok().and_then(|u| u.host()).map(|h| h.to_string()).unwrap_or_default();
+                // „Zertifikatsprüfung abschalten“ (Option des Ziels): ohne Rückfrage durchlassen.
+                if ignore {
+                    allow(view, cert, &host, uri);
+                    return true;
+                }
                 let der = cert.certificate().map(|b| b.to_vec()).unwrap_or_default();
                 let known = AcceptedCerts::load(&profile);
                 match known.decide(&host, &der, &problems(flags)) {

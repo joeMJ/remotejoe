@@ -240,6 +240,9 @@ impl App {
         if let Some(Node::Target(t)) = node {
             v["protocol"] = json!(t.protocol.as_str());
             v["host"] = json!(t.host);
+            if t.protocol == Protocol::Web && !t.host.is_empty() {
+                v["default_url"] = json!(rj_core::weburl::default_url(&t.host, t.effective_port()));
+            }
             v["port"] = json!(t.port);
             v["default_port"] = json!(t.protocol.default_port());
             v["options"] = options_value(&t.options);
@@ -796,6 +799,24 @@ impl App {
             if f.get("host").is_none() {
                 errors.remove("host");
             }
+            // Web-Ziele: Die Adresse genügt; Host und Port werden daraus abgeleitet.
+            if t.protocol == Protocol::Web {
+                let url_now = match &t.options {
+                    ProtocolOptions::Web(o) => o.url.clone().unwrap_or_default(),
+                    _ => String::new(),
+                };
+                let url = f.get("options").and_then(|o| o.get("url")).and_then(Value::as_str).map(str::to_string).unwrap_or(url_now);
+                let host_now = str_of(&f, "host").map(str::to_string).unwrap_or_else(|| t.host.clone());
+                // Ein leerer Host ist bei Web in Ordnung, solange die Adresse da ist; ungültige Zeichen bleiben ein Fehler.
+                if errors.get("host").is_some_and(|m| m == "Host darf nicht leer sein") {
+                    errors.remove("host");
+                }
+                if url.is_empty() && host_now.is_empty() {
+                    errors.insert("url".into(), "Die Adresse (URL) darf nicht leer sein".into());
+                } else if !url.is_empty() && !errors.contains_key("url") && rj_core::weburl::endpoint(&url).is_none() {
+                    errors.insert("url".into(), "Adresse ungültig; Beispiel: https://rechner/ oder http://rechner:8080/".into());
+                }
+            }
             if !errors.is_empty() {
                 return Ok(json!({ "errors": errors }));
             }
@@ -892,6 +913,14 @@ impl App {
                     }
                     if let Some(o) = options {
                         t.options = o;
+                    }
+                    if t.protocol == Protocol::Web {
+                        if let ProtocolOptions::Web(o) = &t.options {
+                            if let Some((h, p)) = o.url.as_deref().filter(|u| !u.is_empty()).and_then(rj_core::weburl::endpoint) {
+                                t.host = h;
+                                t.port = (p != t.protocol.default_port()).then_some(p);
+                            }
+                        }
                     }
                 }
                 Some(Node::Folder(fo)) => {
@@ -1457,5 +1486,59 @@ mod macro_tests {
         let r = cmd(&mut app, json!({ "op": "run_macro", "session": 99, "macro": m }));
         assert!(r["error"].as_str().unwrap().contains("SSH"), "{r}");
         assert_eq!(cmd(&mut app, json!({ "op": "session_macros", "session": 99 })), json!([]));
+    }
+}
+
+#[cfg(test)]
+mod web_tests {
+    use super::*;
+
+    fn cmd(app: &mut App, v: Value) -> Value {
+        serde_json::from_str(&app.edit(&v.to_string())).unwrap()
+    }
+
+    fn host_port(app: &App, id: &str) -> (String, Option<u16>) {
+        match edit::node(&app.index, Uuid::parse_str(id).unwrap()) {
+            Some(Node::Target(t)) => (t.host.clone(), t.port),
+            _ => panic!("kein Ziel"),
+        }
+    }
+
+    #[test]
+    fn web_target_needs_only_the_url() {
+        let mut app = App::new(true);
+        app.config_path = None;
+        let t = cmd(&mut app, json!({ "op": "add", "kind": "web" }))["id"].as_str().unwrap().to_string();
+
+        // Nur die Adresse: Host und Port werden abgeleitet, Standardport 443 bleibt leer.
+        let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "options": { "url": "https://192.0.2.1/" } } }));
+        assert!(r.get("errors").is_none(), "{r}");
+        assert_eq!(host_port(&app, &t), ("192.0.2.1".into(), None));
+
+        // Anderer Port und http.
+        cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "options": { "url": "https://ilo.example.test:8443/index.html" } } }));
+        assert_eq!(host_port(&app, &t), ("ilo.example.test".into(), Some(8443)));
+        cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "options": { "url": "http://ilo.example.test/" } } }));
+        assert_eq!(host_port(&app, &t), ("ilo.example.test".into(), Some(80)));
+
+        // Ungültige Adresse und Zugangsdaten in der Adresse werden abgelehnt.
+        let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "options": { "url": "ilo.example.test" } } }));
+        assert!(r["errors"]["url"].is_string(), "{r}");
+        let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "options": { "url": "https://u:p@x.example.test/" } } }));
+        assert!(r["errors"]["url"].is_string(), "{r}");
+        assert_eq!(host_port(&app, &t).0, "ilo.example.test");
+
+        // Den Editor-Daten liegt für Ziele mit Host ein Vorschlag der Adresse bei.
+        let e = cmd(&mut app, json!({ "op": "editor", "id": t }));
+        assert_eq!(e["default_url"], "http://ilo.example.test/");
+    }
+
+    #[test]
+    fn web_target_without_url_and_host_is_rejected() {
+        let mut app = App::new(true);
+        app.config_path = None;
+        let t = cmd(&mut app, json!({ "op": "add", "kind": "web" }))["id"].as_str().unwrap().to_string();
+        let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "host": "", "options": { "url": "" } } }));
+        assert!(r["errors"]["url"].as_str().unwrap().contains("leer"), "{r}");
     }
 }

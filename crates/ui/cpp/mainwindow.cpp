@@ -316,7 +316,8 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	tree->setDropIndicatorShown(true);
 	tree->setDragDropMode(QAbstractItemView::InternalMove);
 	tree->onDrop = [this](const QModelIndex& src, const QModelIndex& dst, int pos) {
-		if (src.data(RoleGuest).isValid() || src.data(RolePlaceholder).toBool() || dst.data(RoleGuest).isValid() || dst.data(RolePlaceholder).toBool())
+		if (src.data(RoleGuest).isValid() || src.data(RolePlaceholder).toBool() || dst.data(RoleGuest).isValid() || dst.data(RolePlaceholder).toBool() ||
+		    src.data(RoleMacro).toInt() || dst.data(RoleMacro).toInt())
 			return;
 		QString parent;
 		QJsonValue at;
@@ -782,16 +783,18 @@ void MainWindow::addMacroShelf()
 	const QJsonArray macros = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("macro_list") } }).toUtf8()).array();
 	auto* shelf = new QStandardItem(protocolIcon(QString(), QString(), true), T(m_backend, "macro.shelf"));
 	shelf->setData(1, RoleMacro);
-	shelf->setData(true, RolePlaceholder);
 	shelf->setEditable(false);
+	shelf->setDragEnabled(false);
+	shelf->setDropEnabled(false);
 	for (const QJsonValue& v : macros)
 	{
 		const QJsonObject m = v.toObject();
 		auto* it = new QStandardItem(protocolIcon(QStringLiteral("macro"), QString(), false), m.value(QStringLiteral("name")).toString());
 		it->setData(2, RoleMacro);
 		it->setData(m.value(QStringLiteral("id")).toString(), RoleId);
-		it->setData(true, RolePlaceholder);
 		it->setEditable(false);
+		it->setDragEnabled(false);
+		it->setDropEnabled(false);
 		it->setToolTip(T(m_backend, "macro.links").arg(m.value(QStringLiteral("links")).toInt()));
 		shelf->appendRow(it);
 	}
@@ -821,7 +824,7 @@ int MainWindow::treeRowCount() const
 		{
 			const QModelIndex i = m_model->index(r, 0, parent);
 			// Platzhalter und Gäste von Hypervisoren zählen nicht als Index-Einträge.
-			if (i.data(RolePlaceholder).toBool() || i.data(RoleGuest).isValid())
+			if (i.data(RolePlaceholder).toBool() || i.data(RoleGuest).isValid() || i.data(RoleMacro).toInt())
 				continue;
 			++n;
 			walk(i);
@@ -1375,6 +1378,7 @@ void MainWindow::macrosForScreenshot()
 	m_macroShelfOpen = true;
 	reloadTree();
 	openMacroTab(id);
+	m_tree->scrollToBottom();
 }
 
 void MainWindow::terminalSettingsForScreenshot(const QString& scheme)
@@ -1951,7 +1955,7 @@ void MainWindow::showEditResult(const QJsonObject& r, const QString& okMessage)
 QString MainWindow::currentId() const
 {
 	const QModelIndex i = m_tree->currentIndex();
-	if (!i.isValid() || i.data(RoleGuest).isValid() || i.data(RolePlaceholder).toBool())
+	if (!i.isValid() || i.data(RoleGuest).isValid() || i.data(RolePlaceholder).toBool() || i.data(RoleMacro).toInt())
 		return QString();
 	return i.data(RoleId).toString();
 }
@@ -1959,7 +1963,7 @@ QString MainWindow::currentId() const
 QString MainWindow::currentParentId() const
 {
 	const QModelIndex i = m_tree->currentIndex();
-	if (!i.isValid())
+	if (!i.isValid() || i.data(RoleMacro).toInt())
 		return QString();
 	if (i.data(RoleFolder).toBool() && !i.data(RolePlaceholder).toBool())
 		return i.data(RoleId).toString();
@@ -1970,7 +1974,7 @@ QStringList MainWindow::selectedIds() const
 {
 	QStringList ids;
 	for (const QModelIndex& i : m_tree->selectionModel()->selectedIndexes())
-		if (!i.data(RoleGuest).isValid() && !i.data(RolePlaceholder).toBool())
+		if (!i.data(RoleGuest).isValid() && !i.data(RolePlaceholder).toBool() && !i.data(RoleMacro).toInt())
 			ids << i.data(RoleId).toString();
 	if (ids.isEmpty() && !currentId().isEmpty())
 		ids << currentId();

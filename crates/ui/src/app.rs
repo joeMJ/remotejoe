@@ -30,7 +30,9 @@ pub struct App {
     pub demo: bool,
     pub sessions: Manager,
     pub workspace: Workspace,
-    unlocking: Option<Receiver<Result<Vault, String>>>,
+    unlocking: Option<Receiver<Result<(Vault, crate::vaultlock::VaultLock), String>>>,
+    /// Sperre der geöffneten Schlüsseldatenbank (fällt mit dem Tresor weg).
+    vault_lock: Option<crate::vaultlock::VaultLock>,
     /// Laufende Makros und ihr Eingabekanal an die Sitzungen.
     pub(crate) macro_runs: Vec<crate::macro_run::RunningMacro>,
     pub(crate) macro_input_tx: mpsc::Sender<(SessionId, Vec<u8>)>,
@@ -130,6 +132,7 @@ impl App {
             demo,
             workspace: Workspace::default(),
             unlocking: None,
+            vault_lock: None,
             lights: Default::default(),
         };
         // Gespeicherte Farben gelten schon für das erste Terminal.
@@ -148,6 +151,13 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.unlocking = Some(rx);
         std::thread::spawn(move || {
+            let lock = match crate::vaultlock::VaultLock::acquire(std::path::Path::new(&path)) {
+                Ok(l) => l,
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
+            };
             let mut key = MasterKey { password: Some(password), key_file: None };
             if let Some(k) = key_file.filter(|k| !k.is_empty()) {
                 match key.clone().with_key_file(std::path::Path::new(&k)) {
@@ -158,7 +168,7 @@ impl App {
                     }
                 }
             }
-            let _ = tx.send(Vault::open(std::path::Path::new(&path), key, storage).map_err(|e| e.to_string()));
+            let _ = tx.send(Vault::open(std::path::Path::new(&path), key, storage).map(|v| (v, lock)).map_err(|e| e.to_string()));
         });
     }
 
@@ -175,7 +185,7 @@ impl App {
         }
         self.unlocking = Some(rx);
         std::thread::spawn(move || {
-            let result = (|| -> Result<Vault, String> {
+            let result = (|| -> Result<(Vault, crate::vaultlock::VaultLock), String> {
                 if path.trim().is_empty() {
                     return Err("Bitte eine Datei angeben.".into());
                 }
@@ -201,9 +211,10 @@ impl App {
                     }
                     key = key.with_key_file(kp).map_err(|e| format!("Schlüsseldatei: {e}"))?;
                 }
+                let lock = crate::vaultlock::VaultLock::acquire(p)?;
                 let mut v = Vault::create(p, key, rj_kdbx::KdfChoice::Argon2idDefault, storage);
                 v.save(None).map_err(|e| e.to_string())?;
-                Ok(v)
+                Ok((v, lock))
             })();
             let _ = tx.send(result);
         });
@@ -324,6 +335,7 @@ impl App {
         }
         self.snmp_stop.store(true, std::sync::atomic::Ordering::Relaxed);
         self.vault = None;
+        self.vault_lock = None;
         self.unlocking = None;
         self.import_plan = None;
         self.history.clear();
@@ -548,8 +560,33 @@ impl App {
         })
     }
 
+    /// Host und Port zum Verbinden: bei Web-Zielen aus der Adresse, sonst aus dem Ziel.
+    fn endpoint_of(t: &Target) -> (String, u16) {
+        if t.protocol == Protocol::Web {
+            if let ProtocolOptions::Web(o) = &t.options {
+                if let Some(ep) = o.url.as_deref().filter(|u| !u.is_empty()).and_then(rj_core::weburl::endpoint) {
+                    return ep;
+                }
+            }
+        }
+        (t.host.clone(), t.effective_port())
+    }
+
     fn options_json(&self, t: &Target) -> String {
         let mut v = match &t.options {
+            // Der Web-Worker erwartet eigene Optionsnamen: Anmeldefelder unter `login`, Profil je Ziel.
+            ProtocolOptions::Web(o) if t.protocol == Protocol::Web => {
+                let sel = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+                let mut w = json!({ "profile": t.id.to_string(), "ignore_certificate": o.ignore_certificate });
+                if let Some(u) = sel(&o.url) {
+                    w["url"] = json!(u);
+                }
+                let (user, pw, submit) = (sel(&o.user_selector), sel(&o.password_selector), sel(&o.submit_selector));
+                if user.is_some() || pw.is_some() || submit.is_some() {
+                    w["login"] = json!({ "username_selector": user, "password_selector": pw, "submit_selector": submit });
+                }
+                w
+            }
             ProtocolOptions::Rdp(o) => serde_json::to_value(o).unwrap_or_default(),
             ProtocolOptions::Ssh(o) => serde_json::to_value(o).unwrap_or_default(),
             ProtocolOptions::Vnc(o) => serde_json::to_value(o).unwrap_or_default(),
@@ -618,13 +655,14 @@ impl App {
         } else {
             (width.clamp(200, 8192), height.clamp(200, 8192))
         };
+        let (ep_host, ep_port) = Self::endpoint_of(&t);
         let spec = ConnectSpec {
             target,
             title: t.name.clone(),
             protocol: t.protocol,
             request: ConnectRequest {
-                host: t.host.clone(),
-                port: t.effective_port(),
+                host: ep_host.clone(),
+                port: ep_port,
                 width: w,
                 height: h,
                 options_json: self.options_json(&t),
@@ -641,7 +679,7 @@ impl App {
             // Tunnelaufbau im Hintergrund; die Oberfläche bleibt bedienbar.
             let tunnels = self.tunnels.clone();
             let hq = self.hop_question.clone();
-            let (host, port, proto) = (t.host.clone(), t.effective_port(), t.protocol);
+            let (host, port, proto) = (ep_host, ep_port, t.protocol);
             let title = rj_core::charset::mark_visible(&t.name, false).into_owned();
             let job = self.jobs.spawn_cancellable(format!("Tunnel „{}“ für {}", def.name, title), move |job, cancel| {
                 *hq.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -960,7 +998,8 @@ impl App {
             if let Ok(r) = rx.try_recv() {
                 self.unlocking = None;
                 match r {
-                    Ok(v) => {
+                    Ok((v, lock)) => {
+                        self.vault_lock = Some(lock);
                         self.index = v.index().index.clone();
                         self.history.clear();
                         self.locked = false;
@@ -1346,5 +1385,36 @@ mod terminal_settings_tests {
             assert!(ids.contains(&id.to_string()), "{id}");
         }
         assert_eq!(l[0]["ansi"].as_array().unwrap().len(), 16);
+    }
+}
+
+#[cfg(test)]
+mod web_options_tests {
+    use super::*;
+    use rj_core::{Protocol, Target, WebOptions};
+
+    #[test]
+    fn web_options_use_the_names_of_the_web_worker() {
+        let app = App::new(true);
+        let mut t = Target::new("ilo", Protocol::Web, "192.0.2.10");
+        t.options = ProtocolOptions::Web(WebOptions {
+            url: Some("https://192.0.2.10/".into()),
+            user_selector: Some(" #user ".into()),
+            password_selector: Some("#pw".into()),
+            submit_selector: Some("".into()),
+            ignore_certificate: true,
+        });
+        let v: serde_json::Value = serde_json::from_str(&app.options_json(&t)).unwrap();
+        assert_eq!(v["url"], "https://192.0.2.10/");
+        assert_eq!(v["ignore_certificate"], true);
+        assert_eq!(v["profile"], t.id.to_string());
+        assert_eq!(v["login"]["username_selector"], "#user");
+        assert_eq!(v["login"]["password_selector"], "#pw");
+        assert!(v["login"]["submit_selector"].is_null());
+        // Ohne Selektoren und Adresse: kein `login`, keine `url`.
+        t.options = ProtocolOptions::Web(WebOptions::default());
+        let v: serde_json::Value = serde_json::from_str(&app.options_json(&t)).unwrap();
+        assert!(v.get("login").is_none() && v.get("url").is_none());
+        assert_eq!(v["ignore_certificate"], false);
     }
 }

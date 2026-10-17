@@ -46,6 +46,9 @@ pub struct WebOptions {
     pub login: Option<FormLogin>,
     /// Unverschlüsseltes HTTP ohne Rückfrage erlauben.
     pub allow_http: bool,
+    /// Zertifikatsfehler (unbekannte Zertifizierungsstelle, falscher Name, abgelaufen …)
+    /// ohne Rückfrage übergehen. Nur für Geräte, an denen man nichts ändern kann.
+    pub ignore_certificate: bool,
     /// Schlüssel des Profilverzeichnisses (Kennung des Ziels).
     pub profile: Option<String>,
 }

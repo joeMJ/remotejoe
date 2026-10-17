@@ -1,0 +1,12 @@
+<RCC>
+  <qresource prefix="/logo">
+    <file alias="remotejoe-16.png">../../../assets/logo/remotejoe-16.png</file>
+    <file alias="remotejoe-24.png">../../../assets/logo/remotejoe-24.png</file>
+    <file alias="remotejoe-32.png">../../../assets/logo/remotejoe-32.png</file>
+    <file alias="remotejoe-48.png">../../../assets/logo/remotejoe-48.png</file>
+    <file alias="remotejoe-64.png">../../../assets/logo/remotejoe-64.png</file>
+    <file alias="remotejoe-128.png">../../../assets/logo/remotejoe-128.png</file>
+    <file alias="remotejoe-256.png">../../../assets/logo/remotejoe-256.png</file>
+    <file alias="remotejoe-512.png">../../../assets/logo/remotejoe-512.png</file>
+  </qresource>
+</RCC>

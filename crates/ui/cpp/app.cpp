@@ -8,8 +8,15 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QFile>
 #include <QtCore/QLibraryInfo>
+#include <QtCore/QLockFile>
+#include <QtCore/QStandardPaths>
+#include <QtCore/QThread>
 #include <QtCore/QTimer>
 #include <QtCore/QTranslator>
+#include <QtGui/QGuiApplication>
+#include <QtGui/QIcon>
+#include <QtNetwork/QLocalServer>
+#include <QtNetwork/QLocalSocket>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QMenu>
@@ -165,6 +172,63 @@ void screenshots(MainWindow& w, const QString& dir)
 	std::fprintf(stderr, "Erstes Zeichnen nach %lld ms, Baumeinträge: %d\n", (long long)w.firstPaintMs, w.treeRowCount());
 }
 
+// Einzelinstanz: Eine Sperrdatei im Laufzeitordner des Benutzers und ein lokaler Server.
+// Ein zweiter Start meldet sich beim laufenden Programm (Fenster nach vorn) und endet.
+struct SingleInstance
+{
+	QLockFile lock;
+	QLocalServer server;
+	QString serverName;
+
+	SingleInstance()
+		: lock(baseDir() + QStringLiteral("/remotejoe.lock"))
+		, serverName(QStringLiteral("remotejoe-%1").arg(qEnvironmentVariable("USER", qEnvironmentVariable("USERNAME", QStringLiteral("benutzer")))))
+	{
+		lock.setStaleLockTime(0); // veraltet nur, wenn der Prozess nicht mehr läuft
+	}
+
+	static QString baseDir()
+	{
+		QString dir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+		if (dir.isEmpty())
+			dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+		QDir().mkpath(dir);
+		return dir;
+	}
+
+	// true: Wir sind die erste Instanz.
+	bool acquire()
+	{
+		if (lock.tryLock(0))
+		{
+			QLocalServer::removeServer(serverName);
+			server.setSocketOptions(QLocalServer::UserAccessOption);
+			server.listen(serverName);
+			return true;
+		}
+		return false;
+	}
+
+	// Sagt der laufenden Instanz Bescheid; false, wenn sie nicht antwortet.
+	bool notifyRunning()
+	{
+		for (int i = 0; i < 20; ++i) // bis ca. 2 s: die erste Instanz startet evtl. noch
+		{
+			QLocalSocket s;
+			s.connectToServer(serverName);
+			if (s.waitForConnected(100))
+			{
+				s.write("raise\n");
+				s.waitForBytesWritten(500);
+				s.disconnectFromServer();
+				return true;
+			}
+			QThread::msleep(100);
+		}
+		return false;
+	}
+};
+
 } // namespace
 
 std::int32_t rjRunApplication()
@@ -175,17 +239,47 @@ std::int32_t rjRunApplication()
 	static char* argv[] = { name, nullptr };
 	QApplication app(argc, argv);
 	QApplication::setApplicationName(QStringLiteral("remotejoe"));
+	QGuiApplication::setDesktopFileName(QStringLiteral("remotejoe"));
+	{
+		// Programmsymbol (Logo) in allen Größen, aus der eingebetteten Ressource.
+		QIcon icon;
+		for (const int size : { 16, 24, 32, 48, 64, 128, 256, 512 })
+			icon.addFile(QStringLiteral(":/logo/remotejoe-%1.png").arg(size), QSize(size, size));
+		QApplication::setWindowIcon(icon);
+	}
 	// Deutsche Texte für Qt-Standarddialoge, falls installiert.
 	static QTranslator qtDe;
 	if (qtDe.load(QStringLiteral("qtbase_de"), QLibraryInfo::path(QLibraryInfo::TranslationsPath)))
 		QApplication::installTranslator(&qtDe);
 	const QString shots = qEnvironmentVariable("RJ_SCREENSHOTS");
 	const bool demo = !shots.isEmpty() || qEnvironmentVariableIsSet("RJ_DEMO");
+	// Vorführung und Bildschirmfotos dürfen parallel laufen; sie öffnen keine echte Datenbank.
+	static SingleInstance single;
+	const bool useSingle = !demo && !qEnvironmentVariableIsSet("RJ_ALLOW_MULTIPLE");
+	if (useSingle && !single.acquire())
+	{
+		if (single.notifyRunning())
+			std::fprintf(stderr, "remotejoe läuft bereits; das vorhandene Fenster wird nach vorn geholt.\n");
+		else
+			std::fprintf(stderr, "remotejoe läuft bereits (Sperre %s), reagiert aber nicht. Zweite Instanz wird nicht gestartet.\n", qPrintable(single.lock.fileName()));
+		return 1;
+	}
 	RjBackend backend;
 	backend.init(demo);
 	MainWindow w(&backend);
 	w.applyTheme(qEnvironmentVariable("REMOTEJOE_THEME") == QLatin1String("dark"));
 	w.show();
+	if (useSingle)
+		QObject::connect(&single.server, &QLocalServer::newConnection, &w, [&w] {
+			while (QLocalSocket* c = single.server.nextPendingConnection())
+			{
+				c->deleteLater();
+				w.setWindowState((w.windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
+				w.show();
+				w.raise();
+				w.activateWindow();
+			}
+		});
 	if (!shots.isEmpty())
 	{
 		screenshots(w, shots);

@@ -87,7 +87,7 @@ struct Run {
 }
 
 /// Startet den Worker gegen `url` und beantwortet Rückfragen mit `accept`.
-fn run(display: &str, data: &std::path::Path, url: &str, port: u16, accept: bool, rx: &mpsc::Receiver<(String, String)>) -> Run {
+fn run(display: &str, data: &std::path::Path, url: &str, port: u16, accept: bool, ignore: bool, rx: &mpsc::Receiver<(String, String)>) -> Run {
     let mut spec = WorkerSpec::new(env!("CARGO_BIN_EXE_rj-worker-web"));
     // WebKit reserviert sehr viel Adressraum; eine RLIMIT_AS-Grenze bricht es.
     spec.memory_limit = None;
@@ -103,6 +103,7 @@ fn run(display: &str, data: &std::path::Path, url: &str, port: u16, accept: bool
     let opts = serde_json::json!({
         "url": url,
         "allow_http": true,
+        "ignore_certificate": ignore,
         "profile": "6f1c0000-0000-4000-8000-0000000000aa",
         "login": {"username_selector": "#user", "password_selector": "#pw", "submit_selector": "#go"}
     });
@@ -174,7 +175,7 @@ fn form_login_and_certificate_warning_in_real_webview() {
     let port = l.local_addr().unwrap().port();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || serve(l, tx, None));
-    let r = run(&display, data.path(), &format!("http://127.0.0.1:{port}/"), port, true, &rx);
+    let r = run(&display, data.path(), &format!("http://127.0.0.1:{port}/"), port, true, false, &rx);
     expect_login(&r);
     assert_eq!(r.questions, 0);
     let profile = data.path().join("remotejoe/web-profile/6f1c0000-0000-4000-8000-0000000000aa");
@@ -211,20 +212,27 @@ fn form_login_and_certificate_warning_in_real_webview() {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || serve(l, tx, Some(Arc::new(cfg))));
     let url = format!("https://127.0.0.1:{port}/");
-    let r = run(&display, data.path(), &url, port, false, &rx);
+    let r = run(&display, data.path(), &url, port, false, false, &rx);
     assert!(r.posted.is_none(), "abgelehntes Zertifikat darf nicht zur Anmeldung führen");
     assert!(r.questions >= 1, "Rückfrage erwartet: {:#?}", r.log);
     assert!(r.log.iter().any(|t| t.contains("nicht vertrauenswürdig")), "{:#?}", r.log);
 
     // Angenommen ⇒ Anmeldung; Fingerabdruck im Profil gespeichert.
-    let r = run(&display, data.path(), &url, port, true, &rx);
+    let r = run(&display, data.path(), &url, port, true, false, &rx);
     expect_login(&r);
     assert_eq!(r.questions, 1);
     assert!(profile.join("zertifikate.json").is_file());
 
     // Neuer Start mit demselben Profil: keine Rückfrage mehr.
-    let r = run(&display, data.path(), &url, port, true, &rx);
+    let r = run(&display, data.path(), &url, port, true, false, &rx);
     expect_login(&r);
     assert_eq!(r.questions, 0);
+
+    // Option „Zertifikatsprüfung abschalten“: frisches Profil, keine Rückfrage, nichts gespeichert.
+    let fresh = tempfile::tempdir().unwrap();
+    let r = run(&display, fresh.path(), &url, port, true, true, &rx);
+    expect_login(&r);
+    assert_eq!(r.questions, 0, "mit abgeschalteter Prüfung darf es keine Rückfrage geben: {:#?}", r.log);
+    assert!(!fresh.path().join("remotejoe/web-profile/6f1c0000-0000-4000-8000-0000000000aa/zertifikate.json").exists());
     drop(x);
 }

@@ -16,4 +16,5 @@ pub mod sessions;
 pub mod texts;
 pub mod theme;
 pub mod tree;
+pub mod vaultlock;
 pub mod workspace;
