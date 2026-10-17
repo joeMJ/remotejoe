@@ -8,6 +8,6 @@ fn main() {
         .qt_module("Svg")
         .include_dir("cpp")
         .file("src/bridge.rs")
-        .cpp_files(["cpp/mainwindow.h", "cpp/mainwindow.cpp", "cpp/views.cpp", "cpp/app.cpp"])
+        .cpp_files(["cpp/mainwindow.h", "cpp/mainwindow.cpp", "cpp/editor.h", "cpp/editor.cpp", "cpp/views.cpp", "cpp/app.cpp"])
         .build();
 }

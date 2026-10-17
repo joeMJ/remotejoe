@@ -404,6 +404,11 @@ impl Vault {
         out
     }
 
+    /// Liegt der Eintrag in der Gruppe `remotejoe` (darf also geändert werden)?
+    pub fn is_own_entry(&self, uuid: Uuid) -> bool {
+        Self::in_own_group(&self.db, EntryId::from_uuid(uuid))
+    }
+
     /// Liest einen Eintrag. Der Fundort in der Gruppenstruktur ist gleichgültig.
     pub fn credential(&self, uuid: Uuid) -> Option<Credential> {
         let id = EntryId::from_uuid(uuid);

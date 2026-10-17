@@ -38,6 +38,8 @@ pub enum CredentialResolution {
     Ambiguous(Vec<ResolvedCredential>),
     /// Nichts gefunden.
     NotFound { name: String },
+    /// Zugangsdaten sind ausdrücklich abgeschaltet (am Ziel oder darüber).
+    Disabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -50,19 +52,35 @@ struct Chain<'a> {
     links: Vec<(&'a Settings, Origin)>,
 }
 
-fn chain(index: &Index, target_id: Uuid) -> Result<Chain<'_>, UnknownTarget> {
-    let path = index.path_to(target_id).ok_or(UnknownTarget(target_id))?;
-    let Some(Node::Target(target)) = path.last() else {
-        return Err(UnknownTarget(target_id));
-    };
-    let mut links = vec![(&target.settings, Origin::Target)];
+/// Einstellungen vom Knoten (Ziel, Ordner oder Wurzel) bis zur Wurzel.
+fn links_for(index: &Index, node_id: Uuid) -> Option<(Option<&Target>, Vec<(&Settings, Origin)>)> {
+    if node_id == index.root.id {
+        return Some((None, vec![(&index.root.settings, Origin::Root)]));
+    }
+    let path = index.path_to(node_id)?;
+    let mut links = Vec::new();
+    let mut target = None;
+    match path.last()? {
+        Node::Target(t) => {
+            target = Some(t);
+            links.push((&t.settings, Origin::Target));
+        }
+        Node::Folder(f) => links.push((&f.settings, Origin::Folder(f.id))),
+    }
     for node in path.iter().rev().skip(1) {
         if let Node::Folder(f) = node {
             links.push((&f.settings, Origin::Folder(f.id)));
         }
     }
     links.push((&index.root.settings, Origin::Root));
-    Ok(Chain { target, links })
+    Some((target, links))
+}
+
+fn chain(index: &Index, target_id: Uuid) -> Result<Chain<'_>, UnknownTarget> {
+    match links_for(index, target_id) {
+        Some((Some(target), links)) => Ok(Chain { target, links }),
+        _ => Err(UnknownTarget(target_id)),
+    }
 }
 
 fn merged_overrides(links: &[(&Settings, Origin)], name: &str) -> FieldOverrides {
@@ -91,31 +109,155 @@ fn find_named(links: &[(&Settings, Origin)], name: &str) -> Option<ResolvedCrede
     })
 }
 
-/// Sucht den Zugangsdatensatz für ein Ziel (Name des Ziels, sonst `default`).
-pub fn resolve_credential(index: &Index, target_id: Uuid) -> Result<CredentialResolution, UnknownTarget> {
-    let c = chain(index, target_id)?;
-    let name = c.target.credential_name();
-    if let Some(found) = find_named(&c.links, name) {
-        return Ok(CredentialResolution::Found(found));
+/// Gemeinsame Suche für Ziele und Ordner. `own_name` ist der am Knoten selbst
+/// verlangte Name (Ziel: `credential`).
+fn resolve_links(links: &[(&Settings, Origin)], own_name: Option<&str>) -> CredentialResolution {
+    // Abgeschaltete Zugangsdaten schneiden die Kette ab.
+    let cut = links.iter().position(|(s, _)| s.credentials_off);
+    let links = &links[..cut.unwrap_or(links.len())];
+    let explicit = own_name.map(str::to_string).or_else(|| links.iter().find_map(|(s, _)| s.credential_name.clone()));
+    let name = explicit.clone().unwrap_or_else(|| DEFAULT_CREDENTIAL.to_string());
+    if let Some(found) = find_named(links, &name) {
+        return CredentialResolution::Found(found);
     }
-    if c.target.credential.is_none() {
+    if cut.is_some() {
+        return CredentialResolution::Disabled;
+    }
+    if explicit.is_none() {
         // Alle Namen entlang der Kette, jeweils der nächstgelegene Treffer.
         let mut names: Vec<&str> = Vec::new();
-        for (s, _) in &c.links {
+        for (s, _) in links {
             for n in s.credentials.keys() {
                 if !names.contains(&n.as_str()) {
                     names.push(n);
                 }
             }
         }
-        let candidates: Vec<_> = names.iter().filter_map(|n| find_named(&c.links, n)).collect();
+        let mut candidates: Vec<_> = names.iter().filter_map(|n| find_named(links, n)).collect();
         match candidates.len() {
             0 => {}
-            1 => return Ok(CredentialResolution::Found(candidates.into_iter().next().unwrap())),
-            _ => return Ok(CredentialResolution::Ambiguous(candidates)),
+            1 => return CredentialResolution::Found(candidates.remove(0)),
+            _ => return CredentialResolution::Ambiguous(candidates),
         }
     }
-    Ok(CredentialResolution::NotFound { name: name.to_string() })
+    CredentialResolution::NotFound { name }
+}
+
+/// Sucht den Zugangsdatensatz für ein Ziel (Name des Ziels, sonst der
+/// nächstgelegene Name eines Ordners, sonst `default`).
+pub fn resolve_credential(index: &Index, target_id: Uuid) -> Result<CredentialResolution, UnknownTarget> {
+    let c = chain(index, target_id)?;
+    Ok(resolve_links(&c.links, c.target.credential.as_deref()))
+}
+
+/// Wirksamer Zugangsdatensatz an einem beliebigen Knoten (auch Ordner), wie
+/// ihn ein Unterobjekt ohne eigene Angabe erben würde.
+pub fn resolve_credential_at(index: &Index, node_id: Uuid) -> Option<CredentialResolution> {
+    let (target, links) = links_for(index, node_id)?;
+    Some(resolve_links(&links, target.and_then(|t| t.credential.as_deref())))
+}
+
+/// Am Knoten selbst festgelegte Art der Zugangsdaten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialMode {
+    /// Nichts festgelegt: vom übergeordneten Ordner.
+    Inherit,
+    /// Ausdrücklich keine Zugangsdaten.
+    None,
+    /// Verweis auf einen KDBX-Eintrag am Knoten selbst (unter `name`).
+    Entry { name: String, reference: CredentialRef },
+    /// Benannter Datensatz, gesucht nach oben.
+    Named(String),
+}
+
+/// Liest die am Knoten festgelegte Art der Zugangsdaten.
+pub fn credential_mode(index: &Index, node_id: Uuid) -> Option<CredentialMode> {
+    let (settings, own_name) = node_credential_parts(index, node_id)?;
+    if settings.credentials_off {
+        return Some(CredentialMode::None);
+    }
+    let name = own_name.clone().unwrap_or_else(|| DEFAULT_CREDENTIAL.to_string());
+    if let Some(r) = settings.credentials.get(&name) {
+        return Some(CredentialMode::Entry { name, reference: r.clone() });
+    }
+    Some(match own_name {
+        Some(n) => CredentialMode::Named(n),
+        None => CredentialMode::Inherit,
+    })
+}
+
+fn node_credential_parts(index: &Index, node_id: Uuid) -> Option<(&Settings, Option<String>)> {
+    if node_id == index.root.id {
+        return Some((&index.root.settings, index.root.settings.credential_name.clone()));
+    }
+    match index.path_to(node_id)?.last()? {
+        Node::Target(t) => Some((&t.settings, t.credential.clone())),
+        Node::Folder(f) => Some((&f.settings, f.settings.credential_name.clone())),
+    }
+}
+
+/// Setzt die Art der Zugangsdaten am Knoten. Ein bisheriger eigener Verweis
+/// unter dem bisherigen Namen wird entfernt (der KDBX-Eintrag bleibt).
+pub fn set_credential_mode(index: &mut Index, node_id: Uuid, mode: CredentialMode) -> bool {
+    let old_name = match node_credential_parts(index, node_id) {
+        Some((_, n)) => n.unwrap_or_else(|| DEFAULT_CREDENTIAL.to_string()),
+        None => return false,
+    };
+    let is_target = matches!(index.path_to(node_id).and_then(|p| p.last().copied()), Some(Node::Target(_)));
+    let Some(s) = settings_mut(index, node_id) else { return false };
+    s.credentials.remove(&old_name);
+    s.credentials_off = false;
+    let new_name: Option<String> = match mode {
+        CredentialMode::Inherit => None,
+        CredentialMode::None => {
+            s.credentials_off = true;
+            None
+        }
+        CredentialMode::Entry { name, reference } => {
+            s.credentials.insert(name.clone(), reference);
+            (name != DEFAULT_CREDENTIAL).then_some(name)
+        }
+        CredentialMode::Named(n) => Some(n),
+    };
+    if is_target {
+        s.credential_name = None;
+        if let Some(Node::Target(t)) = find_node_mut(&mut index.root, node_id) {
+            t.credential = new_name;
+        }
+    } else {
+        s.credential_name = new_name;
+    }
+    true
+}
+
+/// Knoten zum Ändern (ohne Wurzel).
+pub fn find_node_mut(f: &mut Folder, id: Uuid) -> Option<&mut Node> {
+    for n in &mut f.children {
+        if n.id() == id {
+            return Some(n);
+        }
+        if let Node::Folder(sub) = n {
+            if let Some(found) = find_node_mut(sub, id) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Alle Namen von Zugangsdatensätzen, die am Knoten nach oben erreichbar sind.
+pub fn reachable_credential_names(index: &Index, node_id: Uuid) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some((_, links)) = links_for(index, node_id) {
+        for (s, _) in links.iter().skip(1) {
+            for n in s.credentials.keys() {
+                if !out.contains(n) {
+                    out.push(n.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Sucht einen ausdrücklich benannten Zugangsdatensatz (z. B. nach Auswahl).

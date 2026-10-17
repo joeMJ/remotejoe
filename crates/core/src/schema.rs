@@ -95,6 +95,9 @@ pub fn from_json(bytes: &[u8], source_name: &str) -> Result<LoadedIndex, SchemaE
 fn migrate_step(from: u32, value: Value) -> Result<Value, SchemaError> {
     match from {
         1 => migrate_v1_to_v2(value),
+        // 2 → 3: neue, optionale Felder (Vorlagen, Favoriten, Beschreibungen,
+        // Zugangsdaten-Art); vorhandene Daten bleiben unverändert.
+        2 => Ok(value),
         _ => Err(SchemaError::Migration {
             from,
             reason: "keine Migration bekannt".into(),

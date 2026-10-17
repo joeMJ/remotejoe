@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 
+#include "editor.h"
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 #include "views.h"
 
@@ -7,6 +8,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtGui/QAction>
 #include <QtGui/QClipboard>
+#include <QtGui/QDropEvent>
 #include <QtGui/QCloseEvent>
 #include <QtGui/QFontDatabase>
 #include <QtGui/QGuiApplication>
@@ -151,48 +153,25 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 	}
 }
 
-/// Kleines Verlaufsdiagramm.
-class Sparkline : public QWidget
+/// Baum mit Ziehen und Ablegen: verschoben wird im Index, nicht im Modell.
+class RjTree : public QTreeView
 {
 public:
-	Sparkline(const QString& title, const QJsonArray& values, const QString& unit, QWidget* parent)
-	  : QWidget(parent)
-	  , m_title(title)
-	  , m_unit(unit)
-	{
-		for (const QJsonValue& v : values)
-			m_values << v.toDouble();
-		setMinimumSize(260, 56);
-	}
+	using QTreeView::QTreeView;
+	/// Lage: 0 auf, 1 über, 2 unter dem Eintrag, 3 freie Fläche.
+	std::function<void(const QModelIndex& source, const QModelIndex& target, int position)> onDrop;
 
 protected:
-	void paintEvent(QPaintEvent*) override
+	void dropEvent(QDropEvent* e) override
 	{
-		QPainter p(this);
-		p.setRenderHint(QPainter::Antialiasing);
-		p.fillRect(rect(), palette().base());
-		p.setPen(palette().text().color());
-		const QString last = m_values.isEmpty() ? QStringLiteral("–") : QString::number(m_values.last(), 'f', 1) + m_unit;
-		p.drawText(rect().adjusted(4, 2, -4, -2), Qt::AlignTop | Qt::AlignLeft, m_title + QStringLiteral(": ") + last);
-		if (m_values.size() < 2)
-			return;
-		double mx = 1;
-		for (double v : m_values)
-			mx = qMax(mx, v);
-		const QRectF area = QRectF(rect()).adjusted(4, 20, -4, -4);
-		QPainterPath path;
-		for (int i = 0; i < m_values.size(); ++i)
-		{
-			const QPointF pt(area.left() + area.width() * i / (m_values.size() - 1), area.bottom() - area.height() * m_values[i] / mx);
-			i == 0 ? path.moveTo(pt) : path.lineTo(pt);
-		}
-		p.setPen(QPen(palette().highlight().color(), 2));
-		p.drawPath(path);
+		const QModelIndex src = currentIndex();
+		const QModelIndex dst = indexAt(e->position().toPoint());
+		const int pos = int(dropIndicatorPosition());
+		e->setDropAction(Qt::IgnoreAction);
+		e->accept();
+		if (onDrop && src.isValid())
+			onDrop(src, dst, pos);
 	}
-
-private:
-	QString m_title, m_unit;
-	QVector<double> m_values;
 };
 
 /// Dialog zur Auswahl eines Zugangsdatensatzes.
@@ -388,7 +367,40 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_search->setClearButtonEnabled(true);
 	m_search->setMinimumHeight(32);
 	m_search->setAccessibleName(T(m_backend, "search.placeholder"));
-	m_tree = new QTreeView(left);
+	m_viewBox = new QComboBox(left);
+	m_viewBox->setAccessibleName(T(m_backend, "view.label"));
+	m_bar = new ActionBar(m_backend, left);
+	auto* tree = new RjTree(left);
+	m_tree = tree;
+	tree->setDragEnabled(true);
+	tree->setAcceptDrops(true);
+	tree->setDropIndicatorShown(true);
+	tree->setDragDropMode(QAbstractItemView::InternalMove);
+	tree->onDrop = [this](const QModelIndex& src, const QModelIndex& dst, int pos) {
+		if (src.data(RoleGuest).isValid() || src.data(RolePlaceholder).toBool() || dst.data(RoleGuest).isValid() || dst.data(RolePlaceholder).toBool())
+			return;
+		QString parent;
+		QJsonValue at;
+		if (!dst.isValid() || pos == 3)
+			parent = QString();
+		else if (pos == 0 && dst.data(RoleFolder).toBool())
+			parent = dst.data(RoleId).toString();
+		else
+		{
+			parent = dst.parent().isValid() ? dst.parent().data(RoleId).toString() : QString();
+			at = dst.row() + (pos == 2 ? 1 : 0);
+		}
+		QJsonObject cmd{ { QStringLiteral("op"), QStringLiteral("move") }, { QStringLiteral("id"), src.data(RoleId).toString() } };
+		if (!parent.isEmpty())
+			cmd.insert(QStringLiteral("parent"), parent);
+		if (!at.isUndefined())
+			cmd.insert(QStringLiteral("pos"), at);
+		const QString id = src.data(RoleId).toString();
+		QTimer::singleShot(0, this, [this, cmd, id] {
+			showEditResult(parseObject(edit(cmd)));
+			selectId(id);
+		});
+	};
 	m_model = new QStandardItemModel(this);
 	m_tree->setModel(m_model);
 	m_tree->setHeaderHidden(true);
@@ -397,7 +409,9 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
 	m_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
 	m_tree->setAccessibleName(QStringLiteral("Verbindungsbaum"));
+	leftLay->addWidget(m_viewBox);
 	leftLay->addWidget(m_search);
+	leftLay->addWidget(m_bar);
 	leftLay->addWidget(m_tree, 1);
 
 	m_tabs = new QTabWidget(this);
@@ -416,11 +430,51 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	buildMenus();
 	statusBar()->showMessage(T(m_backend, "status.ready"));
 
-	connect(m_tree, &QTreeView::activated, this, [this](const QModelIndex& i) {
+	// Eingabetaste verbindet, Doppelklick öffnet die Eigenschaften.
+	auto treeKey = [this, left](const QKeySequence& k, auto fn) {
+		auto* s = new QShortcut(k, left);
+		s->setContext(Qt::WidgetWithChildrenShortcut);
+		connect(s, &QShortcut::activated, this, fn);
+	};
+	auto activate = [this] {
+		const QModelIndex i = m_tree->currentIndex();
+		if (!m_tree->hasFocus() || !i.isValid())
+			return;
 		if (i.data(RoleGuest).isValid())
 			openGuestConsole(i);
 		else if (!i.data(RoleFolder).toBool())
 			connectSelected();
+		else
+			m_tree->setExpanded(i, !m_tree->isExpanded(i));
+	};
+	treeKey(QKeySequence(Qt::Key_Return), activate);
+	treeKey(QKeySequence(Qt::Key_Enter), activate);
+	connect(m_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex& i) {
+		if (i.data(RoleGuest).isValid())
+			openGuestConsole(i);
+		else if (!i.data(RolePlaceholder).toBool())
+			openProperties(i.data(RoleId).toString());
+	});
+	treeKey(QKeySequence(Qt::Key_F4), [this] { if (!currentId().isEmpty()) openProperties(currentId()); });
+	treeKey(QKeySequence(QStringLiteral("Alt+Return")), [this] { if (!currentId().isEmpty()) openProperties(currentId()); });
+	treeKey(QKeySequence(QStringLiteral("Ctrl+N")), [this] { popupAddMenu(); });
+	treeKey(QKeySequence(Qt::Key_Insert), [this] { popupAddMenu(); });
+	treeKey(QKeySequence(Qt::Key_F2), [this] { renameSelected(); });
+	treeKey(QKeySequence(Qt::Key_Delete), [this] { deleteSelected(); });
+	treeKey(QKeySequence(QStringLiteral("Ctrl+D")), [this] { duplicateSelected(); });
+	treeKey(QKeySequence(QStringLiteral("Ctrl+Shift+M")), [this] { moveSelected(); });
+	treeKey(QKeySequence(QStringLiteral("Alt+Up")), [this] { reorderSelected(-1); });
+	treeKey(QKeySequence(QStringLiteral("Alt+Down")), [this] { reorderSelected(1); });
+	treeKey(QKeySequence(QStringLiteral("Ctrl+B")), [this] { toggleFavorite(); });
+	treeKey(QKeySequence(QStringLiteral("Ctrl+Z")), [this] { undo(); });
+	connect(m_viewBox, &QComboBox::activated, this, [this](int) {
+		edit({ { QStringLiteral("op"), QStringLiteral("set_view") }, { QStringLiteral("view"), m_viewBox->currentData().toString() } });
+		reloadTree();
+	});
+	m_overlay = new UnlockOverlay(m_backend, this);
+	connect(m_overlay, &UnlockOverlay::unlockRequested, this, [this](const QString& path, const QString& pw, const QString& keyFile) {
+		m_backend->unlock(path, pw, keyFile);
+		statusBar()->showMessage(T(m_backend, "status.unlocking"));
 	});
 	connect(m_tree, &QTreeView::expanded, this, [this](const QModelIndex& i) {
 		const QModelIndex first = m_model->index(0, 0, i);
@@ -433,6 +487,15 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(m_search, &QLineEdit::textChanged, this, [this] { m_filterTimer.start(); });
 	connect(&m_filterTimer, &QTimer::timeout, this, &MainWindow::reloadTree);
 	connect(m_tabs, &QTabWidget::tabCloseRequested, this, [this](int i) {
+		if (auto* ed = qobject_cast<PropertiesTab*>(m_tabs->widget(i)))
+		{
+			m_tabs->setCurrentWidget(ed);
+			ed->requestClose([this, ed] {
+				m_tabs->removeTab(m_tabs->indexOf(ed));
+				ed->deleteLater();
+			});
+			return;
+		}
 		const auto tab = m_tabs->widget(i)->property("tab").toULongLong();
 		for (const QJsonValue& t : m_workspace.value(QStringLiteral("tabs")).toArray())
 			if (std::uint64_t(t.toObject().value(QStringLiteral("id")).toInteger()) == tab)
@@ -471,6 +534,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_poll.setInterval(16);
 	connect(&m_poll, &QTimer::timeout, this, &MainWindow::poll);
 	m_poll.start();
+	reloadViews();
 	reloadTree();
 	rebuildTabs();
 }
@@ -480,7 +544,7 @@ MainWindow::~MainWindow() = default;
 void MainWindow::buildMenus()
 {
 	QMenu* file = menuBar()->addMenu(T(m_backend, "menu.file"));
-	file->addAction(T(m_backend, "menu.file.open"), QKeySequence::Open, this, [this] { unlockDialog(); });
+	file->addAction(T(m_backend, "menu.file.open"), QKeySequence::Open, this, [this] { showUnlock(false); });
 	file->addAction(T(m_backend, "menu.file.import"), this, [this] {
 		const QString path = QFileDialog::getOpenFileName(this, T(m_backend, "menu.file.import"), QString(),
 		                                                  QStringLiteral("Remote Desktop Manager / Royal TS (*.rdm *.json *.rtsz *.rtsx);;Alle Dateien (*)"));
@@ -503,7 +567,7 @@ void MainWindow::buildMenus()
 			reloadTree();
 		}
 	});
-	file->addAction(T(m_backend, "menu.file.save"), QKeySequence::Save, this, [this] { statusBar()->showMessage(m_backend->save(), 5000); });
+	file->addAction(T(m_backend, "menu.file.save"), QKeySequence::Save, this, [this] { saveAll(); });
 	file->addAction(T(m_backend, "menu.file.lock"), QKeySequence(QStringLiteral("Ctrl+L")), this, [this] {
 		m_backend->lock();
 		reloadTree();
@@ -511,6 +575,32 @@ void MainWindow::buildMenus()
 	});
 	file->addSeparator();
 	file->addAction(T(m_backend, "menu.file.quit"), QKeySequence::Quit, this, &QWidget::close);
+	QMenu* editMenu = menuBar()->addMenu(T(m_backend, "menu.edit"));
+	m_undoAction = editMenu->addAction(T(m_backend, "menu.edit.undo.none") + QStringLiteral("\tCtrl+Z"), this, [this] { undo(); });
+	connect(editMenu, &QMenu::aboutToShow, this, [this] {
+		const QString label = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("undo_label") } })).value(QStringLiteral("label")).toString();
+		m_undoAction->setText((label.isEmpty() ? T(m_backend, "menu.edit.undo.none") : T(m_backend, "menu.edit.undo").arg(label)) + QStringLiteral("\tCtrl+Z"));
+		m_undoAction->setEnabled(!label.isEmpty());
+	});
+	editMenu->addSeparator();
+	editMenu->addAction(T(m_backend, "menu.edit.properties") + QStringLiteral("\tF4"), this, [this] {
+		if (!currentId().isEmpty())
+			openProperties(currentId());
+	});
+	QMenu* add = editMenu->addMenu(T(m_backend, "menu.edit.add"));
+	connect(add, &QMenu::aboutToShow, this, [this, add] {
+		add->clear();
+		buildAddMenu(add, currentParentId());
+	});
+	editMenu->addAction(T(m_backend, "ctx.rename") + QStringLiteral("\tF2"), this, [this] { renameSelected(); });
+	editMenu->addAction(T(m_backend, "ctx.duplicate") + QStringLiteral("\tCtrl+D"), this, [this] { duplicateSelected(); });
+	editMenu->addAction(T(m_backend, "ctx.move") + QStringLiteral("\tCtrl+Shift+M"), this, [this] { moveSelected(); });
+	editMenu->addAction(T(m_backend, "ctx.delete") + QStringLiteral("\tEntf"), this, [this] { deleteSelected(); });
+	editMenu->addAction(T(m_backend, "ctx.favorite.on") + QStringLiteral("\tCtrl+B"), this, [this] { toggleFavorite(); });
+	editMenu->addSeparator();
+	editMenu->addAction(T(m_backend, "menu.edit.view.new"), this, [this] { viewCommand(QStringLiteral("new")); });
+	editMenu->addAction(T(m_backend, "menu.edit.view.rename"), this, [this] { viewCommand(QStringLiteral("rename")); });
+	editMenu->addAction(T(m_backend, "menu.edit.view.delete"), this, [this] { viewCommand(QStringLiteral("delete")); });
 	QMenu* view = menuBar()->addMenu(T(m_backend, "menu.view"));
 	const char* modes[] = { "single", "one_by_two", "two_by_two", "free" };
 	int n = 1;
@@ -560,8 +650,12 @@ void MainWindow::applyTheme(bool dark)
 	  "QTabBar::tab { min-height: 30px; padding: 4px 12px; }"
 	  "QLabel#paneHeader { font-weight: bold; padding: 4px; }"
 	  "QLabel#paneNotice { color: %1; padding: 4px; }"
-	  "QPushButton { min-height: 30px; padding: 2px 12px; }")
-	                      .arg(c("warning").name()));
+	  "QPushButton { min-height: 30px; padding: 2px 12px; }"
+	  "QLabel#fieldError, QLabel#dirtyLabel { color: %1; font-weight: bold; }"
+	  "QFrame#actionBar { border: 2px solid %2; border-radius: 4px; }"
+	  "QFrame#unlockBox { border: 2px solid %2; border-radius: 6px; padding: 12px; }"
+	  "*[rjDirty=\"true\"] { border: 2px solid %2; }")
+	                      .arg(c("warning").name(), c("highlight").name()));
 }
 
 void MainWindow::reloadTree()
@@ -688,38 +782,7 @@ void MainWindow::handleConnectResult(const QString& id, const QString& json)
 
 void MainWindow::showProperties(const QString& id)
 {
-	const QJsonObject p = parseObject(m_backend->propertiesJson(id));
-	QDialog d(this);
-	d.setWindowTitle(T(m_backend, "dialog.properties.title"));
-	auto* form = new QFormLayout(&d);
-	const char* keys[][2] = { { "path", "Pfad" },   { "protocol", "Protokoll" },          { "host", "Host" },
-		                      { "port", "Port" },   { "credential", "Zugangsdatensatz" }, { "credential_entry", "KDBX-Eintrag" },
-		                      { "tunnel", "Tunnel" } };
-	for (auto& k : keys)
-	{
-		const QJsonValue v = p.value(QString::fromLatin1(k[0]));
-		if (v.isUndefined() || v.isNull())
-			continue;
-		auto* l = new QLabel(v.isDouble() ? QString::number(v.toInt()) : v.toString(), &d);
-		l->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-		form->addRow(QString::fromUtf8(k[1]) + QLatin1Char(':'), l);
-	}
-	if (p.contains(QStringLiteral("snmp")))
-	{
-		const QJsonObject s = p.value(QStringLiteral("snmp")).toObject();
-		const QString light = s.value(QStringLiteral("light")).toString();
-		const QString state = light == QLatin1String("green") ? QStringLiteral("grün") : light == QLatin1String("yellow") ? QStringLiteral("gelb") : light == QLatin1String("red") ? QStringLiteral("rot") : QStringLiteral("grau (keine Antwort)");
-		form->addRow(QStringLiteral("SNMP:"), new QLabel(state + (s.value(QStringLiteral("error")).isString() ? QStringLiteral(" – ") + s.value(QStringLiteral("error")).toString() : QString()), &d));
-		form->addRow(new Sparkline(QStringLiteral("CPU"), s.value(QStringLiteral("cpu")).toArray(), QStringLiteral(" %"), &d));
-		form->addRow(new Sparkline(QStringLiteral("Speicher"), s.value(QStringLiteral("mem")).toArray(), QStringLiteral(" %"), &d));
-		form->addRow(new Sparkline(QStringLiteral("Durchsatz ein"), s.value(QStringLiteral("in")).toArray(), QStringLiteral(" bit/s"), &d));
-		form->addRow(new Sparkline(QStringLiteral("Durchsatz aus"), s.value(QStringLiteral("out")).toArray(), QStringLiteral(" bit/s"), &d));
-	}
-	auto* b = new QDialogButtonBox(QDialogButtonBox::Close, &d);
-	b->button(QDialogButtonBox::Close)->setText(QStringLiteral("Schließen"));
-	connect(b, &QDialogButtonBox::rejected, &d, &QDialog::reject);
-	form->addRow(b);
-	d.exec();
+	openProperties(id);
 }
 
 void MainWindow::expandFirstHypervisor()
@@ -857,13 +920,46 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 				rebuildTabs();
 		});
 	}
+	const bool folder = i.data(RoleFolder).toBool();
+	QMenu* addM = menu.addMenu(T(m_backend, "ctx.add"));
+	buildAddMenu(addM, folder ? id : currentParentId());
+	menu.addAction(T(m_backend, "ctx.rename") + QStringLiteral("\tF2"), this, [this] { renameSelected(); });
+	menu.addAction(T(m_backend, "ctx.duplicate") + QStringLiteral("\tCtrl+D"), this, [this] { duplicateSelected(); });
+	menu.addAction(T(m_backend, "ctx.move") + QStringLiteral("\tCtrl+Shift+M"), this, [this] { moveSelected(); });
+	menu.addAction(T(m_backend, "ctx.delete") + QStringLiteral("\tEntf"), this, [this] { deleteSelected(); });
+	const bool fav = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), id } })).value(QStringLiteral("favorite")).toBool();
+	menu.addAction(T(m_backend, fav ? "ctx.favorite.off" : "ctx.favorite.on") + QStringLiteral("\tCtrl+B"), this, [this] { toggleFavorite(); });
+	QMenu* viewsM = menu.addMenu(T(m_backend, "ctx.view.add"));
+	for (const QJsonValue& v : QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("views") } }).toUtf8()).array())
+	{
+		const QString vid = v.toObject().value(QStringLiteral("id")).toString();
+		viewsM->addAction(v.toObject().value(QStringLiteral("name")).toString(), this, [this, vid] {
+			showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("view_add") }, { QStringLiteral("view"), vid }, { QStringLiteral("ids"), QJsonArray::fromStringList(selectedIds()) } })));
+			reloadViews();
+		});
+	}
+	viewsM->addSeparator();
+	viewsM->addAction(T(m_backend, "ctx.view.new"), this, [this] { viewCommand(QStringLiteral("new_with")); });
+	const QString curView = m_viewBox->currentData().toString();
+	if (!curView.isEmpty() && curView != QLatin1String("favorites"))
+		menu.addAction(T(m_backend, "ctx.view.remove"), this, [this, curView] {
+			showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("view_remove") }, { QStringLiteral("view"), curView }, { QStringLiteral("ids"), QJsonArray::fromStringList(selectedIds()) } })));
+		});
+	if (folder)
+	{
+		menu.addSeparator();
+		menu.addAction(T(m_backend, "ctx.all.connect"), this, [this] { connectAll(QStringLiteral("connect")); });
+		menu.addAction(T(m_backend, "ctx.all.reconnect"), this, [this] { connectAll(QStringLiteral("reconnect")); });
+		menu.addAction(T(m_backend, "ctx.all.disconnect"), this, [this] { connectAll(QStringLiteral("disconnect")); });
+	}
+	menu.addSeparator();
 	QMenu* tasks = menu.addMenu(T(m_backend, "ctx.tasks"));
 	tasks->addAction(T(m_backend, "ctx.tasks.updates"), this, [this] {
 		const QStringList ids = selectedTargets(m_tree, m_model);
 		if (!ids.isEmpty())
 			openPatchday(ids);
 	});
-	menu.addAction(T(m_backend, "ctx.properties"), this, [this, id] { showProperties(id); });
+	menu.addAction(T(m_backend, "ctx.properties") + QStringLiteral("\tF4"), this, [this, id] { openProperties(id); });
 	menu.exec(m_tree->viewport()->mapToGlobal(pos));
 }
 
@@ -896,20 +992,9 @@ void MainWindow::tabContextMenu(QTabWidget* tabs, const QPoint& pos)
 	menu.exec(tabs->tabBar()->mapToGlobal(pos));
 }
 
-void MainWindow::unlockDialog()
+void MainWindow::showUnlock(bool locked)
 {
-	QString path = m_backend->kdbxPath();
-	path = QFileDialog::getOpenFileName(this, T(m_backend, "dialog.unlock.title"), path, QStringLiteral("KeePass (*.kdbx)"));
-	if (path.isEmpty())
-		return;
-	bool ok = false;
-	QString pw = QInputDialog::getText(this, T(m_backend, "dialog.unlock.title"), T(m_backend, "dialog.unlock.password"),
-	                                   QLineEdit::Password, QString(), &ok);
-	if (!ok)
-		return;
-	m_backend->unlock(path, pw, QString());
-	pw.fill(QLatin1Char(' '));
-	statusBar()->showMessage(T(m_backend, "status.unlocking"));
+	m_overlay->open(m_backend->kdbxPath(), locked);
 }
 
 SessionPane* MainWindow::pane(std::uint64_t session)
@@ -996,11 +1081,18 @@ void MainWindow::rebuildTabs()
 		p->setParent(nullptr);
 	auto fill = [&](QTabWidget* target, const QJsonObject& window) {
 		const auto active = std::uint64_t(window.value(QStringLiteral("active")).toInteger());
+		// Eigenschaften-Tabs bleiben erhalten, Sitzungs-Tabs werden neu aufgebaut.
+		QWidget* current = target->currentWidget();
+		QList<QPair<QWidget*, QString>> editors;
 		while (target->count())
 		{
 			QWidget* w = target->widget(0);
+			const QString text = target->tabText(0);
 			target->removeTab(0);
-			w->deleteLater();
+			if (w->property("editor").toBool())
+				editors.append({ w, text });
+			else
+				w->deleteLater();
 		}
 		int activeIndex = 0;
 		for (const QJsonValue& tv : window.value(QStringLiteral("tabs")).toArray())
@@ -1014,6 +1106,12 @@ void MainWindow::rebuildTabs()
 				activeIndex = i;
 		}
 		target->setCurrentIndex(activeIndex);
+		for (const auto& e : editors)
+		{
+			target->addTab(e.first, e.second);
+			if (e.first == current)
+				target->setCurrentWidget(e.first);
+		}
 	};
 	const QJsonArray windows = m_workspace.value(QStringLiteral("windows")).toArray();
 	QSet<std::uint64_t> seen;
@@ -1132,11 +1230,24 @@ void MainWindow::poll()
 				reloadTree();
 			else if (t == QLatin1String("unlocked"))
 			{
+				m_overlay->hide();
+				reloadViews();
 				reloadTree();
+				for (auto* ed : findChildren<PropertiesTab*>())
+					ed->reload();
 				statusBar()->showMessage(T(m_backend, "status.unlocked"), 5000);
 			}
 			else if (t == QLatin1String("unlock_failed"))
-				QMessageBox::warning(this, T(m_backend, "dialog.unlock.title"), e.value(QStringLiteral("reason")).toString());
+			{
+				if (!m_overlay->isVisible())
+					showUnlock(false);
+				m_overlay->setBusy(false, e.value(QStringLiteral("reason")).toString());
+			}
+			else if (t == QLatin1String("connect_all_done"))
+			{
+				rebuildTabs();
+				statusBar()->showMessage(T(m_backend, "status.connect_all.done"), 5000);
+			}
 		}
 	}
 	for (const auto s : std::as_const(m_dirtyTerminals))
@@ -1176,4 +1287,365 @@ void MainWindow::closeEvent(QCloseEvent* e)
 		if (w)
 			w->close();
 	QMainWindow::closeEvent(e);
+}
+
+// ------------------------------------------------------------- Bearbeiten
+
+QString MainWindow::edit(const QJsonObject& cmd)
+{
+	return m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact)));
+}
+
+void MainWindow::showEditResult(const QJsonObject& r, const QString& okMessage)
+{
+	if (r.contains(QStringLiteral("error")))
+		statusBar()->showMessage(T(m_backend, "edit.error").arg(r.value(QStringLiteral("error")).toString()), 8000);
+	else if (!okMessage.isEmpty())
+		statusBar()->showMessage(okMessage, 5000);
+	reloadTree();
+	for (auto* ed : findChildren<PropertiesTab*>())
+		if (!ed->isDirty())
+			ed->reload();
+}
+
+QString MainWindow::currentId() const
+{
+	const QModelIndex i = m_tree->currentIndex();
+	if (!i.isValid() || i.data(RoleGuest).isValid() || i.data(RolePlaceholder).toBool())
+		return QString();
+	return i.data(RoleId).toString();
+}
+
+QString MainWindow::currentParentId() const
+{
+	const QModelIndex i = m_tree->currentIndex();
+	if (!i.isValid())
+		return QString();
+	if (i.data(RoleFolder).toBool() && !i.data(RolePlaceholder).toBool())
+		return i.data(RoleId).toString();
+	return i.parent().isValid() ? i.parent().data(RoleId).toString() : QString();
+}
+
+QStringList MainWindow::selectedIds() const
+{
+	QStringList ids;
+	for (const QModelIndex& i : m_tree->selectionModel()->selectedIndexes())
+		if (!i.data(RoleGuest).isValid() && !i.data(RolePlaceholder).toBool())
+			ids << i.data(RoleId).toString();
+	if (ids.isEmpty() && !currentId().isEmpty())
+		ids << currentId();
+	return ids;
+}
+
+void MainWindow::selectId(const QString& id)
+{
+	std::function<bool(const QModelIndex&)> walk = [&](const QModelIndex& parent) {
+		for (int r = 0; r < m_model->rowCount(parent); ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			if (i.data(RoleId).toString() == id && !i.data(RoleGuest).isValid())
+			{
+				m_tree->setCurrentIndex(i);
+				m_tree->scrollTo(i);
+				return true;
+			}
+			if (walk(i))
+				return true;
+		}
+		return false;
+	};
+	walk(QModelIndex());
+}
+
+void MainWindow::buildAddMenu(QMenu* menu, const QString& parentId)
+{
+	const char* kinds[][2] = { { "folder", "add.folder" }, { "rdp", "add.rdp" },         { "ssh", "add.ssh" },     { "vnc", "add.vnc" },
+		                       { "web", "add.web" },       { "proxmox", "add.proxmox" }, { "hyperv", "add.hyperv" }, { "psrp", "add.psrp" },
+		                       { "task", "add.task" },     { "macro", "add.macro" } };
+	auto run = [this, parentId](QJsonObject cmd) {
+		if (!parentId.isEmpty())
+			cmd.insert(QStringLiteral("parent"), parentId);
+		const QJsonObject r = parseObject(edit(cmd));
+		showEditResult(r);
+		if (r.contains(QStringLiteral("id")))
+		{
+			const QString id = r.value(QStringLiteral("id")).toString();
+			selectId(id);
+			openProperties(id, QStringLiteral("general"));
+		}
+		else if ((r.contains(QStringLiteral("task")) || r.contains(QStringLiteral("macro"))))
+			openProperties(parentId.isEmpty() ? QString() : parentId, QStringLiteral("tasks"));
+	};
+	for (auto& k : kinds)
+	{
+		const QString kind = QString::fromLatin1(k[0]);
+		if (kind == QLatin1String("task"))
+			menu->addSeparator();
+		QAction* a = menu->addAction(m_backend->text(QString::fromLatin1(k[1])), this, [run, kind] {
+			run({ { QStringLiteral("op"), QStringLiteral("add") }, { QStringLiteral("kind"), kind } });
+		});
+		a->setObjectName(QStringLiteral("add_") + kind);
+		a->setIcon(protocolIcon(kind, QString(), kind == QLatin1String("folder")));
+		if ((kind == QLatin1String("task") || kind == QLatin1String("macro")) && parentId.isEmpty())
+			a->setEnabled(true);
+	}
+	menu->addSeparator();
+	QMenu* tpl = menu->addMenu(T(m_backend, "add.template"));
+	const QJsonArray list = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("templates") } }).toUtf8()).array();
+	if (list.isEmpty())
+		tpl->addAction(T(m_backend, "add.template.none"))->setEnabled(false);
+	for (const QJsonValue& v : list)
+	{
+		const QJsonObject o = v.toObject();
+		const QString tid = o.value(QStringLiteral("id")).toString();
+		tpl->addAction(protocolIcon(o.value(QStringLiteral("protocol")).toString(), QString(), false),
+		               o.value(QStringLiteral("name")).toString() + (o.value(QStringLiteral("is_default")).toBool() ? QStringLiteral(" ★") : QString()), this,
+		               [run, tid] { run({ { QStringLiteral("op"), QStringLiteral("add") }, { QStringLiteral("template"), tid } }); });
+	}
+}
+
+QMenu* MainWindow::popupAddMenu()
+{
+	auto* menu = new QMenu(this);
+	menu->setObjectName(QStringLiteral("addMenu"));
+	menu->setAttribute(Qt::WA_DeleteOnClose);
+	buildAddMenu(menu, currentParentId());
+	const QRect r = m_tree->visualRect(m_tree->currentIndex());
+	menu->popup(m_tree->viewport()->mapToGlobal(r.isValid() ? r.bottomLeft() : QPoint(0, 0)));
+	return menu;
+}
+
+PropertiesTab* MainWindow::openProperties(const QString& id, const QString& category)
+{
+	QString target = id;
+	if (target.isEmpty())
+	{
+		// Wurzel: ID über den Editor ermitteln.
+		target = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), QStringLiteral("00000000-0000-0000-0000-000000000000") } })).value(QStringLiteral("id")).toString();
+		if (target.isEmpty())
+			return nullptr;
+	}
+	for (int i = 0; i < m_tabs->count(); ++i)
+		if (auto* ed = qobject_cast<PropertiesTab*>(m_tabs->widget(i)); ed && ed->nodeId() == target)
+		{
+			m_tabs->setCurrentIndex(i);
+			if (!category.isEmpty())
+				ed->selectCategory(category);
+			return ed;
+		}
+	auto* ed = new PropertiesTab(m_backend, target, m_tabs);
+	const int idx = m_tabs->addTab(ed, ed->title());
+	m_tabs->setTabToolTip(idx, T(m_backend, "edit.cat.general"));
+	connect(ed, &PropertiesTab::titleChanged, this, [this, ed] {
+		const int i = m_tabs->indexOf(ed);
+		if (i >= 0)
+			m_tabs->setTabText(i, ed->title());
+	});
+	connect(ed, &PropertiesTab::indexChanged, this, [this, ed] {
+		reloadTree();
+		reloadViews();
+		for (auto* other : findChildren<PropertiesTab*>())
+			if (other != ed && !other->isDirty())
+				other->reload();
+	});
+	connect(ed, &PropertiesTab::status, this, [this](const QString& t) { statusBar()->showMessage(t, 5000); });
+	m_tabs->setCurrentWidget(ed);
+	if (!category.isEmpty())
+		ed->selectCategory(category);
+	return ed;
+}
+
+PropertiesTab* MainWindow::openFirstTargetProperties()
+{
+	std::function<QString(const QModelIndex&)> walk = [&](const QModelIndex& parent) -> QString {
+		for (int r = 0; r < m_model->rowCount(parent); ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			if (!i.data(RoleFolder).toBool() && i.data(RoleProtocol).toString() == QLatin1String("rdp"))
+				return i.data(RoleId).toString();
+			const QString f = walk(i);
+			if (!f.isEmpty())
+				return f;
+		}
+		return QString();
+	};
+	const QString id = walk(QModelIndex());
+	selectId(id);
+	return id.isEmpty() ? nullptr : openProperties(id);
+}
+
+void MainWindow::renameSelected()
+{
+	const QString id = currentId();
+	if (id.isEmpty())
+		return;
+	const QString name = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), id } })).value(QStringLiteral("name")).toString();
+	m_bar->prompt(T(m_backend, "bar.rename").arg(m_tree->currentIndex().data().toString()), name, [this, id](const QString& n) {
+		showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("rename") }, { QStringLiteral("id"), id }, { QStringLiteral("name"), n } })));
+		selectId(id);
+		m_tree->setFocus();
+	});
+}
+
+void MainWindow::moveSelected()
+{
+	const QString id = currentId();
+	if (id.isEmpty())
+		return;
+	const QJsonObject e = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), id } }));
+	QList<QPair<QString, QString>> items;
+	for (const QJsonValue& f : e.value(QStringLiteral("folders")).toArray())
+		items.append({ f.toObject().value(QStringLiteral("path")).toString(), f.toObject().value(QStringLiteral("id")).toString() });
+	m_bar->choose(T(m_backend, "bar.move").arg(m_tree->currentIndex().data().toString()), items, [this, id](const QString& parent) {
+		showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("move") }, { QStringLiteral("id"), id }, { QStringLiteral("parent"), parent } })));
+		selectId(id);
+		m_tree->setFocus();
+	});
+	const int cur = m_bar->combo()->findData(e.value(QStringLiteral("parent")).toString());
+	if (cur >= 0)
+		m_bar->combo()->setCurrentIndex(cur);
+}
+
+void MainWindow::deleteSelected()
+{
+	const QStringList ids = selectedIds();
+	if (ids.isEmpty())
+		return;
+	const QString text = ids.size() == 1 ? T(m_backend, "bar.delete").arg(m_tree->currentIndex().data().toString()) : T(m_backend, "bar.delete.many").arg(ids.size());
+	m_bar->ask(text, { T(m_backend, "bar.delete.button") }, [this, ids](int i) {
+		if (i != 0)
+			return;
+		// Offene Eigenschaften-Tabs gelöschter Objekte schließen.
+		for (auto* ed : findChildren<PropertiesTab*>())
+			if (ids.contains(ed->nodeId()))
+			{
+				m_tabs->removeTab(m_tabs->indexOf(ed));
+				ed->deleteLater();
+			}
+		showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("delete") }, { QStringLiteral("ids"), QJsonArray::fromStringList(ids) } })));
+		m_tree->setFocus();
+	});
+}
+
+void MainWindow::duplicateSelected()
+{
+	const QString id = currentId();
+	if (id.isEmpty())
+		return;
+	const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("duplicate") }, { QStringLiteral("id"), id } }));
+	showEditResult(r);
+	selectId(r.value(QStringLiteral("id")).toString());
+}
+
+void MainWindow::toggleFavorite()
+{
+	const QString id = currentId();
+	if (id.isEmpty())
+		return;
+	const bool fav = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), id } })).value(QStringLiteral("favorite")).toBool();
+	showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("favorite") }, { QStringLiteral("id"), id }, { QStringLiteral("on"), !fav } })),
+	               T(m_backend, fav ? "ctx.favorite.off" : "ctx.favorite.on").remove(QLatin1Char('&')));
+	selectId(id);
+}
+
+void MainWindow::reorderSelected(int delta)
+{
+	const QString id = currentId();
+	if (id.isEmpty())
+		return;
+	showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("reorder") }, { QStringLiteral("id"), id }, { QStringLiteral("delta"), delta } })));
+	selectId(id);
+}
+
+void MainWindow::undo()
+{
+	const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("undo") } }));
+	if (r.contains(QStringLiteral("undone")))
+		showEditResult(r, T(m_backend, "status.undone").arg(r.value(QStringLiteral("undone")).toString()));
+	else
+		statusBar()->showMessage(T(m_backend, "status.nothing_to_undo"), 4000);
+	reloadViews();
+}
+
+void MainWindow::connectAll(const QString& mode)
+{
+	const QString id = currentId();
+	if (id.isEmpty())
+		return;
+	const QSize px = contentSize(false);
+	const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("connect_all") },
+	                                         { QStringLiteral("id"), id },
+	                                         { QStringLiteral("mode"), mode },
+	                                         { QStringLiteral("width"), px.width() },
+	                                         { QStringLiteral("height"), px.height() } }));
+	if (r.contains(QStringLiteral("error")))
+		statusBar()->showMessage(r.value(QStringLiteral("error")).toString(), 8000);
+	else if (mode == QLatin1String("connect"))
+		statusBar()->showMessage(T(m_backend, "status.connect_all").arg(r.value(QStringLiteral("count")).toInt()).arg(4), 8000);
+	rebuildTabs();
+}
+
+void MainWindow::reloadViews()
+{
+	const QString cur = m_viewBox->currentData().toString();
+	m_viewBox->clear();
+	m_viewBox->addItem(T(m_backend, "view.all"), QString());
+	m_viewBox->addItem(T(m_backend, "view.favorites"), QStringLiteral("favorites"));
+	for (const QJsonValue& v : QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("views") } }).toUtf8()).array())
+		m_viewBox->addItem(v.toObject().value(QStringLiteral("name")).toString() + QStringLiteral(" (%1)").arg(v.toObject().value(QStringLiteral("count")).toInt()),
+		                   v.toObject().value(QStringLiteral("id")).toString());
+	const int i = m_viewBox->findData(cur);
+	m_viewBox->setCurrentIndex(i < 0 ? 0 : i);
+	if (i < 0 && !cur.isEmpty())
+	{
+		edit({ { QStringLiteral("op"), QStringLiteral("set_view") }, { QStringLiteral("view"), QString() } });
+		reloadTree();
+	}
+}
+
+void MainWindow::viewCommand(const QString& what)
+{
+	const QString view = m_viewBox->currentData().toString();
+	const bool real = !view.isEmpty() && view != QLatin1String("favorites");
+	if (what == QLatin1String("new") || what == QLatin1String("new_with"))
+	{
+		const QStringList ids = what == QLatin1String("new_with") ? selectedIds() : QStringList();
+		m_bar->prompt(T(m_backend, "bar.view.new"), QString(), [this, ids](const QString& name) {
+			showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("view_create") }, { QStringLiteral("name"), name }, { QStringLiteral("ids"), QJsonArray::fromStringList(ids) } })));
+			reloadViews();
+		});
+	}
+	else if (what == QLatin1String("rename") && real)
+		m_bar->prompt(T(m_backend, "bar.view.rename"), m_viewBox->currentText().section(QStringLiteral(" ("), 0, 0), [this, view](const QString& name) {
+			showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("view_rename") }, { QStringLiteral("view"), view }, { QStringLiteral("name"), name } })));
+			reloadViews();
+		});
+	else if (what == QLatin1String("delete") && real)
+		m_bar->ask(T(m_backend, "bar.view.delete").arg(m_viewBox->currentText()), { T(m_backend, "bar.delete.button") }, [this, view](int i) {
+			if (i != 0)
+				return;
+			showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("view_delete") }, { QStringLiteral("view"), view } })));
+			reloadViews();
+		});
+}
+
+void MainWindow::saveAll(const QString& choice)
+{
+	QJsonObject cmd{ { QStringLiteral("op"), QStringLiteral("save") } };
+	if (!choice.isEmpty())
+		cmd.insert(QStringLiteral("choice"), choice);
+	const QJsonObject r = parseObject(edit(cmd));
+	if (r.contains(QStringLiteral("conflict")))
+	{
+		const QJsonObject c = r.value(QStringLiteral("conflict")).toObject();
+		m_bar->ask(T(m_backend, "bar.conflict").arg(c.value(QStringLiteral("mine")).toInteger()).arg(c.value(QStringLiteral("theirs")).toInteger()),
+		           { T(m_backend, "bar.conflict.mine"), T(m_backend, "bar.conflict.theirs"), T(m_backend, "bar.conflict.both") }, [this](int i) {
+			           const char* choices[] = { "mine", "theirs", "both" };
+			           if (i >= 0)
+				           saveAll(QString::fromLatin1(choices[i]));
+		           });
+		return;
+	}
+	showEditResult(r, r.value(QStringLiteral("notice")).toString(T(m_backend, "status.saved")));
+	reloadViews();
 }

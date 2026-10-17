@@ -85,6 +85,9 @@ pub struct ConnectionDefaults {
     pub reconnect_max_secs: u32,
     /// Größenlimit der Zwischenablage in Bytes.
     pub clipboard_limit: u64,
+    /// „Alle im Ordner verbinden“: höchstens so viele Verbindungsaufbauten
+    /// gleichzeitig.
+    pub connect_all_parallel: u32,
 }
 
 impl Default for ConnectionDefaults {
@@ -95,6 +98,7 @@ impl Default for ConnectionDefaults {
             auto_reconnect: false,
             reconnect_max_secs: 60,
             clipboard_limit: 16 * 1024 * 1024,
+            connect_all_parallel: 4,
         }
     }
 }

@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 /// Aktuelle Schema-Version des Index.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Name des Zugangsdatensatzes, wenn das Ziel keinen nennt.
 pub const DEFAULT_CREDENTIAL: &str = "default";
@@ -34,6 +34,12 @@ pub struct Index {
     pub macros: Vec<MacroDef>,
     #[serde(default)]
     pub views: Vec<View>,
+    /// Vorlagen für neue Ziele (ohne Kennwörter).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<Template>,
+    /// Favoriten (Ziele oder Ordner) in Anzeigereihenfolge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub favorites: Vec<Uuid>,
 }
 
 impl Default for Index {
@@ -47,6 +53,8 @@ impl Default for Index {
             tasks: Vec::new(),
             macros: Vec::new(),
             views: Vec::new(),
+            templates: Vec::new(),
+            favorites: Vec::new(),
         }
     }
 }
@@ -58,6 +66,8 @@ pub struct Folder {
     pub name: String,
     #[serde(default, skip_serializing_if = "Settings::is_empty")]
     pub settings: Settings,
+    #[serde(default, skip_serializing_if = "Meta::is_empty")]
+    pub meta: Meta,
     #[serde(default)]
     pub children: Vec<Node>,
 }
@@ -68,6 +78,7 @@ impl Folder {
             id: Uuid::new_v4(),
             name: name.into(),
             settings: Settings::default(),
+            meta: Meta::default(),
             children: Vec::new(),
         }
     }
@@ -159,6 +170,8 @@ pub struct Target {
     pub credential: Option<String>,
     #[serde(default, skip_serializing_if = "Settings::is_empty")]
     pub settings: Settings,
+    #[serde(default, skip_serializing_if = "Meta::is_empty")]
+    pub meta: Meta,
 }
 
 impl Target {
@@ -172,6 +185,7 @@ impl Target {
             options: ProtocolOptions::None,
             credential: None,
             settings: Settings::default(),
+            meta: Meta::default(),
         }
     }
 
@@ -378,6 +392,17 @@ pub struct Settings {
     pub psrp_transport: Option<PsrpTransport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snmp: Option<SnmpSetting>,
+    /// Zugangsdaten an dieser Stelle ausdrücklich abgeschaltet (auch für alle
+    /// Unterobjekte, die nichts Eigenes festlegen).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub credentials_off: bool,
+    /// Name des Zugangsdatensatzes für Unterobjekte ohne eigenen Namen
+    /// (Suche nach oben, z. B. `admin`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_name: Option<String>,
+    /// Vorgabe der Zwischenablage-Richtung für neue Ziele in diesem Ordner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipboard: Option<ClipboardDirection>,
 }
 
 impl Settings {
@@ -387,6 +412,9 @@ impl Settings {
             && self.tunnel.is_none()
             && self.psrp_transport.is_none()
             && self.snmp.is_none()
+            && !self.credentials_off
+            && self.credential_name.is_none()
+            && self.clipboard.is_none()
     }
 }
 
@@ -458,6 +486,60 @@ pub struct MacroDef {
     pub id: Uuid,
     pub name: String,
     pub steps: Vec<serde_json::Value>,
+}
+
+/// Beschreibende Angaben an Ordner oder Ziel (keine Geheimnisse).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Meta {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    /// Eigene Felder (Name → Wert).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
+    /// Zugeordnete Aufgaben (IDs aus `Index::tasks`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<Uuid>,
+    /// Zugeordnete Makros (IDs aus `Index::macros`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macros: Vec<Uuid>,
+}
+
+impl Meta {
+    pub fn is_empty(&self) -> bool {
+        self.description.is_empty() && self.notes.is_empty() && self.fields.is_empty() && self.tasks.is_empty() && self.macros.is_empty()
+    }
+}
+
+/// Art der Zugangsdaten in einer Vorlage. Vorlagen verweisen nie auf
+/// KDBX-Einträge und enthalten keine Kennwörter.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", content = "name", rename_all = "lowercase")]
+pub enum TemplateCredential {
+    #[default]
+    Inherit,
+    None,
+    Named(String),
+}
+
+/// Vorlage für neue Ziele eines Protokolls.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Template {
+    pub id: Uuid,
+    pub name: String,
+    pub protocol: Protocol,
+    /// Standardeinstellung des Protokolls (eine je Protokoll).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_default: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "ProtocolOptions::is_none")]
+    pub options: ProtocolOptions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tunnel: Option<TunnelSetting>,
+    #[serde(default)]
+    pub credential: TemplateCredential,
 }
 
 /// Ansicht: benannte Auswahl von Zielen; ein Ziel darf in mehreren Ansichten stehen.

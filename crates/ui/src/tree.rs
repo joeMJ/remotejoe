@@ -89,6 +89,20 @@ pub fn tree(index: &Index, filter: &str, lights: &dyn Fn(Uuid) -> Option<Light>)
     build(&index.root, &q, lights)
 }
 
+/// Flache Liste für eine Ansicht oder die Favoriten (Reihenfolge der Liste;
+/// Ordner mit ihrem Inhalt).
+pub fn listed(index: &Index, ids: &[Uuid], filter: &str, lights: &dyn Fn(Uuid) -> Option<Light>) -> Vec<UiNode> {
+    let q: Vec<String> = filter.split_whitespace().map(|w| w.to_lowercase()).collect();
+    let mut out = Vec::new();
+    for id in ids {
+        let Some(node) = index.path_to(*id).and_then(|p| p.last().copied()) else { continue };
+        let mut tmp = Folder::new("");
+        tmp.children.push(node.clone());
+        out.extend(build(&tmp, &q, lights));
+    }
+    out
+}
+
 pub fn count(nodes: &[UiNode]) -> usize {
     nodes.iter().map(|n| 1 + count(&n.children)).sum()
 }

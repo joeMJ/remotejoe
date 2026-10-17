@@ -3,6 +3,7 @@
 
 pub mod charset;
 pub mod config;
+pub mod edit;
 pub mod fsutil;
 pub mod inherit;
 pub mod model;

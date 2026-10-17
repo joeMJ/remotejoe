@@ -46,6 +46,14 @@ pub struct App {
     snmp_state: std::collections::HashMap<Uuid, serde_json::Value>,
     /// Lokale Brücken für Proxmox-Konsolen (je Sitzung).
     pub(crate) console_bridges: std::collections::HashMap<SessionId, rj_proxmox::ConsoleBridge>,
+    /// Verlauf für „Rückgängig“.
+    pub(crate) history: rj_core::edit::History,
+    /// Laufendes „Alle im Ordner verbinden“ und das zuletzt beendete.
+    pub(crate) stagger: Option<crate::editor::Stagger>,
+    pub stagger_done: Option<crate::editor::Stagger>,
+    pub(crate) connect_size: (u32, u32),
+    /// Gewählte Ansicht im Baum: leer = alles, `favorites` oder UUID einer Ansicht.
+    pub view: String,
 }
 
 impl App {
@@ -79,6 +87,11 @@ impl App {
             snmp_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             snmp_state: Default::default(),
             console_bridges: Default::default(),
+            history: Default::default(),
+            stagger: None,
+            stagger_done: None,
+            connect_size: (1024, 768),
+            view: String::new(),
             sessions: Manager::new(Manager::default_worker_dir(), reconnect),
             config,
             config_path,
@@ -135,7 +148,15 @@ impl App {
 
     pub fn tree_json(&self, filter: &str) -> String {
         let lights = |id: Uuid| self.lights.get(&id).copied();
-        serde_json::to_string(&tree::tree(&self.index, filter, &lights)).unwrap_or_else(|_| "[]".into())
+        let nodes = match self.view.as_str() {
+            "" => tree::tree(&self.index, filter, &lights),
+            "favorites" => tree::listed(&self.index, &self.index.favorites, filter, &lights),
+            v => match self.index.views.iter().find(|x| x.id.to_string() == v) {
+                Some(view) => tree::listed(&self.index, &view.targets, filter, &lights),
+                None => tree::tree(&self.index, filter, &lights),
+            },
+        };
+        serde_json::to_string(&nodes).unwrap_or_else(|_| "[]".into())
     }
 
     pub fn set_light(&mut self, id: Uuid, light: Light) {
@@ -224,11 +245,12 @@ impl App {
         let Some(t) = self.target(target).cloned() else { return json!({ "error": "Ziel nicht gefunden" }).to_string() };
         let resolved = match credential {
             Some(name) => match resolve_credential_named(&self.index, target, name) {
-                Ok(Some(r)) => r,
+                Ok(Some(r)) => Some(r),
                 _ => return json!({ "error": format!("Zugangsdatensatz „{name}“ nicht gefunden") }).to_string(),
             },
             None => match resolve_credential(&self.index, target) {
-                Ok(CredentialResolution::Found(r)) => r,
+                Ok(CredentialResolution::Found(r)) => Some(r),
+                Ok(CredentialResolution::Disabled) => None,
                 Ok(CredentialResolution::Ambiguous(list)) => {
                     let choices: Vec<_> = list
                         .iter()
@@ -252,11 +274,14 @@ impl App {
                 }
             }
         }
-        let payload = match self.payload(&resolved, t.protocol) {
-            Ok(p) => p,
-            Err(e) => {
-                return json!({ "missing": { "name": resolved.name, "title": resolved.reference.last_title, "reason": e } }).to_string();
-            }
+        let payload = match &resolved {
+            None => CredentialPayload { username: String::new(), domain: None, password: SecretBytes(Vec::new()), private_key: None },
+            Some(resolved) => match self.payload(resolved, t.protocol) {
+                Ok(p) => p,
+                Err(e) => {
+                    return json!({ "missing": { "name": resolved.name, "title": resolved.reference.last_title, "reason": e } }).to_string();
+                }
+            },
         };
         let (w, h) = if t.protocol == Protocol::Ssh { (width.clamp(20, 500), height.clamp(5, 300)) } else { (width.max(200), height.max(200)) };
         let spec = ConnectSpec {
@@ -454,12 +479,19 @@ impl App {
 
     pub fn poll(&mut self) -> Vec<UiEvent> {
         let mut out = self.sessions.poll(Duration::from_millis(0));
+        if self.stagger.is_some() {
+            self.stagger_tick();
+            if self.stagger.is_none() {
+                out.push(UiEvent::ConnectAllDone);
+            }
+        }
         if let Some(rx) = &self.unlocking {
             if let Ok(r) = rx.try_recv() {
                 self.unlocking = None;
                 match r {
                     Ok(v) => {
                         self.index = v.index().index.clone();
+                        self.history.clear();
                         let mut n = 0;
                         self.index.for_each_target(|_| n += 1);
                         self.vault = Some(v);

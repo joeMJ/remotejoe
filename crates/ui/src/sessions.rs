@@ -57,6 +57,8 @@ pub enum UiEvent {
     Title { s: SessionId, title: String },
     Bell { s: SessionId },
     Unlocked { targets: usize },
+    /// „Alle im Ordner verbinden“ ist abgeschlossen.
+    ConnectAllDone,
     /// Ampeln haben sich geändert; Baum neu zeichnen.
     TreeChanged,
     UnlockFailed { reason: String },
@@ -155,6 +157,13 @@ impl Manager {
 
     pub fn protocol(&self, s: SessionId) -> Option<Protocol> {
         self.sessions.get(&s).map(|x| x.spec.protocol)
+    }
+
+    /// Alle offenen Sitzungen.
+    pub fn ids(&self) -> Vec<SessionId> {
+        let mut v: Vec<SessionId> = self.sessions.keys().copied().collect();
+        v.sort_unstable();
+        v
     }
 
     pub fn target(&self, s: SessionId) -> Option<Uuid> {

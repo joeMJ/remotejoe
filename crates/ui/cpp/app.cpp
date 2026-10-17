@@ -1,5 +1,6 @@
 #include "app.h"
 
+#include "editor.h"
 #include "mainwindow.h"
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
@@ -10,6 +11,7 @@
 #include <QtCore/QTimer>
 #include <QtCore/QTranslator>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QMenu>
 #include <cstdio>
 
 namespace {
@@ -60,6 +62,29 @@ void screenshots(MainWindow& w, const QString& dir)
 	save(w.findChild<QWidget*>(QStringLiteral("patchdayDialog")), dir, QStringLiteral("patchday.png"));
 	if (auto* d = w.findChild<QWidget*>(QStringLiteral("patchdayDialog")))
 		d->close();
+	// Bearbeiten: Eigenschaften-Tab, Zugangsdaten-Auswahl, Hinzufügen-Menü, Entsperren.
+	if (PropertiesTab* ed = w.openFirstTargetProperties())
+	{
+		pump(300);
+		save(ed, dir, QStringLiteral("eigenschaften.png"));
+		ed->selectCategory(QStringLiteral("credentials"));
+		if (auto* r = ed->findChild<QWidget*>(QStringLiteral("cred_named")))
+			QMetaObject::invokeMethod(r, "click");
+		pump(300);
+		save(ed, dir, QStringLiteral("zugangsdaten-auswahl.png"));
+	}
+	if (QMenu* m = w.popupAddMenu())
+	{
+		pump(300);
+		save(m, dir, QStringLiteral("hinzufuegen-menue.png"));
+		m->close();
+	}
+	w.showUnlock(false);
+	pump(300);
+	save(&w, dir, QStringLiteral("entsperren.png"));
+	if (auto* o = w.findChild<QWidget*>(QStringLiteral("unlockOverlay")))
+		o->hide();
+	w.tabs()->setCurrentIndex(0);
 	w.detachTabAt(1);
 	pump(400);
 	save(w.detachedWindow(), dir, QStringLiteral("abgerissenes-fenster.png"));

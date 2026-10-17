@@ -1,0 +1,986 @@
+//! Bearbeiten von Ordnern, Zielen, Ansichten und Vorlagen aus der
+//! Oberfläche. Befehle kommen als JSON (`{"op": …}`) und antworten mit JSON.
+//!
+//! Jede Änderung geht über den Index der App und wird an den Tresor
+//! weitergegeben (`Vault::set_index`); gespeichert wird über `Vault::save`
+//! mit Sicherungskopie, atomarem Schreiben, Sperre und Konfliktabfrage.
+
+use std::collections::{BTreeMap, VecDeque};
+
+use rj_core::edit::{self, ApplyKind, EditError};
+use rj_core::inherit::{credential_mode, reachable_credential_names, resolve_credential_at, CredentialMode, CredentialResolution, Origin};
+use rj_core::{
+    ClipboardDirection, CredentialRef, Folder, Index, MacroDef, Node, Protocol, ProtocolOptions, PsrpTransport, Secret, SnmpSetting, TaskDef,
+    TunnelSetting,
+};
+use rj_kdbx::{ConflictChoice, CredentialData};
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+use crate::app::App;
+use crate::workspace::SessionId;
+
+/// Gestaffelter Verbindungsaufbau für „Alle im Ordner verbinden“.
+#[derive(Debug, Default)]
+pub struct Stagger {
+    limit: usize,
+    queue: VecDeque<Uuid>,
+    active: Vec<(Uuid, SessionId)>,
+    /// Ergebnis je Ziel: Sitzung oder Fehlermeldung.
+    pub results: Vec<(Uuid, Result<SessionId, String>)>,
+    /// Größte beobachtete Zahl gleichzeitiger Verbindungsaufbauten.
+    pub peak: usize,
+}
+
+impl Stagger {
+    pub fn new(targets: Vec<Uuid>, limit: usize) -> Self {
+        Stagger { limit: limit.max(1), queue: targets.into(), ..Default::default() }
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.queue.is_empty() && self.active.is_empty()
+    }
+
+    /// Ein Schritt: fertige Aufbauten austragen (Zustand nicht mehr
+    /// „connecting“), dann bis zur Grenze neue starten. Ein Fehler bei einem
+    /// Ziel hält die übrigen nicht auf.
+    pub fn tick(&mut self, state: impl Fn(SessionId) -> Option<String>, mut start: impl FnMut(Uuid) -> Result<SessionId, String>) {
+        self.active.retain(|(_, s)| matches!(state(*s).as_deref(), Some("") | Some("connecting")));
+        while self.active.len() < self.limit {
+            let Some(t) = self.queue.pop_front() else { break };
+            match start(t) {
+                Ok(s) => {
+                    self.active.push((t, s));
+                    self.results.push((t, Ok(s)));
+                }
+                Err(e) => self.results.push((t, Err(e))),
+            }
+        }
+        self.peak = self.peak.max(self.active.len());
+    }
+}
+
+fn err(e: impl std::fmt::Display) -> String {
+    json!({ "error": e.to_string() }).to_string()
+}
+
+fn ok(v: Value) -> String {
+    v.to_string()
+}
+
+fn id_of(v: &Value, key: &str) -> Option<Uuid> {
+    v.get(key).and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok())
+}
+
+fn ids_of(v: &Value, key: &str) -> Vec<Uuid> {
+    v.get(key)
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|x| x.as_str().and_then(|s| Uuid::parse_str(s).ok())).collect())
+        .unwrap_or_default()
+}
+
+fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
+    v.get(key).and_then(Value::as_str)
+}
+
+/// Zeichensatzprüfung eines Eingabefelds: Anzeige mit Markierungen und Zahl
+/// der Funde. Kennwörter werden nur geprüft, nie verändert.
+pub fn check_text(text: &str, multiline: bool) -> Value {
+    let findings = rj_core::charset::find_suspicious(text, multiline);
+    json!({
+        "marked": rj_core::charset::mark_visible(text, multiline),
+        "issues": findings.len(),
+    })
+}
+
+fn protocol_from(kind: &str) -> Option<Protocol> {
+    Some(match kind {
+        "rdp" => Protocol::Rdp,
+        "ssh" => Protocol::Ssh,
+        "vnc" => Protocol::Vnc,
+        "web" => Protocol::Web,
+        "proxmox" => Protocol::Proxmox,
+        "hyperv" => Protocol::Hyperv,
+        "psrp" => Protocol::Psrp,
+        _ => return None,
+    })
+}
+
+fn clip_str(c: ClipboardDirection) -> &'static str {
+    match c {
+        ClipboardDirection::Off => "off",
+        ClipboardDirection::HostToTarget => "host_to_target",
+        ClipboardDirection::TargetToHost => "target_to_host",
+        ClipboardDirection::Both => "both",
+    }
+}
+
+fn clip_parse(s: &str) -> Option<ClipboardDirection> {
+    serde_json::from_value(json!(s)).ok()
+}
+
+/// Prüft die Felder der Registerkarte „Verbindung“. Liefert Fehler je Feld.
+pub fn validate_connection(protocol: Protocol, host: &str, port: Option<&Value>, options: Option<&Value>) -> BTreeMap<String, String> {
+    let mut e = BTreeMap::new();
+    if host.is_empty() {
+        e.insert("host".into(), "Host darf nicht leer sein".into());
+    } else if host.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        e.insert("host".into(), "Host enthält Leer- oder Steuerzeichen".into());
+    } else if rj_core::charset::find_suspicious(host, false).len() > 0 {
+        e.insert("host".into(), "Host enthält unsichtbare oder richtungsändernde Zeichen".into());
+    }
+    if let Some(p) = port.filter(|p| !p.is_null() && p.as_str() != Some("")) {
+        let n = p.as_u64().or_else(|| p.as_str().and_then(|s| s.parse().ok()));
+        if !matches!(n, Some(1..=65535)) {
+            e.insert("port".into(), "Port muss zwischen 1 und 65535 liegen".into());
+        }
+    }
+    if let Some(o) = options {
+        if matches!(protocol, Protocol::Web | Protocol::Proxmox) {
+            if let Some(url) = o.get("url").and_then(Value::as_str).filter(|u| !u.is_empty()) {
+                let lower = url.to_ascii_lowercase();
+                if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+                    e.insert("url".into(), "Adresse muss mit https:// oder http:// beginnen".into());
+                } else if url.split("://").nth(1).and_then(|r| r.split('/').next()).is_some_and(|auth| auth.contains('@')) {
+                    e.insert("url".into(), "Zugangsdaten in der Adresse sind nicht erlaubt".into());
+                }
+            }
+        }
+        if let Some(l) = o.get("clipboard_limit").filter(|l| !l.is_null()) {
+            if l.as_u64().is_none() {
+                e.insert("clipboard_limit".into(), "Größenlimit muss eine ganze Zahl sein".into());
+            }
+        }
+    }
+    e
+}
+
+fn options_from(protocol: Protocol, v: &Value) -> Result<ProtocolOptions, String> {
+    let r = match protocol {
+        Protocol::Rdp | Protocol::Hyperv => serde_json::from_value(v.clone()).map(ProtocolOptions::Rdp),
+        Protocol::Ssh => serde_json::from_value(v.clone()).map(ProtocolOptions::Ssh),
+        Protocol::Vnc => serde_json::from_value(v.clone()).map(ProtocolOptions::Vnc),
+        Protocol::Web | Protocol::Proxmox => serde_json::from_value(v.clone()).map(ProtocolOptions::Web),
+        Protocol::Psrp => return Ok(ProtocolOptions::None),
+    };
+    r.map_err(|e| format!("Optionen: {e}"))
+}
+
+fn options_value(o: &ProtocolOptions) -> Value {
+    match o {
+        ProtocolOptions::Rdp(x) => serde_json::to_value(x).unwrap_or_default(),
+        ProtocolOptions::Ssh(x) => serde_json::to_value(x).unwrap_or_default(),
+        ProtocolOptions::Vnc(x) => serde_json::to_value(x).unwrap_or_default(),
+        ProtocolOptions::Web(x) => serde_json::to_value(x).unwrap_or_default(),
+        ProtocolOptions::None => json!({}),
+    }
+}
+
+impl App {
+    fn folder_name(&self, id: Uuid) -> String {
+        edit::folder(&self.index, id).map(|f| rj_core::charset::mark_visible(&f.name, false).into_owned()).unwrap_or_default()
+    }
+
+    fn origin_text(&self, origin: Origin, is_target: bool) -> String {
+        match origin {
+            Origin::Target => "am Ziel gesetzt".into(),
+            Origin::Folder(_) if !is_target => "am Ordner gesetzt oder geerbt".into(),
+            Origin::Folder(id) => format!("geerbt von Ordner „{}“", self.folder_name(id)),
+            Origin::Root => "geerbt von der Wurzel".into(),
+        }
+    }
+
+    /// Übernimmt den geänderten Index in den Tresor und merkt den vorherigen
+    /// Zustand für „Rückgängig“.
+    fn commit(&mut self, label: &str, before: Index) {
+        self.history.record(label, &before);
+        self.push_index();
+    }
+
+    fn push_index(&mut self) {
+        if let Some(v) = self.vault.as_mut() {
+            let _ = v.set_index(self.index.clone());
+        }
+    }
+
+    /// Daten für den Eigenschaften-Tab eines Knotens (ohne Kennwörter).
+    pub fn editor_json(&self, id: Uuid) -> String {
+        let is_root = id == self.index.root.id;
+        let node = if is_root { None } else { edit::node(&self.index, id) };
+        if !is_root && node.is_none() {
+            return err("Objekt nicht gefunden");
+        }
+        let (settings, meta, name) = match node {
+            None => (&self.index.root.settings, &self.index.root.meta, self.index.root.name.as_str()),
+            Some(Node::Folder(f)) => (&f.settings, &f.meta, f.name.as_str()),
+            Some(Node::Target(t)) => (&t.settings, &t.meta, t.name.as_str()),
+        };
+        let mut v = json!({
+            "id": id,
+            "kind": match node { None => "root", Some(Node::Folder(_)) => "folder", Some(Node::Target(_)) => "target" },
+            "name": name,
+            "name_check": check_text(name, false),
+            "description": meta.description,
+            "notes": meta.notes,
+            "fields": meta.fields,
+            "parent": edit::parent_of(&self.index, id),
+            "folders": edit::folder_list(&self.index).into_iter()
+                .filter(|(f, _)| *f != id && !matches!(node, Some(Node::Folder(x)) if edit::folder(&self.index, *f).is_some() && x_contains(x, *f)))
+                .map(|(f, p)| json!({ "id": f, "path": if p.is_empty() { "(Wurzel)".to_string() } else { p } })).collect::<Vec<_>>(),
+            "favorite": self.index.favorites.contains(&id),
+            "unlocked": self.vault.is_some(),
+            "tunnels": self.index.tunnels.iter().map(|t| json!({ "id": t.id, "name": t.name })).collect::<Vec<_>>(),
+            "devices": self.index.snmp_devices.iter().map(|d| json!({ "id": d.id, "name": d.name })).collect::<Vec<_>>(),
+            "tasks": self.index.tasks.iter().map(|t| json!({ "id": t.id, "name": t.name, "kind": t.kind, "params": t.params, "linked": meta.tasks.contains(&t.id) })).collect::<Vec<_>>(),
+            "macros": self.index.macros.iter().map(|m| json!({ "id": m.id, "name": m.name, "steps": m.steps, "linked": meta.macros.contains(&m.id) })).collect::<Vec<_>>(),
+            "tunnel": match settings.tunnel { None => json!("inherit"), Some(TunnelSetting::None) => json!("none"), Some(TunnelSetting::Use(t)) => json!(t) },
+            "snmp": match settings.snmp { None => json!("inherit"), Some(SnmpSetting::None) => json!("none"), Some(SnmpSetting::Device(d)) => json!(d) },
+            "psrp_transport": settings.psrp_transport,
+        });
+        if let Some(Node::Target(t)) = node {
+            v["protocol"] = json!(t.protocol.as_str());
+            v["host"] = json!(t.host);
+            v["port"] = json!(t.port);
+            v["default_port"] = json!(t.protocol.default_port());
+            v["options"] = options_value(&t.options);
+            v["templates"] = json!(self.index.templates.iter().filter(|x| x.protocol == t.protocol).map(|x| json!({ "id": x.id, "name": x.name, "is_default": x.is_default })).collect::<Vec<_>>());
+            if let Ok(Some((tid, origin))) = rj_core::inherit::resolve_tunnel(&self.index, id) {
+                let name = self.index.tunnels.iter().find(|x| x.id == tid).map(|x| x.name.clone()).unwrap_or_default();
+                v["tunnel_effective"] = json!(format!("{name} ({})", self.origin_text(origin, true)));
+            }
+        } else {
+            v["clipboard"] = json!(settings.clipboard.map(clip_str).unwrap_or("inherit"));
+            v["clipboard_effective"] = json!(clip_str(edit::folder_clipboard(&self.index, id)));
+        }
+        v["credential"] = self.credential_section(id, node.is_some_and(|n| matches!(n, Node::Target(_))));
+        v.to_string()
+    }
+
+    fn credential_section(&self, id: Uuid, is_target: bool) -> Value {
+        let mode = credential_mode(&self.index, id).unwrap_or(CredentialMode::Inherit);
+        let mut c = match &mode {
+            CredentialMode::Inherit => json!({ "mode": "inherit" }),
+            CredentialMode::None => json!({ "mode": "none" }),
+            CredentialMode::Named(n) => json!({ "mode": "named", "name": n }),
+            CredentialMode::Entry { name, reference } => {
+                let own = self.vault.as_ref().is_some_and(|v| v.is_own_entry(reference.entry));
+                let username = self.vault.as_ref().and_then(|v| v.credential(reference.entry)).map(|c| c.data.username);
+                json!({ "mode": if own { "direct" } else { "entry" }, "name": name, "entry": reference.entry, "title": reference.last_title, "username": username })
+            }
+        };
+        let eff = match resolve_credential_at(&self.index, id) {
+            Some(CredentialResolution::Found(r)) => {
+                let title = self.vault.as_ref().and_then(|v| v.credential(r.reference.entry)).map(|c| c.data.title).or(r.reference.last_title.clone()).unwrap_or_default();
+                json!({ "state": "found", "name": r.name, "title": title, "origin": self.origin_text(r.origin, is_target) })
+            }
+            Some(CredentialResolution::Disabled) => json!({ "state": "none", "origin": "keine Zugangsdaten" }),
+            Some(CredentialResolution::Ambiguous(list)) => json!({ "state": "ambiguous", "names": list.iter().map(|r| r.name.clone()).collect::<Vec<_>>() }),
+            Some(CredentialResolution::NotFound { name }) => json!({ "state": "missing", "name": name }),
+            None => json!({ "state": "missing" }),
+        };
+        c["effective"] = eff;
+        c["names"] = json!(reachable_credential_names(&self.index, id));
+        c["entries"] = json!(self
+            .vault
+            .as_ref()
+            .map(|v| v.entries().into_iter().map(|e| json!({ "uuid": e.uuid, "title": e.title, "group": e.group_path.join("/") })).collect::<Vec<_>>())
+            .unwrap_or_default());
+        c
+    }
+
+    /// Führt einen Bearbeitungsbefehl aus.
+    pub fn edit(&mut self, cmd: &str) -> String {
+        let Ok(mut c) = serde_json::from_str::<Value>(cmd) else { return err("Befehl ist kein gültiges JSON") };
+        let r = self.edit_value(&c);
+        // Ein mitgegebenes Kennwort überschreiben, sobald es verarbeitet ist.
+        if let Some(Value::String(pw)) = c.get_mut("credential").and_then(|x| x.get_mut("password")) {
+            zeroize::Zeroize::zeroize(pw);
+        }
+        r
+    }
+
+    fn edit_value(&mut self, c: &Value) -> String {
+        let c = c.clone();
+        if str_of(&c, "op") == Some("set_view") {
+            self.view = str_of(&c, "view").unwrap_or_default().to_string();
+            return ok(json!({ "ok": true }));
+        }
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("editor") | Some("check_text") | Some("apply_preview")) {
+            return err("Der Index ist schreibgeschützt (neuere Programmversion)");
+        }
+        let op = str_of(&c, "op").unwrap_or_default().to_string();
+        let r = match op.as_str() {
+            "editor" => return id_of(&c, "id").map(|id| self.editor_json(id)).unwrap_or_else(|| err("ID fehlt")),
+            "check_text" => return ok(check_text(str_of(&c, "text").unwrap_or_default(), c.get("multiline").and_then(Value::as_bool).unwrap_or(false))),
+            "add" => self.op_add(&c),
+            "update" => self.op_update(&c),
+            "move" => self.simple("Verschieben", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                let parent = id_of(&c, "parent").unwrap_or(idx.root.id);
+                let pos = c.get("pos").and_then(Value::as_u64).map(|p| p as usize);
+                edit::move_node(idx, id, parent, pos).map(|_| json!({ "ok": true }))
+            }),
+            "reorder" => self.simple("Verschieben", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                edit::reorder(idx, id, c.get("delta").and_then(Value::as_i64).unwrap_or(0) as i32).map(|_| json!({ "ok": true }))
+            }),
+            "duplicate" => self.simple("Duplizieren", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                edit::duplicate(idx, id, " (Kopie)").map(|n| json!({ "id": n }))
+            }),
+            "rename" => self.simple("Umbenennen", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                edit::rename(idx, id, str_of(&c, "name").unwrap_or_default()).map(|_| json!({ "ok": true }))
+            }),
+            "delete" => self.simple("Löschen", |idx| {
+                let ids = ids_of(&c, "ids");
+                let ids = if ids.is_empty() { id_of(&c, "id").into_iter().collect() } else { ids };
+                for id in &ids {
+                    edit::delete(idx, *id)?;
+                }
+                Ok(json!({ "deleted": ids.len() }))
+            }),
+            "favorite" => self.simple("Favorit", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                edit::set_favorite(idx, id, c.get("on").and_then(Value::as_bool).unwrap_or(true)).map(|_| json!({ "ok": true }))
+            }),
+            "view_create" => self.simple("Ansicht anlegen", |idx| {
+                let v = edit::create_view(idx, str_of(&c, "name").unwrap_or_default())?;
+                edit::add_to_view(idx, v, &ids_of(&c, "ids"))?;
+                Ok(json!({ "id": v }))
+            }),
+            "view_rename" => self.simple("Ansicht umbenennen", |idx| {
+                edit::rename_view(idx, id_of(&c, "view").ok_or(EditError::NotFound)?, str_of(&c, "name").unwrap_or_default()).map(|_| json!({ "ok": true }))
+            }),
+            "view_delete" => self.simple("Ansicht löschen", |idx| edit::delete_view(idx, id_of(&c, "view").ok_or(EditError::NotFound)?).map(|_| json!({ "ok": true }))),
+            "view_add" => self.simple("Zur Ansicht hinzufügen", |idx| {
+                edit::add_to_view(idx, id_of(&c, "view").ok_or(EditError::NotFound)?, &ids_of(&c, "ids")).map(|n| json!({ "added": n }))
+            }),
+            "view_remove" => self.simple("Aus Ansicht entfernen", |idx| {
+                edit::remove_from_view(idx, id_of(&c, "view").ok_or(EditError::NotFound)?, &ids_of(&c, "ids")).map(|_| json!({ "ok": true }))
+            }),
+            "apply_preview" => {
+                let (Some(id), Some(kind)) = (id_of(&c, "id"), str_of(&c, "kind").and_then(ApplyKind::parse)) else { return err("Angaben fehlen") };
+                edit::apply_preview(&self.index, id, kind).map(|n| json!({ "count": n })).map_err(|e| e.to_string())
+            }
+            "apply" => self.simple("Auf Unterobjekte anwenden", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                let kind = str_of(&c, "kind").and_then(ApplyKind::parse).ok_or(EditError::NotFound)?;
+                edit::apply_to_children(idx, id, kind).map(|n| json!({ "count": n }))
+            }),
+            "template_save" => self.simple("Als Vorlage speichern", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                let Some(Node::Target(t)) = edit::node(idx, id) else { return Err(EditError::NotFound) };
+                let name = str_of(&c, "name").filter(|n| !n.is_empty()).ok_or(EditError::EmptyName)?;
+                let mut tpl = edit::template_from_target(t, name);
+                tpl.is_default = c.get("default").and_then(Value::as_bool).unwrap_or(false);
+                let tid = tpl.id;
+                edit::upsert_template(idx, tpl);
+                Ok(json!({ "id": tid }))
+            }),
+            "template_delete" => self.simple("Vorlage löschen", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                idx.templates.retain(|t| t.id != id);
+                Ok(json!({ "ok": true }))
+            }),
+            "templates" => Ok(json!(self.index.templates.iter().map(|t| json!({ "id": t.id, "name": t.name, "protocol": t.protocol.as_str(), "is_default": t.is_default })).collect::<Vec<_>>())),
+            "views" => Ok(json!(self.index.views.iter().map(|v| json!({ "id": v.id, "name": v.name, "count": v.targets.len() })).collect::<Vec<_>>())),
+            "undo" => match self.history.undo(&mut self.index) {
+                Some(label) => {
+                    self.push_index();
+                    Ok(json!({ "undone": label }))
+                }
+                None => Err("Nichts rückgängig zu machen".into()),
+            },
+            "undo_label" => Ok(json!({ "label": self.history.last_label() })),
+            "save" => return self.save_with(str_of(&c, "choice")),
+            "connect_all" => self.op_connect_all(&c),
+            "update_task" => self.simple("Aufgabe ändern", |idx| {
+                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                let t = idx.tasks.iter_mut().find(|t| t.id == id).ok_or(EditError::NotFound)?;
+                if let Some(n) = str_of(&c, "name") {
+                    if n.is_empty() {
+                        return Err(EditError::EmptyName);
+                    }
+                    t.name = n.to_string();
+                }
+                if let Some(k) = str_of(&c, "kind") {
+                    t.kind = k.to_string();
+                }
+                if let Some(p) = c.get("params").and_then(Value::as_object) {
+                    t.params = p.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string()))).collect();
+                }
+                Ok(json!({ "ok": true }))
+            }),
+            "update_macro" => {
+                let steps = match c.get("steps") {
+                    Some(Value::Array(a)) => Some(a.clone()),
+                    Some(Value::String(s)) => match serde_json::from_str::<Vec<Value>>(s) {
+                        Ok(a) => Some(a),
+                        Err(e) => return err(format!("Schritte sind kein gültiges JSON: {e}")),
+                    },
+                    _ => None,
+                };
+                self.simple("Makro ändern", |idx| {
+                    let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
+                    let m = idx.macros.iter_mut().find(|m| m.id == id).ok_or(EditError::NotFound)?;
+                    if let Some(n) = str_of(&c, "name") {
+                        if n.is_empty() {
+                            return Err(EditError::EmptyName);
+                        }
+                        m.name = n.to_string();
+                    }
+                    if let Some(s) = steps {
+                        m.steps = s;
+                    }
+                    Ok(json!({ "ok": true }))
+                })
+            }
+            _ => Err(format!("Unbekannter Befehl „{op}“")),
+        };
+        match r {
+            Ok(v) => ok(v),
+            Err(e) => err(e),
+        }
+    }
+
+    /// Einfache Index-Änderung mit Verlauf.
+    fn simple(&mut self, label: &str, f: impl FnOnce(&mut Index) -> Result<Value, EditError>) -> Result<Value, String> {
+        let before = self.index.clone();
+        match f(&mut self.index) {
+            Ok(v) => {
+                if self.index != before {
+                    self.commit(label, before);
+                }
+                Ok(v)
+            }
+            Err(e) => {
+                self.index = before;
+                Err(e.to_string())
+            }
+        }
+    }
+
+    fn op_add(&mut self, c: &Value) -> Result<Value, String> {
+        let parent = id_of(c, "parent").unwrap_or(self.index.root.id);
+        let kind = str_of(c, "kind").unwrap_or_default();
+        let before = self.index.clone();
+        let template = id_of(c, "template").and_then(|t| self.index.templates.iter().find(|x| x.id == t).cloned());
+        let result = match kind {
+            "folder" => {
+                let name = str_of(c, "name").filter(|n| !n.is_empty()).unwrap_or("Neuer Ordner");
+                edit::insert(&mut self.index, parent, Node::Folder(Folder::new(name)), None).map(|id| json!({ "id": id }))
+            }
+            "task" => {
+                let t = TaskDef { id: Uuid::new_v4(), name: "Neue Aufgabe".into(), kind: "apt".into(), params: BTreeMap::new() };
+                let tid = t.id;
+                self.index.tasks.push(t);
+                link(&mut self.index, parent, |m| m.tasks.push(tid)).map(|_| json!({ "task": tid }))
+            }
+            "macro" => {
+                let m = MacroDef { id: Uuid::new_v4(), name: "Neues Makro".into(), steps: Vec::new() };
+                let mid = m.id;
+                self.index.macros.push(m);
+                link(&mut self.index, parent, |m| m.macros.push(mid)).map(|_| json!({ "macro": mid }))
+            }
+            other => {
+                let protocol = template.as_ref().map(|t| t.protocol).or_else(|| protocol_from(other));
+                match protocol {
+                    Some(p) => {
+                        let name = str_of(c, "name").filter(|n| !n.is_empty()).unwrap_or("Neues Ziel");
+                        let t = edit::new_target(&self.index, parent, p, name, template.as_ref());
+                        edit::insert(&mut self.index, parent, Node::Target(t), None).map(|id| json!({ "id": id }))
+                    }
+                    None => return Err(format!("Unbekannter Typ „{other}“")),
+                }
+            }
+        };
+        match result {
+            Ok(v) => {
+                self.commit("Hinzufügen", before);
+                Ok(v)
+            }
+            Err(e) => {
+                self.index = before;
+                Err(e.to_string())
+            }
+        }
+    }
+
+    /// Übernimmt die Felder des Eigenschaften-Tabs.
+    fn op_update(&mut self, c: &Value) -> Result<Value, String> {
+        let id = id_of(c, "id").ok_or("ID fehlt")?;
+        let f = c.get("fields").cloned().unwrap_or(json!({}));
+        let is_root = id == self.index.root.id;
+        let node = if is_root { None } else { Some(edit::node(&self.index, id).ok_or("Objekt nicht gefunden")?.clone()) };
+        // Prüfen, bevor etwas geändert wird.
+        if let Some(Node::Target(t)) = &node {
+            // Geprüft werden nur übergebene Felder.
+            let mut errors = validate_connection(t.protocol, str_of(&f, "host").unwrap_or("-"), f.get("port"), f.get("options"));
+            if f.get("host").is_none() {
+                errors.remove("host");
+            }
+            if !errors.is_empty() {
+                return Ok(json!({ "errors": errors }));
+            }
+        }
+        if let Some(n) = str_of(&f, "name") {
+            if n.is_empty() && !is_root {
+                return Ok(json!({ "errors": { "name": "Name darf nicht leer sein" } }));
+            }
+        }
+        let before = self.index.clone();
+        // Zugangsdaten zuerst: „direkt“ legt einen KDBX-Eintrag an.
+        if let Some(cred) = c.get("credential") {
+            if let Err(e) = self.apply_credential(id, cred) {
+                self.index = before;
+                return Err(e);
+            }
+        }
+        let res = (|| -> Result<(), String> {
+            let protocol = match &node {
+                Some(Node::Target(t)) => Some(t.protocol),
+                _ => None,
+            };
+            let options = match (protocol, f.get("options")) {
+                (Some(p), Some(o)) => Some(options_from(p, o)?),
+                _ => None,
+            };
+            let tunnel = match f.get("tunnel").and_then(Value::as_str) {
+                None => None,
+                Some("inherit") => Some(None),
+                Some("none") => Some(Some(TunnelSetting::None)),
+                Some(s) => Some(Some(TunnelSetting::Use(Uuid::parse_str(s).map_err(|_| "Tunnel ungültig")?))),
+            };
+            let snmp = match f.get("snmp").and_then(Value::as_str) {
+                None => None,
+                Some("inherit") => Some(None),
+                Some("none") => Some(Some(SnmpSetting::None)),
+                Some(s) => Some(Some(SnmpSetting::Device(Uuid::parse_str(s).map_err(|_| "SNMP-Gerät ungültig")?))),
+            };
+            let psrp: Option<Option<PsrpTransport>> = match f.get("psrp_transport") {
+                None => None,
+                Some(Value::Null) => Some(None),
+                Some(Value::String(s)) if s == "inherit" => Some(None),
+                Some(v) => Some(Some(serde_json::from_value(v.clone()).map_err(|e| format!("PowerShell-Transport: {e}"))?)),
+            };
+            let clipboard = match f.get("clipboard").and_then(Value::as_str) {
+                None => None,
+                Some("inherit") => Some(None),
+                Some(s) => Some(Some(clip_parse(s).ok_or("Zwischenablage-Richtung ungültig")?)),
+            };
+            let (settings, meta) = match edit_target(&mut self.index, id) {
+                Some(x) => x,
+                None => return Err("Objekt nicht gefunden".into()),
+            };
+            if let Some(t) = tunnel {
+                settings.tunnel = t;
+            }
+            if let Some(s) = snmp {
+                settings.snmp = s;
+            }
+            if let Some(p) = psrp {
+                settings.psrp_transport = p;
+            }
+            if let Some(cl) = clipboard {
+                settings.clipboard = cl;
+            }
+            if let Some(d) = str_of(&f, "description") {
+                meta.description = d.to_string();
+            }
+            if let Some(n) = str_of(&f, "notes") {
+                meta.notes = n.to_string();
+            }
+            if let Some(fields) = f.get("fields").and_then(Value::as_object) {
+                meta.fields = fields.iter().filter(|(k, _)| !k.is_empty()).map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string())).collect();
+            }
+            if f.get("tasks").is_some() {
+                meta.tasks = ids_of(&f, "tasks");
+            }
+            if f.get("macros").is_some() {
+                meta.macros = ids_of(&f, "macros");
+            }
+            if is_root {
+                return Ok(());
+            }
+            match rj_core::inherit::find_node_mut(&mut self.index.root, id) {
+                Some(Node::Target(t)) => {
+                    if let Some(n) = str_of(&f, "name") {
+                        t.name = n.to_string();
+                    }
+                    if let Some(h) = str_of(&f, "host") {
+                        t.host = h.to_string();
+                    }
+                    if let Some(p) = f.get("port") {
+                        t.port = p.as_u64().or_else(|| p.as_str().and_then(|s| s.parse().ok())).map(|p| p as u16);
+                    }
+                    if let Some(o) = options {
+                        t.options = o;
+                    }
+                }
+                Some(Node::Folder(fo)) => {
+                    if let Some(n) = str_of(&f, "name") {
+                        fo.name = n.to_string();
+                    }
+                }
+                None => return Err("Objekt nicht gefunden".into()),
+            }
+            if let Some(p) = id_of(&f, "parent") {
+                if edit::parent_of(&self.index, id) != Some(p) {
+                    edit::move_node(&mut self.index, id, p, None).map_err(|e| e.to_string())?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = res {
+            self.index = before;
+            return Err(e);
+        }
+        if self.index != before {
+            self.commit("Eigenschaften ändern", before);
+        }
+        if c.get("save").and_then(Value::as_bool).unwrap_or(false) {
+            return serde_json::from_str(&self.save_with(None)).map_err(|e| e.to_string());
+        }
+        Ok(json!({ "ok": true }))
+    }
+
+    /// Setzt die Zugangsdaten nach einer der fünf Möglichkeiten.
+    fn apply_credential(&mut self, id: Uuid, cred: &Value) -> Result<(), String> {
+        let name_for_entry = match edit::node(&self.index, id) {
+            Some(Node::Target(t)) => t.credential_name().to_string(),
+            _ => edit::folder(&self.index, id).and_then(|f| f.settings.credential_name.clone()).unwrap_or_else(|| rj_core::DEFAULT_CREDENTIAL.into()),
+        };
+        let mode = match str_of(cred, "mode").unwrap_or("inherit") {
+            "inherit" => CredentialMode::Inherit,
+            "none" => CredentialMode::None,
+            "named" => CredentialMode::Named(str_of(cred, "name").filter(|n| !n.is_empty()).ok_or("Name des Datensatzes fehlt")?.to_string()),
+            "entry" => {
+                let entry = id_of(cred, "entry").ok_or("Kein Eintrag gewählt")?;
+                let vault = self.vault.as_ref().ok_or("KDBX ist gesperrt")?;
+                let title = vault.credential(entry).map(|c| c.data.title).ok_or("Eintrag nicht in der KDBX")?;
+                CredentialMode::Entry { name: name_for_entry, reference: CredentialRef { entry, last_title: Some(title) } }
+            }
+            "direct" => {
+                let username = str_of(cred, "username").unwrap_or_default().to_string();
+                // Kennwort byte-genau: kein Trimmen, keine Normalisierung.
+                let password = str_of(cred, "password").map(Secret::from_str_exact);
+                let title = match edit::node(&self.index, id) {
+                    Some(n) => n.name().to_string(),
+                    None => "Wurzel".into(),
+                };
+                let current = match credential_mode(&self.index, id) {
+                    Some(CredentialMode::Entry { reference, .. }) => Some(reference.entry),
+                    _ => None,
+                };
+                let vault = self.vault.as_mut().ok_or("KDBX ist gesperrt")?;
+                let entry = match current.filter(|e| vault.is_own_entry(*e)) {
+                    Some(e) => {
+                        let old = vault.credential(e).ok_or("Eintrag nicht in der KDBX")?;
+                        let data = CredentialData { username, password: password.unwrap_or(old.data.password.clone()), ..old.data };
+                        vault.update_credential(e, data).map_err(|e| e.to_string())?;
+                        e
+                    }
+                    None => vault
+                        .add_credential(CredentialData { title: title.clone(), username, password: password.unwrap_or_default(), ..Default::default() })
+                        .map_err(|e| e.to_string())?,
+                };
+                CredentialMode::Entry { name: name_for_entry, reference: CredentialRef { entry, last_title: Some(title) } }
+            }
+            other => return Err(format!("Unbekannte Art der Zugangsdaten „{other}“")),
+        };
+        if !rj_core::inherit::set_credential_mode(&mut self.index, id, mode) {
+            return Err("Objekt nicht gefunden".into());
+        }
+        Ok(())
+    }
+
+    /// Speichern mit Konfliktbehandlung. Antwort: `{"saved":bool}`,
+    /// `{"conflict":{"mine":r,"theirs":r}}` oder `{"error":…}`.
+    pub fn save_with(&mut self, choice: Option<&str>) -> String {
+        let choice = match choice {
+            Some("mine") => Some(ConflictChoice::KeepMine),
+            Some("theirs") => Some(ConflictChoice::LoadTheirs),
+            Some("both") => Some(ConflictChoice::KeepBoth),
+            _ => None,
+        };
+        let Some(v) = self.vault.as_mut() else {
+            return json!({ "saved": false, "notice": "Vorführdaten werden nicht gespeichert" }).to_string();
+        };
+        match v.save(choice) {
+            Ok(saved) => {
+                self.index = v.index().index.clone();
+                json!({ "saved": saved }).to_string()
+            }
+            Err(rj_kdbx::VaultError::Conflict { mine, theirs }) => json!({ "conflict": { "mine": mine, "theirs": theirs } }).to_string(),
+            Err(e) => err(format!("Speichern fehlgeschlagen: {e}")),
+        }
+    }
+
+    fn op_connect_all(&mut self, c: &Value) -> Result<Value, String> {
+        let id = id_of(c, "id").ok_or("ID fehlt")?;
+        let targets = edit::targets_below(&self.index, id);
+        let mode = str_of(c, "mode").unwrap_or("connect");
+        let open: Vec<SessionId> = self.sessions.ids().into_iter().filter(|s| self.sessions.target(*s).is_some_and(|t| targets.contains(&t))).collect();
+        match mode {
+            "disconnect" => {
+                for s in &open {
+                    self.sessions.disconnect(*s);
+                }
+                Ok(json!({ "count": open.len() }))
+            }
+            "reconnect" => {
+                for s in &open {
+                    self.sessions.reconnect(*s);
+                }
+                Ok(json!({ "count": open.len() }))
+            }
+            _ => {
+                let limit = c.get("parallel").and_then(Value::as_u64).map(|n| n as usize).unwrap_or(self.config.connection.connect_all_parallel as usize);
+                self.connect_size = (
+                    c.get("width").and_then(Value::as_u64).unwrap_or(1024) as u32,
+                    c.get("height").and_then(Value::as_u64).unwrap_or(768) as u32,
+                );
+                let n = targets.len();
+                self.stagger = Some(Stagger::new(targets, limit));
+                self.stagger_tick();
+                Ok(json!({ "count": n }))
+            }
+        }
+    }
+
+    /// Ein Schritt des gestaffelten Verbindungsaufbaus (aus `poll`).
+    pub(crate) fn stagger_tick(&mut self) {
+        let Some(mut st) = self.stagger.take() else { return };
+        let (w, h) = self.connect_size;
+        let states: BTreeMap<SessionId, String> = self.sessions.ids().into_iter().map(|s| (s, self.sessions.state(s).unwrap_or_default().to_string())).collect();
+        st.tick(
+            |s| states.get(&s).cloned(),
+            |t| {
+                let ssh = matches!(edit::node(&self.index, t), Some(Node::Target(x)) if x.protocol == Protocol::Ssh);
+                let (cw, ch) = if ssh { (120, 40) } else { (w, h) };
+                let r: Value = serde_json::from_str(&self.connect(t, None, false, cw, ch)).unwrap_or_default();
+                match r.get("session").and_then(Value::as_u64) {
+                    Some(s) => Ok(s),
+                    None => Err(r.get("error").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| r.to_string())),
+                }
+            },
+        );
+        if !st.is_done() {
+            self.stagger = Some(st);
+        } else {
+            self.stagger_done = Some(st);
+        }
+    }
+}
+
+fn x_contains(f: &Folder, id: Uuid) -> bool {
+    f.children.iter().any(|n| {
+        n.id() == id
+            || match n {
+                Node::Folder(s) => x_contains(s, id),
+                Node::Target(_) => false,
+            }
+    })
+}
+
+/// Einstellungen und Beschreibung eines Knotens (auch der Wurzel).
+fn edit_target(index: &mut Index, id: Uuid) -> Option<(&mut rj_core::Settings, &mut rj_core::Meta)> {
+    if index.root.id == id {
+        return Some((&mut index.root.settings, &mut index.root.meta));
+    }
+    match rj_core::inherit::find_node_mut(&mut index.root, id)? {
+        Node::Folder(f) => Some((&mut f.settings, &mut f.meta)),
+        Node::Target(t) => Some((&mut t.settings, &mut t.meta)),
+    }
+}
+
+fn link(index: &mut Index, id: Uuid, f: impl FnOnce(&mut rj_core::Meta)) -> Result<(), EditError> {
+    let (_, meta) = edit_target(index, id).ok_or(EditError::NotFound)?;
+    f(meta);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rj_kdbx::{KdfChoice, MasterKey, Vault};
+
+    fn app_with_vault(dir: &std::path::Path) -> (App, std::path::PathBuf, MasterKey) {
+        let path = dir.join("t.kdbx");
+        let key = MasterKey::password("Prüf ✓");
+        let mut v = Vault::create(&path, key.clone(), KdfChoice::Weak, rj_core::config::IndexStorage::KdbxCustomData);
+        v.save(None).unwrap();
+        let mut app = App::new(false);
+        app.index = v.index().index.clone();
+        app.vault = Some(v);
+        (app, path, key)
+    }
+
+    fn j(s: String) -> Value {
+        serde_json::from_str(&s).unwrap()
+    }
+
+    fn cmd(app: &mut App, v: Value) -> Value {
+        j(app.edit(&v.to_string()))
+    }
+
+    #[test]
+    fn create_edit_save_reopen_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, path, key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let f = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "Standort Nord" }))["id"].as_str().unwrap().to_string();
+        let t = cmd(&mut app, json!({ "op": "add", "parent": f, "kind": "rdp" }))["id"].as_str().unwrap().to_string();
+        // Kennwort mit zerlegtem Umlaut, Leerzeichen am Ende und Emoji: byte-genau.
+        let pw = "Kennwo\u{0308}rt 🚀 ";
+        let r = cmd(&mut app, json!({
+            "op": "update", "id": t,
+            "fields": { "name": "srv-01", "host": "srv-01.example.test", "port": "3390", "description": "Testserver",
+                        "options": { "clipboard": "target_to_host" }, "fields": { "Raum": "2.14" } },
+            "credential": { "mode": "direct", "username": "EXAMPLE\\admin", "password": pw },
+            "save": true
+        }));
+        assert_eq!(r["saved"], true, "{r}");
+        // Neu öffnen und vergleichen.
+        let v2 = Vault::open(&path, key, rj_core::config::IndexStorage::KdbxCustomData).unwrap();
+        assert_eq!(v2.index().index.root, app.index.root);
+        let tid = Uuid::parse_str(&t).unwrap();
+        let Some(Node::Target(tt)) = edit::node(&v2.index().index, tid) else { panic!() };
+        assert_eq!((tt.host.as_str(), tt.port), ("srv-01.example.test", Some(3390)));
+        assert_eq!(tt.meta.fields["Raum"], "2.14");
+        let entry = tt.settings.credentials["default"].entry;
+        assert!(v2.is_own_entry(entry));
+        assert_eq!(v2.credential(entry).unwrap().data.password.as_bytes(), pw.as_bytes());
+        // Kennwort steht nie im Index.
+        let json = String::from_utf8(rj_core::schema::to_json(&v2.index().index).unwrap()).unwrap();
+        assert!(!json.contains("Kennwo"));
+    }
+
+    #[test]
+    fn validation_reports_fields() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        let t = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "web" }))["id"].as_str().unwrap().to_string();
+        let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "host": "a b", "port": "70000", "options": { "url": "https://u:p@example.test/" } } }));
+        let e = &r["errors"];
+        assert!(e["host"].is_string() && e["port"].is_string() && e["url"].is_string(), "{r}");
+        let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "host": "web\u{200B}01.example.test" } }));
+        assert!(r["errors"]["host"].as_str().unwrap().contains("unsichtbare"));
+        let c = check_text("Kassen\u{202E}txt.exe", false);
+        assert_eq!(c["issues"], 1);
+        assert_eq!(c["marked"], "Kassen⟦U+202E⟧txt.exe");
+    }
+
+    #[test]
+    fn inheritance_display_matches_core_and_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let f = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "Linux" }))["id"].as_str().unwrap().to_string();
+        let t = cmd(&mut app, json!({ "op": "add", "parent": f, "kind": "ssh", "name": "web01" }))["id"].as_str().unwrap().to_string();
+        let r = cmd(&mut app, json!({ "op": "update", "id": f, "credential": { "mode": "direct", "username": "root", "password": "x" } }));
+        assert_eq!(r["ok"], true, "{r}");
+        let e = j(app.editor_json(Uuid::parse_str(&t).unwrap()));
+        assert_eq!(e["credential"]["mode"], "inherit");
+        assert_eq!(e["credential"]["effective"]["origin"], "geerbt von Ordner „Linux“");
+        let CredentialResolution::Found(r) = rj_core::inherit::resolve_credential(&app.index, Uuid::parse_str(&t).unwrap()).unwrap() else { panic!() };
+        assert_eq!(r.origin, Origin::Folder(Uuid::parse_str(&f).unwrap()));
+        let fe = j(app.editor_json(Uuid::parse_str(&f).unwrap()));
+        assert_eq!(fe["credential"]["mode"], "direct");
+        // „Keine“ am Ziel, dann zurück auf Vererbung.
+        cmd(&mut app, json!({ "op": "update", "id": t, "credential": { "mode": "none" } }));
+        assert_eq!(j(app.editor_json(Uuid::parse_str(&t).unwrap()))["credential"]["effective"]["state"], "none");
+        let u = cmd(&mut app, json!({ "op": "undo" }));
+        assert_eq!(u["undone"], "Eigenschaften ändern");
+        assert_eq!(j(app.editor_json(Uuid::parse_str(&t).unwrap()))["credential"]["effective"]["state"], "found");
+        // Auf Unterobjekte anwenden mit Vorschau und Rückgängig.
+        cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "tunnel": "none" } }));
+        assert_eq!(cmd(&mut app, json!({ "op": "apply_preview", "id": f, "kind": "tunnel" }))["count"], 1);
+        assert_eq!(cmd(&mut app, json!({ "op": "apply", "id": f, "kind": "tunnel" }))["count"], 1);
+        assert_eq!(cmd(&mut app, json!({ "op": "apply_preview", "id": f, "kind": "tunnel" }))["count"], 0);
+        assert_eq!(cmd(&mut app, json!({ "op": "undo" }))["undone"], "Auf Unterobjekte anwenden");
+        assert_eq!(cmd(&mut app, json!({ "op": "apply_preview", "id": f, "kind": "tunnel" }))["count"], 1);
+        // Löschen lässt den KDBX-Eintrag bestehen: er erscheint unter „Nicht zugeordnet“.
+        cmd(&mut app, json!({ "op": "delete", "id": f }));
+        assert_eq!(app.vault.as_ref().unwrap().unassigned().len(), 1);
+    }
+
+    #[test]
+    fn templates_and_favorites_views() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        let t = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "a" }))["id"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "host": "a.example.test", "port": 2222, "tunnel": "none" }, "credential": { "mode": "named", "name": "admin" } }));
+        let tpl = cmd(&mut app, json!({ "op": "template_save", "id": t, "name": "Linux-Standard", "default": true }))["id"].as_str().unwrap().to_string();
+        let json = serde_json::to_string(&app.index.templates).unwrap();
+        assert!(json.contains("admin") && !json.contains("entry"), "{json}");
+        // Neues SSH-Ziel nimmt die Standardvorlage.
+        let n = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh" }))["id"].as_str().unwrap().to_string();
+        let Some(Node::Target(nt)) = edit::node(&app.index, Uuid::parse_str(&n).unwrap()) else { panic!() };
+        assert_eq!((nt.port, nt.credential.as_deref()), (Some(2222), Some("admin")));
+        let n2 = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "x", "template": tpl }))["id"].as_str().unwrap().to_string();
+        assert!(Uuid::parse_str(&n2).is_ok());
+        cmd(&mut app, json!({ "op": "favorite", "id": t, "on": true }));
+        let v = cmd(&mut app, json!({ "op": "view_create", "name": "Patchday", "ids": [t, n] }))["id"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "view_create", "name": "Kunde", "ids": [t] }));
+        assert_eq!(app.index.views.iter().filter(|x| x.targets.contains(&Uuid::parse_str(&t).unwrap())).count(), 2);
+        cmd(&mut app, json!({ "op": "view_rename", "view": v, "name": "Patchday Juli" }));
+        let d = cmd(&mut app, json!({ "op": "duplicate", "id": t }))["id"].as_str().unwrap().to_string();
+        assert_ne!(d, t);
+        assert_eq!(app.index.favorites.len(), 1, "Duplikat ist kein Favorit");
+        cmd(&mut app, json!({ "op": "rename", "id": d, "name": "a-zwei" }));
+        let f = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder" }))["id"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "move", "id": d, "parent": f }));
+        assert_eq!(edit::parent_of(&app.index, Uuid::parse_str(&d).unwrap()), Uuid::parse_str(&f).ok());
+        let task = cmd(&mut app, json!({ "op": "add", "parent": f, "kind": "task" }))["task"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "update_task", "id": task, "name": "apt-Aktualisierung", "params": { "dry_run": "true" } }));
+        let m = cmd(&mut app, json!({ "op": "add", "parent": f, "kind": "macro" }))["macro"].as_str().unwrap().to_string();
+        let r = cmd(&mut app, json!({ "op": "update_macro", "id": m, "steps": "[{\"send\":\"uptime\\n\"}]" }));
+        assert_eq!(r["ok"], true, "{r}");
+        let e = j(app.editor_json(Uuid::parse_str(&f).unwrap()));
+        assert_eq!(e["tasks"][0]["linked"], true);
+        assert_eq!(e["macros"][0]["linked"], true);
+    }
+
+    #[test]
+    fn stagger_limits_parallelism_and_survives_failures() {
+        use std::cell::RefCell;
+        let targets: Vec<Uuid> = (0..10).map(|_| Uuid::new_v4()).collect();
+        let bad = targets[3];
+        let mut st = Stagger::new(targets.clone(), 4);
+        // Simulierte Sitzungen: jede braucht drei Schritte bis „connected“.
+        let states: RefCell<BTreeMap<SessionId, (u32, Uuid)>> = RefCell::new(BTreeMap::new());
+        let mut next = 1;
+        let mut max_active = 0;
+        for _ in 0..50 {
+            for (age, _) in states.borrow_mut().values_mut() {
+                *age += 1;
+            }
+            st.tick(
+                |s| states.borrow().get(&s).map(|(age, t)| if *age >= 3 { if *t == bad { "failed" } else { "connected" } } else { "connecting" }.to_string()),
+                |t| {
+                    let s = next;
+                    next += 1;
+                    states.borrow_mut().insert(s, (0, t));
+                    Ok(s)
+                },
+            );
+            let active = states.borrow().values().filter(|(a, _)| *a < 3).count();
+            max_active = max_active.max(active);
+            if st.is_done() {
+                break;
+            }
+        }
+        assert!(st.is_done());
+        assert_eq!(st.results.len(), 10);
+        assert!(max_active <= 4 && st.peak == 4, "höchstens 4 gleichzeitig ({max_active}/{})", st.peak);
+        let ok = states.borrow().values().filter(|(a, t)| *a >= 3 && *t != bad).count();
+        assert_eq!(ok, 9);
+        // Startfehler (z. B. Zugangsdaten fehlen) halten die übrigen nicht auf.
+        let mut st = Stagger::new(targets.clone(), 2);
+        let mut n = 0;
+        st.tick(|_| Some("connected".into()), |t| if t == targets[0] { Err("fehlt".into()) } else { n += 1; Ok(n) });
+        assert_eq!(st.results.len(), 3);
+    }
+}

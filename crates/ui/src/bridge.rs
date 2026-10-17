@@ -112,6 +112,9 @@ pub mod qobject {
         fn lock(self: Pin<&mut RjBackend>);
         #[qinvokable]
         fn save(self: Pin<&mut RjBackend>) -> QString;
+        /// Bearbeitungsbefehl als JSON (siehe `editor.rs`).
+        #[qinvokable]
+        fn edit(self: Pin<&mut RjBackend>, cmd: &QString) -> QString;
         #[qinvokable]
         #[cxx_name = "kdbxPath"]
         fn kdbx_path(self: &RjBackend) -> QString;
@@ -426,6 +429,13 @@ impl qobject::RjBackend {
 
     fn kdbx_path(&self) -> QString {
         q(self.app().and_then(|a| a.kdbx_path()).unwrap_or_default())
+    }
+
+    fn edit(self: Pin<&mut Self>, cmd: &QString) -> QString {
+        let mut c = cmd.to_string();
+        let r = self.app_mut().map(|a| a.edit(&c)).unwrap_or_else(|| r#"{"error":"nicht bereit"}"#.into());
+        zeroize::Zeroize::zeroize(&mut c);
+        q(r)
     }
 
     fn text(&self, key: &QString) -> QString {

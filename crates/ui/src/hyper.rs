@@ -70,6 +70,7 @@ impl App {
             CredentialResolution::Found(r) => r,
             CredentialResolution::Ambiguous(_) => return Err("Mehrere Zugangsdatensätze; bitte am Ziel festlegen".into()),
             CredentialResolution::NotFound { name } => return Err(format!("Kein Zugangsdatensatz „{name}“")),
+            CredentialResolution::Disabled => return Err("Für dieses Ziel sind keine Zugangsdaten festgelegt".into()),
         };
         let creds = self.credential_payload(&r, t.protocol)?;
         let transport = rj_core::inherit::resolve_psrp_transport(&self.index, target).ok().flatten();

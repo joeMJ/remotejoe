@@ -15,6 +15,7 @@ name = "remotejoe"
 path = "src/main.rs"
 
 [dependencies]
+zeroize.workspace = true
 remotejoe-core = { path = "../core" }
 remotejoe-kdbx = { path = "../kdbx" }
 remotejoe-ipc = { path = "../ipc" }

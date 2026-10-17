@@ -15,6 +15,12 @@
 
 class RjBackend;
 class SessionPane;
+class ActionBar;
+class PropertiesTab;
+class UnlockOverlay;
+class QComboBox;
+class QMenu;
+class QAction;
 
 class MainWindow : public QMainWindow
 {
@@ -34,6 +40,13 @@ public:
 	void patchdayForFirstTargets(int n);
 	QTreeView* tree() const { return m_tree; }
 	int treeRowCount() const;
+	/// Eigenschaften-Tab öffnen (oder vorhandenen zeigen).
+	PropertiesTab* openProperties(const QString& id, const QString& category = QString());
+	/// Für Bildschirmfotos: Eigenschaften des ersten Ziels, Hinzufügen-Menü, Entsperren.
+	PropertiesTab* openFirstTargetProperties();
+	QMenu* popupAddMenu();
+	void showUnlock(bool locked);
+	QTabWidget* tabs() const { return m_tabs; }
 
 	/// Zeit vom Programmstart bis zum ersten Zeichnen des Fensters.
 	static QElapsedTimer startClock;
@@ -57,7 +70,24 @@ private:
 	void openGuestConsole(const QModelIndex& index);
 	void guestAction(const QModelIndex& index, const QString& action);
 	void tabContextMenu(QTabWidget* tabs, const QPoint& pos);
-	void unlockDialog();
+	void buildAddMenu(QMenu* menu, const QString& parentId);
+	QString edit(const QJsonObject& cmd);
+	QString currentId() const;
+	QString currentParentId() const;
+	QStringList selectedIds() const;
+	void selectId(const QString& id);
+	void renameSelected();
+	void moveSelected();
+	void deleteSelected();
+	void duplicateSelected();
+	void toggleFavorite();
+	void reorderSelected(int delta);
+	void undo();
+	void connectAll(const QString& mode);
+	void reloadViews();
+	void viewCommand(const QString& what);
+	void saveAll(const QString& choice = QString());
+	void showEditResult(const QJsonObject& r, const QString& okMessage = QString());
 	SessionPane* pane(std::uint64_t session);
 	std::uint64_t currentTab() const;
 	std::uint64_t currentSession() const;
@@ -76,4 +106,8 @@ private:
 	QHash<std::uint64_t, QTabWidget*> m_windowTabs;
 	QJsonObject m_workspace;
 	QSet<std::uint64_t> m_dirtyTerminals;
+	ActionBar* m_bar = nullptr;
+	QComboBox* m_viewBox = nullptr;
+	UnlockOverlay* m_overlay = nullptr;
+	QAction* m_undoAction = nullptr;
 };
