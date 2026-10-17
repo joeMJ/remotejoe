@@ -1,4 +1,4 @@
-# Nur von Hand starten (Actions-Minuten knapp).
+# Nur von Hand starten.
 # Baut alle Pakete unter Windows (MSVC, Qt 6, FreeRDP 3 aus vcpkg) und führt
 # die Tests der Pakete aus, die unter Windows laufen sollen.
 name: Windows (von Hand)

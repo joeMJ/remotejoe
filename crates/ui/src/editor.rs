@@ -1596,9 +1596,9 @@ mod web_tests {
         let t = cmd(&mut app, json!({ "op": "add", "kind": "web" }))["id"].as_str().unwrap().to_string();
 
         // Nur die Adresse: Host und Port werden abgeleitet, Standardport 443 bleibt leer.
-        let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "options": { "url": "https://192.0.2.1/" } } }));
+        let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "options": { "url": "https://192.0.2.192/" } } }));
         assert!(r.get("errors").is_none(), "{r}");
-        assert_eq!(host_port(&app, &t), ("192.0.2.1".into(), None));
+        assert_eq!(host_port(&app, &t), ("192.0.2.192".into(), None));
 
         // Anderer Port und http.
         cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "options": { "url": "https://ilo.example.test:8443/index.html" } } }));

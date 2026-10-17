@@ -1,10 +1,65 @@
 # remotejoe
 
-Verbindungsmanager für Ubuntu 24.04 und Windows 10/11. Verbindungen zu Servern und Geräten
-über **RDP, SSH, VNC, Web, PowerShell**, dazu **Proxmox VE** und **Hyper-V**. Die
-Zugangsdaten liegen in einer KeePass-Datei (KDBX), die man weiter mit KeePassXC öffnen kann.
+> **Verbindungsmanager für Ubuntu und Windows – RDP, SSH, VNC, Web, PowerShell, Proxmox VE und Hyper-V in einem Fenster, mit KeePass-Schlüsseldatenbank**
 
-![Hauptfenster](docs/screenshots/hauptfenster-hell.png)
+> [!WARNING]
+> **Privates Hobbyprojekt – nicht gepflegt / unmaintained.**
+> Dieses Repository ist für meinen eigenen Gebrauch gedacht und wird nur aus Bequemlichkeit öffentlich bereitgestellt.
+>
+> * **Keine Unterstützung:** Issues und Pull Requests werden nicht bearbeitet, Feature-Wünsche nicht umgesetzt. Bitte keine Issues eröffnen.
+> * **Keine Garantie:** Bereitstellung „wie besehen“, ohne jede Gewährleistung und Haftung. Nutzung auf eigenes Risiko.
+> * **Eigene Umgebung:** Entwickelt und getestet nur auf meinen eigenen Ubuntu-Rechnern (24.04 / 26.04). Auf anderen Systemen kann es fehlschlagen. Die Windows-Fassung ist bisher nur vorbereitet (Bauanleitung), aber nicht erprobt.
+> * **Zugangsdaten & Netzwerk:** Das Programm läuft mit den Rechten deines Benutzerkontos, öffnet Verbindungen zu den Zielen, die du einträgst, und verwaltet Zugangsdaten in einer KeePass-Datei (KDBX). Für die Update-Prüfung ruft es die Veröffentlichungen dieses Repositorys auf GitHub ab. **Lies den Code, bevor du ihn installierst.**
+> * **Keine Updates zugesichert:** Es kann jederzeit ohne Ankündigung Änderungen, Brüche oder die Löschung des Repos geben. Gern selbst forken und anpassen.
+>
+> *Private hobby project, unmaintained, provided as-is. No support, no issues, no warranty. Fork it if you like.*
+
+<p align="center">
+  <img src="docs/screenshots/hauptfenster-hell.png" alt="Hauptfenster: Baum mit Ordnern und Zielen links, Sitzungen gekachelt rechts" width="760">
+  <br>
+  <em>Hauptfenster (helles Farbschema, Demo-Daten)</em>
+</p>
+
+---
+
+## Plattform-Übersicht
+
+| Plattform | Status | Hinweis |
+| :--- | :--- | :--- |
+| **Linux (Ubuntu 24.04 / 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto |
+| **Windows 10/11** | Vorbereitet | Bauanleitung [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md); noch nicht erprobt, Web-Ziele im Tab fehlen noch |
+
+---
+
+## Installation (Linux, Ubuntu)
+
+**Voraussetzungen:** Ubuntu 24.04 – 26.04, `curl`, `tar` und `zstd`. Kein `sudo` für das Programm selbst nötig – es wird im eigenen Benutzerkonto installiert (`~/.local`). Die benötigten Systembibliotheken (Qt 6, FreeRDP 3, WebKitGTK) kommen aus den Ubuntu-Paketquellen; das Skript prüft sie und nennt fehlende Pakete.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh | bash
+```
+
+Das Skript lädt die neueste signierte Veröffentlichung per HTTPS von GitHub, prüft Signatur und Prüfsumme, installiert nach `~/.local/share/remotejoe`, legt den Starter und das Programmsymbol im Anwendungsmenü an und räumt danach auf.
+
+**Erst ansehen, dann ausführen:**
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh
+less install.sh
+bash install.sh
+```
+
+**Aktualisieren:** im Programm **Hilfe → Nach Updates suchen …** (Pakete sind mit Ed25519 signiert und werden vor der Installation geprüft, siehe [`docs/UPDATE.md`](docs/UPDATE.md)) oder den Installationsbefehl erneut ausführen. Einstellungen und Schlüsseldatenbank bleiben unberührt.
+
+**Deinstallieren:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh | bash -s -- --uninstall
+```
+
+Entfernt Programm, Starter und Symbole. Einstellungen (`~/.config/remotejoe`) und deine Schlüsseldatenbank bleiben erhalten.
+
+---
 
 ## Was das Programm kann
 
@@ -36,9 +91,9 @@ Zugangsdaten liegen in einer KeePass-Datei (KDBX), die man weiter mit KeePassXC 
   rückgängig machbare Aktion.
 - **Keine Dialogfenster:** Rückfragen, Hinweise und Fehlermeldungen erscheinen als Leiste im
   Tab oder im Hauptfenster; Import-Vorschau und Patchday sind Tabs.
-- **Updates** aus dem eigenen Gitea oder von GitHub: Hilfe → Nach Updates suchen …; Pakete
-  sind mit Ed25519 signiert und werden vor der Installation geprüft (siehe
-  [`docs/UPDATE.md`](docs/UPDATE.md)).
+- **Updates** aus den Veröffentlichungen dieses Repositorys (oder einer eigenen Quelle):
+  Hilfe → Nach Updates suchen …; Pakete sind mit Ed25519 signiert und werden vor der
+  Installation geprüft (siehe [`docs/UPDATE.md`](docs/UPDATE.md)).
 - **Alle im Ordner verbinden**, neu verbinden oder trennen (gestaffelt, höchstens 4
   gleichzeitig).
 - **Sperre nach Leerlauf** (Vorgabe aus) und Sperren von Hand; nach dem Aufwachen aus dem
@@ -137,8 +192,6 @@ lock_after_idle_mins = 0      # 0 = aus
 disconnect_on_lock = false
 ```
 
-Handprobe gegen echte Gegenstellen: [`docs/HANDPROBE.md`](docs/HANDPROBE.md).
-
 ## Bauen unter Ubuntu 24.04
 
 ```sh
@@ -179,8 +232,16 @@ nötigen DLLs an:
 .\scripts\build-windows.ps1 -VcpkgRoot C:\vcpkg -QtDir C:\Qt\6.5.3\msvc2019_64
 ```
 
+## Dokumentation
+
+- [`docs/UPDATE.md`](docs/UPDATE.md) – Updates: Quelle einstellen, Pakete packen, signieren und veröffentlichen
+- [`docs/ARCHITEKTUR.md`](docs/ARCHITEKTUR.md) – Aufbau: Bausteine, Prozessmodell, Zusammenspiel der Prozesse, Oberfläche
+- [`docs/DATENMODELL.md`](docs/DATENMODELL.md) – Datenmodell: Index, Verweise auf Zugangsdaten, Vererbung, Ablage in der KDBX
+- [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md) – remotejoe unter Windows bauen
+- [`docs/ZIELE-EINRICHTEN.md`](docs/ZIELE-EINRICHTEN.md) – Windows-Ziele für RDP und PowerShell-Remoting einrichten (mit Skripten unter [`tools/ziel-einrichten/`](tools/ziel-einrichten/))
+- [`THIRD_PARTY.md`](THIRD_PARTY.md) – verwendete Bibliotheken Dritter mit Lizenzen
+
 ## Lizenz
 
-Apache-2.0, siehe [`LICENSE`](LICENSE) und [`NOTICE`](NOTICE). Verwendete Bibliotheken mit
-ihren Lizenzen: [`THIRD_PARTY.md`](THIRD_PARTY.md). Aufbau des Programms:
-[`docs/ARCHITEKTUR.md`](docs/ARCHITEKTUR.md).
+Apache License 2.0, siehe [`LICENSE`](LICENSE) und [`NOTICE`](NOTICE). Copyright 2026 joeMJ.
+Verwendete Bibliotheken mit ihren Lizenzen: [`THIRD_PARTY.md`](THIRD_PARTY.md).

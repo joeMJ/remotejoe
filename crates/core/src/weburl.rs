@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn host_and_port_from_url() {
-        assert_eq!(endpoint("https://192.0.2.1/"), Some(("192.0.2.1".into(), 443)));
+        assert_eq!(endpoint("https://192.0.2.192/"), Some(("192.0.2.192".into(), 443)));
         assert_eq!(endpoint("http://ilo.example.test"), Some(("ilo.example.test".into(), 80)));
         assert_eq!(endpoint("https://host.example.test:8443/pfad?x=1#a"), Some(("host.example.test".into(), 8443)));
         assert_eq!(endpoint("HTTPS://Host.example.test:1"), Some(("Host.example.test".into(), 1)));
