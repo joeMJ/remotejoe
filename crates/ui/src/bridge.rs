@@ -207,6 +207,7 @@ impl qobject::RjBackend {
             if demo {
                 app.open_demo_sessions();
             }
+            app.maybe_auto_check();
             r.app = Some(app);
         }
     }

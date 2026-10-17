@@ -548,6 +548,11 @@ impl App {
                 }
                 Ok(json!({ "ok": true }))
             }
+            "update_status" => Ok(self.update_status()),
+            "update_settings" => self.update_settings(&c),
+            "update_check" => self.update_check(),
+            "update_install" => self.update_install(c.get("confirm").and_then(Value::as_bool).unwrap_or(false)),
+            "update_cancel" => Ok(self.update_cancel()),
             "web_command" => {
                 let s = c.get("session").and_then(Value::as_u64).unwrap_or(0);
                 match c.get("cmd") {

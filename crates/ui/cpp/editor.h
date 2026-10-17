@@ -274,6 +274,42 @@ signals:
 	void closeRequested();
 };
 
+/// „Nach Updates suchen“: Quelle einstellen, prüfen, Änderungstext,
+/// herunterladen und installieren, Neustart anbieten. Kein Dialogfenster.
+class UpdateTab : public ToolTab
+{
+	Q_OBJECT
+public:
+	explicit UpdateTab(RjBackend* backend, QWidget* parent = nullptr);
+	/// Ergebnis einer Hintergrundaufgabe (`update_check`, `update_install`).
+	void handleResult(const QString& kind, const QJsonObject& r);
+	/// Zustand neu laden (z. B. nach dem Entsperren).
+	void refresh();
+	void check();
+
+private:
+	void saveSettings();
+	void install(bool confirm);
+	void setBusy(bool busy, const QString& text = QString());
+	RjBackend* m_backend;
+	QComboBox* m_source;
+	QLineEdit* m_base;
+	QLineEdit* m_repo;
+	QComboBox* m_token;
+	QCheckBox* m_onStart;
+	QLabel* m_current;
+	QLabel* m_found;
+	QLabel* m_state;
+	QPlainTextEdit* m_notes;
+	QPushButton* m_check;
+	QPushButton* m_install;
+	QPushButton* m_later;
+	QPushButton* m_cancel;
+	QPushButton* m_restart;
+	ActionBar* m_bar;
+	QString m_program;
+};
+
 /// Rückfragen beim Verbinden eines Ziels, bevor eine Sitzung besteht
 /// (Auswahl des Zugangsdatensatzes, Host-Schlüssel eines Sprungservers,
 /// Zertifikat eines Hypervisors). Schließen lehnt ab.

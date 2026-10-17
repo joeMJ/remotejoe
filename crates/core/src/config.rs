@@ -42,6 +42,25 @@ pub struct Config {
     pub security: SecurityDefaults,
     /// Schrift und Farben des SSH-Terminals.
     pub terminal: crate::termcolors::TerminalSettings,
+    /// Update-Quelle (Voreinstellung: keine).
+    pub update: UpdateSettings,
+}
+
+/// Einstellungen der Update-Funktion. Der Zugriffsschlüssel steht nie hier,
+/// sondern als Eintrag in der Schlüsseldatenbank (`token_entry`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// `gitea`, `github` oder leer (keine Quelle).
+    pub source: String,
+    /// Gitea: Basisadresse, z. B. `https://git.example.test`; GitHub: leer.
+    pub base_url: String,
+    /// Repository `besitzer/name`.
+    pub repo: String,
+    /// KDBX-Eintrag, dessen Kennwort der Zugriffsschlüssel ist.
+    pub token_entry: Option<uuid::Uuid>,
+    /// Beim Start im Hintergrund prüfen (Voreinstellung aus).
+    pub check_on_start: bool,
 }
 
 impl Default for Config {
@@ -54,6 +73,7 @@ impl Default for Config {
             connection: ConnectionDefaults::default(),
             security: SecurityDefaults::default(),
             terminal: Default::default(),
+            update: UpdateSettings::default(),
         }
     }
 }

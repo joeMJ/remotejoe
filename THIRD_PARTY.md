@@ -75,6 +75,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | const-oid | 0.10.2 | Apache-2.0 OR MIT |
 | constant_time_eq | 0.4.2 | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | convert_case | 0.6.0 | MIT |
+| core-foundation | 0.10.1 | MIT OR Apache-2.0 |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 |
 | cpubits | 0.1.1 | MIT OR Apache-2.0 |
 | cpufeatures | 0.2.17 | MIT OR Apache-2.0 |
@@ -129,6 +130,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | fiat-crypto | 0.2.9 | MIT OR Apache-2.0 OR BSD-1-Clause |
 | fiat-crypto | 0.3.0 | MIT OR Apache-2.0 OR BSD-1-Clause |
 | field-offset | 0.3.6 | MIT OR Apache-2.0 |
+| filetime | 0.2.29 | MIT/Apache-2.0 |
 | find-msvc-tools | 0.1.14 | MIT OR Apache-2.0 |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | foldhash | 0.2.0 | Zlib |
@@ -223,6 +225,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | opaque-debug | 0.3.1 | MIT OR Apache-2.0 |
+| openssl-probe | 0.2.1 | MIT OR Apache-2.0 |
 | p256 | 0.14.0 | Apache-2.0 OR MIT |
 | p384 | 0.14.0 | Apache-2.0 OR MIT |
 | p521 | 0.14.0 | Apache-2.0 OR MIT |
@@ -284,15 +287,20 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustix-openpty | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
+| rustls-native-certs | 0.8.5 | Apache-2.0 OR ISC OR MIT |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 |
 | rustls-webpki | 0.103.15 | ISC |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 |
+| ruzstd | 0.8.3 | MIT |
 | salsa20 | 0.11.0 | MIT OR Apache-2.0 |
+| schannel | 0.1.30 | MIT |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 |
 | scratch | 1.0.9 | MIT OR Apache-2.0 |
 | scrypt | 0.12.0 | MIT OR Apache-2.0 |
 | sec1 | 0.8.1 | Apache-2.0 OR MIT |
 | secrecy | 0.10.3 | Apache-2.0 OR MIT |
+| security-framework | 3.7.0 | MIT OR Apache-2.0 |
+| security-framework-sys | 2.17.0 | MIT OR Apache-2.0 |
 | semver | 1.0.28 | MIT OR Apache-2.0 |
 | serde | 1.0.229 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
@@ -333,6 +341,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | syn | 3.0.9 | MIT OR Apache-2.0 |
 | synstructure | 0.13.2 | MIT |
 | system-deps | 6.2.2 | MIT OR Apache-2.0 |
+| tar | 0.4.46 | MIT OR Apache-2.0 |
 | target-lexicon | 0.12.16 | Apache-2.0 WITH LLVM-exception |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | termcolor | 1.4.1 | Unlicense OR MIT |
@@ -350,6 +359,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | tracing-attributes | 0.1.31 | MIT |
 | tracing-core | 0.1.36 | MIT |
 | twofish | 0.8.0 | MIT OR Apache-2.0 |
+| twox-hash | 2.1.5 | MIT |
 | typed-path | 0.12.3 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 |

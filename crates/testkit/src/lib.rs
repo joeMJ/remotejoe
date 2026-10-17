@@ -4,6 +4,7 @@
 //! geben dann einen Hinweis aus und gelten nicht als gegen die echte
 //! Gegenstelle bestanden.
 
+pub mod gitea;
 pub mod shadow;
 pub mod snmpd;
 pub mod sshd;

@@ -170,6 +170,13 @@ void screenshots(MainWindow& w, const QString& dir)
 	pump(300);
 	save(&w, dir, QStringLiteral("leerer-baum.png"));
 	w.setFilter(QString());
+	// Update-Tab gegen eine lokale Attrappe (RJ_DEMO_UPDATE = Basisadresse).
+	if (const QString base = qEnvironmentVariable("RJ_DEMO_UPDATE"); !base.isEmpty())
+	{
+		w.updateForScreenshot(base);
+		pump(2500);
+		save(&w, dir, QStringLiteral("update-tab.png"));
+	}
 	w.tabs()->setCurrentIndex(0);
 	w.detachTabAt(1);
 	pump(400);
@@ -207,7 +214,8 @@ struct SingleInstance
 	// true: Wir sind die erste Instanz.
 	bool acquire()
 	{
-		if (lock.tryLock(0))
+		// Neustart nach einem Update: warten, bis die alte Instanz beendet ist.
+		if (lock.tryLock(qEnvironmentVariableIsSet("RJ_RESTART_WAIT") ? 15000 : 0))
 		{
 			QLocalServer::removeServer(serverName);
 			server.setSocketOptions(QLocalServer::UserAccessOption);

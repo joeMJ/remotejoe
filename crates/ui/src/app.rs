@@ -57,6 +57,8 @@ pub struct App {
     hop_question: std::sync::Arc<std::sync::Mutex<Option<HostKeyQuestion>>>,
     session_tunnels: std::collections::HashMap<SessionId, (Uuid, String, u16)>,
     pub patchday: Option<rj_tasks::patchday::Patchday>,
+    /// Update-Funktion (gefundene Version, laufende Aufgabe).
+    pub update: crate::update::UpdateState,
     /// Zugangsdaten des laufenden Patchday-Laufs (nur bis zur Übernahme durch die Aufgaben).
     pub patch_creds: Option<std::sync::Arc<crate::patch::CredStore>>,
     import_plan: Option<rj_importer::plan::ImportPlan>,
@@ -134,6 +136,7 @@ impl App {
             unlocking: None,
             vault_lock: None,
             lights: Default::default(),
+            update: Default::default(),
         };
         // Gespeicherte Farben gelten schon für das erste Terminal.
         let scheme = app.terminal_scheme();
@@ -1043,6 +1046,7 @@ impl App {
                         self.restore_session_credentials();
                         self.start_snmp();
                         out.push(UiEvent::Unlocked { targets: n });
+                        self.maybe_auto_check();
                     }
                     Err(reason) => out.push(UiEvent::UnlockFailed { reason }),
                 }
