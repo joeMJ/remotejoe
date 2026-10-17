@@ -442,7 +442,10 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	setCentralWidget(split);
 
 	buildMenus();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	// Hell/Dunkel des Desktops live übernehmen (ab Qt 6.5; unter Ubuntu 24.04 mit Qt 6.4 gilt es beim Start).
 	connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] { applyAppearance(); });
+#endif
 	FrameView::setFocusFrame(parseObject(m_backend->appearanceJson()).value(QStringLiteral("focus_frame")).toBool(true));
 	statusBar()->showMessage(T(m_backend, "status.ready"));
 	// Fußzeile rechts: womit, wohin, seit wann, als wer.

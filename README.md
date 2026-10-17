@@ -26,14 +26,14 @@
 
 | Plattform | Status | Hinweis |
 | :--- | :--- | :--- |
-| **Linux (Ubuntu 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto; Pakete werden unter 26.04 gebaut (24.04 ungeprüft) |
+| **Linux (Ubuntu 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto; Pakete für 26.04 und für 24.04 (eigenes Paket mit Qt 6.4; gegen Qt 6.4.2 übersetzt und im Probelauf gestartet, auf einem echten 24.04-System noch nicht erprobt) |
 | **Windows 10/11** | Vorbereitet | Bauanleitung [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md); noch nicht erprobt, Web-Ziele im Tab fehlen noch |
 
 ---
 
 ## Installation (Linux, Ubuntu)
 
-**Voraussetzungen:** Ubuntu 26.04 (24.04 ungeprüft), `curl`, `tar`, `zstd` und `openssl`. Kein `sudo` für das Programm selbst nötig – es wird im eigenen Benutzerkonto installiert (`~/.local`). Die benötigten Systembibliotheken (Qt 6, FreeRDP 3, WebKitGTK) kommen aus den Ubuntu-Paketquellen; das Skript prüft sie und nennt fehlende Pakete.
+**Voraussetzungen:** Ubuntu 26.04 oder 24.04 (24.04: eigenes Paket, noch nicht auf einem echten System erprobt), `curl`, `tar`, `zstd` und `openssl`. Kein `sudo` für das Programm selbst nötig – es wird im eigenen Benutzerkonto installiert (`~/.local`). Die benötigten Systembibliotheken (Qt 6, FreeRDP 3, WebKitGTK) kommen aus den Ubuntu-Paketquellen; das Skript prüft sie und nennt fehlende Pakete.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh | bash

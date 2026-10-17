@@ -1,6 +1,8 @@
 //! `rj-update`: Werkzeug für Herausgeber von remotejoe-Paketen.
 //!
 //! ```text
+//! rj-update plattform
+//!     gibt die Plattformkennung dieses Rechners aus (z. B. linux-x86_64 oder linux-x86_64-ubuntu2404)
 //! rj-update schluessel <ordner>
 //!     erzeugt update-key.priv (nur lokal aufbewahren!) und update-key.pub
 //! rj-update packen <programmordner> <version> <plattform> <privater-schluessel> <ausgabeordner>
@@ -36,6 +38,10 @@ use zeroize::Zeroizing;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {
+        Some("plattform") if args.len() == 1 => {
+            println!("{}", rj_update::platform());
+            Ok(())
+        }
         Some("schluessel") if args.len() == 1 => keys(&default_key_dir()),
         Some("schluessel") if args.len() == 2 => keys(Path::new(&args[1])),
         Some("packen") if args.len() == 6 => pack(Path::new(&args[1]), &args[2], &args[3], Some(Path::new(&args[4])), Path::new(&args[5])),

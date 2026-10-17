@@ -36,6 +36,15 @@ REMOTEJOE_PREFIX="$W/fremd" run --aus-ordner "$W/pak" >/dev/null 2>&1 && fail "E
 [ -f "$W/fremd/datei" ] || fail "Fremder Ordner wurde verändert"
 [ "$(cat "$DATA/known_hosts")" = wichtig ] || fail "Daten nach den Verweigerungen verändert"
 
+# Ubuntu 24.04 bekommt das eigene Paket (…-ubuntu2404), alle anderen das allgemeine.
+printf 'ID=ubuntu\nVERSION_ID="24.04"\n' > "$W/os24"; printf 'ID=ubuntu\nVERSION_ID="26.04"\n' > "$W/os26"
+mkdir -p "$W/var24"; cp "$W"/roh/remotejoe-0.0.1-linux-x86_64.tar.zst "$W/stage24.tar.zst"
+mkdir -p "$W/st24"; tar --zstd -xf "$W/stage24.tar.zst" -C "$W/st24"
+target/release/rj-update packen "$W/st24" 0.0.1 linux-x86_64-ubuntu2404 "$W/keys/update-key.priv" "$W/pak24" >/dev/null
+RJ_OS_RELEASE="$W/os24" run --aus-ordner "$W/pak24" >/dev/null 2>&1 || fail "24.04-Paket wurde auf Ubuntu 24.04 nicht installiert"
+RJ_OS_RELEASE="$W/os26" run --aus-ordner "$W/pak24" >/dev/null 2>&1 && fail "24.04-Paket wurde auf Ubuntu 26.04 angenommen"
+RJ_OS_RELEASE="$W/os24" run --aus-ordner "$W/pak" >/dev/null 2>&1 && fail "allgemeines Paket wurde auf Ubuntu 24.04 angenommen"
+
 run --uninstall >/dev/null 2>&1
 [ "$(cat "$DATA/known_hosts")" = wichtig ] || fail "Entfernen hat Daten gelöscht"
 [ ! -e "$W/home/.local/opt/remotejoe" ] && [ ! -e "$W/home/.local/bin/remotejoe" ] || fail "Entfernen unvollständig"

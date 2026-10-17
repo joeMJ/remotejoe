@@ -59,19 +59,23 @@ for t in tar zstd openssl sha256sum base64; do
 done
 [ -n "$FROM_DIR" ] || command -v curl >/dev/null 2>&1 || die "curl fehlt (sudo apt install curl)."
 
+# Ubuntu 24.04 hat Qt 6.4 und eigene Bibliotheken: dafür gibt es ein eigenes Paket.
+VARIANT=""
+if [ -r "${RJ_OS_RELEASE:-/etc/os-release}" ] && grep -qx 'ID=ubuntu' "${RJ_OS_RELEASE:-/etc/os-release}" && grep -qx 'VERSION_ID="24.04"' "${RJ_OS_RELEASE:-/etc/os-release}"; then VARIANT="-ubuntu2404"; fi
+
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 if [ -n "$FROM_DIR" ]; then
     say "Verwende Dateien aus $FROM_DIR"
     cp "$FROM_DIR"/SHA256SUMS "$FROM_DIR"/SHA256SUMS.sig "$TMP/"
-    ARCHIVE_NAME="$(awk '{print $2}' "$TMP/SHA256SUMS" | grep -E '^remotejoe-.*-linux-x86_64\.tar\.zst$' | head -1)"
+    ARCHIVE_NAME="$(awk '{print $2}' "$TMP/SHA256SUMS" | grep -E "^remotejoe-[0-9][^-]*(-[A-Za-z0-9.]+)?-linux-x86_64${VARIANT}\\.tar\\.zst$" | head -1)"
     [ -n "$ARCHIVE_NAME" ] || die "Kein Linux-Paket in SHA256SUMS."
     cp "$FROM_DIR/$ARCHIVE_NAME" "$TMP/"
 else
     say "Suche die neueste Veröffentlichung …"
     JSON="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$API/repos/$REPO/releases/latest")" || die "Die Veröffentlichung ist nicht abrufbar."
     asset_url() { printf '%s' "$JSON" | grep -o "\"browser_download_url\": *\"[^\"]*/$1\"" | head -1 | sed -E 's/.*: *"([^"]*)"/\1/'; }
-    ARCHIVE_NAME="$(printf '%s' "$JSON" | grep -o '"name": *"remotejoe-[^"]*-linux-x86_64\.tar\.zst"' | head -1 | sed -E 's/.*: *"([^"]*)"/\1/')"
+    ARCHIVE_NAME="$(printf '%s' "$JSON" | grep -oE "\"name\": *\"remotejoe-[0-9][^\"]*-linux-x86_64${VARIANT}\\.tar\\.zst\"" | head -1 | sed -E 's/.*: *"([^"]*)"/\1/')"
     [ -n "$ARCHIVE_NAME" ] || die "In der neuesten Veröffentlichung gibt es kein Linux-Paket."
     for f in "$ARCHIVE_NAME" SHA256SUMS SHA256SUMS.sig; do
         url="$(asset_url "$f")"; [ -n "$url" ] || die "Die Veröffentlichung enthält '$f' nicht."
@@ -79,7 +83,7 @@ else
         curl -fsSL --proto '=https' -o "$TMP/$f" "$url" || die "Download von '$f' fehlgeschlagen."
     done
 fi
-VERSION="${ARCHIVE_NAME#remotejoe-}"; VERSION="${VERSION%-linux-x86_64.tar.zst}"
+VERSION="${ARCHIVE_NAME#remotejoe-}"; VERSION="${VERSION%-linux-x86_64${VARIANT}.tar.zst}"
 
 # 1. Signatur von SHA256SUMS mit dem eingebauten Schlüssel (Ed25519, über OpenSSL ≥ 3).
 KEYTEXT="${REMOTEJOE_UPDATE_KEY:-$UPDATE_KEY}"

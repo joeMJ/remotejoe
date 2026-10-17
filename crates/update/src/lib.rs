@@ -67,7 +67,37 @@ pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Plattformkennung im Dateinamen der Pakete, z. B. `linux-x86_64`.
 pub fn platform() -> String {
-    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+    let base = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    if std::env::consts::OS == "linux" {
+        if let Ok(text) = std::fs::read_to_string("/etc/os-release") {
+            return format!("{base}{}", linux_variant(&text));
+        }
+    }
+    base
+}
+
+/// Zusatz zur Plattformkennung: Pakete für Ubuntu 24.04 (Qt 6.4, ältere Bibliotheken) sind eigene
+/// Dateien `…-linux-x86_64-ubuntu2404.tar.zst`; alle anderen Linux-Systeme nehmen `…-linux-x86_64`.
+pub fn linux_variant(os_release: &str) -> &'static str {
+    let get = |key: &str| os_release.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix('=')).map(|v| v.trim().trim_matches('"').to_string());
+    match (get("ID").as_deref(), get("VERSION_ID").as_deref()) {
+        (Some("ubuntu"), Some("24.04")) => "-ubuntu2404",
+        _ => "",
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::*;
+
+    #[test]
+    fn ubuntu_2404_gets_its_own_package_variant() {
+        assert_eq!(linux_variant("NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\n"), "-ubuntu2404");
+        assert_eq!(linux_variant("ID=ubuntu\nVERSION_ID=\"26.04\"\n"), "");
+        assert_eq!(linux_variant("ID=debian\nVERSION_ID=\"24.04\"\n"), "");
+        assert_eq!(linux_variant(""), "");
+        assert_eq!(asset_name("0.1.3", "linux-x86_64-ubuntu2404"), "remotejoe-0.1.3-linux-x86_64-ubuntu2404.tar.zst");
+    }
 }
 
 /// Dateiname des Pakets für eine Version und Plattform.

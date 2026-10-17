@@ -1,6 +1,7 @@
-# Baut bei einem Versions-Tag (v1.2.3) das Linux-Paket und legt einen ENTWURF der Veröffentlichung an.
-# Signiert wird nicht hier: Der Herausgeber setzt die Signatur lokal mit seinem privaten Schlüssel
-# (rj-update abschliessen) und veröffentlicht den Entwurf erst danach. Der Schlüssel liegt nie bei GitHub.
+# Baut bei einem Versions-Tag (v1.2.3) die Linux-Pakete (Ubuntu 26.04 und 24.04) und legt einen
+# ENTWURF der Veröffentlichung an. Signiert wird nicht hier: Der Herausgeber setzt die Signatur lokal
+# mit seinem privaten Schlüssel (rj-update abschliessen) und veröffentlicht den Entwurf erst danach.
+# Der Schlüssel liegt nie bei GitHub.
 name: Release (Versions-Tag)
 
 on:
@@ -12,8 +13,16 @@ permissions:
 
 jobs:
   linux:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - ubuntu: "26.04"
+            name: ubuntu2604
+          - ubuntu: "24.04"
+            name: ubuntu2404
     runs-on: ubuntu-latest
-    container: ubuntu:26.04
+    container: ubuntu:${{ matrix.ubuntu }}
     timeout-minutes: 120
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -25,7 +34,7 @@ jobs:
           apt-get update
           apt-get install -y build-essential pkg-config cmake clang libclang-dev lld \
             qt6-base-dev qt6-base-dev-tools qt6-svg-dev qmake6 freerdp3-dev libwinpr3-dev \
-            libwebkit2gtk-4.1-dev libgtk-3-dev git curl ca-certificates zstd gh
+            libwebkit2gtk-4.1-dev libgtk-3-dev git curl ca-certificates zstd
 
       - name: Quellen holen
         uses: actions/checkout@v5
@@ -47,13 +56,40 @@ jobs:
       - name: Paket
         run: scripts/package-linux.sh "${GITHUB_REF_NAME#v}" dist
 
+      - name: Paket bereitstellen
+        uses: actions/upload-artifact@v5
+        with:
+          name: paket-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  entwurf:
+    needs: linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Quellen holen
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Pakete holen
+        uses: actions/download-artifact@v5
+        with:
+          pattern: paket-*
+          path: pakete
+
       - name: Entwurf der Veröffentlichung anlegen
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          mkdir dist
+          cp pakete/*/remotejoe-* dist/
+          # Eine gemeinsame Prüfsummendatei für alle Pakete (die Signatur setzt der Herausgeber darauf).
+          cat pakete/*/SHA256SUMS | sort -k2 -u > dist/SHA256SUMS
+          ls -l dist
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           NOTES="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
             --title "remotejoe ${GITHUB_REF_NAME#v}" \
-            --notes "${NOTES:-Linux-Paket, gebaut unter Ubuntu 26.04.}"
+            --notes "${NOTES:-Linux-Pakete für Ubuntu 26.04 und 24.04.}"

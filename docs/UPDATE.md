@@ -23,7 +23,9 @@ FreeRDP 3, WebKitGTK), bricht es ab und nennt die `apt`-Pakete. Die bisherige Fa
 Schlüsseldatenbank bleiben). Offline aus einem Ordner mit den drei Dateien einer Veröffentlichung:
 `bash install.sh --aus-ordner <Ordner>`.
 
-Die Pakete werden unter Ubuntu 26.04 gebaut; für 24.04 gibt es keine Prüfung.
+Es gibt zwei Pakete: `…-linux-x86_64.tar.zst` (gebaut unter Ubuntu 26.04, für 26.04 und neuer) und
+`…-linux-x86_64-ubuntu2404.tar.zst` (gebaut unter Ubuntu 24.04 mit Qt 6.4). `install.sh` und das Update
+wählen das passende Paket nach `/etc/os-release`.
 
 ### Updates im Programm
 

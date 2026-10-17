@@ -3,14 +3,14 @@
 #   scripts/package-linux.sh <version> <ausgabeordner>
 # Voraussetzung: cargo build --release, cargo build --release -p remotejoe-worker-web --features webview
 # und cargo build --release -p remotejoe-update-tool (liefert rj-update). Ergebnis im Ausgabeordner:
-#   remotejoe-<version>-linux-x86_64.tar.zst und SHA256SUMS (ohne Signatur; die setzt der Herausgeber
+#   remotejoe-<version>-linux-x86_64[-ubuntu2404].tar.zst und SHA256SUMS (ohne Signatur; die setzt der Herausgeber
 #   lokal, siehe docs/UPDATE.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="${1:?Version fehlt (z. B. 1.2.3)}"
 OUT="${2:?Ausgabeordner fehlt}"
 REL=target/release
-PLATFORM="linux-$(uname -m)"
+
 
 PROGRAMS=(remotejoe rj-worker-ssh rj-worker-rdp rj-worker-vnc rj-worker-psrp rj-worker-web)
 for p in "${PROGRAMS[@]}"; do
@@ -32,6 +32,8 @@ install -m 0644 packaging/linux/remotejoe.desktop "$STAGE/share/remotejoe.deskto
 install -m 0644 LICENSE NOTICE THIRD_PARTY.md "$STAGE/"
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 
+# Plattformkennung aus dem Bauumfeld (Ubuntu 24.04 bekommt „-ubuntu2404“).
+PLATFORM="$("$REL/rj-update" plattform)"
 mkdir -p "$OUT"
 "$REL/rj-update" packen-ohne-signatur "$STAGE" "$VERSION" "$PLATFORM" "$OUT"
 ls -l "$OUT"
