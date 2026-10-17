@@ -14,7 +14,7 @@ set -euo pipefail
 
 REPO="joeMJ/remotejoe"
 # Öffentlicher Update-Schlüssel; muss zu crates/ui/res/update-key.pub passen (prüft die Veröffentlichung).
-UPDATE_KEY='remotejoe-update-ed25519 wIbq6YF+j+x1Ho4RLzE4zDHVC6aTQzlI8+NfeFgC3is='
+UPDATE_KEY='remotejoe-update-ed25519 rX04dvtzNUPhXGPerFMcSxAuy1RFAeenHEup6eNVkaw='
 
 API="${REMOTEJOE_API:-https://api.github.com}"
 PREFIX="${REMOTEJOE_PREFIX:-$HOME/.local/share/remotejoe}"

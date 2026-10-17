@@ -1,4 +1,3 @@
-# Öffentlicher Schlüssel für remotejoe-Updates – PLATZHALTER.
-# Der zugehörige private Schlüssel wurde verworfen; mit ihm signierte Pakete gibt es nicht.
-# Herausgeber ersetzen diese Datei durch die eigene update-key.pub (siehe docs/UPDATE.md).
-remotejoe-update-ed25519 wIbq6YF+j+x1Ho4RLzE4zDHVC6aTQzlI8+NfeFgC3is=
+# Öffentlicher Schlüssel für remotejoe-Updates (Ed25519).
+# Der zugehörige private Schlüssel liegt nur beim Herausgeber.
+remotejoe-update-ed25519 rX04dvtzNUPhXGPerFMcSxAuy1RFAeenHEup6eNVkaw=
