@@ -13,7 +13,7 @@ fn offscreen_screenshots_and_start_time() {
         .unwrap();
     let log = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{log}");
-    for f in ["hauptfenster-hell.png", "hauptfenster-dunkel.png", "suche.png", "hypervisor.png", "dialog-zugangsdaten.png", "patchday.png", "abgerissenes-fenster.png", "eigenschaften.png", "zugangsdaten-auswahl.png", "hinzufuegen-menue.png", "entsperren.png"] {
+    for f in ["hauptfenster-hell.png", "hauptfenster-dunkel.png", "suche.png", "hypervisor.png", "dialog-zugangsdaten.png", "patchday.png", "abgerissenes-fenster.png", "eigenschaften.png", "zugangsdaten-auswahl.png", "hinzufuegen-menue.png", "entsperren.png", "mehrere-ziele.png"] {
         let len = std::fs::metadata(dir.path().join(f)).map(|m| m.len()).unwrap_or(0);
         assert!(len > 5000, "{f} fehlt oder ist leer ({len} Bytes)\n{log}");
     }
@@ -21,6 +21,8 @@ fn offscreen_screenshots_and_start_time() {
     eprintln!("{m}");
     let get = |k: &str| m.lines().find_map(|l| l.strip_prefix(k)).and_then(|v| v.trim().parse::<i64>().ok()).unwrap();
     assert_eq!(get("baum_eintraege="), 525, "500 Ziele, 20 Gruppen, 5 Standorte");
+    let bulk = m.lines().find_map(|l| l.strip_prefix("mehrere_ziele=")).unwrap_or_default();
+    assert!(bulk.starts_with("4 Ziele werden angelegt, 3 Zeilen mit Fehlern"), "{bulk}");
     let ms = get("erstes_zeichnen_ms=");
     assert!(ms > 0 && ms < 3000, "erstes Zeichnen nach {ms} ms");
 }

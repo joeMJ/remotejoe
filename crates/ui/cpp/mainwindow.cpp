@@ -615,6 +615,13 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 			st->deleteLater();
 			return;
 		}
+		if (auto* tt = qobject_cast<ToolTab*>(m_tabs->widget(i)))
+		{
+			tt->wipeSecrets();
+			m_tabs->removeTab(i);
+			tt->deleteLater();
+			return;
+		}
 		if (auto* ed = qobject_cast<PropertiesTab*>(m_tabs->widget(i)))
 		{
 			m_tabs->setCurrentWidget(ed);
@@ -1543,6 +1550,8 @@ void MainWindow::lockNow(bool alreadyLocked)
 		ed->wipeSecrets();
 	for (auto* st : findChildren<SnmpTab*>())
 		st->wipeSecrets();
+	for (auto* tt : findChildren<ToolTab*>())
+		tt->wipeSecrets();
 	reloadTree();
 	statusBar()->showMessage(T(m_backend, "status.locked"));
 	showUnlock(true);
@@ -1701,6 +1710,8 @@ void MainWindow::buildAddMenu(QMenu* menu, const QString& parentId)
 			a->setEnabled(true);
 	}
 	menu->addSeparator();
+	QAction* bulk = menu->addAction(T(m_backend, "add.bulk"), this, [this, parentId] { openBulkAdd(parentId); });
+	bulk->setObjectName(QStringLiteral("add_bulk"));
 	QMenu* tpl = menu->addMenu(T(m_backend, "add.template"));
 	const QJsonArray list = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("templates") } }).toUtf8()).array();
 	if (list.isEmpty())
@@ -1764,6 +1775,19 @@ PropertiesTab* MainWindow::openProperties(const QString& id, const QString& cate
 	if (!category.isEmpty())
 		ed->selectCategory(category);
 	return ed;
+}
+
+BulkAddTab* MainWindow::openBulkAdd(const QString& parentId)
+{
+	auto* t = new BulkAddTab(m_backend, parentId, m_tabs);
+	connect(t, &ToolTab::indexChanged, this, [this] {
+		reloadTree();
+		reloadViews();
+	});
+	connect(t, &ToolTab::status, this, [this](const QString& m) { statusBar()->showMessage(m, 5000); });
+	m_tabs->setCurrentIndex(m_tabs->addTab(t, T(m_backend, "bulk.title")));
+	t->hosts()->setFocus();
+	return t;
 }
 
 PropertiesTab* MainWindow::openFirstTargetProperties()

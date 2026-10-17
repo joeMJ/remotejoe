@@ -1,6 +1,7 @@
 //! Kern von remotejoe: Datenmodell des Index, Vererbung, Zeichensatzprüfung,
 //! Konfiguration und sicheres Schreiben von Dateien.
 
+pub mod bulk;
 pub mod charset;
 pub mod config;
 pub mod edit;

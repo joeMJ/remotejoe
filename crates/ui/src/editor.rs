@@ -310,7 +310,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -318,6 +318,8 @@ impl App {
             "editor" => return id_of(&c, "id").map(|id| self.editor_json(id)).unwrap_or_else(|| err("ID fehlt")),
             "check_text" => return ok(check_text(str_of(&c, "text").unwrap_or_default(), c.get("multiline").and_then(Value::as_bool).unwrap_or(false))),
             "add" => self.op_add(&c),
+            "bulk_preview" => self.op_bulk(&c, false),
+            "bulk_add" => self.op_bulk(&c, true),
             "update" => self.op_update(&c),
             "move" => self.simple("Verschieben", |idx| {
                 let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
@@ -558,6 +560,79 @@ impl App {
                 Err(e.to_string())
             }
         }
+    }
+
+    /// Mehrere Ziele: Vorschau (`apply` = false) oder Anlegen aller gültigen
+    /// Zeilen als eine rückgängig machbare Aktion. Antwort: Zeilen mit
+    /// Hinweisen, bei `apply` zusätzlich `created` und `remaining` (der Text
+    /// der ungültigen Zeilen, der im Eingabefeld stehen bleibt).
+    fn op_bulk(&mut self, c: &Value, apply: bool) -> Result<Value, String> {
+        let parent = id_of(c, "parent").unwrap_or(self.index.root.id);
+        let template = id_of(c, "template").and_then(|t| self.index.templates.iter().find(|x| x.id == t).cloned());
+        let protocol = template.as_ref().map(|t| t.protocol).or_else(|| str_of(c, "kind").and_then(protocol_from)).ok_or("Zieltyp fehlt")?;
+        if edit::folder(&self.index, parent).is_none() {
+            return Err("Ordner nicht gefunden".into());
+        }
+        let pattern = str_of(c, "pattern").unwrap_or(rj_core::bulk::DEFAULT_PATTERN);
+        let port_default = template.as_ref().and_then(|t| t.port).or_else(|| edit::default_template(&self.index, protocol).and_then(|t| t.port));
+        let rows = rj_core::bulk::plan(&self.index, parent, protocol, str_of(c, "text").unwrap_or_default(), pattern, port_default).map_err(|e| e.to_string())?;
+        let rows_json: Vec<Value> = rows
+            .iter()
+            .map(|r| {
+                json!({
+                    "line": r.line, "nr": r.nr,
+                    "name": rj_core::charset::mark_visible(&r.name, false),
+                    "host": rj_core::charset::mark_visible(&r.host, false),
+                    "port": r.effective_port, "valid": r.is_valid(),
+                    "errors": r.errors, "hints": r.hints,
+                })
+            })
+            .collect();
+        let valid = rows.iter().filter(|r| r.is_valid()).count();
+        let mut out = json!({ "rows": rows_json, "valid": valid, "invalid": rows.len() - valid, "limit": rj_core::bulk::MAX_ROWS });
+        if !apply {
+            return Ok(out);
+        }
+        if valid == 0 {
+            return Err("Keine gültige Zeile zum Anlegen".into());
+        }
+        let before = self.index.clone();
+        let ids = match rj_core::bulk::apply(&mut self.index, parent, protocol, &rows, template.as_ref()) {
+            Ok(ids) => ids,
+            Err(e) => {
+                self.index = before;
+                return Err(e.to_string());
+            }
+        };
+        if let Some(cred) = c.get("credential").filter(|v| str_of(v, "mode").is_some_and(|m| m != "inherit")) {
+            // Bei „direkt“ entsteht ein gemeinsamer KDBX-Eintrag, den alle
+            // neuen Ziele verwenden.
+            let res = self.apply_credential(ids[0], cred).and_then(|_| {
+                let mode = credential_mode(&self.index, ids[0]).ok_or("Objekt nicht gefunden")?;
+                for id in &ids[1..] {
+                    let m = match &mode {
+                        CredentialMode::Entry { reference, .. } => {
+                            let name = match edit::node(&self.index, *id) {
+                                Some(Node::Target(t)) => t.credential_name().to_string(),
+                                _ => rj_core::DEFAULT_CREDENTIAL.into(),
+                            };
+                            CredentialMode::Entry { name, reference: reference.clone() }
+                        }
+                        m => m.clone(),
+                    };
+                    rj_core::inherit::set_credential_mode(&mut self.index, *id, m);
+                }
+                Ok(())
+            });
+            if let Err(e) = res {
+                self.index = before;
+                return Err(e);
+            }
+        }
+        self.commit("Mehrere Ziele anlegen", before);
+        out["created"] = json!(ids);
+        out["remaining"] = json!(rj_core::bulk::remaining_text(&rows));
+        Ok(out)
     }
 
     /// Übernimmt die Felder des Eigenschaften-Tabs.
@@ -979,6 +1054,51 @@ mod tests {
         // Kennwort steht nie im Index.
         let json = String::from_utf8(rj_core::schema::to_json(&v2.index().index).unwrap()).unwrap();
         assert!(!json.contains("Kennwo"));
+    }
+
+    #[test]
+    fn bulk_add_roundtrip_and_single_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, path, key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let f = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "Linux" }))["id"].as_str().unwrap().to_string();
+        let text = "# Webserver\nweb1.example.test\nweb2.example.test:2222\n\nkaputt host\nweb3\u{200B}.example.test\n192.0.2.10";
+        let p = cmd(&mut app, json!({ "op": "bulk_preview", "parent": f, "kind": "ssh", "text": text, "pattern": "{nr}-{host}" }));
+        assert_eq!((p["valid"].as_u64(), p["invalid"].as_u64()), (Some(3), Some(2)), "{p}");
+        assert!(p["rows"][3]["host"].as_str().unwrap().contains("⟦U+200B⟧"));
+        // Vorschau ändert nichts.
+        assert_eq!(edit::folder(&app.index, Uuid::parse_str(&f).unwrap()).unwrap().children.len(), 0);
+        let pw = "geheim ";
+        let r = cmd(&mut app, json!({ "op": "bulk_add", "parent": f, "kind": "ssh", "text": text, "pattern": "{nr}-{host}",
+                                      "credential": { "mode": "direct", "username": "root", "password": pw } }));
+        assert_eq!(r["created"].as_array().unwrap().len(), 3, "{r}");
+        assert_eq!(r["remaining"], "kaputt host\nweb3\u{200B}.example.test");
+        assert_eq!(app.history.last_label(), Some("Mehrere Ziele anlegen"));
+        let s = j(app.save_with(None));
+        assert_eq!(s["saved"], true, "{s}");
+        let v2 = Vault::open(&path, key, rj_core::config::IndexStorage::KdbxCustomData).unwrap();
+        assert_eq!(v2.index().index.root, app.index.root);
+        let fid = Uuid::parse_str(&f).unwrap();
+        let names: Vec<_> = edit::folder(&v2.index().index, fid).unwrap().children.iter().map(|n| n.name().to_string()).collect();
+        assert_eq!(names, ["1-web1.example.test", "2-web2.example.test", "5-192.0.2.10"]);
+        let entries: Vec<_> = edit::folder(&v2.index().index, fid)
+            .unwrap()
+            .children
+            .iter()
+            .map(|n| match n {
+                Node::Target(t) => t.settings.credentials["default"].entry,
+                _ => panic!(),
+            })
+            .collect();
+        assert!(entries.iter().all(|e| *e == entries[0]));
+        assert_eq!(v2.credential(entries[0]).unwrap().data.password.as_bytes(), pw.as_bytes());
+        // Eine Aktion rückgängig: alle drei Ziele sind wieder weg.
+        let u = cmd(&mut app, json!({ "op": "undo" }));
+        assert_eq!(u["undone"], "Mehrere Ziele anlegen");
+        assert!(edit::folder(&app.index, fid).unwrap().children.is_empty());
+        // Ohne gültige Zeile wird nichts angelegt.
+        let e = cmd(&mut app, json!({ "op": "bulk_add", "parent": f, "kind": "ssh", "text": "kaputt host" }));
+        assert!(e["error"].is_string(), "{e}");
     }
 
     #[test]

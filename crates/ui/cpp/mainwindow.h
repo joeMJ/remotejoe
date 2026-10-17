@@ -17,6 +17,7 @@ class RjBackend;
 class SessionPane;
 class ActionBar;
 class PropertiesTab;
+class BulkAddTab;
 class UnlockOverlay;
 class QComboBox;
 class QMenu;
@@ -47,6 +48,7 @@ public:
 	/// Für Bildschirmfotos: Eigenschaften des ersten Ziels, Hinzufügen-Menü, Entsperren.
 	PropertiesTab* openFirstTargetProperties();
 	QMenu* popupAddMenu();
+	BulkAddTab* openBulkAdd(const QString& parentId);
 	void showUnlock(bool locked);
 	QTabWidget* tabs() const { return m_tabs; }
 

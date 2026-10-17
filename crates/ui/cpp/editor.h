@@ -21,6 +21,7 @@ class QPushButton;
 class QStackedWidget;
 class QTableWidget;
 class QTreeWidget;
+class QTimer;
 
 /// Text aus der Ressourcendatei.
 QString rjText(RjBackend* b, const char* key);
@@ -190,6 +191,62 @@ private:
 	QLineEdit* m_privPw;
 	QLabel* m_message;
 	QString m_current;
+};
+
+/// Tab für eine Aufgabe im Hauptfenster (Mehrere Ziele, Import-Vorschau,
+/// Patchday). Schließen verwirft eingegebene Geheimnisse.
+class ToolTab : public QWidget
+{
+	Q_OBJECT
+public:
+	using QWidget::QWidget;
+	virtual void wipeSecrets() {}
+
+signals:
+	/// Der Index hat sich geändert (Baum neu laden).
+	void indexChanged();
+	void status(const QString& text);
+};
+
+/// Mehrere Ziele auf einmal anlegen: ein Host pro Zeile, Namensmuster,
+/// Vorlage, Zugangsdaten, Vorschau mit Hinweisen je Zeile.
+class BulkAddTab : public ToolTab
+{
+	Q_OBJECT
+public:
+	BulkAddTab(RjBackend* backend, const QString& parentId, QWidget* parent = nullptr);
+	QString parentId() const { return m_parent; }
+	void wipeSecrets() override;
+	QPlainTextEdit* hosts() const { return m_hosts; }
+	/// Vorschau sofort neu berechnen (sonst verzögert beim Tippen).
+	void refresh();
+
+private:
+	QJsonObject command(const QString& op) const;
+	void fillTemplates();
+	void updateCredentialMode();
+	void create();
+	QString edit(const QJsonObject& cmd) const;
+
+	RjBackend* m_backend;
+	QString m_parent;
+	QComboBox* m_kind;
+	QPlainTextEdit* m_hosts;
+	QLineEdit* m_pattern;
+	QLabel* m_patternError;
+	QComboBox* m_template;
+	QButtonGroup* m_credMode;
+	QWidget* m_directBox;
+	QLineEdit* m_user;
+	QLineEdit* m_password;
+	QWidget* m_entryBox;
+	QComboBox* m_entry;
+	QWidget* m_namedBox;
+	QComboBox* m_named;
+	QTableWidget* m_preview;
+	QLabel* m_summary;
+	QPushButton* m_create;
+	QTimer* m_timer;
 };
 
 /// Abdeckung des Hauptfensters zum Entsperren der KDBX.

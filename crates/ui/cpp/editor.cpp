@@ -4,6 +4,7 @@
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QTimer>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
@@ -1522,4 +1523,322 @@ bool UnlockOverlay::eventFilter(QObject* o, QEvent* e)
 	if (o == parentWidget() && e->type() == QEvent::Resize && isVisible())
 		setGeometry(parentWidget()->rect());
 	return QWidget::eventFilter(o, e);
+}
+
+// ---------------------------------------------------------------- BulkAddTab
+
+BulkAddTab::BulkAddTab(RjBackend* backend, const QString& parentId, QWidget* parent)
+  : ToolTab(parent)
+  , m_backend(backend)
+  , m_parent(parentId)
+{
+	setProperty("editor", true);
+	setObjectName(QStringLiteral("bulkAddTab"));
+	const QJsonObject info = parse(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), parentId } }));
+	if (m_parent.isEmpty())
+		m_parent = info.value(QStringLiteral("id")).toString();
+	const QJsonObject cred = info.value(QStringLiteral("credential")).toObject();
+	auto* outer = new QVBoxLayout(this);
+	QString folderName = info.value(QStringLiteral("name")).toString();
+	if (folderName.isEmpty())
+		folderName = rjText(backend, "bulk.root");
+	auto* head = new QLabel(rjText(backend, "bulk.heading").arg(folderName), this);
+	head->setObjectName(QStringLiteral("heading"));
+	outer->addWidget(head);
+	auto* split = new QSplitter(Qt::Vertical, this);
+	outer->addWidget(split, 1);
+
+	auto* left = new QWidget(split);
+	auto* top = new QHBoxLayout(left);
+	auto* hostsCol = new QVBoxLayout;
+	auto* f = new QFormLayout;
+	top->addLayout(hostsCol, 2);
+	top->addLayout(f, 3);
+	m_kind = new QComboBox(left);
+	m_kind->setObjectName(QStringLiteral("bulkKind"));
+	for (const char* k : { "rdp", "ssh", "vnc", "web", "proxmox", "hyperv", "psrp" })
+		m_kind->addItem(rjText(backend, (QByteArray("add.") + k).constData()).remove(QLatin1Char('&')), QString::fromLatin1(k));
+	auto* kl = new QLabel(rjText(backend, "bulk.kind"), left);
+	kl->setBuddy(m_kind);
+	f->addRow(kl, m_kind);
+	m_hosts = new QPlainTextEdit(left);
+	m_hosts->setObjectName(QStringLiteral("bulkHosts"));
+	m_hosts->setTabChangesFocus(true);
+	m_hosts->setPlaceholderText(rjText(backend, "bulk.hosts.placeholder"));
+	m_hosts->setAccessibleName(rjText(backend, "bulk.hosts").remove(QLatin1Char('&')));
+	auto* hl = new QLabel(rjText(backend, "bulk.hosts"), left);
+	hl->setBuddy(m_hosts);
+	hostsCol->addWidget(hl);
+	hostsCol->addWidget(m_hosts, 1);
+	m_pattern = new QLineEdit(QStringLiteral("{host}"), left);
+	m_pattern->setObjectName(QStringLiteral("bulkPattern"));
+	m_pattern->setToolTip(rjText(backend, "bulk.pattern.tip"));
+	auto* pl = new QLabel(rjText(backend, "bulk.pattern"), left);
+	pl->setBuddy(m_pattern);
+	f->addRow(pl, m_pattern);
+	m_patternError = errorLabel(left);
+	f->addRow(QString(), m_patternError);
+	m_template = new QComboBox(left);
+	m_template->setObjectName(QStringLiteral("bulkTemplate"));
+	auto* tl = new QLabel(rjText(backend, "bulk.template"), left);
+	tl->setBuddy(m_template);
+	f->addRow(tl, m_template);
+
+	auto* credBox = new QWidget(left);
+	auto* cv = new QVBoxLayout(credBox);
+	cv->setContentsMargins(0, 0, 0, 0);
+	m_credMode = new QButtonGroup(credBox);
+	const char* modes[][2] = { { "inherit", "edit.cred.inherit" }, { "none", "edit.cred.none" }, { "direct", "bulk.cred.direct" },
+		                       { "entry", "edit.cred.entry" },     { "named", "edit.cred.named" } };
+	int id = 0;
+	for (auto& m : modes)
+	{
+		auto* r = new QRadioButton(rjText(backend, m[1]), credBox);
+		r->setProperty("mode", QString::fromLatin1(m[0]));
+		r->setObjectName(QStringLiteral("bulk_cred_") + QString::fromLatin1(m[0]));
+		m_credMode->addButton(r, id++);
+		cv->addWidget(r);
+		const QString mode = QString::fromLatin1(m[0]);
+		if (mode == QLatin1String("direct"))
+		{
+			m_directBox = new QWidget(credBox);
+			auto* df = new QFormLayout(m_directBox);
+			df->setContentsMargins(24, 0, 0, 0);
+			m_user = new QLineEdit(m_directBox);
+			m_password = new QLineEdit(m_directBox);
+			m_password->setEchoMode(QLineEdit::Password);
+			auto* ul = new QLabel(rjText(backend, "edit.cred.username"), m_directBox);
+			ul->setBuddy(m_user);
+			auto* pwl = new QLabel(rjText(backend, "edit.cred.password"), m_directBox);
+			pwl->setBuddy(m_password);
+			df->addRow(ul, m_user);
+			df->addRow(pwl, m_password);
+			cv->addWidget(m_directBox);
+		}
+		else if (mode == QLatin1String("entry"))
+		{
+			m_entryBox = new QWidget(credBox);
+			auto* ef = new QFormLayout(m_entryBox);
+			ef->setContentsMargins(24, 0, 0, 0);
+			m_entry = new QComboBox(m_entryBox);
+			for (const QJsonValue& e : cred.value(QStringLiteral("entries")).toArray())
+			{
+				const QJsonObject o = e.toObject();
+				m_entry->addItem(o.value(QStringLiteral("title")).toString(), o.value(QStringLiteral("uuid")).toString());
+			}
+			auto* el = new QLabel(rjText(backend, "edit.cred.entry.label"), m_entryBox);
+			el->setBuddy(m_entry);
+			ef->addRow(el, m_entry);
+			cv->addWidget(m_entryBox);
+		}
+		else if (mode == QLatin1String("named"))
+		{
+			m_namedBox = new QWidget(credBox);
+			auto* nf = new QFormLayout(m_namedBox);
+			nf->setContentsMargins(24, 0, 0, 0);
+			m_named = new QComboBox(m_namedBox);
+			m_named->setEditable(true);
+			for (const QJsonValue& n : cred.value(QStringLiteral("names")).toArray())
+				m_named->addItem(n.toString(), n.toString());
+			auto* nl = new QLabel(rjText(backend, "edit.cred.named.label"), m_namedBox);
+			nl->setBuddy(m_named);
+			nf->addRow(nl, m_named);
+			cv->addWidget(m_namedBox);
+		}
+	}
+	m_credMode->button(0)->setChecked(true);
+	if (!info.value(QStringLiteral("unlocked")).toBool())
+		for (int i : { 2, 3 })
+			m_credMode->button(i)->setEnabled(false);
+	f->addRow(rjText(backend, "edit.cat.credentials"), credBox);
+
+	auto* right = new QWidget(split);
+	auto* rv = new QVBoxLayout(right);
+	auto* prevLabel = new QLabel(rjText(backend, "bulk.preview"), right);
+	m_preview = new QTableWidget(0, 4, right);
+	m_preview->setObjectName(QStringLiteral("bulkPreview"));
+	m_preview->setHorizontalHeaderLabels({ rjText(backend, "bulk.col.name"), rjText(backend, "bulk.col.host"), rjText(backend, "bulk.col.port"),
+	                                       rjText(backend, "bulk.col.hints") });
+	for (int c = 0; c < 3; ++c)
+		m_preview->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
+	m_preview->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+	m_preview->setEditTriggers(QAbstractItemView::NoEditTriggers);
+	m_preview->setSelectionBehavior(QAbstractItemView::SelectRows);
+	m_preview->setWordWrap(true);
+	m_preview->verticalHeader()->setVisible(true);
+	m_preview->setAccessibleName(rjText(backend, "bulk.preview").remove(QLatin1Char('&')));
+	prevLabel->setBuddy(m_preview);
+	m_summary = new QLabel(right);
+	m_summary->setObjectName(QStringLiteral("bulkSummary"));
+	m_summary->setWordWrap(true);
+	auto* buttons = new QHBoxLayout;
+	m_create = new QPushButton(rjText(backend, "bulk.create"), right);
+	m_create->setObjectName(QStringLiteral("bulkCreate"));
+	m_create->setDefault(true);
+	buttons->addStretch(1);
+	buttons->addWidget(m_create);
+	rv->addWidget(prevLabel);
+	rv->addWidget(m_preview, 1);
+	rv->addWidget(m_summary);
+	rv->addLayout(buttons);
+	split->setStretchFactor(0, 2);
+	split->setStretchFactor(1, 3);
+
+	m_timer = new QTimer(this);
+	m_timer->setSingleShot(true);
+	m_timer->setInterval(250);
+	connect(m_timer, &QTimer::timeout, this, &BulkAddTab::refresh);
+	auto later = [this] { m_timer->start(); };
+	connect(m_hosts, &QPlainTextEdit::textChanged, this, later);
+	connect(m_pattern, &QLineEdit::textChanged, this, later);
+	connect(m_kind, &QComboBox::currentIndexChanged, this, [this] {
+		fillTemplates();
+		refresh();
+	});
+	connect(m_template, &QComboBox::currentIndexChanged, this, later);
+	connect(m_credMode, &QButtonGroup::idToggled, this, [this](int, bool on) {
+		if (on)
+			updateCredentialMode();
+	});
+	connect(m_create, &QPushButton::clicked, this, &BulkAddTab::create);
+	auto* sc = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return), this);
+	connect(sc, &QShortcut::activated, this, &BulkAddTab::create);
+	fillTemplates();
+	updateCredentialMode();
+	refresh();
+}
+
+QString BulkAddTab::edit(const QJsonObject& cmd) const
+{
+	return m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact)));
+}
+
+void BulkAddTab::fillTemplates()
+{
+	const QString kind = m_kind->currentData().toString();
+	const QSignalBlocker block(m_template);
+	m_template->clear();
+	m_template->addItem(rjText(m_backend, "bulk.template.default"), QString());
+	for (const QJsonValue& v : QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("templates") } }).toUtf8()).array())
+	{
+		const QJsonObject o = v.toObject();
+		if (o.value(QStringLiteral("protocol")).toString() == kind)
+			m_template->addItem(o.value(QStringLiteral("name")).toString() + (o.value(QStringLiteral("is_default")).toBool() ? QStringLiteral(" ★") : QString()),
+			                    o.value(QStringLiteral("id")).toString());
+	}
+}
+
+void BulkAddTab::updateCredentialMode()
+{
+	const QString mode = m_credMode->checkedButton() ? m_credMode->checkedButton()->property("mode").toString() : QString();
+	m_directBox->setVisible(mode == QLatin1String("direct"));
+	m_entryBox->setVisible(mode == QLatin1String("entry"));
+	m_namedBox->setVisible(mode == QLatin1String("named"));
+}
+
+QJsonObject BulkAddTab::command(const QString& op) const
+{
+	QJsonObject c{ { QStringLiteral("op"), op },
+		           { QStringLiteral("parent"), m_parent },
+		           { QStringLiteral("kind"), m_kind->currentData().toString() },
+		           { QStringLiteral("text"), m_hosts->toPlainText() },
+		           { QStringLiteral("pattern"), m_pattern->text() } };
+	if (!m_template->currentData().toString().isEmpty())
+		c.insert(QStringLiteral("template"), m_template->currentData().toString());
+	return c;
+}
+
+void BulkAddTab::refresh()
+{
+	m_timer->stop();
+	const QJsonObject r = parse(edit(command(QStringLiteral("bulk_preview"))));
+	m_preview->setRowCount(0);
+	if (r.contains(QStringLiteral("error")))
+	{
+		setWarn(m_patternError, r.value(QStringLiteral("error")).toString());
+		m_summary->clear();
+		m_create->setEnabled(false);
+		return;
+	}
+	setWarn(m_patternError, QString());
+	const QJsonArray rows = r.value(QStringLiteral("rows")).toArray();
+	m_preview->setRowCount(rows.size());
+	QStringList lines;
+	for (int i = 0; i < rows.size(); ++i)
+	{
+		const QJsonObject o = rows[i].toObject();
+		const bool valid = o.value(QStringLiteral("valid")).toBool();
+		QStringList notes;
+		for (const QJsonValue& e : o.value(QStringLiteral("errors")).toArray())
+			notes << QStringLiteral("✗ ") + e.toString();
+		for (const QJsonValue& h : o.value(QStringLiteral("hints")).toArray())
+			notes << QStringLiteral("ℹ ") + h.toString();
+		if (notes.isEmpty())
+			notes << rjText(m_backend, "bulk.row.ok");
+		const QString cells[] = { o.value(QStringLiteral("name")).toString(), o.value(QStringLiteral("host")).toString(),
+			                      QString::number(o.value(QStringLiteral("port")).toInt()), notes.join(QLatin1Char('\n')) };
+		for (int c = 0; c < 4; ++c)
+		{
+			auto* it = new QTableWidgetItem(cells[c]);
+			if (!valid)
+			{
+				QFont fnt = it->font();
+				fnt.setBold(c == 3);
+				it->setFont(fnt);
+			}
+			m_preview->setItem(i, c, it);
+		}
+		m_preview->setVerticalHeaderItem(i, new QTableWidgetItem(QString::number(o.value(QStringLiteral("line")).toInt())));
+	}
+	m_preview->resizeRowsToContents();
+	const int valid = r.value(QStringLiteral("valid")).toInt();
+	const int invalid = r.value(QStringLiteral("invalid")).toInt();
+	m_summary->setText(rjText(m_backend, "bulk.summary").arg(valid).arg(invalid).arg(r.value(QStringLiteral("limit")).toInt()));
+	m_create->setEnabled(valid > 0);
+}
+
+void BulkAddTab::create()
+{
+	refresh();
+	if (!m_create->isEnabled())
+		return;
+	QJsonObject c = command(QStringLiteral("bulk_add"));
+	const QString mode = m_credMode->checkedButton()->property("mode").toString();
+	QJsonObject cred{ { QStringLiteral("mode"), mode } };
+	if (mode == QLatin1String("direct"))
+	{
+		cred.insert(QStringLiteral("username"), m_user->text());
+		// Kennwort byte-genau weitergeben; das Feld wird danach geleert.
+		cred.insert(QStringLiteral("password"), m_password->text());
+	}
+	else if (mode == QLatin1String("entry"))
+		cred.insert(QStringLiteral("entry"), m_entry->currentData().toString());
+	else if (mode == QLatin1String("named"))
+		cred.insert(QStringLiteral("name"), m_named->currentText());
+	c.insert(QStringLiteral("credential"), cred);
+	QString raw = QString::fromUtf8(QJsonDocument(c).toJson(QJsonDocument::Compact));
+	const QJsonObject r = parse(m_backend->edit(raw));
+	raw.fill(QLatin1Char(' '));
+	if (r.contains(QStringLiteral("error")))
+	{
+		m_summary->setText(rjText(m_backend, "bulk.failed").arg(r.value(QStringLiteral("error")).toString()));
+		return;
+	}
+	wipeSecrets();
+	const int created = r.value(QStringLiteral("created")).toArray().size();
+	// Ungültige Zeilen bleiben stehen, die Vorschau zeigt ihre Fehler.
+	m_hosts->setPlainText(r.value(QStringLiteral("remaining")).toString());
+	refresh();
+	const QJsonObject saved = parse(edit({ { QStringLiteral("op"), QStringLiteral("save") } }));
+	const QString msg = rjText(m_backend, "bulk.done").arg(created);
+	m_summary->setText(saved.value(QStringLiteral("saved")).toBool() ? msg : msg + QStringLiteral(" ") + rjText(m_backend, "bulk.not_saved"));
+	emit indexChanged();
+	emit status(msg);
+}
+
+void BulkAddTab::wipeSecrets()
+{
+	QString t = m_password->text();
+	t.fill(QLatin1Char(' '));
+	m_password->clear();
 }

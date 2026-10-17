@@ -11,7 +11,10 @@
 #include <QtCore/QTimer>
 #include <QtCore/QTranslator>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QLabel>
 #include <QtWidgets/QMenu>
+#include <QtWidgets/QPlainTextEdit>
+#include <QtWidgets/QTabWidget>
 #include <cstdio>
 
 namespace {
@@ -83,6 +86,19 @@ void screenshots(MainWindow& w, const QString& dir)
 		save(m, dir, QStringLiteral("hinzufuegen-menue.png"));
 		m->close();
 	}
+	QString extra;
+	if (BulkAddTab* b = w.openBulkAdd(QString()))
+	{
+		b->hosts()->setPlainText(QStringLiteral("# Webserver Nord\nweb01.example.test\nweb02.example.test:2222\n\nweb 03\nweb04\u200B.example.test\n192.0.2.40\n"
+		                                        "[2001:db8::5]:2200\nweb01.example.test"));
+		b->refresh();
+		pump(300);
+		save(b, dir, QStringLiteral("mehrere-ziele.png"));
+		if (auto* s = b->findChild<QLabel*>(QStringLiteral("bulkSummary")))
+			extra += QStringLiteral("mehrere_ziele=") + s->text() + QLatin1Char('\n');
+		w.tabs()->removeTab(w.tabs()->indexOf(b));
+		b->deleteLater();
+	}
 	w.showUnlock(false);
 	pump(300);
 	save(&w, dir, QStringLiteral("entsperren.png"));
@@ -94,7 +110,7 @@ void screenshots(MainWindow& w, const QString& dir)
 	save(w.detachedWindow(), dir, QStringLiteral("abgerissenes-fenster.png"));
 	QFile f(QDir(dir).filePath(QStringLiteral("messwerte.txt")));
 	if (f.open(QIODevice::WriteOnly))
-		f.write((QStringLiteral("erstes_zeichnen_ms=%1\nbaum_eintraege=%2\n").arg(w.firstPaintMs).arg(w.treeRowCount()) + patchday).toUtf8());
+		f.write((QStringLiteral("erstes_zeichnen_ms=%1\nbaum_eintraege=%2\n").arg(w.firstPaintMs).arg(w.treeRowCount()) + patchday + extra).toUtf8());
 	std::fprintf(stderr, "Erstes Zeichnen nach %lld ms, Baumeinträge: %d\n", (long long)w.firstPaintMs, w.treeRowCount());
 }
 
