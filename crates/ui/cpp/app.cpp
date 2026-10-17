@@ -175,6 +175,15 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.tabs()->removeTab(w.tabs()->indexOf(b));
 		b->deleteLater();
 	}
+	// Lange Tab-Titel werden gekürzt; die Symbole zeigen das Protokoll.
+	if (w.tabs()->count() > 1)
+	{
+		const QString original = w.tabs()->tabText(1);
+		w.tabs()->setTabText(1, QStringLiteral("Webseite mit sehr langem Namen – Verwaltung Server 02 im Rechenzentrum Nord"));
+		pump(200);
+		save(w.tabs(), dir, QStringLiteral("tabs-gekuerzt.png"));
+		w.tabs()->setTabText(1, original);
+	}
 	w.showUnlock(false);
 	pump(300);
 	save(&w, dir, QStringLiteral("entsperren.png"));

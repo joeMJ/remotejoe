@@ -34,6 +34,8 @@
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QStyleFactory>
 #include <QtWidgets/QTabBar>
+#include <QtGui/QHelpEvent>
+#include <QtWidgets/QToolTip>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
@@ -115,31 +117,47 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder)
 	struct P
 	{
 		const char* name;
-		const char* label;
+		const char* glyph; // weißes Piktogramm im Koordinatenraum 32 × 32
 		const char* color;
 	};
-	static const P table[] = { { "rdp", "R", "#0b5cad" },     { "ssh", "S", "#1b6e20" },   { "vnc", "V", "#7a3e9d" },
-		                       { "web", "W", "#8a5300" },     { "psrp", "P", "#005f73" },  { "proxmox", "X", "#b03a00" },
-		                       { "hyperv", "H", "#3a4a8c" },  { "macro", "M", "#6a1b9a" } };
+	// Gemeinsame Strichart der Piktogramme.
+	#define RJ_G(body) "<g fill='none' stroke='#ffffff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'>" body "</g>"
+	static const P table[] = {
+		// RDP: Bildschirm mit Fuß
+		{ "rdp", RJ_G("<rect x='6' y='7' width='20' height='13' rx='1.5'/><path d='M12 25h8M16 20v5'/>"), "#0b5cad" },
+		// SSH: Eingabeaufforderung „>_“
+		{ "ssh", RJ_G("<path d='M8 10l7 6-7 6'/><path d='M17 23h8'/>"), "#1b6e20" },
+		// VNC: Bildschirm mit Mauszeiger
+		{ "vnc", RJ_G("<rect x='5' y='7' width='19' height='13' rx='1.5'/><path d='M11 25h7'/><path d='M19 14l7 4-3 1 2 4-2 1-2-4-2 2z' fill='#ffffff'/>"), "#7a3e9d" },
+		// Web: Weltkugel
+		{ "web", RJ_G("<circle cx='16' cy='16' r='10'/><ellipse cx='16' cy='16' rx='4.5' ry='10'/><path d='M6 16h20M7.5 10.5h17M7.5 21.5h17'/>"), "#8a5300" },
+		// PowerShell: Fenster mit Pfeilspitze und Strich
+		{ "psrp", RJ_G("<path d='M5 24L8 8h19l-3 16z'/><path d='M12 13l5 4-6 4'/><path d='M17 22h5'/>"), "#005f73" },
+		// Proxmox: Würfel
+		{ "proxmox", RJ_G("<path d='M16 5l9 5v11l-9 6-9-6V10z'/><path d='M7 10l9 5 9-5M16 15v12'/>"), "#b03a00" },
+		// Hyper-V: zwei Server übereinander
+		{ "hyperv", RJ_G("<rect x='6' y='6' width='20' height='8' rx='1.5'/><rect x='6' y='18' width='20' height='8' rx='1.5'/><path d='M10 10h.1M10 22h.1M15 10h8M15 22h8'/>"), "#3a4a8c" },
+		// Makro: Abspielzeichen
+		{ "macro", RJ_G("<path d='M11 8l14 8-14 8z' fill='#ffffff'/>"), "#6a1b9a" },
+	};
 	QString svg;
 	if (folder)
 		svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
 		                     "<path d='M2 8h11l3 3h14v17H2z' fill='#c9a227' stroke='#6b5410' stroke-width='1.5'/></svg>");
 	else
 	{
-		QString label = QStringLiteral("?"), color = QStringLiteral("#555555");
+		QString glyph = QStringLiteral(RJ_G("<path d='M12 12a4 4 0 1 1 6 3.5c-1.5 1-2 1.5-2 3'/><path d='M16 23h.1'/>")), color = QStringLiteral("#555555");
 		for (const P& p : table)
 			if (protocol == QLatin1String(p.name))
 			{
-				label = QLatin1String(p.label);
+				glyph = QLatin1String(p.glyph);
 				color = QLatin1String(p.color);
 			}
 		svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
-		                     "<rect x='1' y='3' width='30' height='26' rx='5' fill='%1'/>"
-		                     "<text x='16' y='23' font-size='18' font-family='sans-serif' font-weight='bold' "
-		                     "text-anchor='middle' fill='#ffffff'>%2</text></svg>")
-		        .arg(color, label);
+		                     "<rect x='1' y='3' width='30' height='26' rx='5' fill='%1'/>%2</svg>")
+		        .arg(color, glyph);
 	}
+	#undef RJ_G
 	QPixmap pm(32, 32);
 	pm.fill(Qt::transparent);
 	{
@@ -383,6 +401,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_tabs->setMovable(true);
 	m_tabs->setDocumentMode(true);
 	m_tabs->tabBar()->setContextMenuPolicy(Qt::CustomContextMenu);
+	configureTabBar(m_tabs);
 
 	auto* split = new QSplitter(Qt::Horizontal, this);
 	split->addWidget(left);
@@ -781,9 +800,9 @@ void MainWindow::applyTheme(bool dark)
 	  // Tabs: der aktive Tab hat Akzentbalken, kräftige Schrift und den Hintergrund der Fläche darunter;
 	  // inaktive Tabs sind abgesetzt (Schaltflächenfarbe, Nebentext) und durch Linien klar getrennt.
 	  "QTabWidget::pane { border: 1px solid %3; border-top: 2px solid %2; top: -1px; }"
-	  "QTabBar::tab { min-height: 30px; padding: 4px 14px; margin-right: 2px; background: %4; color: %5; border: 1px solid %3; border-bottom: none; "
+	  "QTabBar::tab { min-height: 30px; min-width: 70px; max-width: 230px; padding: 4px 16px 4px 12px; margin-right: 2px; background: %4; color: %5; border: 1px solid %3; border-bottom: none; "
 	  "border-top-left-radius: 4px; border-top-right-radius: 4px; }"
-	  "QTabBar::tab:selected { background: %6; color: %7; font-weight: bold; border-top: 3px solid %2; padding-top: 3px; }"
+	  "QTabBar::tab:selected { background: %6; color: %7; border-top: 3px solid %2; padding-top: 3px; }"
 	  "QTabBar::tab:!selected { margin-top: 3px; }"
 	  "QTabBar::tab:!selected:hover { background: %8; color: %7; }"
 	  "QLabel#paneHeader { font-weight: bold; padding: 4px; }"
@@ -1573,6 +1592,15 @@ void MainWindow::rebuildTabs()
 			for (SessionPane* p : std::as_const(m_panes))
 				if (p && content->isAncestorOf(p))
 					applyPageTitle(p);
+			// Symbol des Protokolls der ersten Sitzung im Tab.
+			for (SessionPane* p : std::as_const(m_panes))
+				if (p && content->isAncestorOf(p))
+				{
+					const QString proto = parseObject(m_backend->sessionInfo(p->session())).value(QStringLiteral("protocol")).toString();
+					if (!proto.isEmpty())
+						target->setTabIcon(i, protocolIcon(proto, QString(), false));
+					break;
+				}
 		}
 		target->setCurrentIndex(activeIndex);
 		for (const auto& e : editors)
@@ -1606,6 +1634,7 @@ void MainWindow::rebuildTabs()
 			tw = new QTabWidget(win);
 			tw->setDocumentMode(true);
 			tw->tabBar()->setContextMenuPolicy(Qt::CustomContextMenu);
+			configureTabBar(tw);
 			connect(tw->tabBar(), &QTabBar::customContextMenuRequested, this, [this, tw](const QPoint& p) { tabContextMenu(tw, p); });
 			lay->addWidget(tw);
 			m_windows.insert(wid, win);
@@ -1914,8 +1943,30 @@ void MainWindow::updateJobs()
 	m_jobsLabel->setText(text);
 }
 
+// Lange Tab-Titel in der Mitte kürzen (Breite begrenzt das Stilblatt); der volle Titel erscheint als Hinweis.
+void MainWindow::configureTabBar(QTabWidget* tabs)
+{
+	QTabBar* bar = tabs->tabBar();
+	bar->setElideMode(Qt::ElideMiddle);
+	bar->setUsesScrollButtons(true);
+	bar->installEventFilter(this);
+}
+
 bool MainWindow::eventFilter(QObject* o, QEvent* e)
 {
+	if (e->type() == QEvent::ToolTip)
+		if (auto* bar = qobject_cast<QTabBar*>(o))
+		{
+			const int i = bar->tabAt(static_cast<QHelpEvent*>(e)->pos());
+			if (i >= 0)
+			{
+				QString full = bar->tabToolTip(i);
+				if (full.isEmpty())
+					full = bar->tabText(i);
+				QToolTip::showText(static_cast<QHelpEvent*>(e)->globalPos(), full.remove(QLatin1Char('&')), bar);
+				return true;
+			}
+		}
 	if (m_tree && o == m_tree->viewport() && e->type() == QEvent::Resize)
 		updateEmptyHint();
 	switch (e->type())

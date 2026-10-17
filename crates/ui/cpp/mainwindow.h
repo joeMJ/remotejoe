@@ -114,6 +114,7 @@ private:
 	void addToolTab(ToolTab* t, const QString& title);
 	void closeToolTab(ToolTab* t);
 	void tabContextMenu(QTabWidget* tabs, const QPoint& pos);
+	void configureTabBar(QTabWidget* tabs);
 	void buildAddMenu(QMenu* menu, const QString& parentId);
 	QString edit(const QJsonObject& cmd);
 	QString currentId() const;
