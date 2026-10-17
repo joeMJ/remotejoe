@@ -245,9 +245,6 @@ PropertiesTab::PropertiesTab(RjBackend* backend, const QString& id, QWidget* par
 {
 	setProperty("editor", true);
 	setObjectName(QStringLiteral("propertiesTab"));
-	auto* sc = new QShortcut(QKeySequence(QStringLiteral("Ctrl+S")), this);
-	sc->setContext(Qt::WidgetWithChildrenShortcut);
-	connect(sc, &QShortcut::activated, this, &PropertiesTab::save);
 	reload();
 }
 

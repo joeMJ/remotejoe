@@ -73,6 +73,8 @@ public:
 	ActionBar* bar() const { return m_bar; }
 	/// Beim Sperren: eingegebene Kennwörter verwerfen.
 	void wipeSecrets();
+	/// Änderungen speichern (Strg+S, wenn der Tab vorn liegt).
+	void saveNow() { save(); }
 
 signals:
 	/// Der Index hat sich geändert (Baum neu laden).

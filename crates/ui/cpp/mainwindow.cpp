@@ -695,7 +695,13 @@ void MainWindow::buildMenus()
 			reloadTree();
 		}
 	});
-	file->addAction(T(m_backend, "menu.file.save"), QKeySequence::Save, this, [this] { saveAll(); });
+	file->addAction(T(m_backend, "menu.file.save"), QKeySequence::Save, this, [this] {
+		// Liegt ein geänderter Eigenschaften-Tab vorn, speichert er seine Felder mit.
+		if (auto* ed = qobject_cast<PropertiesTab*>(m_tabs->currentWidget()); ed && ed->isDirty())
+			ed->saveNow();
+		else
+			saveAll();
+	});
 	file->addAction(T(m_backend, "menu.file.lock"), QKeySequence(QStringLiteral("Ctrl+L")), this, [this] { lockNow(false); });
 	file->addSeparator();
 	file->addAction(T(m_backend, "menu.file.quit"), QKeySequence::Quit, this, &QWidget::close);
