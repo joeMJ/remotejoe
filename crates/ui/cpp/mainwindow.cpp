@@ -34,6 +34,8 @@
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QMenu>
+#include <QtWidgets/QScrollBar>
+#include <functional>
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QMenuBar>
 #include <QtWidgets/QSplitter>
@@ -909,19 +911,74 @@ void MainWindow::applyTheme(bool dark)
 
 void MainWindow::reloadTree()
 {
+	// Aufgeklappte Ordner, Auswahl und Bildlauf merken, damit eine Änderung den Baum nicht zuklappt.
+	// Während einer Suche klappt alles auf; dann bleibt der zuletzt bekannte Zustand ohne Suche erhalten.
+	const bool searching = !m_search->text().isEmpty();
+	if (!searching && m_treeLoaded)
+	{
+		m_expandedIds.clear();
+		std::function<void(const QModelIndex&)> collect = [&](const QModelIndex& parent) {
+			for (int r = 0; r < m_model->rowCount(parent); ++r)
+			{
+				const QModelIndex i = m_model->index(r, 0, parent);
+				if (m_tree->isExpanded(i))
+				{
+					const QString id = i.data(RoleId).toString();
+					if (!id.isEmpty())
+						m_expandedIds.insert(id);
+				}
+				collect(i);
+			}
+		};
+		collect(QModelIndex());
+	}
+	const QString current = m_tree->currentIndex().isValid() ? m_tree->currentIndex().data(RoleId).toString() : QString();
+	const int scroll = m_tree->verticalScrollBar()->value();
+
 	const QString json = m_backend->treeJson(m_search->text());
 	m_model->clear();
 	addNodes(m_model->invisibleRootItem(), QJsonDocument::fromJson(json.toUtf8()).array());
-	if (!m_search->text().isEmpty())
+	if (searching)
 		m_tree->expandAll();
+	else if (m_treeLoaded)
+	{
+		std::function<void(const QModelIndex&)> restore = [&](const QModelIndex& parent) {
+			for (int r = 0; r < m_model->rowCount(parent); ++r)
+			{
+				const QModelIndex i = m_model->index(r, 0, parent);
+				if (m_expandedIds.contains(i.data(RoleId).toString()))
+					m_tree->expand(i);
+				restore(i);
+			}
+		};
+		restore(QModelIndex());
+	}
 	else
 	{
 		m_tree->expandToDepth(0);
-		// Ersten Ordner mit Zielen aufklappen.
+		// Erster Start: den ersten Ordner mit Zielen aufklappen.
 		if (m_model->rowCount() > 0)
 			m_tree->expand(m_model->index(0, 0, m_model->index(0, 0)));
 	}
+	m_treeLoaded = true;
 	addMacroShelf();
+	if (!current.isEmpty())
+	{
+		std::function<QModelIndex(const QModelIndex&)> find = [&](const QModelIndex& parent) -> QModelIndex {
+			for (int r = 0; r < m_model->rowCount(parent); ++r)
+			{
+				const QModelIndex i = m_model->index(r, 0, parent);
+				if (i.data(RoleId).toString() == current)
+					return i;
+				if (const QModelIndex f = find(i); f.isValid())
+					return f;
+			}
+			return QModelIndex();
+		};
+		if (const QModelIndex i = find(QModelIndex()); i.isValid())
+			m_tree->setCurrentIndex(i);
+	}
+	m_tree->verticalScrollBar()->setValue(scroll);
 	updateEmptyHint();
 }
 

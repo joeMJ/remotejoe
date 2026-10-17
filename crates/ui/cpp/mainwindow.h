@@ -1,6 +1,7 @@
 #pragma once
 // Hauptfenster: Baum links, Tabs rechts (mit Kacheln), Statuszeile.
 
+#include <QtCore/QSet>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QHash>
 #include <QtCore/QJsonObject>
@@ -171,6 +172,8 @@ private:
 	RjBackend* m_backend;
 	QLineEdit* m_search;
 	bool m_edgeOverride = false;
+	bool m_treeLoaded = false;
+	QSet<QString> m_expandedIds;
 	QTimer* m_clipTimer = nullptr;
 	QByteArray m_clipHash;
 	QTreeView* m_tree;

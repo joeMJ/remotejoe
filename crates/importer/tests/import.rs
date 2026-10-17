@@ -198,3 +198,28 @@ Website,D,,,,ftp://host-d.example.test/\n";
     assert_eq!(got[3].1, "ftp://host-d.example.test/", "ungültig: Host bleibt, Hinweis im Bericht");
     assert!(p.report.warnings.iter().any(|w| w.contains("keine gültige Web-Adresse")), "{:?}", p.report.warnings);
 }
+
+/// Auch bei RDM-Dateien (XML): Web-Ziele bekommen Adresse in den Optionen und Host ohne „://“.
+#[test]
+fn rdm_xml_web_target_is_split_into_host_and_url() {
+    let doc = read_file(&data("beispiel.rdm")).unwrap();
+    let p = plan(&doc, "Import RDM");
+    let mut web = Vec::new();
+    fn walk(f: &rj_core::Folder, out: &mut Vec<(String, Option<u16>, Option<String>)>) {
+        for c in &f.children {
+            match c {
+                Node::Target(t) if t.protocol == Protocol::Web => {
+                    let url = match &t.options {
+                        rj_core::model::ProtocolOptions::Web(o) => o.url.clone(),
+                        _ => None,
+                    };
+                    out.push((t.host.clone(), t.port, url));
+                }
+                Node::Folder(x) => walk(x, out),
+                _ => {}
+            }
+        }
+    }
+    walk(&p.folder, &mut web);
+    assert_eq!(web, [("fw.example.test".to_string(), None, Some("https://fw.example.test".to_string()))]);
+}
