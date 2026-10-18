@@ -35,8 +35,18 @@ public:
 	void damage(int x, int y, int w, int h);
 	/// Blauen Rahmen beim Tastaturfokus zeigen (Einstellung unter Extras → Darstellung).
 	static void setFocusFrame(bool on) { s_focusFrame = on; }
-	/// Web-Sitzung: Fokuswechsel an den Worker melden.
-	void setWeb(bool web) { m_web = web; }
+	/// Web-Sitzung: Fokuswechsel an den Worker melden. Unter Windows läuft die Seite als Kindfenster dieses
+	/// Widgets (WebView2 im Worker-Prozess): das Widget bekommt dafür ein eigenes natives Fenster.
+	void setWeb(bool web);
+	/// Windows: Elternfenster, Bereich, Sichtbarkeit und Kurzbefehle erneut an den Worker senden
+	/// (nach dem Start oder Neustart des Workers; Nachrichten vor dem Start gehen verloren).
+	void resyncWeb();
+	/// Windows: Die Seite hat den Systemfokus bekommen (`on`) oder gibt ihn mit Tab ab (`forward`: weiter, sonst zurück).
+	void webFocus(bool on, bool forward);
+	/// Windows: Anwendungstaste aus der Seite (löst den Kurzbefehl des Hauptfensters aus).
+	static void triggerShortcut(QWidget* window, int vk, bool ctrl, bool alt, bool shift);
+	/// Windows: Das Widget ist ein eingebettetes Web-Fenster.
+	bool isEmbedded() const { return m_embedded; }
 	inline static bool s_focusFrame = true;
 	/// Tastenkürzel des Desktops (Windows-Taste, Alt+Tab …) bei Fokus an RDP/VNC geben (Extras-Menü).
 	inline static bool s_keyCapture = true;
@@ -57,6 +67,8 @@ protected:
 	void focusInEvent(QFocusEvent*) override;
 	void focusOutEvent(QFocusEvent*) override;
 	bool focusNextPrevChild(bool) override { return false; }
+	void showEvent(QShowEvent*) override;
+	void hideEvent(QHideEvent*) override;
 	bool event(QEvent*) override;
 
 private:
@@ -67,7 +79,10 @@ private:
 	void captureKeys();
 	/// Alle noch gedrückten Tasten als losgelassen melden.
 	void releasePressed();
+	void webCommand(const QString& cmd);
+	void sendBounds();
 	bool m_web = false;
+	bool m_embedded = false;
 	QSet<std::uint32_t> m_pressed;
 	/// Rechte Strg-Taste gedrückt und noch keine andere Taste dazu (Notausgang).
 	bool m_rightCtrlAlone = false;

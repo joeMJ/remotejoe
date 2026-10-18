@@ -8,8 +8,11 @@ use rj_testkit::gitea::GiteaMock;
 use rj_ui::app::App;
 use rj_ui::sessions::UiEvent;
 use rj_update::release::{Source, SourceKind};
+use rj_update::install;
+#[cfg(not(windows))]
 use rj_update::sign::{self, SIG, SUMS};
-use rj_update::{archive, asset_name, install};
+#[cfg(not(windows))]
+use rj_update::{archive, asset_name};
 use serde_json::{json, Value};
 
 fn wait_result(app: &mut App, kind: &str) -> Value {
@@ -31,6 +34,37 @@ fn edit(app: &mut App, v: Value) -> Value {
     serde_json::from_str(&app.edit(&v.to_string())).unwrap()
 }
 
+/// Windows: Die Prüfung nennt die neue Version ohne Windows-Paket in der Veröffentlichung,
+/// „Installieren“ liefert nur die Release-Seite; nichts wird ersetzt.
+#[cfg(windows)]
+#[test]
+fn windows_shows_version_and_release_page() {
+    let mock = GiteaMock::start("team/remotejoe");
+    mock.set_release("v9.0.0", "Änderungen\n- MSI", &[]);
+    let mut app = App::new(false);
+    app.config_path = None;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(install::main_program()), b"alt").unwrap();
+    app.update.dir_override = Some(dir.path().to_path_buf());
+    assert_eq!(rj_ui::update::github_source().releases_page().unwrap(), "https://github.com/joeMJ/remotejoe/releases/latest");
+    app.update.source_override = Some(Source { kind: SourceKind::Gitea, base_url: mock.base.clone(), repo: "team/remotejoe".into() });
+    let page = format!("{}/team/remotejoe/releases/latest", mock.base);
+
+    assert_eq!(app.update_status()["page_only"], true);
+    edit(&mut app, json!({"op": "update_check"}));
+    let r = wait_result(&mut app, "update_check");
+    assert_eq!(r["state"], "newer", "{r}");
+    assert_eq!(r["found"]["version"], "9.0.0");
+    assert_eq!(r["found"]["notes"], "Änderungen\n- MSI");
+    assert_eq!(r["page"], page);
+    assert_eq!(app.update_status()["found"]["version"], "9.0.0");
+
+    let r = edit(&mut app, json!({"op": "update_install", "confirm": true}));
+    assert_eq!(r, json!({"state": "page", "url": page}));
+    assert_eq!(std::fs::read(dir.path().join(install::main_program())).unwrap(), b"alt");
+}
+
+#[cfg(not(windows))]
 #[test]
 fn check_and_install_from_the_fixed_source() {
     let dir = tempfile::tempdir().unwrap();

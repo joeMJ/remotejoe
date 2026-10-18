@@ -60,6 +60,23 @@ impl Source {
         Ok(url)
     }
 
+    /// Webseite der neuesten Veröffentlichung (zum Öffnen im Browser), z. B.
+    /// `https://github.com/joeMJ/remotejoe/releases/latest`.
+    pub fn releases_page(&self) -> Result<String> {
+        if !valid_repo(&self.repo) {
+            return Err(UpdateError::Url(format!("Repository „{}“ (erwartet besitzer/name)", self.repo)));
+        }
+        let web = match self.kind {
+            SourceKind::None => return Err(UpdateError::NoSource),
+            SourceKind::Github if self.base_url.trim().is_empty() => "https://github.com".to_string(),
+            _ if self.base().is_empty() => return Err(UpdateError::NoSource),
+            _ => self.base(),
+        };
+        let url = format!("{web}/{}/releases/latest", self.repo);
+        http::Url::parse(&url)?;
+        Ok(url)
+    }
+
     /// Kopfzeilen für die Programmierschnittstelle; der Schlüssel wird nie ausgegeben.
     pub fn headers(&self, token: Option<&str>, binary: bool) -> Vec<(String, String)> {
         let mut h = Vec::new();
@@ -152,12 +169,17 @@ pub enum Check {
     UpToDate(Version),
 }
 
+/// Fragt die neueste Veröffentlichung ab (ohne Auswahl der Dateien).
+pub fn latest(source: &Source, token: Option<&str>, cancel: Option<&AtomicBool>) -> Result<Release> {
+    let ctl = Control::new(Limits { max_bytes: 4 * 1024 * 1024, timeout: std::time::Duration::from_secs(30) }, cancel);
+    let body = http::get(&source.latest_url()?, &source.headers(token, false), "die neueste Veröffentlichung", &ctl)?;
+    Release::parse(&body)
+}
+
 /// Fragt die neueste Veröffentlichung ab und vergleicht mit `current`.
 /// Entwürfe zählen nicht; ältere Versionen werden nie angeboten.
 pub fn check(source: &Source, token: Option<&str>, current: &Version, platform: &str, cancel: Option<&AtomicBool>) -> Result<Check> {
-    let ctl = Control::new(Limits { max_bytes: 4 * 1024 * 1024, timeout: std::time::Duration::from_secs(30) }, cancel);
-    let body = http::get(&source.latest_url()?, &source.headers(token, false), "die neueste Veröffentlichung", &ctl)?;
-    let release = Release::parse(&body)?;
+    let release = latest(source, token, cancel)?;
     let v = Version::parse(&release.tag_name)?;
     if release.draft || v <= *current {
         return Ok(Check::UpToDate(v));
@@ -233,6 +255,9 @@ mod tests {
         assert!(!g.headers(None, false).iter().any(|(k, _)| k == "Authorization"));
         let h = Source { kind: SourceKind::Github, base_url: String::new(), repo: "a/b".into() };
         assert_eq!(h.latest_url().unwrap(), "https://api.github.com/repos/a/b/releases/latest");
+        assert_eq!(h.releases_page().unwrap(), "https://github.com/a/b/releases/latest");
+        assert_eq!(g.releases_page().unwrap(), "https://git.example.test/team/remotejoe/releases/latest");
+        assert!(Source { repo: "../b".into(), ..h.clone() }.releases_page().is_err());
         for bad in ["a", "a/b/c", "../b", "a/ b"] {
             assert!(Source { repo: bad.into(), ..g.clone() }.latest_url().is_err(), "{bad}");
         }

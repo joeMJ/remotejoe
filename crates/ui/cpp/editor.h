@@ -321,6 +321,8 @@ private:
 	QPushButton* m_restart;
 	ActionBar* m_bar;
 	QString m_program;
+	/// Windows: Das Programm ersetzt sich nicht selbst; der Knopf öffnet die Release-Seite.
+	bool m_pageOnly = false;
 };
 
 /// „Schlüssel und Zertifikate prüfen“: holt die Server-Schlüssel der gewählten Ziele ohne Anmeldung,

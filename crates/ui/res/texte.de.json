@@ -569,6 +569,12 @@
   "web.header.loading": "lädt seit %1 s (%2 %)",
   "web.status.loading": "%1: Seite lädt … %2 %",
   "web.status.loaded": "%1: Seite geladen",
+  "web.download.started": "%1: Download %2 gestartet",
+  "web.download.progress": "%1: Download %2 … %3 %",
+  "web.download.done": "%1: Download %2 gespeichert in %3",
+  "web.download.opened": "%1: %2 heruntergeladen und geöffnet (gespeichert in %3)",
+  "web.download.open_failed": "%1: %2 gespeichert in %3, aber nicht geöffnet: %4",
+  "web.download.failed": "%1: Download %2 fehlgeschlagen: %3",
   "web.status.error": "%1: Seite nicht geladen – %2",
   "menu.extras.keycapture": "Tastenkürzel an die Sitzung geben (Windows-Taste, Alt+Tab, Menütaste)",
   "keys.captured": "Windows-Taste, Alt+Tab und Menütaste gehen an die Sitzung. Rechte Strg-Taste allein gibt sie an Ubuntu zurück.",
@@ -653,5 +659,10 @@
   "update.development": "Dies ist ein Entwicklungsstand (Bauordner target/release) und aktualisiert sich nicht selbst. Die installierte Fassung (install.sh) wird über diese Funktion aktualisiert.",
   "update.development.hint": "Entwicklungsstand: nicht ersetzt. Die neue Fassung steht hier bereit: %1",
   "update.package_managed.hint": "Installation über die Paketverwaltung: bitte das Paket von dort aktualisieren. Download: %1",
-  "update.available": "Update verfügbar: remotejoe %1 (Hilfe → Nach Updates suchen …)"
+  "update.available": "Update verfügbar: remotejoe %1 (Hilfe → Nach Updates suchen …)",
+  "webview2.missing": "<b>Die WebView2-Laufzeit von Microsoft fehlt.</b><br>Web-Ziele (Seiten im Tab) brauchen sie; alle anderen Verbindungen gehen auch ohne.<br><br>Download (kostenlos, von Microsoft):<br><a href=\"https://developer.microsoft.com/microsoft-edge/webview2/\">https://developer.microsoft.com/microsoft-edge/webview2/</a><br>Dort „Evergreen Bootstrapper“ wählen und danach remotejoe neu starten.",
+  "update.open_page": "Release-Seite öffnen",
+  "update.windows.hint": "Unter Windows bitte die neue MSI von der Release-Seite installieren.",
+  "update.page.opened": "Die Release-Seite ist im Browser geöffnet: %1. Unter Windows bitte die neue MSI von der Release-Seite installieren.",
+  "update.page.failed": "Der Browser ließ sich nicht öffnen. Release-Seite: %1. Unter Windows bitte die neue MSI von dort installieren."
 }

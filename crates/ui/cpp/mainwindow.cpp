@@ -10,6 +10,8 @@
 #include "views.h"
 
 #include <QtCore/QDateTime>
+#include <QtCore/QDir>
+#include <QtCore/QSettings>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtGui/QAction>
@@ -358,6 +360,23 @@ protected:
 		p.drawEllipse(QRectF(isChecked() ? r.right() - d - 2 : r.left() + 2, r.top() + 2, d, d));
 	}
 };
+
+#ifdef Q_OS_WIN
+/// WebView2-Laufzeit vorhanden? Nach Microsoft: Wert „pv“ des Laufzeit-Clients (systemweit oder je Benutzer),
+/// weder leer noch 0.0.0.0.
+bool webView2Installed()
+{
+	const QString client = QStringLiteral("Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}");
+	for (const QString& root : { QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\"), QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\"),
+	                             QStringLiteral("HKEY_CURRENT_USER\\Software\\") })
+	{
+		const QString pv = QSettings(root + client, QSettings::NativeFormat).value(QStringLiteral("pv")).toString();
+		if (!pv.isEmpty() && pv != QLatin1String("0.0.0.0"))
+			return true;
+	}
+	return false;
+}
+#endif
 } // namespace
 
 MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
@@ -798,6 +817,18 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	reloadViews();
 	reloadTree();
 	rebuildTabs();
+#ifdef Q_OS_WIN
+	// Ohne WebView2-Laufzeit gehen Web-Ziele nicht: beim Start einmal deutlich darauf hinweisen (mit Link).
+	if (qEnvironmentVariableIsEmpty("RJ_DEMO") && qEnvironmentVariableIsEmpty("RJ_SCREENSHOTS") && !webView2Installed())
+		QTimer::singleShot(1500, this, [this] {
+			auto* box = new QMessageBox(QMessageBox::Information, QStringLiteral("remotejoe"), T(m_backend, "webview2.missing"), QMessageBox::Ok, this);
+			box->setTextFormat(Qt::RichText);
+			box->setTextInteractionFlags(Qt::TextBrowserInteraction);
+			box->setAttribute(Qt::WA_DeleteOnClose);
+			box->setWindowModality(Qt::NonModal);
+			box->show();
+		});
+#endif
 }
 
 MainWindow::~MainWindow() = default;
@@ -2316,6 +2347,45 @@ void MainWindow::handleEvents(const QString& json)
 			}
 			else if (t == QLatin1String("web_menu") && p)
 				p->showWebMenu(e);
+			else if (t == QLatin1String("web_focus") && p && p->frame())
+				p->frame()->webFocus(e.value(QStringLiteral("on")).toBool(), e.value(QStringLiteral("forward")).toBool());
+			else if (t == QLatin1String("web_key") && p)
+				FrameView::triggerShortcut(this, e.value(QStringLiteral("vk")).toInt(), e.value(QStringLiteral("ctrl")).toBool(),
+				                           e.value(QStringLiteral("alt")).toBool(), e.value(QStringLiteral("shift")).toBool());
+			else if (t == QLatin1String("web_download") && p)
+			{
+				// Download einer Web-Sitzung (Windows): Fortschritt und Ergebnis in der Fußzeile, Fehler zusätzlich als Hinweis.
+				const QString state = e.value(QStringLiteral("state")).toString();
+				const QString name = e.value(QStringLiteral("name")).toString();
+				const QString dir = QDir::toNativeSeparators(e.value(QStringLiteral("dir")).toString());
+				const QString error = e.value(QStringLiteral("error")).toString();
+				if (state == QLatin1String("started"))
+					statusBar()->showMessage(T(m_backend, "web.download.started").arg(p->title(), name), 5000);
+				else if (state == QLatin1String("progress"))
+				{
+					const qlonglong total = e.value(QStringLiteral("total")).toVariant().toLongLong();
+					const qlonglong got = e.value(QStringLiteral("received")).toVariant().toLongLong();
+					statusBar()->showMessage(T(m_backend, "web.download.progress").arg(p->title(), name).arg(total > 0 ? int(got * 100 / total) : 0), 3000);
+				}
+				else if (state == QLatin1String("done"))
+				{
+					const bool opened = e.value(QStringLiteral("opened")).toBool();
+					const QString text = !error.isEmpty() ? T(m_backend, "web.download.open_failed").arg(p->title(), name, dir, error)
+					                     : opened      ? T(m_backend, "web.download.opened").arg(p->title(), name, dir)
+					                                   : T(m_backend, "web.download.done").arg(p->title(), name, dir);
+					statusBar()->showMessage(text, 15000);
+					// Wohin die Datei gekommen ist, soll stehen bleiben (Hinweiszeile), nicht nur kurz erscheinen.
+					p->setNotice(text);
+					updateNotice();
+				}
+				else if (state == QLatin1String("failed"))
+				{
+					const QString text = T(m_backend, "web.download.failed").arg(p->title(), name, error);
+					statusBar()->showMessage(text, 15000);
+					p->setNotice(text);
+					updateNotice();
+				}
+			}
 			else if (t == QLatin1String("tree_changed"))
 				reloadTree();
 			else if (t == QLatin1String("unlocked"))

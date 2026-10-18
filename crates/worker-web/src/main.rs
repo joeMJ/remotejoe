@@ -7,16 +7,22 @@
 
 #[cfg(target_os = "linux")]
 mod offscreen;
+#[cfg(windows)]
+mod webview2;
 
 #[cfg(target_os = "linux")]
 fn main() {
     offscreen::run();
 }
 
-/// Unter Windows ist das Rendern ohne Fenster (WebView2 mit
-/// Composition-Controller) noch nicht umgesetzt; der Worker meldet das,
-/// statt ein eigenes Fenster zu öffnen.
-#[cfg(not(target_os = "linux"))]
+/// Windows: WebView2 als Kindfenster im Tab-Bereich des Hauptfensters (siehe `webview2.rs`).
+#[cfg(windows)]
+fn main() {
+    webview2::run();
+}
+
+/// Andere Systeme: noch nicht umgesetzt; der Worker meldet das, statt ein eigenes Fenster zu öffnen.
+#[cfg(not(any(target_os = "linux", windows)))]
 fn main() {
     use std::time::Duration;
 
@@ -34,7 +40,7 @@ fn main() {
         match link.recv() {
             Ok(ToWorker::Connect(_)) => {
                 let _ = link.sender.send(&FromWorker::State(SessionState::Failed {
-                    reason: "Web-Ziele werden unter Windows noch nicht im Tab angezeigt.".into(),
+                    reason: "Web-Ziele werden auf diesem System noch nicht im Tab angezeigt.".into(),
                 }));
             }
             Ok(ToWorker::Ping) => {

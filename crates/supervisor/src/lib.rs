@@ -239,11 +239,13 @@ impl Supervisor {
             (parent, child_end)
         };
         // Angehalten starten, damit der Worker erst im Job-Objekt (Speichergrenze,
-        // kein Fehlerdialog) zu laufen beginnt.
+        // kein Fehlerdialog) zu laufen beginnt; ohne eigenes Konsolenfenster (das
+        // Hauptprogramm ist ein Fensterprogramm, Worker sind Konsolenprogramme).
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
+            use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+            cmd.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
         }
         let mut child = cmd.spawn()?;
         #[cfg(windows)]
@@ -667,7 +669,7 @@ mod win {
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
     };
     use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
@@ -695,7 +697,12 @@ mod win {
             let job = Job { handle: unsafe { OwnedHandle::from_raw_handle(h as _) } };
             // SAFETY: Nullwerte sind für die Struktur gültig.
             let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+            // Nur der Worker selbst gehört zum Job: Seine Kindprozesse (Browser-Prozess von WebView2, den sich
+            // Worker mit demselben Profil teilen; pwsh) verwalten sich selbst. Im Job wurden sie beim Ende des
+            // Workers mit beendet bzw. blieben mit ihm verknüpft, und ein gleich danach gestarteter Worker mit
+            // demselben Profil scheiterte („Ressource wird bereits verwendet“) oder bekam keine Downloads mehr.
+            info.BasicLimitInformation.LimitFlags =
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
             if let Some(limit) = memory_limit {
                 info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
                 info.ProcessMemoryLimit = usize::try_from(limit).unwrap_or(usize::MAX);

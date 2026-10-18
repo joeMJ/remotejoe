@@ -14,6 +14,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QStyle>
+#include <QtGui/QDesktopServices>
 #include <QtGui/QIcon>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
@@ -3759,6 +3760,9 @@ void UpdateTab::refresh()
 	const QSignalBlocker block(m_onStart);
 	m_onStart->setChecked(s.value(QStringLiteral("check_on_start")).toBool());
 	m_current->setText(m_backend->text(QStringLiteral("update.current")).arg(s.value(QStringLiteral("current")).toString(), s.value(QStringLiteral("platform")).toString()));
+	m_pageOnly = s.value(QStringLiteral("page_only")).toBool();
+	if (m_pageOnly)
+		m_install->setText(m_backend->text(QStringLiteral("update.open_page")));
 	const QJsonObject f = s.value(QStringLiteral("found")).toObject();
 	if (!f.isEmpty())
 	{
@@ -3820,6 +3824,13 @@ void UpdateTab::install(bool confirm)
 		m_state->setText(m_backend->text(QStringLiteral("update.package_managed.hint")).arg(r.value(QStringLiteral("url")).toString()));
 	else if (state == QLatin1String("development"))
 		m_state->setText(m_backend->text(QStringLiteral("update.development.hint")).arg(r.value(QStringLiteral("url")).toString()));
+	else if (state == QLatin1String("page"))
+	{
+		// Windows: Release-Seite im Standardbrowser; die Adresse bleibt zum Kopieren stehen.
+		const QString url = r.value(QStringLiteral("url")).toString();
+		const bool opened = QDesktopServices::openUrl(QUrl(url));
+		m_state->setText(m_backend->text(opened ? QStringLiteral("update.page.opened") : QStringLiteral("update.page.failed")).arg(url));
+	}
 	else
 		setBusy(true, m_backend->text(QStringLiteral("update.installing")));
 }
@@ -3841,7 +3852,8 @@ void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 			m_found->setText(m_backend->text(QStringLiteral("update.found")).arg(f.value(QStringLiteral("version")).toString()));
 			m_notes->setPlainText(f.value(QStringLiteral("notes")).toString());
 			m_install->setEnabled(true);
-			m_state->setText(m_backend->text(QStringLiteral("update.newer")));
+			m_state->setText(m_backend->text(QStringLiteral("update.newer"))
+			                 + (m_pageOnly ? QLatin1Char(' ') + m_backend->text(QStringLiteral("update.windows.hint")) : QString()));
 			m_install->setFocus();
 		}
 		else

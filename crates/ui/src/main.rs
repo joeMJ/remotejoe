@@ -2,6 +2,9 @@
 //!
 //! Aufruf: `remotejoe [--demo] [--fenster-zuruecksetzen] [--screenshots <ordner>]`
 
+// Windows: Fensterprogramm, ohne Konsolenfenster beim Start aus dem Startmenü oder Explorer.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 #[global_allocator]
 static ALLOC: rj_ui::alloc::ZeroizingAllocator = rj_ui::alloc::ZeroizingAllocator;
 

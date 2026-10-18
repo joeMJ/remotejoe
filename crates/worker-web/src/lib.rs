@@ -51,6 +51,9 @@ pub struct WebOptions {
     pub ignore_certificate: bool,
     /// Schlüssel des Profilverzeichnisses (Kennung des Ziels).
     pub profile: Option<String>,
+    /// Ohne Fenster im Hauptprogramm laufen (Felderkennung): Unter Windows gibt es dann kein Elternfenster
+    /// zum Einbetten, der Worker legt ein unsichtbares an.
+    pub headless: bool,
 }
 
 /// Geprüfte Adresse.
@@ -369,6 +372,35 @@ pub enum WebCommand {
         #[serde(default)]
         action: Option<String>,
     },
+    /// Windows: Fenster des Hauptprogramms (Tab-Bereich), in das die Seite als Kindfenster gesetzt wird.
+    /// `hwnd` 0: lösen. Wechselt die Kennung (Tab abgerissen), kommt der Befehl erneut.
+    Embed { hwnd: i64 },
+    /// Windows: Bereich der Seite im Elternfenster in Bildpunkten; `scale` ist das Geräte-Pixelverhältnis
+    /// des Hauptfensters in Prozent (150: 1,5; Seitenmaßstab), 0: unverändert.
+    Bounds {
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        #[serde(default)]
+        scale: u32,
+    },
+    /// Windows: Seite zeigen oder ausblenden (Tabwechsel).
+    Visible { on: bool },
+    /// Windows: Tasten, die der Anwendung gehören (Kurzbefehle des Hauptfensters); sie gehen nicht an die Seite.
+    Keys { keys: Vec<ReservedKey> },
+}
+
+/// Tastenkombination (Windows-Tastencode) für `WebCommand::Keys`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReservedKey {
+    pub vk: u32,
+    #[serde(default)]
+    pub ctrl: bool,
+    #[serde(default)]
+    pub alt: bool,
+    #[serde(default)]
+    pub shift: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,6 +444,14 @@ pub enum WebEvent {
     Menu { id: u32, kind: String, x: i32, y: i32, items: Vec<MenuEntry> },
     /// Gefundene Felder der Seite (Antwort auf `WebCommand::Detect`).
     Fields { users: Vec<FieldCandidate>, passwords: Vec<FieldCandidate>, submits: Vec<FieldCandidate> },
+    /// Windows: Eine Taste aus `WebCommand::Keys` wurde in der Seite gedrückt und ist nicht an die Seite gegangen.
+    Key { vk: u32, ctrl: bool, alt: bool, shift: bool },
+    /// Windows: Die Seite hat den Tastaturfokus des Systems bekommen (`on`) oder will ihn abgeben (`on` falsch,
+    /// `forward`: mit Tab weiter, sonst zurück).
+    Focus { on: bool, forward: bool },
+    /// Windows: Download; `state`: `started`, `progress`, `done`, `failed`. `opened`: Datei wurde mit dem
+    /// zugeordneten Programm gestartet (nur .ica).
+    Download { id: u32, state: String, name: String, dir: String, received: u64, total: u64, error: Option<String>, opened: bool },
 }
 
 /// Gefundenes Feld oder gefundener Knopf mit Selektor und lesbarer Beschriftung.
