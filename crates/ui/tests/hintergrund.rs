@@ -57,7 +57,7 @@ fn slow_peer_does_not_block_ui() {
     let (vault, entry) = vault_with(dir, "benutzer", "geheim");
     let mut idx = Index::default();
     let tid = uuid::Uuid::new_v4();
-    idx.tunnels.push(TunnelDef { id: tid, name: "Langsam".into(), kind: TunnelKind::Ssh { hops: vec![SshHop { host: "127.0.0.1".into(), port: Some(slow), credential: None }] } });
+    idx.tunnels.push(TunnelDef { id: tid, name: "Langsam".into(), kind: TunnelKind::Ssh { hops: vec![SshHop { host: "127.0.0.1".into(), port: Some(slow), credential: None, legacy_algorithms: false }] } });
     let mut f = Folder::new("Langsam");
     f.settings.credentials.insert("default".into(), CredentialRef { entry, last_title: None });
     let mut t = Target::new("hinter-tunnel", Protocol::Ssh, "srv.example.test");
@@ -257,7 +257,7 @@ fn wake_reconnects_dropped_session_tunnel_first() {
     // Ziel: derselbe sshd, erreicht über einen SSH-Tunnel mit ihm als Sprungserver.
     let mut idx = Index::default();
     let tid = uuid::Uuid::new_v4();
-    idx.tunnels.push(TunnelDef { id: tid, name: "Sprung".into(), kind: TunnelKind::Ssh { hops: vec![SshHop { host: "127.0.0.1".into(), port: Some(sshd.port), credential: None }] } });
+    idx.tunnels.push(TunnelDef { id: tid, name: "Sprung".into(), kind: TunnelKind::Ssh { hops: vec![SshHop { host: "127.0.0.1".into(), port: Some(sshd.port), credential: None, legacy_algorithms: false }] } });
     let mut f = Folder::new("Hinter Sprung");
     f.settings.credentials.insert("default".into(), CredentialRef { entry, last_title: None });
     f.settings.tunnel = Some(TunnelSetting::Use(tid));

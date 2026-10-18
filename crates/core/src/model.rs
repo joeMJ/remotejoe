@@ -467,6 +467,10 @@ pub struct SshHop {
     /// Zugangsdatensatz-Name für diese Stufe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<String>,
+    /// Ältere, unsichere SSH-Verfahren für diese Stufe zusätzlich zulassen (alte Geräte als Sprungserver).
+    /// Gilt auch, wenn das Ziel hinter dem Tunnel „Ältere Verfahren“ eingeschaltet hat.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_algorithms: bool,
 }
 
 /// SNMP-Gerät.

@@ -189,7 +189,7 @@ mod tests {
             id: Uuid::new_v4(),
             name: "Sprung".into(),
             kind: TunnelKind::Ssh {
-                hops: vec![SshHop { host: "jump.example.test".into(), port: Some(2222), credential: None }],
+                hops: vec![SshHop { host: "jump.example.test".into(), port: Some(2222), credential: None, legacy_algorithms: false }],
             },
         });
         idx

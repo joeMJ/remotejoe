@@ -170,8 +170,11 @@ void FrameView::paintEvent(QPaintEvent*)
 	p.drawImage(target(), m_image);
 	if (hasFocus() && s_focusFrame)
 	{
-		p.setPen(QPen(palette().highlight().color(), 2));
-		p.drawRect(rect().adjusted(1, 1, -1, -1));
+		// Dezent: dünne, leicht durchscheinende Linie (abschaltbar unter Extras → Darstellung).
+		QColor c = palette().highlight().color();
+		c.setAlpha(170);
+		p.setPen(QPen(c, 1));
+		p.drawRect(rect().adjusted(0, 0, -1, -1));
 	}
 }
 

@@ -19,6 +19,8 @@ pub struct JobSpec {
     pub port: u16,
     pub credentials: CredentialPayload,
     pub transport: Option<PsrpTransport>,
+    /// Ältere SSH-Verfahren zulassen (Option des Ziels).
+    pub legacy: bool,
 }
 
 /// Zugangsdaten eines Patchday-Laufs im Hauptprozess. Eine Aufgabe nimmt
@@ -161,7 +163,7 @@ impl AppExecutor {
         }
         auth.push(Auth::Password(pw.clone()));
         auth.push(Auth::KeyboardInteractive(pw.clone()));
-        let params = SshParams { host: spec.host.clone(), port: spec.port, user: spec.credentials.username.clone(), auth, connect_timeout: Duration::from_secs(15), keepalive: Duration::from_secs(30), legacy: false };
+        let params = SshParams { host: spec.host.clone(), port: spec.port, user: spec.credentials.username.clone(), auth, connect_timeout: Duration::from_secs(15), keepalive: Duration::from_secs(30), legacy: spec.legacy };
         let conn = rt
             .block_on(SshConnection::connect(&params, self.known_hosts.clone(), ask))
             .map_err(|e| match e {
@@ -303,6 +305,7 @@ mod tests {
             port: 22,
             credentials: CredentialPayload { username: "root".into(), domain: None, password: rj_ipc::SecretBytes(b"geheim".to_vec()), private_key: None },
             transport: None,
+            legacy: false,
         }
     }
 

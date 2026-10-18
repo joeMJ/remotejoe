@@ -21,6 +21,7 @@
 #include <freerdp/input.h>
 #include <freerdp/settings.h>
 #include <winpr/synch.h>
+#include <winpr/wlog.h>
 
 struct rj_rdp
 {
@@ -467,7 +468,13 @@ int rj_rdp_connect(rj_rdp* rdp, const rj_params* p)
 		fprintf(stderr, "[remotejoe-rdp] Diagnose: Sicherheitsmodus %s\n", getenv("RJ_RDP_SEC"));
 	}
 	if (rj_is_local_account(p))
+	{
 		ok &= freerdp_settings_set_string(s, FreeRDP_AuthenticationPackageList, "!kerberos");
+		/* Bei lokalen Konten probiert die Bibliothek Kerberos trotzdem kurz an und protokolliert dann
+		 * „Configuration file does not specify default realm“ als Fehler, obwohl danach NTLM sauber
+		 * anmeldet. Diese eine Meldung wird abgeschaltet; alle anderen bleiben. */
+		WLog_SetLogLevel(WLog_Get("com.winpr.sspi.Kerberos"), WLOG_OFF);
+	}
 	ok &= freerdp_settings_set_bool(s, FreeRDP_NlaSecurity, nla);
 	ok &= freerdp_settings_set_bool(s, FreeRDP_TlsSecurity, tls);
 	ok &= freerdp_settings_set_bool(s, FreeRDP_RdpSecurity, rdpsec);

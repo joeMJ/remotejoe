@@ -1118,11 +1118,19 @@ impl App {
         s
     }
 
+    /// Hat das Ziel (SSH) „Ältere Verfahren“ eingeschaltet?
+    fn target_legacy(&self, id: Uuid) -> bool {
+        self.target(id).is_some_and(|t| matches!(&t.options, rj_core::ProtocolOptions::Ssh(o) if o.legacy_algorithms))
+    }
+
     /// Tunnelbeschreibung mit Zugangsdaten aus der KDBX.
     fn tunnel_spec(&self, def: &rj_core::TunnelDef, target: Uuid) -> Result<TunnelSpec, String> {
         match &def.kind {
             rj_core::TunnelKind::System { probe_host, probe_port } => Ok(TunnelSpec::System { probe_host: probe_host.clone(), probe_port: *probe_port }),
             rj_core::TunnelKind::Ssh { hops } => {
+                // Hat das Ziel hinter dem Tunnel „Ältere Verfahren“ eingeschaltet, gilt das auch für die Stufen
+                // (die älteren Verfahren stehen in der Rangfolge ganz hinten; neuere werden weiter bevorzugt).
+                let target_legacy = self.target_legacy(target);
                 let mut out = Vec::new();
                 for hop in hops {
                     let name = hop.credential.as_deref().unwrap_or(rj_core::DEFAULT_CREDENTIAL);
@@ -1144,7 +1152,7 @@ impl App {
                         auth,
                         connect_timeout: Duration::from_secs(self.config.connection.connect_timeout_secs as u64),
                         keepalive: Duration::from_secs(self.config.connection.keepalive_secs as u64),
-                        legacy: false,
+                        legacy: hop.legacy_algorithms || target_legacy,
                     });
                 }
                 Ok(TunnelSpec::Ssh { hops: out })
@@ -1178,7 +1186,7 @@ impl App {
             if let Ok(CredentialResolution::Found(r)) = resolve_credential(&self.index, t.id) {
                 if let Ok(c) = self.payload(&r, t.protocol) {
                     let transport = rj_core::inherit::resolve_psrp_transport(&self.index, t.id).ok().flatten();
-                    jobs.insert(t.id, crate::patch::JobSpec { protocol: t.protocol, host: t.host.clone(), port: t.effective_port(), credentials: c, transport });
+                    jobs.insert(t.id, crate::patch::JobSpec { protocol: t.protocol, host: t.host.clone(), port: t.effective_port(), credentials: c, transport, legacy: self.target_legacy(t.id) });
                 }
             }
         }
@@ -1212,6 +1220,7 @@ impl App {
                     port: t.effective_port(),
                     credentials: c,
                     transport: rj_core::inherit::resolve_psrp_transport(&self.index, t.id).ok().flatten(),
+                    legacy: self.target_legacy(t.id),
                 }),
                 _ => None,
             });
@@ -1710,6 +1719,55 @@ mod tunnel_tests {
             std::thread::sleep(Duration::from_millis(10));
         };
         assert!(error.contains("Tunnel „VPN“"), "{error}");
+    }
+
+    /// „Ältere Verfahren“: gilt für die Stufe selbst und, wenn das Ziel sie eingeschaltet hat, für alle Stufen.
+    #[test]
+    fn tunnel_hops_follow_legacy_option() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::create(&dir.path().join("t.kdbx"), MasterKey::password("pw"), KdfChoice::Weak, rj_core::config::IndexStorage::KdbxCustomData);
+        let entry = vault
+            .add_credential(CredentialData { title: "Konto".into(), username: "benutzer".into(), password: Secret::from_str_exact("geheim"), ..Default::default() })
+            .unwrap();
+        let mut idx = Index::default();
+        let tid = Uuid::new_v4();
+        let def = TunnelDef {
+            id: tid,
+            name: "Sprung".into(),
+            kind: TunnelKind::Ssh {
+                hops: vec![
+                    rj_core::SshHop { host: "neu.example.test".into(), port: None, credential: None, legacy_algorithms: false },
+                    rj_core::SshHop { host: "alt.example.test".into(), port: None, credential: None, legacy_algorithms: true },
+                ],
+            },
+        };
+        idx.tunnels.push(def.clone());
+        let mut f = Folder::new("Hinter Sprung");
+        f.settings.tunnel = Some(TunnelSetting::Use(tid));
+        f.settings.credentials.insert("default".into(), CredentialRef { entry, last_title: Some("Konto".into()) });
+        let t = Target::new("srv", Protocol::Ssh, "srv.example.test");
+        let target = t.id;
+        f.children.push(Node::Target(t));
+        idx.root.children.push(Node::Folder(f));
+        let mut app = App::new(false);
+        app.index = idx;
+        app.vault = Some(vault);
+        let flags = |app: &App| match app.tunnel_spec(&def, target).unwrap() {
+            TunnelSpec::Ssh { hops } => hops.iter().map(|h| h.legacy).collect::<Vec<_>>(),
+            _ => panic!("kein SSH-Tunnel"),
+        };
+        assert_eq!(flags(&app), vec![false, true], "nur die Stufe mit eigener Einstellung");
+        // Ziel schaltet „Ältere Verfahren“ ein: gilt für alle Stufen.
+        for n in app.index.root.children.iter_mut() {
+            if let Node::Folder(f) = n {
+                for c in f.children.iter_mut() {
+                    if let Node::Target(t) = c {
+                        t.options = rj_core::ProtocolOptions::Ssh(rj_core::SshOptions { legacy_algorithms: true, ..Default::default() });
+                    }
+                }
+            }
+        }
+        assert_eq!(flags(&app), vec![true, true], "Option des Ziels gilt für alle Stufen");
     }
 }
 
