@@ -187,7 +187,7 @@ private:
 	void updateLogo();
 	/// Liegt der Tastaturfokus in einer Sitzung (RDP, VNC, Terminal, Web)?
 	bool focusInSession() const;
-	/// Darf Strg+W gerade den Tab schließen (Einstellung „close_tab_key“)?
+	/// Darf Strg+Umschalt+W gerade den Tab schließen (Einstellung „close_tab_key“)?
 	bool closeTabKeyActive() const;
 	void updateConnInfo();
 	void openTerminalSettings();
@@ -231,7 +231,7 @@ private:
 	QTimer m_fitTimer;
 	QWidget* m_emptyHint = nullptr;
 	class QLabel* m_logo = nullptr;
-	/// Strg+W: „outside“, „always“ oder „never“.
+	/// Strg+Umschalt+W: „outside“, „always“ oder „never“.
 	QString m_closeTabKey = QStringLiteral("outside");
 	bool m_macroShelfOpen = false;
 	QStandardItemModel* m_model = nullptr;

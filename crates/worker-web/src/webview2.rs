@@ -1038,8 +1038,8 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
 }
 
 /// Tasten, die immer dem Hauptprogramm gehören, auch wenn es sie (noch) nicht als Kurzbefehl meldet:
-/// Strg+W schließt den Tab, nie die Seite.
-const ALWAYS_RESERVED: [ReservedKey; 1] = [ReservedKey { vk: 0x57, ctrl: true, alt: false, shift: false }];
+/// Strg+Umschalt+W schließt den Tab, nie die Seite (Strg+W bleibt bei der Seite).
+const ALWAYS_RESERVED: [ReservedKey; 1] = [ReservedKey { vk: 0x57, ctrl: true, alt: false, shift: true }];
 
 /// Geht die Taste ans Hauptprogramm statt an die Seite?
 fn is_reserved(keys: &[ReservedKey], key: &ReservedKey) -> bool {
@@ -1100,11 +1100,11 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_w_always_goes_to_the_main_program() {
-        let ctrl_w = ReservedKey { vk: 0x57, ctrl: true, ..Default::default() };
-        assert!(is_reserved(&[], &ctrl_w), "auch ohne gemeldete Kurzbefehle");
+    fn ctrl_shift_w_always_goes_to_the_main_program() {
+        let ctrl_shift_w = ReservedKey { vk: 0x57, ctrl: true, shift: true, ..Default::default() };
+        assert!(is_reserved(&[], &ctrl_shift_w), "auch ohne gemeldete Kurzbefehle");
         assert!(!is_reserved(&[], &ReservedKey { vk: 0x57, ..Default::default() }), "W allein gehört der Seite");
-        assert!(!is_reserved(&[], &ReservedKey { vk: 0x57, ctrl: true, shift: true, ..Default::default() }));
+        assert!(!is_reserved(&[], &ReservedKey { vk: 0x57, ctrl: true, ..Default::default() }), "Strg+W gehört der Seite");
         let ctrl_pgdn = ReservedKey { vk: 0x22, ctrl: true, ..Default::default() };
         assert!(!is_reserved(&[], &ctrl_pgdn));
         assert!(is_reserved(&[ctrl_pgdn], &ctrl_pgdn));

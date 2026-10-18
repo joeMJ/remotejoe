@@ -1043,7 +1043,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		m_search->selectAll();
 	});
 	sc(QKeySequence(QStringLiteral("Ctrl+Alt+Home")), [this] { m_tree->setFocus(); });
-	sc(QKeySequence(QStringLiteral("Ctrl+W")), [this] {
+	sc(QKeySequence(QStringLiteral("Ctrl+Shift+W")), [this] {
 		if (closeTabKeyActive() && m_tabs->count() > 0)
 			emit m_tabs->tabCloseRequested(m_tabs->currentIndex());
 	});
@@ -1174,7 +1174,7 @@ void MainWindow::buildMenus()
 		connect(extras, &QMenu::aboutToShow, kc, [kc] { kc->setChecked(FrameView::s_keyCapture); });
 	}
 	{
-		// Strg+W: wann es den aktiven Tab schließt.
+		// Strg+Umschalt+W: wann es den aktiven Tab schließt.
 		QMenu* cw = extras->addMenu(T(m_backend, "menu.extras.closetab"));
 		auto* group = new QActionGroup(cw);
 		for (const char* mode : { "outside", "always", "never" })
@@ -2923,11 +2923,11 @@ bool MainWindow::eventFilter(QObject* o, QEvent* e)
 {
 	if (m_tabs && o == m_tabs && e->type() == QEvent::Resize)
 		updateLogo();
-	// Strg+W soll die Sitzung erreichen, wenn es den Tab gerade nicht schließen darf.
+	// Strg+Umschalt+W soll die Sitzung erreichen, wenn es den Tab gerade nicht schließen darf.
 	if (e->type() == QEvent::ShortcutOverride)
 	{
 		auto* k = static_cast<QKeyEvent*>(e);
-		if (k->key() == Qt::Key_W && (k->modifiers() & ~Qt::KeypadModifier) == Qt::ControlModifier && !closeTabKeyActive())
+		if (k->key() == Qt::Key_W && (k->modifiers() & ~Qt::KeypadModifier) == (Qt::ControlModifier | Qt::ShiftModifier) && !closeTabKeyActive())
 		{
 			e->accept();
 			return true;
