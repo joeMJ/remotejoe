@@ -50,6 +50,8 @@ enum Msg {
     Detected(String),
     Rejected(String),
     LoginResult { text: String, script: zeroize::Zeroizing<String>, tries: u32 },
+    /// Ein „Verbindung abgebrochen“ nach dem Laden zeigen, falls kein Download gestartet ist.
+    PendingError,
 }
 
 #[derive(Clone)]
@@ -170,6 +172,8 @@ struct Inner {
     uri: RefCell<String>,
     loading: Cell<bool>,
     error: RefCell<Option<String>>,
+    /// Abbruch einer Navigation, die zum Download wurde (kein Fehler): erst melden, wenn kein Download folgt.
+    pending_error: RefCell<Option<String>>,
     started: Instant,
     load_started: Cell<Option<Instant>>,
     trace_path: RefCell<Option<PathBuf>>,
@@ -212,6 +216,7 @@ impl Worker {
             uri: RefCell::new(String::new()),
             loading: Cell::new(false),
             error: RefCell::new(None),
+            pending_error: RefCell::new(None),
             started: Instant::now(),
             load_started: Cell::new(None),
             trace_path: RefCell::new(None),
@@ -247,6 +252,12 @@ impl Worker {
         match m {
             Msg::RetryLogin(script, tries) => self.run_login(script, tries),
             Msg::CheckRejected => self.check_rejected(),
+            Msg::PendingError => {
+                if let Some(e) = self.0.pending_error.borrow_mut().take() {
+                    *self.0.error.borrow_mut() = Some(e);
+                    self.status();
+                }
+            }
             Msg::Detected(r) => {
                 // WebView2 liefert das Ergebnis als JSON-Wert; das Skript gibt selbst JSON-Text zurück.
                 let text: String = serde_json::from_str(&r).unwrap_or_default();
@@ -451,7 +462,14 @@ impl Worker {
                 let host = check_url(&uri).map(|u| u.host).unwrap_or_default();
                 let why = web_error_text(status);
                 me.trace(&format!("Laden fehlgeschlagen: {host}: {why}"));
-                *me.0.error.borrow_mut() = Some(format!("{host}: {why}"));
+                let text = format!("{host}: {why}");
+                if status == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED {
+                    // So endet auch eine Navigation, die zum Download wird: kurz abwarten, ob einer startet.
+                    *me.0.pending_error.borrow_mut() = Some(text);
+                    me.0.queue.push_after(Duration::from_millis(900), Msg::PendingError);
+                } else {
+                    *me.0.error.borrow_mut() = Some(text);
+                }
                 me.status();
                 return Ok(());
             }
@@ -634,6 +652,10 @@ impl Worker {
             let dir = download_dir();
             let id = me.0.next_download.get().wrapping_add(1).max(1);
             me.0.next_download.set(id);
+            // Die Navigation war ein Download: kein Ladefehler.
+            me.0.pending_error.borrow_mut().take();
+            *me.0.error.borrow_mut() = None;
+            me.status();
             let (dir_s, path) = match std::fs::create_dir_all(&dir).map(|_| unique_path(&dir, &name)) {
                 Ok(p) => (dir.to_string_lossy().into_owned(), p),
                 Err(e) => {
