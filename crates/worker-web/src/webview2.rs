@@ -741,6 +741,12 @@ impl Worker {
         }
         let wide: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
         let verb: Vec<u16> = "open\0".encode_utf16().collect();
+        // Ohne zugeordnetes Programm würde Windows „Wie soll diese Datei geöffnet werden?“ mit dem Store zeigen:
+        // vorher prüfen und nur den Hinweis melden.
+        let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        if !has_open_command(&ext) {
+            return Err("Dem Dateityp ist kein Programm zugeordnet (z. B. Citrix Workspace installieren)".into());
+        }
         // SAFETY: nullterminierte Zeichenketten leben über den Aufruf.
         let r = unsafe { windows_sys::Win32::UI::Shell::ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), wide.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
         if (r as usize) > 32 {
@@ -1031,6 +1037,21 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
 
 fn is_auto_open(name: &str) -> bool {
     Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(AUTO_OPEN_EXT))
+}
+
+/// Hat die Endung (z. B. `.ica`) ein Programm zum Öffnen? Unbekannte Typen zählen nicht (sonst „Öffnen mit“).
+fn has_open_command(ext: &str) -> bool {
+    use windows_sys::Win32::UI::Shell::{AssocQueryStringW, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_COMMAND};
+    if ext.len() < 2 {
+        return false;
+    }
+    let assoc: Vec<u16> = ext.encode_utf16().chain(Some(0)).collect();
+    let verb: Vec<u16> = "open\0".encode_utf16().collect();
+    let mut len = 0u32;
+    // SAFETY: nullterminierte Zeichenketten; ohne Ausgabepuffer liefert der Aufruf nur die Länge.
+    let hr = unsafe { AssocQueryStringW(ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_COMMAND, assoc.as_ptr(), verb.as_ptr(), std::ptr::null_mut(), &mut len) };
+    // S_FALSE (1) = Länge geliefert.
+    (hr == 0 || hr == 1) && len > 1
 }
 
 /// Unsichtbares Elternfenster für Sitzungen ohne Oberfläche (Felderkennung).
