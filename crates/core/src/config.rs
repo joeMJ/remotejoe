@@ -48,18 +48,22 @@ pub struct Config {
     pub appearance: AppearanceSettings,
 }
 
-/// Darstellung: Farbschema (`system`, `hell`, `dunkel` oder `datei:<Name>` für eine eigene Palette)
+/// Darstellung: Farbschema (`system`, `hell`, `dunkel`, `eingebaut:<Name>` oder `datei:<Name>` für eine eigene Palette)
 /// und der Rahmen um die Sitzung mit dem Tastaturfokus.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceSettings {
     pub scheme: String,
     pub focus_frame: bool,
+    /// Bei `scheme = system`: Palette im hellen bzw. dunklen Modus des Systems
+    /// (`system` = Farben des Desktops, sonst eine Kennung wie bei `scheme`).
+    pub light_theme: String,
+    pub dark_theme: String,
 }
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
-        AppearanceSettings { scheme: "system".into(), focus_frame: true }
+        AppearanceSettings { scheme: "system".into(), focus_frame: true, light_theme: "system".into(), dark_theme: "system".into() }
     }
 }
 
