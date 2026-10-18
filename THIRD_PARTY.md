@@ -482,7 +482,7 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | zvariant_derive | 4.2.0 | MIT |
 | zvariant_utils | 2.1.0 | MIT |
 
-## Systembibliotheken (dynamisch gelinkt, nicht mitgeliefert)
+## Systembibliotheken (dynamisch gelinkt; unter Linux nicht mitgeliefert)
 
 | Bibliothek | Lizenz | Verwendung |
 |---|---|---|
@@ -490,3 +490,36 @@ Bei Doppellizenzen (`A OR B`) wird die Apache-2.0-verträgliche Variante genutzt
 | FreeRDP 3 (libfreerdp3, libfreerdp-client3, libwinpr3) | Apache-2.0 | RDP-Worker |
 | WebKitGTK 4.1, GTK 3 (Linux) | LGPL-2.1 (dynamisch gelinkt) | Web-Worker, Merkmal `webview` |
 | Microsoft Edge WebView2 Runtime (Windows) | Laufzeit von Microsoft, nicht mitgeliefert | Web-Worker, Merkmal `webview` |
+
+## Unter Windows mitgeliefert (MSI)
+
+Das Windows-Installationspaket enthält neben den eigenen Programmen diese Bibliotheken als eigene DLLs im
+Programmordner (dynamisch gelinkt, unverändert):
+
+| Bibliothek | Lizenz | Dateien |
+|---|---|---|
+| Qt 6 (Core, Gui, Widgets, Network, Svg) mit Plattform-, Stil-, Bildformat-, TLS- und Netzwerk-Plugins | LGPL-3.0 | `Qt6*.dll`, `platforms\`, `styles\`, `imageformats\`, `tls\`, `networkinformation\`, `iconengines\`, `generic\` |
+| Fremdkomponenten innerhalb von Qt (u. a. HarfBuzz, FreeType, libpng, libjpeg, zlib, PCRE2, md4c) | jeweils eigene Lizenzen, siehe [Licenses Used in Qt](https://doc.qt.io/qt-6/licenses-used-in-qt.html) | in den Qt-DLLs und -Plugins |
+| Mesa llvmpipe (Software-OpenGL von Qt) | MIT | `opengl32sw.dll` |
+| FreeRDP 3 (freerdp3, freerdp-client3, winpr3) | Apache-2.0 | `freerdp3.dll`, `freerdp-client3.dll`, `winpr3.dll` |
+| OpenSSL 3 | Apache-2.0 | `libcrypto-3-x64.dll`, `libssl-3-x64.dll`, `legacy.dll` |
+| cJSON (Abhängigkeit von FreeRDP) | MIT | `cjson.dll` |
+| pkgconf (Laufzeitbibliothek aus vcpkg) | ISC | `pkgconf-8.dll` |
+| Microsoft Visual C++ Redistributable (app-lokal) | Lizenzbedingungen von Microsoft für weiterverteilbaren Code | `vcruntime140*.dll`, `msvcp140*.dll`, `concrt140.dll`, `vccorlib140.dll` |
+| Microsoft D3DCompiler (von Qt eingebunden, falls vorhanden) | Lizenzbedingungen von Microsoft für weiterverteilbaren Code | `D3DCompiler_47.dll` |
+
+Die Qt-Bibliotheken sind dynamisch gelinkt und können gegen eine eigene Qt-Version gleicher Hauptversion
+ausgetauscht werden (LGPL-3.0, Abschnitt 4). Der Quelltext von Qt ist unter <https://download.qt.io/> erhältlich.
+Teile von Qt beruhen auf der Arbeit der Independent JPEG Group.
+
+## Farbpaletten
+
+Die eingebauten Farbschemata und Symbolfarben übernehmen Farbwerte dieser Paletten:
+
+| Palette | Lizenz | Quelle |
+|---|---|---|
+| Catppuccin (Latte, Frappé, Macchiato, Mocha) | MIT | <https://github.com/catppuccin/catppuccin> |
+| Nord | MIT | <https://github.com/nordtheme/nord> |
+| Solarized | MIT | <https://github.com/altercation/solarized> |
+| Gruvbox | MIT | <https://github.com/morhetz/gruvbox> |
+| Dracula | MIT | <https://github.com/dracula/dracula-theme> |
