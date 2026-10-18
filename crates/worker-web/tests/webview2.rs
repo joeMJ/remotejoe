@@ -516,6 +516,26 @@ fn download_without_associated_program_reports_error() {
     assert!(home.path().join("daten/downloads/start.ica").is_file());
 }
 
+#[test]
+fn field_detection_works_headless() {
+    if !runtime_available() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let (port, _rx) = http_server();
+    // Wie „Felder erkennen“ im Editor: Sitzung ohne Fenster im Hauptprogramm, nur der Befehl `detect`.
+    let mut s = Sess::start(home.path(), &[], opts(&format!("http://127.0.0.1:{port}/")), true);
+    assert!(s.wait(60, |s| s.loaded("Anmeldung")), "Seite nicht geladen: {:?}", s.log);
+    s.command(serde_json::json!({"op": "detect"}));
+    assert!(s.wait(20, |s| s.custom.iter().any(|c| c["ev"] == "fields")), "keine Felder gemeldet: {:?}", s.custom);
+    let f = s.custom.iter().find(|c| c["ev"] == "fields").unwrap().clone();
+    let sel = |k: &str| -> Vec<String> { f[k].as_array().unwrap().iter().map(|e| e["selector"].as_str().unwrap().to_string()).collect() };
+    assert_eq!(sel("users"), ["#user"], "{f}");
+    assert_eq!(sel("passwords"), ["#pw"], "{f}");
+    assert!(sel("submits").contains(&"#go".to_string()), "{f}");
+    assert!(!f.to_string().contains(PASSWORD), "Werte der Felder werden nie gelesen: {f}");
+}
+
 /// Fenster dieses Testprozesses mit eigener Nachrichtenschleife (Elternfenster für das Einbetten).
 struct HostWindow {
     hwnd: isize,
