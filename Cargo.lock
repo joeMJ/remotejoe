@@ -3296,6 +3296,7 @@ version = "0.1.9"
 dependencies = [
  "libc",
  "remotejoe-ipc",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

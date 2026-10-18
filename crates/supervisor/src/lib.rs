@@ -150,6 +150,9 @@ struct Slot {
     restart_at: Option<Instant>,
     /// Vom Supervisor gesetzter Grund (Hänger, Speicher, Stopp).
     kill_reason: Option<ExitReason>,
+    /// Job-Objekt mit Speichergrenze; beendet den Worker beim Schließen.
+    #[cfg(windows)]
+    job: Option<win::Job>,
 }
 
 /// Verwaltet alle Worker.
@@ -188,6 +191,8 @@ impl Supervisor {
             attempts: 0,
             restart_at: None,
             kill_reason: None,
+            #[cfg(windows)]
+            job: None,
         };
         let pid = self.launch(id, &mut slot)?;
         self.slots.insert(id, slot);
@@ -206,7 +211,7 @@ impl Supervisor {
             use std::os::unix::process::CommandExt;
             // Harte Grenze für den Adressraum als zweite Sicherung; die
             // eigentliche Prüfung erfolgt über den belegten Speicher.
-            let hard = limit.saturating_mul(4).saturating_add(512 * 1024 * 1024);
+            let hard = hard_memory_limit(limit);
             // SAFETY: setrlimit ist async-signal-sicher und wird vor exec aufgerufen.
             unsafe {
                 cmd.pre_exec(move || {
@@ -233,7 +238,23 @@ impl Supervisor {
             }
             (parent, child_end)
         };
+        // Angehalten starten, damit der Worker erst im Job-Objekt (Speichergrenze,
+        // kein Fehlerdialog) zu laufen beginnt.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
+        }
         let mut child = cmd.spawn()?;
+        #[cfg(windows)]
+        let job = match win::Job::start(&child, slot.spec.memory_limit.map(hard_memory_limit)) {
+            Ok(job) => job,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        };
         #[cfg(unix)]
         let frame_sock = {
             drop(frame_sock.1);
@@ -288,6 +309,10 @@ impl Supervisor {
         })?;
         let now = Instant::now();
         slot.child = Some(child);
+        #[cfg(windows)]
+        {
+            slot.job = Some(job);
+        }
         slot.stdin = Some(FrameWriter::new(stdin));
         slot.started = now;
         slot.last_beat = now;
@@ -414,10 +439,17 @@ impl Supervisor {
                 child.wait().unwrap_or_else(exit_status_unknown)
             }
         };
+        // Windows: Ein Ende an der Speichergrenze des Job-Objekts (Speicheranforderung
+        // abgelehnt, Prozess bricht ab) gilt als Speicherproblem.
+        #[cfg(windows)]
+        let memory_hit = slot.job.take().and_then(|job| job.memory_limit_hit()).filter(|_| !status.success());
+        #[cfg(not(windows))]
+        let memory_hit: Option<u64> = None;
         let reason = slot
             .kill_reason
             .take()
             .or_else(|| protocol_error.map(ExitReason::Protocol).filter(|_| status.success()))
+            .or_else(|| memory_hit.map(|rss| ExitReason::MemoryLimit { rss }))
             .unwrap_or_else(|| classify(&status));
         let ran = slot.started.elapsed();
         events.push(SupervisorEvent::Exited { id, reason: reason.clone(), at: SystemTime::now() });
@@ -608,9 +640,117 @@ pub fn resident_bytes(pid: u32) -> Option<u64> {
     Some(pages * page.max(4096) as u64)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Belegter Arbeitsspeicher eines Prozesses in Bytes (Arbeitsmenge, `GetProcessMemoryInfo`).
+#[cfg(windows)]
+pub fn resident_bytes(pid: u32) -> Option<u64> {
+    win::working_set(pid)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn resident_bytes(_pid: u32) -> Option<u64> {
     None
+}
+
+/// Harte Speichergrenze als zweite Sicherung (Unix: Adressraum, Windows: Job-Objekt);
+/// die eigentliche Prüfung erfolgt über den belegten Speicher.
+fn hard_memory_limit(limit: u64) -> u64 {
+    limit.saturating_mul(4).saturating_add(512 * 1024 * 1024)
+}
+
+#[cfg(windows)]
+mod win {
+    use std::io;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use std::process::Child;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+    };
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn NtResumeProcess(process: HANDLE) -> i32;
+    }
+
+    /// Job-Objekt je Worker: Speichergrenze je Prozess, Ende beim Schließen,
+    /// kein Windows-Fehlerdialog bei einem Absturz (sonst hinge der Worker im Dialog).
+    pub struct Job {
+        handle: OwnedHandle,
+    }
+
+    impl Job {
+        /// Nimmt den angehalten gestarteten Worker in ein neues Job-Objekt auf und lässt ihn laufen.
+        pub fn start(child: &Child, memory_limit: Option<u64>) -> io::Result<Job> {
+            // SAFETY: anonymes Job-Objekt, Kennung nicht vererbbar.
+            let h = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if h.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: frische Kennung, gehört ab hier `job`.
+            let job = Job { handle: unsafe { OwnedHandle::from_raw_handle(h as _) } };
+            // SAFETY: Nullwerte sind für die Struktur gültig.
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+            if let Some(limit) = memory_limit {
+                info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+                info.ProcessMemoryLimit = usize::try_from(limit).unwrap_or(usize::MAX);
+            }
+            let process = child.as_raw_handle() as HANDLE;
+            // SAFETY: gültige Kennungen; die Struktur hat die angegebene Größe.
+            unsafe {
+                if SetInformationJobObject(job.raw(), JobObjectExtendedLimitInformation, &info as *const _ as _, std::mem::size_of_val(&info) as u32) == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if AssignProcessToJobObject(job.raw(), process) == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let status = NtResumeProcess(process);
+                if status < 0 {
+                    return Err(io::Error::other(format!("Worker ließ sich nicht fortsetzen (NTSTATUS {status:#x})")));
+                }
+            }
+            Ok(job)
+        }
+
+        fn raw(&self) -> HANDLE {
+            self.handle.as_raw_handle() as HANDLE
+        }
+
+        /// Höchster Speicherverbrauch eines Prozesses im Job, wenn er die Grenze erreicht hat.
+        pub fn memory_limit_hit(&self) -> Option<u64> {
+            // SAFETY: Nullwerte sind für die Struktur gültig.
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+            // SAFETY: Ausgabepuffer mit passender Größe.
+            let ok = unsafe {
+                QueryInformationJobObject(self.raw(), JobObjectExtendedLimitInformation, &mut info as *mut _ as _, std::mem::size_of_val(&info) as u32, std::ptr::null_mut())
+            };
+            let limit = info.ProcessMemoryLimit as u64;
+            let peak = info.PeakProcessMemoryUsed as u64;
+            // Die abgelehnte Anforderung liegt oberhalb der Spitze; ein Rest bis zur Grenze bleibt.
+            (ok != 0 && info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0 && peak + 64 * 1024 * 1024 >= limit).then_some(peak)
+        }
+    }
+
+    /// Arbeitsmenge eines Prozesses in Bytes.
+    pub fn working_set(pid: u32) -> Option<u64> {
+        // SAFETY: OpenProcess/K32GetProcessMemoryInfo mit gültigen Zeigern; die Kennung wird geschlossen.
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return None;
+            }
+            let mut pmc: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            let ok = K32GetProcessMemoryInfo(h, &mut pmc, pmc.cb);
+            CloseHandle(h);
+            (ok != 0).then_some(pmc.WorkingSetSize as u64)
+        }
+    }
 }
 
 #[cfg(test)]
