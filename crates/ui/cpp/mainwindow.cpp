@@ -15,6 +15,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtGui/QAction>
+#include <QtGui/QActionGroup>
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QMimeData>
 #include <QtGui/QClipboard>
@@ -331,7 +332,7 @@ void MainWindow::patchdayForFirstTargets(int n)
 
 namespace {
 /// Breite des Randes, an dem das Fenster in der Größe verändert wird (Pixel).
-constexpr int kResizeBorder = 5;
+constexpr int kResizeBorder = 8;
 
 /// Kleiner Schiebeschalter für die Fußzeile.
 class SwitchButton : public QAbstractButton
@@ -508,6 +509,8 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	split->addWidget(m_tabs);
 	split->setStretchFactor(1, 1);
 	split->setSizes({ 300, 980 });
+	// Breiterer Trenner zwischen Baum und Tabs: leichter zu treffen, beim Darüberfahren hervorgehoben.
+	split->setHandleWidth(7);
 	m_split = split;
 	setCentralWidget(split);
 
@@ -533,6 +536,27 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	}
 	m_tabs->tabBar()->installEventFilter(this);
 	m_tabs->installEventFilter(this);
+	{
+		// Logo unten rechts, solange kein Tab offen ist (halbtransparent, Klicks gehen durch).
+		const QPixmap src(QStringLiteral(":/logo/remotejoe-512.png"));
+		const qreal dpr = devicePixelRatioF();
+		QPixmap pm(QSize(200, 200) * dpr);
+		pm.setDevicePixelRatio(dpr);
+		pm.fill(Qt::transparent);
+		{
+			QPainter p(&pm);
+			p.setRenderHint(QPainter::SmoothPixmapTransform);
+			p.setOpacity(0.35);
+			p.drawPixmap(QRect(0, 0, 200, 200), src);
+		}
+		m_logo = new QLabel(m_tabs);
+		m_logo->setObjectName(QStringLiteral("emptyLogo"));
+		m_logo->setPixmap(pm);
+		m_logo->setFixedSize(200, 200);
+		m_logo->setAttribute(Qt::WA_TransparentForMouseEvents);
+		connect(m_tabs, &QTabWidget::currentChanged, this, [this] { updateLogo(); });
+		QTimer::singleShot(0, this, [this] { updateLogo(); });
+	}
 	m_fitTimer.setSingleShot(true);
 	m_fitTimer.setInterval(300);
 	connect(&m_fitTimer, &QTimer::timeout, this, &MainWindow::fitToScreen);
@@ -544,7 +568,11 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] { applyAppearance(); });
 #endif
 	FrameView::setFocusFrame(parseObject(m_backend->appearanceJson()).value(QStringLiteral("focus_frame")).toBool(true));
-	FrameView::s_keyCapture = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("settings") } })).value(QStringLiteral("keyboard_capture")).toBool(true);
+	{
+		const QJsonObject st = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("settings") } }));
+		FrameView::s_keyCapture = st.value(QStringLiteral("keyboard_capture")).toBool(true);
+		m_closeTabKey = st.value(QStringLiteral("close_tab_key")).toString(QStringLiteral("outside"));
+	}
 	FrameView::s_notice = [this](const QString& m) { statusBar()->showMessage(m, 8000); };
 	statusBar()->showMessage(T(m_backend, "status.ready"));
 	// Fußzeile rechts: womit, wohin, seit wann, als wer.
@@ -807,6 +835,10 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		m_search->selectAll();
 	});
 	sc(QKeySequence(QStringLiteral("Ctrl+Alt+Home")), [this] { m_tree->setFocus(); });
+	sc(QKeySequence(QStringLiteral("Ctrl+W")), [this] {
+		if (closeTabKeyActive() && m_tabs->count() > 0)
+			emit m_tabs->tabCloseRequested(m_tabs->currentIndex());
+	});
 	sc(QKeySequence(QStringLiteral("Ctrl+PgDown")), [this] { m_tabs->setCurrentIndex((m_tabs->currentIndex() + 1) % qMax(1, m_tabs->count())); });
 	sc(QKeySequence(QStringLiteral("Ctrl+PgUp")), [this] { m_tabs->setCurrentIndex((m_tabs->currentIndex() + m_tabs->count() - 1) % qMax(1, m_tabs->count())); });
 	connect(m_search, &QLineEdit::returnPressed, this, [this] { m_tree->setFocus(); m_tree->setCurrentIndex(m_model->index(0, 0)); });
@@ -933,6 +965,26 @@ void MainWindow::buildMenus()
 		});
 		connect(extras, &QMenu::aboutToShow, kc, [kc] { kc->setChecked(FrameView::s_keyCapture); });
 	}
+	{
+		// Strg+W: wann es den aktiven Tab schließt.
+		QMenu* cw = extras->addMenu(T(m_backend, "menu.extras.closetab"));
+		auto* group = new QActionGroup(cw);
+		for (const char* mode : { "outside", "always", "never" })
+		{
+			QAction* a = cw->addAction(T(m_backend, (QByteArray("menu.extras.closetab.") + mode).constData()));
+			a->setCheckable(true);
+			a->setData(QString::fromLatin1(mode));
+			group->addAction(a);
+			connect(a, &QAction::triggered, this, [this, a] {
+				m_closeTabKey = a->data().toString();
+				edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("close_tab_key"), m_closeTabKey } });
+			});
+		}
+		connect(cw, &QMenu::aboutToShow, cw, [this, group] {
+			for (QAction* a : group->actions())
+				a->setChecked(a->data().toString() == m_closeTabKey);
+		});
+	}
 	QMenu* help = nullptr;
 	QMenu* view = m_menuBar->addMenu(T(m_backend, "menu.view"));
 	const char* modes[] = { "single", "one_by_two", "two_by_two", "free" };
@@ -964,6 +1016,9 @@ void MainWindow::buildMenus()
 	help = m_menuBar->addMenu(T(m_backend, "menu.help"));
 	help->addAction(T(m_backend, "menu.help.update"), this, [this] { openUpdateTab(); });
 	help->addAction(T(m_backend, "menu.help.help"), QKeySequence::HelpContents, this, [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kHelpUrl))); });
+	help->addAction(T(m_backend, "menu.help.issues"), this, [] {
+		QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/joeMJ/remotejoe#fehler-melden-und-w%C3%BCnsche"), QUrl::TolerantMode));
+	});
 	help->addSeparator();
 	// Das einzige Popup des Programms: „Über remotejoe“.
 	help->addAction(T(m_backend, "menu.help.about"), this, [this] {
@@ -1085,6 +1140,7 @@ void MainWindow::applyTheme(bool dark)
 	  "QLabel#statusNotice { color: %1; }"
 	  "QLabel#statusNotice[severe=\"true\"] { color: #e53935; font-weight: bold; }"
 	  "QLabel#fieldError, QLabel#dirtyLabel { color: %1; font-weight: bold; }"
+	  "QSplitter::handle:hover { background: %2; }"
 	  "QFrame#actionBar { border: 2px solid %2; border-radius: 4px; }"
 	  "QFrame#securityBar { border: 2px solid %2; border-radius: 4px; }"
 	  "QFrame#securityBar[changed=\"true\"] { border: 3px solid %1; }"
@@ -2492,8 +2548,47 @@ void MainWindow::configureTabBar(QTabWidget* tabs)
 	bar->installEventFilter(this);
 }
 
+void MainWindow::updateLogo()
+{
+	if (!m_logo)
+		return;
+	const int margin = 32;
+	m_logo->move(m_tabs->width() - m_logo->width() - margin, m_tabs->height() - m_logo->height() - margin);
+	const bool show = m_tabs->count() == 0 && m_tabs->width() > m_logo->width() + 2 * margin && m_tabs->height() > m_logo->height() + 2 * margin;
+	m_logo->setVisible(show);
+	if (show)
+		m_logo->raise();
+}
+
+bool MainWindow::focusInSession() const
+{
+	for (QWidget* w = QApplication::focusWidget(); w; w = w->parentWidget())
+		if (dynamic_cast<SessionPane*>(w))
+			return true;
+	return false;
+}
+
+bool MainWindow::closeTabKeyActive() const
+{
+	if (m_closeTabKey == QLatin1String("never"))
+		return false;
+	return m_closeTabKey == QLatin1String("always") || !focusInSession();
+}
+
 bool MainWindow::eventFilter(QObject* o, QEvent* e)
 {
+	if (m_tabs && o == m_tabs && e->type() == QEvent::Resize)
+		updateLogo();
+	// Strg+W soll die Sitzung erreichen, wenn es den Tab gerade nicht schließen darf.
+	if (e->type() == QEvent::ShortcutOverride)
+	{
+		auto* k = static_cast<QKeyEvent*>(e);
+		if (k->key() == Qt::Key_W && (k->modifiers() & ~Qt::KeypadModifier) == Qt::ControlModifier && !closeTabKeyActive())
+		{
+			e->accept();
+			return true;
+		}
+	}
 	if (m_compact && m_tabs && o == m_tabs->tabBar() && e->type() == QEvent::Resize)
 		QTimer::singleShot(0, this, [this] { syncStripHeight(); });
 	// Platzsparmodus: die freie Fläche der Tab-Leiste ist die Titelzeile (Ziehen, Doppelklick maximiert).

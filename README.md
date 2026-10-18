@@ -596,6 +596,20 @@ Daraus baut `scripts/build-msi.ps1` mit WiX 3.14 die signierte MSI unter `target
 - [`docs/ZIELE-EINRICHTEN.md`](docs/ZIELE-EINRICHTEN.md) – Windows-Ziele für RDP und PowerShell-Remoting einrichten (mit Skripten unter [`tools/ziel-einrichten/`](tools/ziel-einrichten/))
 - [`THIRD_PARTY.md`](THIRD_PARTY.md) – verwendete Bibliotheken Dritter mit Lizenzen
 
+## Fehler melden und Wünsche
+
+Fehler und Wünsche bitte als [Issue auf GitHub](https://github.com/joeMJ/remotejoe/issues) melden
+(im Programm: **Hilfe → Fehler melden / Wünsche**). Es kann dauern, bis ein Issue bearbeitet wird.
+
+Hilfreich sind:
+
+- Version (**Hilfe → Über remotejoe**) und System (z. B. Ubuntu 26.04, Windows 11 24H2)
+- Art des Ziels (RDP, SSH, VNC, Web, PowerShell, Proxmox, Hyper-V) und was genau passiert
+- Schritte, mit denen sich der Fehler wiederholen lässt, und der Wortlaut einer Meldung
+
+**Nie mitschicken:** Kennwörter, Schlüssel, Tokens, die Schlüsseldatenbank (KDBX) oder `config.toml`.
+Interne Adressen, Host- und Benutzernamen in Bildschirmfotos und Meldungen bitte unkenntlich machen.
+
 ## Lizenz
 
 Apache License 2.0, siehe [`LICENSE`](LICENSE) und [`NOTICE`](NOTICE). Copyright 2026 joeMJ.

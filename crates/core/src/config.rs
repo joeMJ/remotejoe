@@ -134,6 +134,9 @@ pub struct ConnectionDefaults {
     /// Tastenkürzel des Desktops (Windows-Taste, Alt+Tab, Menütaste) gehen an RDP/VNC, solange die
     /// Sitzung den Tastaturfokus hat.
     pub keyboard_capture: bool,
+    /// Strg+W schließt den aktiven Tab: „outside“ (nur wenn der Fokus nicht in einer Sitzung liegt),
+    /// „always“ oder „never“.
+    pub close_tab_key: String,
 }
 
 impl Default for ConnectionDefaults {
@@ -146,6 +149,7 @@ impl Default for ConnectionDefaults {
             clipboard_limit: 16 * 1024 * 1024,
             connect_all_parallel: 4,
             keyboard_capture: true,
+            close_tab_key: "outside".into(),
         }
     }
 }
