@@ -66,6 +66,7 @@
 #endif
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <windowsx.h>
 #endif
 
 QElapsedTimer MainWindow::startClock;
@@ -253,6 +254,156 @@ public:
 private:
 	std::function<void()> m_resumed;
 };
+
+/// Nativer Größenrahmen ohne Titelleiste: Das Fenster bleibt für Qt rahmenlos (eigene Titelleiste), bekommt aber
+/// WS_THICKFRAME, WS_CAPTION, Minimieren und Maximieren (Aero Snap, Win+Pfeile). WM_NCCALCSIZE macht das ganze
+/// Fenster zum Inhaltsbereich; WM_NCHITTEST meldet Ränder und Ecken in der Breite des Systemrahmens (je Bildschirm-
+/// DPI), dann stellt Windows Zeiger und Größenänderung selbst. Der Innenrand (gleiche Breite) hält eigene native
+/// Fenster (WebView2) aus dieser Zone; maximiert gleicht er den Überstand über den Bildschirm aus.
+class WinFrame : public QObject, public QAbstractNativeEventFilter
+{
+public:
+	WinFrame(QWidget* window, std::function<void(int)> setInset)
+	  : QObject(window)
+	  , m_window(window)
+	  , m_setInset(std::move(setInset))
+	{
+		qApp->installNativeEventFilter(this);
+		window->installEventFilter(this);
+		attach();
+	}
+	~WinFrame() override { qApp->removeNativeEventFilter(this); }
+
+	bool eventFilter(QObject* o, QEvent* e) override
+	{
+		// Qt kann das native Fenster neu anlegen oder den Stil zurücksetzen (Vollbild): Stil und Innenrand erneuern.
+		if (o == m_window && (e->type() == QEvent::WinIdChange || e->type() == QEvent::Show || e->type() == QEvent::WindowStateChange))
+			QTimer::singleShot(0, this, [this] { attach(); });
+		return false;
+	}
+
+	bool nativeEventFilter(const QByteArray& type, void* message, qintptr* result) override
+	{
+		if (type != "windows_generic_MSG")
+			return false;
+		const MSG* m = static_cast<const MSG*>(message);
+		if (!m_hwnd || m->hwnd != m_hwnd)
+			return false;
+		switch (m->message)
+		{
+			case WM_NCCALCSIZE:
+				if (m->wParam && !m_window->isFullScreen())
+				{
+					*result = 0;
+					return true;
+				}
+				break;
+			case WM_NCHITTEST:
+			{
+				if (IsZoomed(m_hwnd) || m_window->isFullScreen())
+					break;
+				RECT r;
+				GetWindowRect(m_hwnd, &r);
+				const int x = GET_X_LPARAM(m->lParam), y = GET_Y_LPARAM(m->lParam);
+				const int b = border(), c = 2 * b;
+				const bool left = x < r.left + b, right = x >= r.right - b, top = y < r.top + b, bottom = y >= r.bottom - b;
+				// Ecken etwas größer, damit sie leicht zu treffen sind.
+				const bool nearLeft = x < r.left + c, nearRight = x >= r.right - c, nearTop = y < r.top + c, nearBottom = y >= r.bottom - c;
+				LRESULT hit = 0;
+				if ((top && nearLeft) || (left && nearTop))
+					hit = HTTOPLEFT;
+				else if ((top && nearRight) || (right && nearTop))
+					hit = HTTOPRIGHT;
+				else if ((bottom && nearLeft) || (left && nearBottom))
+					hit = HTBOTTOMLEFT;
+				else if ((bottom && nearRight) || (right && nearBottom))
+					hit = HTBOTTOMRIGHT;
+				else if (left)
+					hit = HTLEFT;
+				else if (right)
+					hit = HTRIGHT;
+				else if (top)
+					hit = HTTOP;
+				else if (bottom)
+					hit = HTBOTTOM;
+				if (hit)
+				{
+					*result = hit;
+					return true;
+				}
+				break;
+			}
+			case WM_SIZE:
+			case WM_DPICHANGED:
+				QTimer::singleShot(0, this, [this] { updateInset(); });
+				break;
+			default:
+				break;
+		}
+		return false;
+	}
+
+private:
+	/// Breite der Größenzone in Gerätepixeln (Systemrahmen für die DPI des Bildschirms, bei 100 % 8 px).
+	int border() const
+	{
+		const UINT dpi = GetDpiForWindow(m_hwnd);
+		return GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+	}
+
+	void attach()
+	{
+		if (!m_window->windowHandle())
+			m_window->winId();
+		m_hwnd = reinterpret_cast<HWND>(m_window->winId());
+		if (!m_hwnd || m_window->isFullScreen())
+		{
+			updateInset();
+			return;
+		}
+		const LONG_PTR style = GetWindowLongPtrW(m_hwnd, GWL_STYLE);
+		const LONG_PTR want = style | WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+		if (want != style)
+		{
+			SetWindowLongPtrW(m_hwnd, GWL_STYLE, want);
+			SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
+		}
+		updateInset();
+	}
+
+	/// Innenrand in logischen Bildpunkten: normal die Größenzone, maximiert der Überstand über den Arbeitsbereich.
+	void updateInset()
+	{
+		if (!m_hwnd)
+			return;
+		int px = 0;
+		if (m_window->isFullScreen())
+			px = 0;
+		else if (IsZoomed(m_hwnd))
+		{
+			RECT r;
+			GetWindowRect(m_hwnd, &r);
+			MONITORINFO mi{};
+			mi.cbSize = sizeof(mi);
+			if (GetMonitorInfoW(MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST), &mi))
+				px = qMax(0, int(mi.rcWork.left - r.left));
+		}
+		else
+			px = border();
+		const qreal dpr = m_window->devicePixelRatioF();
+		const int inset = qRound(px / (dpr > 0 ? dpr : 1.0));
+		if (inset != m_inset)
+		{
+			m_inset = inset;
+			m_setInset(inset);
+		}
+	}
+
+	QWidget* m_window;
+	std::function<void(int)> m_setInset;
+	HWND m_hwnd = nullptr;
+	int m_inset = -1;
+};
 #endif
 
 /// Baum mit Ziehen und Ablegen: verschoben wird im Index, nicht im Modell.
@@ -390,6 +541,10 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	setWindowFlag(Qt::FramelessWindowHint, true);
 	setMouseTracking(true);
 	setContentsMargins(kResizeBorder, kResizeBorder, kResizeBorder, kResizeBorder);
+#ifdef Q_OS_WIN
+	// Windows: nativer Größenrahmen (Zeiger, Ziehen, Aero Snap); der Innenrand folgt Rahmenbreite und Zustand.
+	new WinFrame(this, [this](int m) { setContentsMargins(m, m, m, m); });
+#endif
 	{
 		auto* top = new QWidget(this);
 		auto* tl = new QVBoxLayout(top);
@@ -2689,6 +2844,11 @@ static Qt::CursorShape cursorFor(Qt::Edges e)
 
 void MainWindow::updateEdgeCursor(const QPoint& global)
 {
+#ifdef Q_OS_WIN
+	// Windows: Zeiger an den Rändern stellt das System (WM_NCHITTEST, siehe WinFrame).
+	Q_UNUSED(global);
+	return;
+#endif
 	const Qt::Edges edges = isMaximized() || isFullScreen() ? Qt::Edges() : edgesAt(this, mapFromGlobal(global));
 	if (edges)
 	{
@@ -2712,7 +2872,13 @@ void MainWindow::mouseMoveEvent(QMouseEvent* e)
 
 void MainWindow::mousePressEvent(QMouseEvent* e)
 {
-	if (e->button() == Qt::LeftButton && !isMaximized() && !isFullScreen())
+#ifdef Q_OS_WIN
+	// Windows: Größenänderung über den nativen Rahmen (WinFrame).
+	const bool ownResize = false;
+#else
+	const bool ownResize = true;
+#endif
+	if (ownResize && e->button() == Qt::LeftButton && !isMaximized() && !isFullScreen())
 	{
 		const Qt::Edges edges = edgesAt(this, e->position().toPoint());
 		if (edges && windowHandle())
@@ -2730,9 +2896,11 @@ void MainWindow::changeEvent(QEvent* e)
 	QMainWindow::changeEvent(e);
 	if (e->type() == QEvent::WindowStateChange)
 	{
-		// Maximiert: kein Rand zum Ziehen.
+		// Maximiert: kein Rand zum Ziehen. Windows: den Innenrand setzt WinFrame.
+#ifndef Q_OS_WIN
 		const int m = isMaximized() || isFullScreen() ? 0 : kResizeBorder;
 		setContentsMargins(m, m, m, m);
+#endif
 		if (m_titleBar)
 			m_titleBar->updateState();
 	}
