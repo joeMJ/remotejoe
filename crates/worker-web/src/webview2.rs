@@ -28,7 +28,7 @@ use webview2_com::{
 };
 use windows::core::{Interface, BOOL, HSTRING, PWSTR};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use wry::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
 use wry::{Rect, WebContext, WebView, WebViewBuilder, WebViewExtWindows};
@@ -544,7 +544,9 @@ impl Worker {
             if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN {
                 return Ok(());
             }
-            let down = |k: u16| unsafe { GetKeyState(k as i32) } < 0;
+            // Tatsächlicher Tastenzustand: Die Tasten gehen an den Browser-Prozess von WebView2, nicht an diesen
+            // Faden; GetKeyState kennt Strg/Alt/Umschalt hier nicht (Strg+Bild↓ kam sonst nicht an).
+            let down = |k: u16| unsafe { GetAsyncKeyState(k as i32) } < 0;
             let key = ReservedKey { vk, ctrl: down(VK_CONTROL), alt: down(VK_MENU), shift: down(VK_SHIFT) };
             if me.0.keys.borrow().contains(&key) {
                 unsafe {
