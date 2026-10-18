@@ -127,6 +127,8 @@ private:
 	void reloadTree();
 	/// Suchtext anwenden, ohne den Baum neu aufzubauen: Nicht passende Zeilen werden ausgeblendet.
 	void applySearch();
+	/// Punkt am Symbol der Ziele mit offenem Tab (gefüllt: verbunden, Ring: nicht verbunden).
+	void updateSessionMarks();
 	void poll();
 	void rebuildTabs();
 	QWidget* buildTabContent(const QJsonObject& tab);

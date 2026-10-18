@@ -195,7 +195,7 @@ AppearanceTab::AppearanceTab(RjBackend* backend, QWidget* parent)
 	auto* ig = new QGridLayout(m_iconBox);
 	ig->setContentsMargins(0, 0, 0, 0);
 	int ii = 0;
-	for (const char* k : { "rdp", "ssh", "vnc", "web", "psrp", "proxmox", "hyperv", "macro", "folder" })
+	for (const char* k : { "rdp", "ssh", "vnc", "web", "psrp", "proxmox", "hyperv", "macro", "folder", "session" })
 	{
 		const QString key = QString::fromLatin1(k);
 		auto* b = new QPushButton(T((QByteArray("appearance.icons.kind.") + k).constData()), m_iconBox);

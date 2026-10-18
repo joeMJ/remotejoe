@@ -1376,6 +1376,16 @@ impl App {
         let b = self.sessions.open_demo_frame("rdp-002", 800, 600, 120);
         let c = self.sessions.open_demo_frame("vnc-003", 800, 600, 30);
         let d = self.sessions.open_demo_terminal("ssh-004", "root@labor:~# uptime\r\n 10:15:02 up 12 days,  3:04,  1 user,  load average: 0,08, 0,05, 0,01\r\nroot@labor:~# ", 90, 20);
+        // Vorführsitzungen den gleichnamigen Zielen zuordnen (Punkt am Symbol im Baum).
+        let mut by_name = std::collections::HashMap::new();
+        self.index.for_each_target(|t| {
+            by_name.entry(t.name.clone()).or_insert(t.id);
+        });
+        for (s, name) in [(a, "ssh-001"), (b, "rdp-002"), (c, "vnc-003"), (d, "ssh-004")] {
+            if let Some(id) = by_name.get(name) {
+                self.sessions.set_demo_target(s, *id);
+            }
+        }
         // Vorne eine einzelne SSH-Sitzung, die anderen als Tabs im Hintergrund.
         let t1 = self.workspace.open(a, "ssh-001");
         self.workspace.open(b, "rdp-002");

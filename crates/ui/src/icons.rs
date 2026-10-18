@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 /// Arten mit eigener Farbe (Zieltypen, Makro, Ordner).
-pub const KINDS: [&str; 9] = ["rdp", "ssh", "vnc", "web", "psrp", "proxmox", "hyperv", "macro", "folder"];
+pub const KINDS: [&str; 10] = ["rdp", "ssh", "vnc", "web", "psrp", "proxmox", "hyperv", "macro", "folder", "session"];
 
 /// Farben in der Reihenfolge von [`KINDS`].
 type Set = [&'static str; 9];
@@ -45,6 +45,8 @@ pub fn colors(id: &str, dark: bool, style: &str, accent: &str, muted: &str, own:
         let folder = if valid(muted) { muted } else { set[8] };
         KINDS.iter().map(|k| (k.to_string(), if *k == "folder" { folder } else { accent }.to_string())).collect()
     };
+    // Punkt für offene Sitzungen: das Grün des Themes, in beiden Stilen gut sichtbar.
+    m.insert("session".into(), set[1].to_string());
     for (k, c) in own {
         if KINDS.contains(&k.as_str()) && valid(c) {
             m.insert(k.clone(), c.clone());

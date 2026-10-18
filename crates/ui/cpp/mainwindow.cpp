@@ -84,6 +84,10 @@ constexpr int RoleConsoleHost = Qt::UserRole + 5;
 /// Platzhalter unter einem Hypervisor, bis die Gäste geladen sind.
 constexpr int RolePlaceholder = Qt::UserRole + 6;
 constexpr int RoleProtocol = Qt::UserRole + 7;
+/// Ampelfarbe aus dem Baum (für das Neuzeichnen mit Sitzungspunkt).
+constexpr int RoleLight = Qt::UserRole + 8;
+/// Zuletzt gezeichneter Sitzungspunkt (0, 1, 2).
+constexpr int RoleSessionMark = Qt::UserRole + 9;
 /// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
 constexpr int RoleMacro = Qt::UserRole + 20;
 
@@ -144,7 +148,9 @@ void setIconColors(const QJsonObject& colors, const QColor& ring)
 	++g_iconGeneration;
 }
 
-QIcon protocolIcon(const QString& protocol, const QString& light, bool folder)
+/// `session`: 0 = keine offene Sitzung, 1 = verbunden (gefüllter Punkt oben rechts),
+/// 2 = Tab offen, aber nicht verbunden (Ring).
+QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, int session = 0)
 {
 	static QHash<QString, QIcon> cache;
 	static int generation = -1;
@@ -153,7 +159,7 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder)
 		cache.clear();
 		generation = g_iconGeneration;
 	}
-	const QString key = protocol + QLatin1Char('|') + light + (folder ? QStringLiteral("|f") : QString());
+	const QString key = protocol + QLatin1Char('|') + light + (folder ? QStringLiteral("|f") : QString()) + QLatin1Char('|') + QString::number(session);
 	auto it = cache.find(key);
 	if (it != cache.end())
 		return *it;
@@ -224,6 +230,23 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder)
 			p.setPen(QPen(g_iconRing, 2));
 			p.drawEllipse(QRect(19, 19, 12, 12));
 		}
+		if (session > 0)
+		{
+			const QColor dot = g_iconColors.value(QStringLiteral("session"), QColor("#2e9e44"));
+			p.setRenderHint(QPainter::Antialiasing);
+			if (session == 1)
+			{
+				p.setBrush(dot);
+				p.setPen(QPen(g_iconRing, 2));
+				p.drawEllipse(QRect(20, 0, 12, 12));
+			}
+			else
+			{
+				p.setBrush(g_iconRing);
+				p.setPen(QPen(dot, 2.5));
+				p.drawEllipse(QRectF(21.25, 1.25, 9.5, 9.5));
+			}
+		}
 	}
 	QIcon icon(pm);
 	cache.insert(key, icon);
@@ -241,6 +264,7 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		item->setData(n.value(QStringLiteral("id")).toString(), RoleId);
 		item->setData(folder, RoleFolder);
 		item->setIcon(protocolIcon(n.value(QStringLiteral("protocol")).toString(), n.value(QStringLiteral("light")).toString(), folder));
+		item->setData(n.value(QStringLiteral("light")).toString(), RoleLight);
 		QString tip = n.value(QStringLiteral("host")).toString();
 		if (n.value(QStringLiteral("suspicious")).toBool())
 			tip += QStringLiteral("\nName enthält unsichtbare oder richtungsändernde Zeichen.");
@@ -1282,11 +1306,47 @@ void MainWindow::reloadTree()
 			m_tree->setCurrentIndex(i);
 	}
 	m_tree->setUpdatesEnabled(true);
+	updateSessionMarks();
 	if (searching)
 		applySearch();
 	else
 		m_tree->verticalScrollBar()->setValue(scroll);
 	updateEmptyHint();
+}
+
+void MainWindow::updateSessionMarks()
+{
+	if (!m_model)
+		return;
+	// Ziel → 1 (mindestens eine verbundene Sitzung) bzw. 2 (nur offene, nicht verbundene Tabs).
+	QHash<QString, int> marks;
+	for (auto it = m_panes.cbegin(); it != m_panes.cend(); ++it)
+	{
+		const QJsonObject info = parseObject(m_backend->sessionInfo(it.key()));
+		const QString target = info.value(QStringLiteral("target")).toString();
+		if (target.isEmpty())
+			continue;
+		const int m = info.value(QStringLiteral("state")).toString() == QLatin1String("connected") ? 1 : 2;
+		marks[target] = marks.contains(target) ? qMin(marks.value(target), m) : m;
+	}
+	std::function<void(QStandardItem*)> walk = [&](QStandardItem* parent) {
+		for (int r = 0; r < parent->rowCount(); ++r)
+		{
+			QStandardItem* i = parent->child(r);
+			const QString id = i->data(RoleId).toString();
+			if (!id.isEmpty() && !i->data(RoleFolder).toBool() && !i->data(RoleGuest).isValid() && !i->data(RoleMacro).toInt())
+			{
+				const int m = marks.value(id, 0);
+				if (i->data(RoleSessionMark).toInt() != m)
+				{
+					i->setData(m, RoleSessionMark);
+					i->setIcon(protocolIcon(i->data(RoleProtocol).toString(), i->data(RoleLight).toString(), false, m));
+				}
+			}
+			walk(i);
+		}
+	};
+	walk(m_model->invisibleRootItem());
 }
 
 void MainWindow::applySearch()
@@ -2294,6 +2354,7 @@ void MainWindow::rebuildTabs()
 			++it;
 	}
 	updateStatus();
+	updateSessionMarks();
 }
 
 QWidget* MainWindow::detachedWindow() const
@@ -2451,6 +2512,7 @@ void MainWindow::handleEvents(const QString& json)
 					p->setState(e.value(QStringLiteral("state")).toString(), e.value(QStringLiteral("detail")).toString());
 				updateNotice();
 				updateStatus();
+				updateSessionMarks();
 			}
 			else if (t == QLatin1String("shared_frame"))
 			{

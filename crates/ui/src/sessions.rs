@@ -542,6 +542,13 @@ impl Manager {
         id
     }
 
+    /// Vorführsitzung einem Ziel zuordnen (Punkt am Symbol im Baum).
+    pub fn set_demo_target(&mut self, s: SessionId, target: Uuid) {
+        if let Some(x) = self.sessions.get_mut(&s) {
+            x.spec.target = target;
+        }
+    }
+
     /// Vorführsitzung mit erzeugtem Bild (ohne Worker).
     /// Testhilfe: verbundene Vorführsitzung für ein bestimmtes Ziel.
     #[cfg(test)]
