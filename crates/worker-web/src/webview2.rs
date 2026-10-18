@@ -548,7 +548,7 @@ impl Worker {
             // Faden; GetKeyState kennt Strg/Alt/Umschalt hier nicht (Strg+Bild↓ kam sonst nicht an).
             let down = |k: u16| unsafe { GetAsyncKeyState(k as i32) } < 0;
             let key = ReservedKey { vk, ctrl: down(VK_CONTROL), alt: down(VK_MENU), shift: down(VK_SHIFT) };
-            if me.0.keys.borrow().contains(&key) {
+            if is_reserved(&me.0.keys.borrow(), &key) {
                 unsafe {
                     let _ = args.SetHandled(true);
                 }
@@ -1037,6 +1037,15 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
     (1..10_000).map(|i| dir.join(format!("{stem} ({i}){ext}"))).find(|p| !p.exists()).unwrap_or(first)
 }
 
+/// Tasten, die immer dem Hauptprogramm gehören, auch wenn es sie (noch) nicht als Kurzbefehl meldet:
+/// Strg+W schließt den Tab, nie die Seite.
+const ALWAYS_RESERVED: [ReservedKey; 1] = [ReservedKey { vk: 0x57, ctrl: true, alt: false, shift: false }];
+
+/// Geht die Taste ans Hauptprogramm statt an die Seite?
+fn is_reserved(keys: &[ReservedKey], key: &ReservedKey) -> bool {
+    ALWAYS_RESERVED.contains(key) || keys.contains(key)
+}
+
 fn is_auto_open(name: &str) -> bool {
     Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(AUTO_OPEN_EXT))
 }
@@ -1088,6 +1097,17 @@ mod tests {
         assert_eq!(unique_path(d.path(), "a.ica"), d.path().join("a (2).ica"));
         std::fs::write(d.path().join("rohdatei"), b"1").unwrap();
         assert_eq!(unique_path(d.path(), "rohdatei"), d.path().join("rohdatei (1)"));
+    }
+
+    #[test]
+    fn ctrl_w_always_goes_to_the_main_program() {
+        let ctrl_w = ReservedKey { vk: 0x57, ctrl: true, ..Default::default() };
+        assert!(is_reserved(&[], &ctrl_w), "auch ohne gemeldete Kurzbefehle");
+        assert!(!is_reserved(&[], &ReservedKey { vk: 0x57, ..Default::default() }), "W allein gehört der Seite");
+        assert!(!is_reserved(&[], &ReservedKey { vk: 0x57, ctrl: true, shift: true, ..Default::default() }));
+        let ctrl_pgdn = ReservedKey { vk: 0x22, ctrl: true, ..Default::default() };
+        assert!(!is_reserved(&[], &ctrl_pgdn));
+        assert!(is_reserved(&[ctrl_pgdn], &ctrl_pgdn));
     }
 
     #[test]
