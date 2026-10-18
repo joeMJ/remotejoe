@@ -206,6 +206,8 @@ private:
 	QLineEdit* m_akWait = nullptr;
 	QLineEdit* m_akMax = nullptr;
 	QComboBox* m_akReconnect = nullptr;
+	QLineEdit* m_akUser = nullptr;
+	QLineEdit* m_akPass = nullptr;
 	QComboBox* m_psrp = nullptr;
 	QComboBox* m_psrpAuth = nullptr;
 	QLineEdit* m_psrpPort = nullptr;

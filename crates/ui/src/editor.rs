@@ -280,6 +280,12 @@ impl App {
             v["clipboard_effective"] = json!(clip_str(edit::folder_clipboard(&self.index, id)));
         }
         v["credential"] = self.credential_section(id, node.is_some_and(|n| matches!(n, Node::Target(_))));
+        // Zweiter Zugangsdatensatz „Sitzung“ (nur Benutzername; das Kennwort verlässt die Schlüsseldatenbank nie).
+        let aux = settings.credentials.get(rj_core::autokeys::SESSION_CREDENTIAL).map(|r| {
+            let username = self.vault.as_ref().and_then(|v| v.credential(r.entry)).map(|c| c.data.username).unwrap_or_default();
+            json!({ "name": rj_core::autokeys::SESSION_CREDENTIAL, "exists": true, "username": username })
+        });
+        v["aux_credential"] = aux.unwrap_or_else(|| json!({ "name": rj_core::autokeys::SESSION_CREDENTIAL, "exists": false, "username": "" }));
         v.to_string()
     }
 
@@ -321,6 +327,9 @@ impl App {
         let r = self.edit_value(&c);
         // Ein mitgegebenes Kennwort überschreiben, sobald es verarbeitet ist.
         if let Some(Value::String(pw)) = c.get_mut("credential").and_then(|x| x.get_mut("password")) {
+            zeroize::Zeroize::zeroize(pw);
+        }
+        if let Some(Value::String(pw)) = c.get_mut("aux_credential").and_then(|x| x.get_mut("password")) {
             zeroize::Zeroize::zeroize(pw);
         }
         for k in ["community", "auth_password", "priv_password"] {
@@ -906,6 +915,13 @@ impl App {
                 return Err(e);
             }
         }
+        // Zweiter Zugangsdatensatz „Sitzung“ für die Tastenfolge.
+        if let Some(aux) = c.get("aux_credential") {
+            if let Err(e) = self.apply_aux_credential(id, aux) {
+                self.index = before;
+                return Err(e);
+            }
+        }
         let res = (|| -> Result<(), String> {
             let protocol = match &node {
                 Some(Node::Target(t)) => Some(t.protocol),
@@ -1069,6 +1085,38 @@ impl App {
         if !rj_core::inherit::set_credential_mode(&mut self.index, id, mode) {
             return Err("Objekt nicht gefunden".into());
         }
+        Ok(())
+    }
+
+    /// Zweiten, benannten Zugangsdatensatz des Ziels anlegen oder ändern (Kennwort der Sitzung für die Tastenfolge).
+    /// Leere Felder lassen den bisherigen Wert; es wird nichts angelegt, solange nichts eingegeben ist.
+    fn apply_aux_credential(&mut self, id: Uuid, aux: &Value) -> Result<(), String> {
+        let name = str_of(aux, "name").filter(|n| !n.is_empty()).unwrap_or(rj_core::autokeys::SESSION_CREDENTIAL).to_string();
+        let username = str_of(aux, "username").map(str::to_string);
+        // Kennwort byte-genau: kein Trimmen, keine Normalisierung.
+        let password = str_of(aux, "password").filter(|p| !p.is_empty()).map(Secret::from_str_exact);
+        let existing = rj_core::inherit::settings_mut(&mut self.index, id).and_then(|s| s.credentials.get(&name).cloned());
+        if existing.is_none() && username.as_deref().unwrap_or_default().is_empty() && password.is_none() {
+            return Ok(());
+        }
+        let title = match edit::node(&self.index, id) {
+            Some(n) => format!("{} – {name}", n.name()),
+            None => name.clone(),
+        };
+        let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
+        let entry = match existing.as_ref().map(|r| r.entry).filter(|e| vault.is_own_entry(*e)) {
+            Some(e) => {
+                let old = vault.credential(e).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
+                let data = CredentialData { username: username.unwrap_or(old.data.username.clone()), password: password.unwrap_or(old.data.password.clone()), ..old.data };
+                vault.update_credential(e, data).map_err(|e| e.to_string())?;
+                e
+            }
+            None => vault
+                .add_credential(CredentialData { title: title.clone(), username: username.unwrap_or_default(), password: password.unwrap_or_default(), ..Default::default() })
+                .map_err(|e| e.to_string())?,
+        };
+        let s = rj_core::inherit::settings_mut(&mut self.index, id).ok_or("Objekt nicht gefunden")?;
+        s.credentials.insert(name, CredentialRef { entry, last_title: Some(title) });
         Ok(())
     }
 
@@ -1405,6 +1453,36 @@ mod tests {
         let e = j(app.editor_json(Uuid::parse_str(&rdp).unwrap()));
         let a = &e["options"]["auto_keys"];
         assert_eq!((a["enabled"].as_bool(), a["script"].as_str(), a["trigger"].as_str(), a["wait_ms"].as_u64(), a["on_reconnect"].as_str()), (Some(true), Some(script), Some("delay"), Some(1500), Some("first_only")), "{e}");
+    }
+
+    #[test]
+    fn second_session_credential_is_stored_in_the_vault_and_used_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let t = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "rdp", "name": "desktop" }))["id"].as_str().unwrap().to_string();
+        let tid = Uuid::parse_str(&t).unwrap();
+        // Vorher: nichts angelegt.
+        let e = j(app.editor_json(tid));
+        assert_eq!((e["aux_credential"]["exists"].as_bool(), e["aux_credential"]["username"].as_str()), (Some(false), Some("")));
+        // Leere Angaben legen nichts an.
+        let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": {}, "aux_credential": { "name": "Sitzung", "username": "", "password": "" } }));
+        assert!(r["error"].is_null(), "{r}");
+        assert!(app.auto_key_credentials(&app.target(tid).cloned().unwrap()).is_empty());
+        // Anlegen: Benutzer und Kennwort; das Kennwort steht nur in der Schlüsseldatenbank.
+        let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "options": { "auto_keys": { "enabled": true, "script": "Text {cred:Sitzung:password}" } } }, "aux_credential": { "name": "Sitzung", "username": "anna2", "password": "zweites Kennwort" } }));
+        assert!(r["error"].is_null() && r["errors"].as_object().is_none_or(|e| e.is_empty()), "{r}");
+        let named = app.auto_key_credentials(&app.target(tid).cloned().unwrap());
+        assert_eq!((named["Sitzung"].username.as_str(), named["Sitzung"].password.0.as_slice()), ("anna2", b"zweites Kennwort".as_slice()));
+        let e = j(app.editor_json(tid));
+        assert_eq!((e["aux_credential"]["exists"].as_bool(), e["aux_credential"]["username"].as_str()), (Some(true), Some("anna2")));
+        assert!(!e.to_string().contains("zweites Kennwort"), "Kennwort darf nie im Editor-JSON stehen");
+        let index = serde_json::to_string(&app.index).unwrap();
+        assert!(!index.contains("zweites Kennwort"), "Kennwort darf nie im Index stehen");
+        // Ändern: nur den Benutzer; das Kennwort bleibt.
+        cmd(&mut app, json!({ "op": "update", "id": t, "fields": {}, "aux_credential": { "name": "Sitzung", "username": "anna3" } }));
+        let named = app.auto_key_credentials(&app.target(tid).cloned().unwrap());
+        assert_eq!((named["Sitzung"].username.as_str(), named["Sitzung"].password.0.as_slice()), ("anna3", b"zweites Kennwort".as_slice()));
     }
 
     #[test]

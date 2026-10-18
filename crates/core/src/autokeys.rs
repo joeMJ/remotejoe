@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::Secret;
 
+/// Name des zweiten Zugangsdatensatzes, den der Editor am Ziel anlegt (`{cred:Sitzung:password}`).
+pub const SESSION_CREDENTIAL: &str = "Sitzung";
+
 /// Höchstzahl der Schritte und Gesamtlänge der Pausen (Schutz vor Fehleingaben).
 pub const MAX_STEPS: usize = 200;
 pub const MAX_PAUSE_MS: u32 = 120_000;
@@ -320,16 +323,29 @@ pub fn parse_script(script: &str) -> Result<Vec<KeyStep>, String> {
 
 /// Prüft die Platzhalter eines Textes, ohne Werte einzusetzen.
 fn check_placeholders(text: &str) -> Result<(), String> {
-    expand_with(text, &mut |_| Some(Secret::from_str_exact(""))).map(|_| ())
+    expand_with(text, &mut |_, _| Some(Secret::from_str_exact(""))).map(|_| ())
 }
 
-/// Setzt `{cred:feld}` ein. Fehlt ein Feld oder ist ein Platzhalter ungültig, gibt es einen Fehler.
-pub fn expand_text(text: &str, creds: &dyn Fn(&str) -> Option<Secret>) -> Result<Secret, String> {
-    let mut f = |name: &str| creds(name);
+/// Namen der Zugangsdatensätze, die ein Text mit `{cred:Name:feld}` anspricht (ohne die Vorgabe `{cred:feld}`).
+pub fn named_credentials(script: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let _ = expand_with(script, &mut |name, _| {
+        if let Some(n) = name {
+            out.insert(n.to_string());
+        }
+        Some(Secret::from_str_exact(""))
+    });
+    out
+}
+
+/// Setzt `{cred:feld}` (Zugangsdaten des Ziels) und `{cred:Name:feld}` (benannter Zugangsdatensatz) ein.
+/// `creds` bekommt (Name, Feld). Fehlt ein Feld oder ist ein Platzhalter ungültig, gibt es einen Fehler.
+pub fn expand_text(text: &str, creds: &dyn Fn(Option<&str>, &str) -> Option<Secret>) -> Result<Secret, String> {
+    let mut f = |name: Option<&str>, field: &str| creds(name, field);
     expand_with(text, &mut f)
 }
 
-fn expand_with(text: &str, creds: &mut dyn FnMut(&str) -> Option<Secret>) -> Result<Secret, String> {
+fn expand_with(text: &str, creds: &mut dyn FnMut(Option<&str>, &str) -> Option<Secret>) -> Result<Secret, String> {
     let mut out = Vec::new();
     let mut rest = text;
     while let Some(pos) = rest.find(['{', '}']) {
@@ -345,11 +361,20 @@ fn expand_with(text: &str, creds: &mut dyn FnMut(&str) -> Option<Secret>) -> Res
         }
         let end = tail.find('}').ok_or("„{“ ohne schließende Klammer (doppelt schreiben: {{)")?;
         let inner = &tail[1..end];
-        let field = inner.strip_prefix("cred:").ok_or_else(|| format!("Platzhalter „{{{inner}}}“ unbekannt (erlaubt: {{cred:password}}, {{cred:username}}, {{cred:domain}})"))?;
+        let spec = inner.strip_prefix("cred:").ok_or_else(|| format!("Platzhalter „{{{inner}}}“ unbekannt (erlaubt: {{cred:password}}, {{cred:Name:password}}, auch username und domain)"))?;
+        // `Feld` oder `Name:Feld` (der Name darf keinen Doppelpunkt enthalten).
+        let (name, field) = match spec.rsplit_once(':') {
+            Some((n, f)) if !n.trim().is_empty() => (Some(n.trim()), f),
+            Some(_) => return Err(format!("Platzhalter „{{{inner}}}“: Name des Zugangsdatensatzes fehlt")),
+            None => (None, spec),
+        };
         if !matches!(field, "password" | "username" | "domain") {
             return Err(format!("Zugangsdatenfeld „{field}“ unbekannt (erlaubt: password, username, domain)"));
         }
-        let v = creds(field).ok_or_else(|| format!("Zugangsdatenfeld „{field}“ ist für dieses Ziel leer"))?;
+        let v = creds(name, field).ok_or_else(|| match name {
+            Some(n) => format!("Zugangsdatensatz „{n}“ nicht gefunden oder Feld „{field}“ leer"),
+            None => format!("Zugangsdatenfeld „{field}“ ist für dieses Ziel leer"),
+        })?;
         out.extend_from_slice(v.as_bytes());
         rest = &tail[end + 1..];
     }
@@ -420,6 +445,7 @@ mod tests {
         assert!(parse_script("Tanzen").unwrap_err().contains("Unbekannter Schritt"));
         assert!(parse_script("Taste Enter\n{cred:password}").unwrap_err().contains("Es fehlt das Wort „Text“"));
         assert!(parse_script("Text {cred:token}").unwrap_err().contains("unbekannt"));
+        assert!(parse_script("Text {cred:Sitzung:password}").is_ok());
         assert!(parse_script("Text {unsinn}").unwrap_err().contains("unbekannt"));
         assert!(parse_script("Text {offen").unwrap_err().contains("schließende"));
         assert!(parse_script("Taste F13").is_err());
@@ -428,14 +454,21 @@ mod tests {
 
     #[test]
     fn placeholders_expand_and_braces_escape() {
-        let creds = |f: &str| match f {
-            "password" => Some(Secret::from_str_exact("pä{ss}")),
-            "username" => Some(Secret::from_str_exact("anna")),
+        let creds = |n: Option<&str>, f: &str| match (n, f) {
+            (None, "password") => Some(Secret::from_str_exact("pä{ss}")),
+            (None, "username") => Some(Secret::from_str_exact("anna")),
+            (Some("Sitzung"), "password") => Some(Secret::from_str_exact("zweit")),
             _ => None,
         };
-        let r = expand_text("{cred:username}:{cred:password} {{ok}}", &creds).unwrap();
-        assert_eq!(r.as_bytes(), "anna:pä{ss} {ok}".as_bytes());
+        let r = expand_text("{cred:username}:{cred:password} {{ok}} {cred:Sitzung:password}", &creds).unwrap();
+        assert_eq!(r.as_bytes(), "anna:pä{ss} {ok} zweit".as_bytes());
         assert!(expand_text("{cred:domain}", &creds).unwrap_err().contains("leer"));
+        assert!(expand_text("{cred:Fremd:password}", &creds).unwrap_err().contains("Zugangsdatensatz „Fremd“"));
+        assert!(expand_text("{cred::password}", &creds).unwrap_err().contains("Name"));
+        assert!(expand_text("{cred:Sitzung:token}", &creds).unwrap_err().contains("unbekannt"));
+        // Namen für die Auflösung beim Verbinden.
+        let n = named_credentials("Text {cred:Sitzung:password}\nText {cred:password}\nText {cred:Büro:username}");
+        assert_eq!(n.into_iter().collect::<Vec<_>>(), vec!["Büro".to_string(), "Sitzung".to_string()]);
     }
 
     #[test]

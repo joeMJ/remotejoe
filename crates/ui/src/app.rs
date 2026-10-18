@@ -779,7 +779,7 @@ impl App {
         self.payload(r, protocol)
     }
 
-    fn target(&self, id: Uuid) -> Option<&Target> {
+    pub(crate) fn target(&self, id: Uuid) -> Option<&Target> {
         match self.index.path_to(id)?.last()? {
             Node::Target(t) => Some(t),
             _ => None,
@@ -911,6 +911,7 @@ impl App {
                 keepalive_secs: self.config.connection.keepalive_secs,
             },
             credentials: CredentialPayload { username: String::new(), domain: None, password: SecretBytes(Vec::new()), private_key: None },
+            named_credentials: Default::default(),
         };
         let s = self.sessions.open(spec);
         self.probe = Some(FieldProbe { s, target, started: std::time::Instant::now(), saw_loading: false, next_detect: None, attempts: 0, last: None });
@@ -1051,6 +1052,7 @@ impl App {
                 keepalive_secs: self.config.connection.keepalive_secs,
             },
             credentials: payload,
+            named_credentials: self.auto_key_credentials(&t),
         };
         if let Some(def) = rj_tunnel::plan(&self.index, target).cloned() {
             let tspec = match self.tunnel_spec(&def, target) {
@@ -1116,6 +1118,27 @@ impl App {
             self.session_tunnels.insert(s, u);
         }
         s
+    }
+
+    /// Benannte Zugangsdatensätze, die die Tastenfolge des Ziels mit `{cred:Name:feld}` anspricht; nur gefundene.
+    pub(crate) fn auto_key_credentials(&self, t: &Target) -> std::collections::BTreeMap<String, CredentialPayload> {
+        let script = match &t.options {
+            ProtocolOptions::Rdp(o) => o.auto_keys.as_ref(),
+            ProtocolOptions::Ssh(o) => o.auto_keys.as_ref(),
+            _ => None,
+        }
+        .filter(|a| a.enabled)
+        .map(|a| a.script.clone())
+        .unwrap_or_default();
+        let mut out = std::collections::BTreeMap::new();
+        for name in rj_core::autokeys::named_credentials(&script) {
+            if let Ok(Some(r)) = resolve_credential_named(&self.index, t.id, &name) {
+                if let Ok(p) = self.payload(&r, t.protocol) {
+                    out.insert(name, p);
+                }
+            }
+        }
+        out
     }
 
     /// Hat das Ziel (SSH) „Ältere Verfahren“ eingeschaltet?
@@ -1340,6 +1363,7 @@ impl App {
                     keepalive_secs: 30,
                 },
                 credentials: CredentialPayload { username: String::new(), domain: None, password: SecretBytes(Vec::new()), private_key: None },
+                named_credentials: Default::default(),
             };
             let s = self.sessions.open(spec);
             match web_tab {
@@ -1719,6 +1743,42 @@ mod tunnel_tests {
             std::thread::sleep(Duration::from_millis(10));
         };
         assert!(error.contains("Tunnel „VPN“"), "{error}");
+    }
+
+    /// Die Tastenfolge kann einen zweiten, benannten Zugangsdatensatz einsetzen (anderes Kennwort für die Sitzung).
+    #[test]
+    fn auto_keys_resolve_named_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::create(&dir.path().join("t.kdbx"), MasterKey::password("pw"), KdfChoice::Weak, rj_core::config::IndexStorage::KdbxCustomData);
+        let main = vault.add_credential(CredentialData { title: "RDP".into(), username: "anna".into(), password: Secret::from_str_exact("erstes"), ..Default::default() }).unwrap();
+        let second = vault.add_credential(CredentialData { title: "Sitzung".into(), username: "anna2".into(), password: Secret::from_str_exact("zweites Kennwort"), ..Default::default() }).unwrap();
+        let mut idx = Index::default();
+        let mut f = Folder::new("Ubuntu");
+        f.settings.credentials.insert("default".into(), CredentialRef { entry: main, last_title: Some("RDP".into()) });
+        f.settings.credentials.insert("Sitzung".into(), CredentialRef { entry: second, last_title: Some("Sitzung".into()) });
+        let mut t = Target::new("desktop", Protocol::Rdp, "desktop.example.test");
+        t.options = ProtocolOptions::Rdp(rj_core::model::RdpOptions {
+            auto_keys: Some(rj_core::autokeys::AutoKeys { enabled: true, script: "Taste Enter\nText {cred:Sitzung:password}\nText {cred:Gibtsnicht:password}".into(), ..Default::default() }),
+            ..Default::default()
+        });
+        let target = t.id;
+        f.children.push(Node::Target(t));
+        idx.root.children.push(Node::Folder(f));
+        let mut app = App::new(false);
+        app.index = idx;
+        app.vault = Some(vault);
+        let t = app.target(target).cloned().unwrap();
+        let named = app.auto_key_credentials(&t);
+        // Gefunden wird nur, was es gibt; für „Gibtsnicht“ meldet die Tastenfolge beim Senden den Fehler.
+        assert_eq!(named.keys().collect::<Vec<_>>(), vec!["Sitzung"]);
+        assert_eq!(named["Sitzung"].password.0, b"zweites Kennwort");
+        assert_eq!(named["Sitzung"].username, "anna2");
+        // Ausgeschaltet: nichts auflösen.
+        let mut off = t.clone();
+        if let ProtocolOptions::Rdp(o) = &mut off.options {
+            o.auto_keys.as_mut().unwrap().enabled = false;
+        }
+        assert!(app.auto_key_credentials(&off).is_empty());
     }
 
     /// „Ältere Verfahren“: gilt für die Stufe selbst und, wenn das Ziel sie eingeschaltet hat, für alle Stufen.

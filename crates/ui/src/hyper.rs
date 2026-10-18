@@ -191,7 +191,7 @@ impl App {
                         };
                         let creds = CredentialPayload { username: String::new(), domain: None, password: SecretBytes(bridge.password.as_bytes().to_vec()), private_key: None };
                         let request = ConnectRequest { host: "127.0.0.1".into(), port: bridge.port, options_json: opts, ..request };
-                        let s = app.open_session(ConnectSpec { target, title, protocol: Protocol::Vnc, request, credentials: creds }, None);
+                        let s = app.open_session(ConnectSpec { target, title, protocol: Protocol::Vnc, request, credentials: creds, named_credentials: Default::default() }, None);
                         app.console_bridges.insert(s, bridge);
                         app.console_sources.insert(s, (target, guest));
                         app.sessions.set_hold(s, true);
@@ -207,7 +207,7 @@ impl App {
                 }
                 let opts = json!({ "clipboard_limit": self.config.connection.clipboard_limit }).to_string();
                 let request = ConnectRequest { host: console_host.to_string(), port: 3389, options_json: opts, ..request };
-                let s = self.open_session(ConnectSpec { target, title, protocol: Protocol::Rdp, request, credentials: c.creds.clone() }, None);
+                let s = self.open_session(ConnectSpec { target, title, protocol: Protocol::Rdp, request, credentials: c.creds.clone(), named_credentials: Default::default() }, None);
                 json!({ "session": s }).to_string()
             }
         }

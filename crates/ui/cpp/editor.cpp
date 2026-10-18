@@ -396,6 +396,8 @@ void PropertiesTab::build()
 	m_akWait = nullptr;
 	m_akMax = nullptr;
 	m_akReconnect = nullptr;
+	m_akUser = nullptr;
+	m_akPass = nullptr;
 	delete layout();
 	qDeleteAll(findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly));
 	auto* lay = new QVBoxLayout(this);
@@ -627,6 +629,27 @@ QWidget* PropertiesTab::pageConnection()
 			help->setWordWrap(true);
 			help->setTextInteractionFlags(Qt::TextSelectableByMouse);
 			f->addRow(QString(), help);
+			// Zweites Kennwort (z. B. Anmeldung an der Sitzung nach dem RDP-Kennwort): im Skript {cred:Sitzung:password}.
+			{
+				const QJsonObject aux = m_data.value(QStringLiteral("aux_credential")).toObject();
+				auto* ah = new QLabel(rjText(m_backend, "edit.autokeys.aux"), w);
+				ah->setObjectName(QStringLiteral("heading"));
+				f->addRow(ah);
+				m_akUser = new QLineEdit(aux.value(QStringLiteral("username")).toString(), w);
+				m_akUser->setAccessibleName(rjText(m_backend, "edit.autokeys.aux.user"));
+				track(m_akUser, QStringLiteral("aux"));
+				f->addRow(rjText(m_backend, "edit.autokeys.aux.user"), m_akUser);
+				m_akPass = new QLineEdit(w);
+				m_akPass->setEchoMode(QLineEdit::Password);
+				m_akPass->setAccessibleName(rjText(m_backend, "edit.autokeys.aux.password"));
+				m_akPass->setPlaceholderText(aux.value(QStringLiteral("exists")).toBool() ? rjText(m_backend, "edit.cred.password.keep") : QString());
+				track(m_akPass, QStringLiteral("aux"));
+				f->addRow(rjText(m_backend, "edit.autokeys.aux.password"), m_akPass);
+				auto* auxHelp = new QLabel(rjText(m_backend, "edit.autokeys.aux.help"), w);
+				auxHelp->setWordWrap(true);
+				auxHelp->setTextInteractionFlags(Qt::TextSelectableByMouse);
+				f->addRow(QString(), auxHelp);
+			}
 			m_akTrigger = new QComboBox(w);
 			m_akTrigger->addItem(rjText(m_backend, "edit.autokeys.trigger.quiet"), QStringLiteral("quiet"));
 			m_akTrigger->addItem(rjText(m_backend, "edit.autokeys.trigger.delay"), QStringLiteral("delay"));
@@ -1325,6 +1348,14 @@ QJsonObject PropertiesTab::collect() const
 		else if (mode == QLatin1String("named"))
 			c.insert(QStringLiteral("name"), m_named->currentText());
 		cmd.insert(QStringLiteral("credential"), c);
+	}
+	if (m_akUser && m_akPass && m_dirty.contains(QStringLiteral("aux")))
+	{
+		QJsonObject a{ { QStringLiteral("name"), QStringLiteral("Sitzung") }, { QStringLiteral("username"), m_akUser->text() } };
+		// Kennwort unverändert (kein Trimmen); leer heißt „unverändert lassen“.
+		if (!m_akPass->text().isEmpty())
+			a.insert(QStringLiteral("password"), m_akPass->text());
+		cmd.insert(QStringLiteral("aux_credential"), a);
 	}
 	return cmd;
 }

@@ -200,7 +200,8 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
     als Platzhalter aus den Zugangsdaten der Sitzung und steht nie im Protokoll.
     **Tastenfolge nach dem Verbinden** (RDP und SSH, je Ziel unter Verbindung → „Nach dem Verbinden“):
     eine Zeile je Schritt – `Taste Enter`, `Text {cred:password}`, `Pause 500` –, zum Beispiel für die
-    zweite Anmeldung am Ubuntu-Desktop nach dem Verbinden. Auslöser ist eine feste Wartezeit oder „Bild
+    zweite Anmeldung am Ubuntu-Desktop nach dem Verbinden; hat die Sitzung ein anderes Kennwort, legt
+    man dafür einen zweiten benannten Zugangsdatensatz an und schreibt `Text {cred:Name:password}`. Auslöser ist eine feste Wartezeit oder „Bild
     bzw. Ausgabe wird ruhig“; wählbar ist auch, ob beim Neuverbinden erneut gesendet wird. Die Folge
     läuft nur, wenn man sie am Ziel einschaltet, das Kennwort wird getippt (nicht kopiert) und nie
     protokolliert, **Esc** bricht sie ab.

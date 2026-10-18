@@ -34,7 +34,7 @@ Knoten im Baum (`children`, Feld `kind`):
   (protokollabhängig, z. B. Zwischenablage-Richtung, Auflösung, Formular-Anmeldung),
   `credential` (Name des benötigten Zugangsdatensatzes, Standard `default`), `settings`, `meta`.
 - `options.auto_keys` (RDP und SSH, optional): Tastenfolge nach dem Verbinden mit `enabled`, `script`
-  (eine Zeile je Schritt: `Taste <Name oder Ctrl+Alt+T>`, `Text <mit {cred:password|username|domain}>`,
+  (eine Zeile je Schritt: `Taste <Name oder Ctrl+Alt+T>`, `Text <mit {cred:password|username|domain} oder {cred:Name:feld} für einen benannten Zugangsdatensatz>`,
   `Pause <ms>`, `#` Kommentar), `trigger` (`quiet` oder `delay`), `wait_ms`, `max_ms` und
   `on_reconnect` (`always`, `first_only`, `manual_only`). Die Zugangsdaten stehen nie im Index,
   nur der Platzhalter.

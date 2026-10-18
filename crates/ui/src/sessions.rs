@@ -23,11 +23,13 @@ pub struct ConnectSpec {
     pub protocol: Protocol,
     pub request: ConnectRequest,
     pub credentials: CredentialPayload,
+    /// Weitere benannte Zugangsdatensätze, die die Tastenfolge einsetzt (`{cred:Name:password}`).
+    pub named_credentials: BTreeMap<String, CredentialPayload>,
 }
 
 /// Nachrichten an den Worker für einen Schritt der Tastenfolge. Die Werte der Zugangsdaten werden erst hier
 /// eingesetzt und erscheinen nirgends sonst.
-fn auto_step_messages(protocol: Protocol, creds: &CredentialPayload, step: &rj_core::autokeys::KeyStep) -> Result<Vec<ToWorker>, String> {
+fn auto_step_messages(protocol: Protocol, creds: &CredentialPayload, named: &BTreeMap<String, CredentialPayload>, step: &rj_core::autokeys::KeyStep) -> Result<Vec<ToWorker>, String> {
     use rj_core::autokeys::{expand_text, Key, KeyStep};
     let input = |e: InputEvent| ToWorker::Input(e);
     let mut out = Vec::new();
@@ -48,11 +50,17 @@ fn auto_step_messages(protocol: Protocol, creds: &CredentialPayload, step: &rj_c
             }
         }
         KeyStep::Text(t) => {
-            let field = |name: &str| match name {
-                "password" => Some(rj_core::Secret::from_bytes(creds.password.0.clone())),
-                "username" => Some(rj_core::Secret::from_str_exact(&creds.username)),
-                "domain" => creds.domain.as_deref().filter(|d| !d.is_empty()).map(rj_core::Secret::from_str_exact),
-                _ => None,
+            let field = |set: Option<&str>, name: &str| {
+                let c = match set {
+                    None => creds,
+                    Some(n) => named.get(n)?,
+                };
+                match name {
+                    "password" => Some(rj_core::Secret::from_bytes(c.password.0.clone())),
+                    "username" => Some(rj_core::Secret::from_str_exact(&c.username)),
+                    "domain" => c.domain.as_deref().filter(|d| !d.is_empty()).map(rj_core::Secret::from_str_exact),
+                    _ => None,
+                }
             };
             let secret = expand_text(t, &field)?;
             if protocol == Protocol::Ssh {
@@ -935,7 +943,7 @@ impl Manager {
             let Some(run) = x.auto.as_mut() else { continue };
             let (steps, done) = run.poll(now, last);
             let running = run.is_running();
-            let (protocol, creds) = (x.spec.protocol, x.spec.credentials.clone());
+            let (protocol, creds, named) = (x.spec.protocol, x.spec.credentials.clone(), x.spec.named_credentials.clone());
             if running && !was_running {
                 let since_move = now.saturating_duration_since(last).as_millis();
                 eprintln!("[remotejoe] Tastenfolge Sitzung {s}: Auslöser erreicht nach {} ms (letzte Bildbewegung vor {since_move} ms)", self.sessions.get(&s).and_then(|x| x.auto.as_ref()).map(|a| a.elapsed_ms(now)).unwrap_or(0));
@@ -950,7 +958,7 @@ impl Manager {
                     rj_core::autokeys::KeyStep::Pause(ms) => format!("Pause {ms} ms"),
                 };
                 eprintln!("[remotejoe] Tastenfolge Sitzung {s}: sende {what}");
-                if let Err(e) = self.send_auto_step(s, protocol, &creds, &step) {
+                if let Err(e) = self.send_auto_step(s, protocol, &creds, &named, &step) {
                     failed = Some(e);
                     break;
                 }
@@ -968,8 +976,8 @@ impl Manager {
         }
     }
 
-    fn send_auto_step(&mut self, s: SessionId, protocol: Protocol, creds: &CredentialPayload, step: &rj_core::autokeys::KeyStep) -> Result<(), String> {
-        for m in auto_step_messages(protocol, creds, step)? {
+    fn send_auto_step(&mut self, s: SessionId, protocol: Protocol, creds: &CredentialPayload, named: &BTreeMap<String, CredentialPayload>, step: &rj_core::autokeys::KeyStep) -> Result<(), String> {
+        for m in auto_step_messages(protocol, creds, named, step)? {
             self.send(s, &m);
         }
         Ok(())
@@ -1155,6 +1163,7 @@ fn demo_spec(title: &str, protocol: Protocol) -> ConnectSpec {
         protocol,
         request: ConnectRequest { host: String::new(), port: 0, width: 80, height: 24, options_json: "{}".into(), connect_timeout_secs: 15, keepalive_secs: 30 },
         credentials: CredentialPayload { username: String::new(), domain: None, password: SecretBytes(Vec::new()), private_key: None },
+        named_credentials: BTreeMap::new(),
     }
 }
 
@@ -1250,8 +1259,12 @@ mod autokeys_tests {
         CredentialPayload { username: "anna".into(), domain: None, password: SecretBytes(b"p\xc3\xa4ss{1}".to_vec()), private_key: None }
     }
 
+    fn named() -> BTreeMap<String, CredentialPayload> {
+        BTreeMap::from([("Sitzung".to_string(), CredentialPayload { username: "sitz".into(), domain: None, password: SecretBytes(b"zweites Kennwort".to_vec()), private_key: None })])
+    }
+
     fn msgs(p: Protocol, line: &str) -> Result<Vec<ToWorker>, String> {
-        auto_step_messages(p, &creds(), &parse_script(line).unwrap()[0])
+        auto_step_messages(p, &creds(), &named(), &parse_script(line).unwrap()[0])
     }
 
     fn manager_with(auto_keys: serde_json::Value) -> (Manager, SessionId) {
@@ -1361,6 +1374,9 @@ mod autokeys_tests {
         assert_eq!(msgs(Protocol::Rdp, "Text {cred:password}").unwrap(), vec![ToWorker::Input(InputEvent::Text("päss{1}".into()))]);
         assert_eq!(msgs(Protocol::Rdp, "Text {cred:username}@x").unwrap(), vec![ToWorker::Input(InputEvent::Text("anna@x".into()))]);
         assert!(msgs(Protocol::Rdp, "Text {cred:domain}").unwrap_err().contains("leer"));
+        // Zweites Kennwort aus einem benannten Zugangsdatensatz; ein unbekannter Name bricht ab.
+        assert_eq!(msgs(Protocol::Rdp, "Text {cred:Sitzung:password}").unwrap(), vec![ToWorker::Input(InputEvent::Text("zweites Kennwort".into()))]);
+        assert!(msgs(Protocol::Rdp, "Text {cred:Fremd:password}").unwrap_err().contains("Fremd"));
         assert!(msgs(Protocol::Rdp, "Pause 10").unwrap().is_empty());
     }
 
