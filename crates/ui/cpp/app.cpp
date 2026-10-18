@@ -358,7 +358,12 @@ std::int32_t rjRunApplication()
 		w.restoreWindowState();
 	else if (!demo)
 		w.resetWindow();
+	// Standardgröße (1280 × 800) oder gespeicherte Größe nie größer als der sichtbare Bildschirmbereich.
+	if (!demo)
+		w.fitToScreen();
 	w.show();
+	if (!demo)
+		QTimer::singleShot(0, &w, [&w] { w.fitToScreen(); });
 	// Echter Start: zuerst die Entsperrmaske für die Schlüsseldatenbank.
 	if (!demo)
 	{

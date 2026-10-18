@@ -1514,7 +1514,17 @@ void MainWindow::copyCredential(const QString& id, const QString& kind)
 	auto* md = new QMimeData;
 	md->setText(text);
 	if (password)
+	{
 		md->setData(QStringLiteral("x-kde-passwordManagerHint"), "secret");
+#ifdef Q_OS_WIN
+		// Windows: Das Kennwort soll weder im Zwischenablageverlauf (Win+V) noch in der Cloud-Zwischenablage
+		// und nicht in Überwachungsprogrammen landen. Qt reicht diese Formate unter ihrem Windows-Namen durch.
+		const QByteArray zero(4, '\0'); // DWORD 0
+		md->setData(QStringLiteral("application/x-qt-windows-mime;value=\"ExcludeClipboardContentFromMonitorProcessing\""), zero);
+		md->setData(QStringLiteral("application/x-qt-windows-mime;value=\"CanIncludeInClipboardHistory\""), zero);
+		md->setData(QStringLiteral("application/x-qt-windows-mime;value=\"CanUploadToCloudClipboard\""), zero);
+#endif
+	}
 	QGuiApplication::clipboard()->setMimeData(md);
 	const int secs = r.value(QStringLiteral("clear_secs")).toInt(30);
 	if (!password)

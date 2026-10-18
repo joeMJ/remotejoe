@@ -18,6 +18,23 @@ pub fn lock_path(path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Windows: Datei kurz von einem anderen Prozess geöffnet (Virenscanner, Indexdienst): Zugriff verweigert (5),
+/// Sharing-Verletzung (32) oder Sperr-Verletzung (33). Solche Fehler gehen meist nach Millisekunden vorbei.
+fn is_sharing_violation(e: &io::Error) -> bool {
+    cfg!(windows) && matches!(e.raw_os_error(), Some(5) | Some(32) | Some(33))
+}
+
+/// Wiederholt `f`, solange `transient` den Fehler als vorübergehend einstuft, höchstens `total` lang.
+fn retry_while<T>(mut f: impl FnMut() -> io::Result<T>, transient: impl Fn(&io::Error) -> bool, total: std::time::Duration) -> io::Result<T> {
+    let deadline = std::time::Instant::now() + total;
+    loop {
+        match f() {
+            Err(e) if transient(&e) && std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(25)),
+            r => return r,
+        }
+    }
+}
+
 /// Exklusive Sperre gegen gleichzeitiges Schreiben. Wird beim Freigeben gelöst.
 #[derive(Debug)]
 pub struct WriteLock {
@@ -83,6 +100,9 @@ impl WriteLock {
 impl Drop for WriteLock {
     fn drop(&mut self) {
         let _ = self.file.unlock();
+        // Unter Windows bleibt die Sperrdatei liegen: Eine gelöschte, aber noch von einem Wartenden geöffnete
+        // Datei lässt zwei Schreiber gleichzeitig die Sperre bekommen (verschiedene „Generationen“ derselben Datei).
+        #[cfg(not(windows))]
         let _ = fs::remove_file(&self.path);
     }
 }
@@ -96,8 +116,9 @@ pub fn atomic_write_with_backup(path: &Path, data: &[u8]) -> io::Result<()> {
 
 /// Wie [`atomic_write_with_backup`], aber der Aufrufer hält die Sperre bereits.
 pub fn atomic_write_locked(path: &Path, data: &[u8]) -> io::Result<()> {
+    let patience = std::time::Duration::from_secs(3);
     if path.exists() {
-        fs::copy(path, backup_path(path))?;
+        retry_while(|| fs::copy(path, backup_path(path)), is_sharing_violation, patience)?;
     }
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let file_name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "kein Dateiname"))?;
@@ -106,12 +127,13 @@ pub fn atomic_write_locked(path: &Path, data: &[u8]) -> io::Result<()> {
     tmp_name.push(format!(".tmp{}", std::process::id()));
     let tmp = dir.join(tmp_name);
     {
-        let mut f = File::create(&tmp)?;
+        let mut f = retry_while(|| File::create(&tmp), is_sharing_violation, patience)?;
         f.write_all(data)?;
         f.sync_all()?;
     }
-    if let Err(e) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
+    // Ein Virenscanner oder Indexdienst hält die frisch geschriebene Datei oft kurz offen (Windows, Fehler 32).
+    if let Err(e) = retry_while(|| fs::rename(&tmp, path), is_sharing_violation, patience) {
+        let _ = retry_while(|| fs::remove_file(&tmp), is_sharing_violation, patience);
         return Err(e);
     }
     #[cfg(unix)]
@@ -137,7 +159,32 @@ mod tests {
         atomic_write_with_backup(&p, b"drei").unwrap();
         assert_eq!(fs::read(backup_path(&p)).unwrap(), b"zwei");
         // Keine temporären Reste.
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+        // Unter Windows bleibt die Sperrdatei liegen.
+        let files = fs::read_dir(dir.path()).unwrap().filter_map(|e| e.ok()).filter(|e| !e.file_name().to_string_lossy().ends_with(".lock")).count();
+        assert_eq!(files, 2);
+    }
+
+    #[test]
+    fn transient_errors_are_retried_until_they_pass_but_others_fail_at_once() {
+        let mut n = 0;
+        let r = retry_while(
+            || {
+                n += 1;
+                if n < 3 { Err(io::Error::from_raw_os_error(32)) } else { Ok(n) }
+            },
+            |e| e.raw_os_error() == Some(32),
+            std::time::Duration::from_secs(2),
+        );
+        assert_eq!(r.unwrap(), 3);
+        // Anderer Fehler: sofort, ohne Wiederholung.
+        let mut calls = 0;
+        let r: io::Result<()> = retry_while(|| { calls += 1; Err(io::Error::from(io::ErrorKind::NotFound)) }, |e| e.raw_os_error() == Some(32), std::time::Duration::from_secs(2));
+        assert!(r.is_err());
+        assert_eq!(calls, 1);
+        // Dauerhafter vorübergehender Fehler: gibt nach der Frist auf.
+        let t0 = std::time::Instant::now();
+        let r: io::Result<()> = retry_while(|| Err(io::Error::from_raw_os_error(32)), |e| e.raw_os_error() == Some(32), std::time::Duration::from_millis(200));
+        assert!(r.is_err() && t0.elapsed() >= std::time::Duration::from_millis(200));
     }
 
     #[test]

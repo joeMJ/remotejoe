@@ -15,15 +15,19 @@ class BrandStrip : public QWidget
 	Q_OBJECT
 public:
 	BrandStrip(QWidget* window, const QString& name, const QString& version, QWidget* parent = nullptr);
+	/// Farbe der Versionsangabe nach dem Farbschema (hell/dunkel) setzen.
+	void applyVersionColor();
 	/// Die Tab-Leiste legt Eck-Widgets nach `sizeHint` an; bei festgesetzter Höhe gilt diese.
 	QSize sizeHint() const override;
 
 protected:
 	void mousePressEvent(QMouseEvent* e) override;
 	void mouseDoubleClickEvent(QMouseEvent* e) override;
+	void changeEvent(QEvent* e) override;
 
 private:
 	QWidget* m_window;
+	QLabel* m_ver = nullptr;
 };
 
 /// Hamburger-Knopf (nur im Platzsparmodus), Minimieren, Maximieren und Schließen.
@@ -44,9 +48,12 @@ protected:
 
 private:
 	void paintBurgerIcon();
+	void paintGlyphs();
 	QWidget* m_window;
 	QToolButton* m_burger;
+	QToolButton* m_min = nullptr;
 	QToolButton* m_max;
+	QToolButton* m_close = nullptr;
 };
 
 /// Fenster ein- oder ausmaximieren.

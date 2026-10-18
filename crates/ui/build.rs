@@ -8,6 +8,15 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         b = b.qt_module("DBus");
     }
+    // MSVC liest Quelltexte sonst in der Systemcodepage: Umlaute und Sonderzeichen in Texten wären falsch.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        // SAFETY: Der Rückruf setzt nur einen Übersetzerschalter.
+        b = unsafe {
+            b.cc_builder(|cc| {
+                cc.flag("/utf-8");
+            })
+        };
+    }
     b
         .qrc("res/remotejoe.qrc")
         .include_dir("cpp")

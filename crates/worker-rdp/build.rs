@@ -14,6 +14,10 @@ fn main() {
     };
     let mut build = cc::Build::new();
     build.file("csrc/rjrdp.c").warnings(false);
+    // MSVC: Quelltext als UTF-8 lesen (Umlaute in Meldungen).
+    if build.get_compiler().is_like_msvc() {
+        build.flag("/utf-8");
+    }
     for p in &lib.include_paths {
         build.include(p);
     }

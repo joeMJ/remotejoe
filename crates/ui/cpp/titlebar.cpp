@@ -23,10 +23,43 @@ const char* const kHelpUrl = "https://github.com/joeMJ/remotejoe#readme";
 
 namespace {
 
-QToolButton* windowButton(QStyle::StandardPixmap icon, const QString& name, QWidget* parent)
+enum class Glyph { Minimize, Maximize, Restore, Close };
+
+/// Eigene Symbole in der Textfarbe des Farbschemas: Die Standardsymbole des Systemstils sind unter Windows im
+/// dunklen Schema dunkelgrau auf dunkel und kaum zu sehen.
+QIcon glyphIcon(Glyph g, const QColor& color, qreal dpr)
+{
+	QPixmap pm(QSize(16, 16) * dpr);
+	pm.setDevicePixelRatio(dpr);
+	pm.fill(Qt::transparent);
+	QPainter p(&pm);
+	p.setPen(QPen(color, 1.3, Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
+	switch (g)
+	{
+	case Glyph::Minimize:
+		p.drawLine(QPointF(3.5, 11.5), QPointF(12.5, 11.5));
+		break;
+	case Glyph::Maximize:
+		p.drawRect(QRectF(3.5, 3.5, 9, 9));
+		break;
+	case Glyph::Restore:
+		p.drawRect(QRectF(3.5, 5.5, 7, 7));
+		p.drawLine(QPointF(5.5, 3.5), QPointF(12.5, 3.5));
+		p.drawLine(QPointF(12.5, 3.5), QPointF(12.5, 10.5));
+		p.drawLine(QPointF(10.5, 10.5), QPointF(12.5, 10.5));
+		break;
+	case Glyph::Close:
+		p.drawLine(QPointF(3.5, 3.5), QPointF(12.5, 12.5));
+		p.drawLine(QPointF(12.5, 3.5), QPointF(3.5, 12.5));
+		break;
+	}
+	p.end();
+	return QIcon(pm);
+}
+
+QToolButton* windowButton(const QString& name, QWidget* parent)
 {
 	auto* b = new QToolButton(parent);
-	b->setIcon(parent->style()->standardIcon(icon));
 	b->setAutoRaise(true);
 	b->setFocusPolicy(Qt::NoFocus);
 	b->setFixedSize(34, 26);
@@ -55,10 +88,9 @@ BrandStrip::BrandStrip(QWidget* window, const QString& name, const QString& vers
 	f.setPointSizeF(f.pointSizeF() * 0.9);
 	title->setFont(f);
 	auto* ver = new QLabel(QStringLiteral("V %1").arg(version), this);
+	m_ver = ver;
 	ver->setFont(f);
-	QPalette p = ver->palette();
-	p.setColor(QPalette::WindowText, palette().color(QPalette::PlaceholderText));
-	ver->setPalette(p);
+	applyVersionColor();
 	l->addWidget(logo);
 	l->addWidget(title);
 	l->addWidget(ver);
@@ -79,6 +111,23 @@ QSize WindowControls::sizeHint() const
 	if (minimumHeight() > 0)
 		s.setHeight(minimumHeight());
 	return s;
+}
+
+void BrandStrip::applyVersionColor()
+{
+	if (!m_ver)
+		return;
+	// Nebentext-Farbe des aktuellen Farbschemas; der Stylesheet-Hintergrund der Leiste ist die Schaltflächenfarbe.
+	QPalette p = m_ver->palette();
+	p.setColor(QPalette::WindowText, qApp->palette().color(QPalette::PlaceholderText));
+	m_ver->setPalette(p);
+}
+
+void BrandStrip::changeEvent(QEvent* e)
+{
+	QWidget::changeEvent(e);
+	if (e->type() == QEvent::PaletteChange || e->type() == QEvent::ApplicationPaletteChange)
+		applyVersionColor();
 }
 
 void toggleMaximized(QWidget* window)
@@ -129,9 +178,11 @@ WindowControls::WindowControls(QWidget* window, QWidget* parent)
 	m_burger->setStyleSheet(QStringLiteral("QToolButton::menu-indicator { image: none; }"));
 	m_burger->hide();
 	paintBurgerIcon();
-	auto* min = windowButton(QStyle::SP_TitleBarMinButton, tr("Minimieren"), this);
-	m_max = windowButton(QStyle::SP_TitleBarMaxButton, tr("Maximieren"), this);
-	auto* close = windowButton(QStyle::SP_TitleBarCloseButton, tr("Schließen"), this);
+	m_min = windowButton(tr("Minimieren"), this);
+	m_max = windowButton(tr("Maximieren"), this);
+	m_close = windowButton(tr("Schließen"), this);
+	auto* min = m_min;
+	auto* close = m_close;
 	close->setObjectName(QStringLiteral("titleClose"));
 	l->addWidget(m_burger);
 	l->addWidget(min);
@@ -154,7 +205,7 @@ void WindowControls::paintBurgerIcon()
 	pm.setDevicePixelRatio(dpr);
 	pm.fill(Qt::transparent);
 	QPainter p(&pm);
-	p.setPen(QPen(palette().color(QPalette::ButtonText), 2, Qt::SolidLine, Qt::RoundCap));
+	p.setPen(QPen(qApp->palette().color(QPalette::ButtonText), 2, Qt::SolidLine, Qt::RoundCap));
 	for (int y : { 4, 9, 14 })
 		p.drawLine(3, y, 15, y);
 	p.end();
@@ -164,8 +215,22 @@ void WindowControls::paintBurgerIcon()
 void WindowControls::changeEvent(QEvent* e)
 {
 	QWidget::changeEvent(e);
-	if (e->type() == QEvent::PaletteChange)
+	if (e->type() == QEvent::PaletteChange || e->type() == QEvent::ApplicationPaletteChange)
+	{
 		paintBurgerIcon();
+		paintGlyphs();
+	}
+}
+
+void WindowControls::paintGlyphs()
+{
+	if (!m_min || !m_max || !m_close)
+		return;
+	const QColor c = qApp->palette().color(QPalette::ButtonText);
+	const qreal dpr = devicePixelRatioF();
+	m_min->setIcon(glyphIcon(Glyph::Minimize, c, dpr));
+	m_max->setIcon(glyphIcon(m_window->isMaximized() ? Glyph::Restore : Glyph::Maximize, c, dpr));
+	m_close->setIcon(glyphIcon(Glyph::Close, c, dpr));
 }
 
 void WindowControls::setBurgerMenu(QMenu* menu)
@@ -181,7 +246,7 @@ void WindowControls::setBurgerVisible(bool on)
 void WindowControls::updateState()
 {
 	const bool max = m_window->isMaximized();
-	m_max->setIcon(style()->standardIcon(max ? QStyle::SP_TitleBarNormalButton : QStyle::SP_TitleBarMaxButton));
+	paintGlyphs();
 	m_max->setToolTip(max ? tr("Wiederherstellen") : tr("Maximieren"));
 	m_max->setAccessibleName(m_max->toolTip());
 }
