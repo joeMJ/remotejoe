@@ -29,7 +29,13 @@ pub struct UpdateState {
     pub source_override: Option<Source>,
     /// Automatische Prüfung beim Start ist erledigt.
     auto_done: bool,
+    /// Windows: zuletzt gefundene neuere Version (Angaben für den Tab).
+    found_page: Option<Value>,
 }
+
+/// Windows: Das Programm ersetzt sich nicht selbst; „Nach Updates suchen“ nennt die neue Version
+/// und öffnet die Release-Seite, installiert wird die MSI von dort.
+const PAGE_ONLY: bool = cfg!(windows);
 
 /// Die einzige Quelle: die öffentlichen Veröffentlichungen von remotejoe auf GitHub.
 pub fn github_source() -> Source {
@@ -49,7 +55,7 @@ impl App {
     /// Zustand für den Tab: Versionen, Quelle (ohne Schlüssel), Installationsart.
     pub fn update_status(&self) -> Value {
         let plan = self.program_dir().map(|d| install::plan(&d));
-        json!({
+        let mut status = json!({
             "current": rj_update::CURRENT_VERSION,
             "platform": rj_update::platform(),
             "check_on_start": self.config.update.check_on_start,
@@ -58,7 +64,49 @@ impl App {
             "busy": self.update.job.is_some_and(|j| self.jobs.is_pending(j)),
             "found": self.update.found.as_ref().map(|f| found_json(f)),
             "sessions": self.sessions.ids().len(),
-        })
+        });
+        if PAGE_ONLY {
+            status["page_only"] = json!(true);
+            status["page"] = json!(self.update_source().releases_page().ok());
+            status["found"] = self.update.found_page.clone().unwrap_or(Value::Null);
+            status["package_managed"] = json!(false);
+            status["development"] = json!(false);
+        }
+        status
+    }
+
+    /// Windows: nur die Version vergleichen (keine Dateiauswahl); Ergebnis wie `update_check`,
+    /// zusätzlich mit der Adresse der Release-Seite.
+    fn update_check_page(&mut self, src: Source, current: Version) -> Result<Value, String> {
+        let page = src.releases_page().map_err(|e| e.to_string())?;
+        let job = self.jobs.spawn_cancellable("Nach Updates suchen", move |job, cancel| {
+            let r = release::latest(&src, None, Some(&*cancel)).and_then(|rel| Version::parse(&rel.tag_name).map(|v| (v, rel)));
+            Box::new(move |app: &mut App, cancelled| {
+                if cancelled {
+                    return Vec::new();
+                }
+                let json = match r {
+                    Ok((v, rel)) if !rel.draft && v > current => {
+                        let found = json!({
+                            "version": v.to_string(),
+                            "name": rel.name.as_deref().map(|n| rj_core::charset::mark_visible(n, false).into_owned()),
+                            "notes": rel.notes(),
+                            "prerelease": v.is_prerelease(),
+                        });
+                        app.update.found_page = Some(found.clone());
+                        json!({ "state": "newer", "current": current.to_string(), "found": found, "page": page })
+                    }
+                    Ok((v, _)) => {
+                        app.update.found_page = None;
+                        json!({ "state": "uptodate", "current": current.to_string(), "latest": v.to_string() })
+                    }
+                    Err(e) => json!({ "state": "error", "error": e.to_string() }),
+                };
+                vec![UiEvent::JobResult { job, kind: "update_check".into(), target: String::new(), json: json.to_string() }]
+            })
+        });
+        self.update.job = Some(job);
+        Ok(json!({ "job": job }))
     }
 
     /// Einstellungen ändern: nur „Beim Start im Hintergrund prüfen“.
@@ -90,6 +138,9 @@ impl App {
         }
         let src = self.update_source();
         let current = Version::parse(rj_update::CURRENT_VERSION).map_err(|e| e.to_string())?;
+        if PAGE_ONLY {
+            return self.update_check_page(src, current);
+        }
         let platform = rj_update::platform();
         let job = self.jobs.spawn_cancellable("Nach Updates suchen", move |job, cancel| {
             let r = release::check(&src, None, &current, &platform, Some(&*cancel));
@@ -119,6 +170,10 @@ impl App {
     /// Lädt, prüft und installiert die gefundene Version. Bei offenen Sitzungen
     /// nur mit `confirm`; unter `/usr` nur ein Hinweis.
     pub fn update_install(&mut self, confirm: bool) -> Result<Value, String> {
+        // Windows: kein Ersetzen im laufenden Betrieb; die Oberfläche öffnet die Release-Seite.
+        if PAGE_ONLY {
+            return Ok(json!({ "state": "page", "url": self.update_source().releases_page().map_err(|e| e.to_string())? }));
+        }
         let found = self.update.found.clone().ok_or("Keine neuere Version gefunden; bitte zuerst prüfen.")?;
         if self.update.job.is_some_and(|j| self.jobs.is_pending(j)) {
             return Err("Es läuft bereits eine Update-Prüfung oder -Installation.".into());

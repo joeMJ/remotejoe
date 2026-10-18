@@ -659,5 +659,9 @@
   "update.development": "Dies ist ein Entwicklungsstand (Bauordner target/release) und aktualisiert sich nicht selbst. Die installierte Fassung (install.sh) wird über diese Funktion aktualisiert.",
   "update.development.hint": "Entwicklungsstand: nicht ersetzt. Die neue Fassung steht hier bereit: %1",
   "update.package_managed.hint": "Installation über die Paketverwaltung: bitte das Paket von dort aktualisieren. Download: %1",
-  "update.available": "Update verfügbar: remotejoe %1 (Hilfe → Nach Updates suchen …)"
+  "update.available": "Update verfügbar: remotejoe %1 (Hilfe → Nach Updates suchen …)",
+  "update.open_page": "Release-Seite öffnen",
+  "update.windows.hint": "Unter Windows bitte die neue MSI von der Release-Seite installieren.",
+  "update.page.opened": "Die Release-Seite ist im Browser geöffnet: %1. Unter Windows bitte die neue MSI von der Release-Seite installieren.",
+  "update.page.failed": "Der Browser ließ sich nicht öffnen. Release-Seite: %1. Unter Windows bitte die neue MSI von dort installieren."
 }
