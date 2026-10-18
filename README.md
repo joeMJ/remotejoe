@@ -77,6 +77,22 @@ Startmenü an und erscheint unter „Apps und Features“. Die Visual-C++-Laufze
 Die MSI und die Programme sind signiert; damit Windows den Herausgeber kennt, siehe
 [Zertifikat des Herausgebers](#windows-zertifikat-des-herausgebers).
 
+> [!NOTE]
+> **Warnung „Der Computer wurde durch Windows geschützt“:** Microsoft Defender SmartScreen zeigt diese
+> Meldung bei Dateien, die noch selten heruntergeladen wurden – auch wenn sie signiert sind. So geht es weiter:
+>
+> 1. Auf **Weitere Informationen** klicken.
+> 2. Prüfen, dass bei **Herausgeber** steht: `documentjoe, documentjoe Code Signing (privat)`.
+> 3. Nur dann **Trotzdem ausführen** wählen.
+>
+> Steht dort „Unbekannter Herausgeber“, ist entweder das [Zertifikat](#windows-zertifikat-des-herausgebers)
+> nicht eingetragen oder die Datei wurde verändert. Dann vor dem Ausführen die Prüfsumme vergleichen
+> (PowerShell im Download-Ordner, Wert muss mit der Datei `….msi.sha256` der Release-Seite übereinstimmen):
+>
+> ```powershell
+> Get-FileHash .\remotejoe-<Version>-windows-x86_64.msi -Algorithm SHA256
+> ```
+
 **Aktualisieren:** **Hilfe → Nach Updates suchen …** zeigt eine neue Version an und öffnet die
 Release-Seite. Die neue MSI einfach darüber installieren; sie ersetzt die alte Fassung.
 
