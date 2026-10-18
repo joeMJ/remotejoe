@@ -751,6 +751,7 @@ QWidget* PropertiesTab::pageConnection()
 	// PowerShell-Transport und SNMP (vererbbar).
 	m_psrp = new QComboBox(w);
 	m_psrp->addItem(rjText(m_backend, "edit.psrp.inherit"), QStringLiteral("inherit"));
+	m_psrp->addItem(rjText(m_backend, "edit.psrp.auto"), QStringLiteral("auto"));
 	m_psrp->addItem(rjText(m_backend, "edit.psrp.winrm_https"), QStringLiteral("winrm_https"));
 	m_psrp->addItem(rjText(m_backend, "edit.psrp.winrm_http"), QStringLiteral("winrm_http"));
 	m_psrp->addItem(rjText(m_backend, "edit.psrp.ssh"), QStringLiteral("ssh"));
@@ -766,11 +767,12 @@ QWidget* PropertiesTab::pageConnection()
 	if (pt.isObject())
 	{
 		const QJsonObject t = pt.toObject();
-		if (t.value(QStringLiteral("type")).toString() == QLatin1String("ssh"))
-			m_psrp->setCurrentIndex(3);
+		const QString type = t.value(QStringLiteral("type")).toString();
+		if (type == QLatin1String("ssh") || type == QLatin1String("auto"))
+			m_psrp->setCurrentIndex(m_psrp->findData(type));
 		else
 		{
-			m_psrp->setCurrentIndex(t.value(QStringLiteral("https")).toBool(true) ? 1 : 2);
+			m_psrp->setCurrentIndex(m_psrp->findData(t.value(QStringLiteral("https")).toBool(true) ? QStringLiteral("winrm_https") : QStringLiteral("winrm_http")));
 			m_psrpAuth->setCurrentIndex(qMax(0, m_psrpAuth->findData(t.value(QStringLiteral("auth")).toString())));
 			m_psrpVerify->setChecked(t.value(QStringLiteral("verify_certificate")).toBool(true));
 		}
@@ -1292,8 +1294,8 @@ QJsonObject PropertiesTab::collect() const
 		else
 		{
 			QJsonObject t;
-			if (p == QLatin1String("ssh"))
-				t.insert(QStringLiteral("type"), QStringLiteral("ssh"));
+			if (p == QLatin1String("ssh") || p == QLatin1String("auto"))
+				t.insert(QStringLiteral("type"), p);
 			else
 			{
 				t.insert(QStringLiteral("type"), QStringLiteral("winrm"));
@@ -1303,7 +1305,7 @@ QJsonObject PropertiesTab::collect() const
 			}
 			bool ok = false;
 			const int port = m_psrpPort->text().toInt(&ok);
-			if (ok)
+			if (ok && p != QLatin1String("auto"))
 				t.insert(QStringLiteral("port"), port);
 			f.insert(QStringLiteral("psrp_transport"), t);
 		}
@@ -3082,9 +3084,10 @@ SecurityBar::SecurityBar(RjBackend* backend, QWidget* parent)
 	m_accept = new QPushButton(rjText(backend, "security.accept"), this);
 	m_accept->setObjectName(QStringLiteral("securityAccept"));
 	m_accept->setAutoDefault(false);
-	buttons->addWidget(m_countdown, 1);
+	// Knöpfe links unter dem Text: Sie bleiben sichtbar, auch wenn der Tab schmal ist.
 	buttons->addWidget(m_accept);
 	buttons->addWidget(m_reject);
+	buttons->addWidget(m_countdown, 1);
 	lay->addWidget(m_title);
 	lay->addWidget(m_details);
 	lay->addWidget(m_checked);
@@ -3131,6 +3134,25 @@ void SecurityBar::next()
 		          .arg(rjText(m_backend, label).toHtmlEscaped(),
 		               mono ? QStringLiteral("<code>") + value.toHtmlEscaped() + QStringLiteral("</code>") : value.toHtmlEscaped());
 	};
+	// Lange Fingerabdrücke in Zeilen umbrechen (16 Bytes bzw. 32 Zeichen je Zeile), damit die Leiste
+	// nie breiter als der Tab wird.
+	auto wrapped = [](const QString& v) {
+		QStringList lines;
+		const QStringList parts = v.split(QLatin1Char(':'));
+		if (parts.size() > 16)
+			for (int i = 0; i < parts.size(); i += 16)
+				lines << parts.mid(i, 16).join(QLatin1Char(':'));
+		else
+			for (int i = 0; i < v.size(); i += 32)
+				lines << v.mid(i, 32);
+		QStringList esc;
+		for (const QString& l : lines)
+			esc << l.toHtmlEscaped();
+		return QStringLiteral("<code>") + esc.join(QStringLiteral("<br>")) + QStringLiteral("</code>");
+	};
+	auto fpRow = [&](const char* label, const QString& value) {
+		html += QStringLiteral("<tr><td style='padding-right:12px' valign='top'>%1</td><td>%2</td></tr>").arg(rjText(m_backend, label).toHtmlEscaped(), wrapped(value));
+	};
 	if (!fp.isEmpty())
 	{
 		const QString host = info.value(QStringLiteral("host")).toString();
@@ -3138,9 +3160,9 @@ void SecurityBar::next()
 		if (!host.isEmpty())
 			row("security.host", port > 0 ? host + QLatin1Char(':') + QString::number(port) : host, false);
 		row("security.key_type", info.value(QStringLiteral("key_type")).toString(), true);
-		row(changed ? "security.fingerprint.new" : "security.fingerprint", fp, true);
+		fpRow(changed ? "security.fingerprint.new" : "security.fingerprint", fp);
 		if (changed)
-			row("security.fingerprint.old", previous, true);
+			fpRow("security.fingerprint.old", previous);
 		html = QStringLiteral("<table>") + html + QStringLiteral("</table>");
 	}
 	else

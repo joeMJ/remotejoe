@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use rj_core::{Protocol, PsrpTransport, Secret, WinrmAuth};
+use rj_core::{Protocol, PsrpTransport, Secret};
 use rj_ipc::CredentialPayload;
 use rj_ssh::client::{Auth, BlockingShell, SshConnection, SshParams};
 use rj_ssh::known_hosts::KnownHosts;
@@ -186,7 +186,7 @@ impl AppExecutor {
     }
 
     fn windows(&self, spec: &JobSpec, job: &JobHandle) -> Result<(), String> {
-        let transport = spec.transport.clone().unwrap_or(PsrpTransport::Winrm { https: true, port: None, auth: WinrmAuth::Ntlm, verify_certificate: true });
+        let transport = PsrpTransport::effective(spec.transport.clone(), None);
         let t = rj_psrp::PsTarget { host: spec.host.clone(), username: spec.credentials.username.clone(), domain: spec.credentials.domain.clone(), transport };
         let mut s = rj_psrp::PsSession::start(&t, &Secret::from_bytes(spec.credentials.password.0.clone())).map_err(|e| e.to_string())?;
         let mut found = 0;

@@ -357,7 +357,7 @@ fn run_action(c: &Ctx, guest: &str, action: &str, timeout: Duration) -> String {
 }
 
 fn hyperv_session(c: &Ctx) -> Result<rj_psrp::PsSession, String> {
-    let transport = c.transport.clone().unwrap_or(rj_core::PsrpTransport::Winrm { https: true, port: None, auth: rj_core::WinrmAuth::Ntlm, verify_certificate: true });
+    let transport = rj_core::PsrpTransport::effective(c.transport.clone(), None);
     let t = rj_psrp::PsTarget { host: c.host.clone(), username: c.creds.username.clone(), domain: c.creds.domain.clone(), transport };
     rj_psrp::PsSession::start(&t, &Secret::from_bytes(c.creds.password.0.clone())).map_err(|e| e.to_string())
 }

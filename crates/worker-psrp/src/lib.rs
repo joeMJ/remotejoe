@@ -41,13 +41,26 @@ pub(crate) fn ps_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
+/// Bekannte Fehler von PowerShell verständlich erklären (Originaltext bleibt angehängt).
+pub fn explain(error: String) -> String {
+    if error.contains("WSMan") {
+        return format!(
+            "WinRM ist auf diesem Rechner nicht verfügbar (PowerShell 7 hat unter Linux keinen WinRM-Client). \
+             Bitte beim Ziel den PowerShell-Transport auf „Automatisch“ oder „SSH“ stellen; Einrichtung siehe README, \
+             Abschnitt „Hyper-V und PowerShell-Remoting“. ({error})"
+        );
+    }
+    error
+}
+
 /// Steuerskript (ohne Geheimnisse).
 pub fn driver_script(t: &PsTarget) -> String {
     let user = match &t.domain {
         Some(d) if !d.is_empty() => format!("{d}\\{}", t.username),
         _ => t.username.clone(),
     };
-    let session = match &t.transport {
+    let transport = t.transport.clone().resolved(None);
+    let session = match &transport {
         PsrpTransport::Winrm { https, port, auth, verify_certificate } => {
             let port = port.unwrap_or(if *https { 5986 } else { 5985 });
             let auth = match auth {
@@ -64,6 +77,7 @@ pub fn driver_script(t: &PsTarget) -> String {
                 ssl = if *https { "-UseSSL" } else { "" },
             )
         }
+        PsrpTransport::Auto => unreachable!("durch resolved ersetzt"),
         PsrpTransport::Ssh { port } => format!(
             "$s = New-PSSession -HostName {host} -UserName {user} -Port {port} -SSHTransport",
             host = ps_quote(&t.host),
@@ -177,7 +191,7 @@ impl PsSession {
             let r = s.read_record()?;
             match r.ready {
                 Some(true) => return Ok(s),
-                Some(false) => return Err(PsError::Session(r.error.unwrap_or_default())),
+                Some(false) => return Err(PsError::Session(explain(r.error.unwrap_or_default()))),
                 None => continue,
             }
         }

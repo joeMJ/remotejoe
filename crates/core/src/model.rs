@@ -387,6 +387,33 @@ pub enum PsrpTransport {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         port: Option<u16>,
     },
+    /// Automatisch: unter Windows WinRM über HTTPS, sonst SSH (PowerShell 7 hat unter Linux
+    /// keinen WinRM-Client).
+    Auto,
+}
+
+impl PsrpTransport {
+    /// Transport, den dieses Betriebssystem ohne Vorgabe nimmt (`winrm_port` nur für WinRM).
+    pub fn for_this_os(winrm_port: Option<u16>) -> Self {
+        if cfg!(windows) {
+            PsrpTransport::Winrm { https: true, port: winrm_port, auth: WinrmAuth::Ntlm, verify_certificate: true }
+        } else {
+            PsrpTransport::Ssh { port: None }
+        }
+    }
+
+    /// `Auto` durch den Transport dieses Betriebssystems ersetzen.
+    pub fn resolved(self, winrm_port: Option<u16>) -> Self {
+        match self {
+            PsrpTransport::Auto => Self::for_this_os(winrm_port),
+            t => t,
+        }
+    }
+
+    /// Fehlende Vorgabe oder `Auto` → Transport dieses Betriebssystems.
+    pub fn effective(t: Option<Self>, winrm_port: Option<u16>) -> Self {
+        t.map(|t| t.resolved(winrm_port)).unwrap_or_else(|| Self::for_this_os(winrm_port))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

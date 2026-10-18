@@ -6,7 +6,7 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use rj_core::{PsrpTransport, Secret, WinrmAuth};
+use rj_core::{PsrpTransport, Secret};
 use rj_ipc::worker::WorkerLink;
 use rj_ipc::*;
 use rj_psrp::{PsSession, PsTarget};
@@ -111,7 +111,7 @@ fn main() {
             let (r, c) = (req.take().unwrap(), cred.take().unwrap());
             send(FromWorker::State(SessionState::Connecting));
             let o: Options = serde_json::from_str(&r.options_json).unwrap_or_default();
-            let transport = o.psrp_transport.unwrap_or(PsrpTransport::Winrm { https: true, port: Some(r.port), auth: WinrmAuth::Ntlm, verify_certificate: true });
+            let transport = PsrpTransport::effective(o.psrp_transport, Some(r.port));
             if let PsrpTransport::Winrm { verify_certificate: false, .. } = &transport {
                 send(FromWorker::Notice("Zertifikatsprüfung für WinRM ist abgeschaltet.".into()));
             }
