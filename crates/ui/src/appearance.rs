@@ -99,6 +99,10 @@ pub fn palette_json(app: Option<&App>) -> Value {
     };
     // Vorgabe für Bildschirmfotos: Umgebungsvariable erzwingt ein Standardschema.
     if std::env::var_os("REMOTEJOE_THEME").is_some() {
+        // Bildschirmfotos: dunkles Bild auf Wunsch mit einem eingebauten Theme.
+        if let Some((dark, colors)) = std::env::var("RJ_SHOT_DARK_THEME").ok().filter(|_| dark_sys).and_then(|id| resolve(&id)) {
+            return fixed(dark, colors);
+        }
         return fixed(dark_sys, if dark_sys { DARK } else { LIGHT }.into());
     }
     let Some(a) = app.map(|a| &a.config.appearance) else { return system(dark_sys) };

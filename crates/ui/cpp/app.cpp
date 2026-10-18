@@ -75,9 +75,24 @@ void screenshots(MainWindow& w, const QString& dir)
 		pump(500);
 		save(&w, dir, QStringLiteral("normal-nach-kompakt.png"));
 	}
+	// Platzsparmodus als Dokumentationsbild.
+	w.setCompact(true);
+	pump(500);
+	save(&w, dir, QStringLiteral("hauptfenster-kompakt.png"));
+	w.setTreeVisible(false);
+	pump(500);
+	save(&w, dir, QStringLiteral("hauptfenster-kompakt-ohne-baum.png"));
+	w.setTreeVisible(true);
+	w.setCompact(false);
+	pump(500);
+	// Dunkles Bild mit Catppuccin Macchiato (Vorgabe für Bildschirmfotos, siehe appearance.rs).
+	qputenv("REMOTEJOE_THEME", "dark");
+	qputenv("RJ_SHOT_DARK_THEME", "eingebaut:catppuccin-macchiato");
 	w.applyTheme(true);
 	pump(300);
 	save(&w, dir, QStringLiteral("hauptfenster-dunkel.png"));
+	qunsetenv("RJ_SHOT_DARK_THEME");
+	qunsetenv("REMOTEJOE_THEME");
 	w.applyTheme(false);
 	w.setFilter(QStringLiteral("ssh-00"));
 	pump(300);

@@ -33,9 +33,17 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
   <br>
   <em>Hauptfenster (helles Farbschema, Demo-Daten)</em>
   <br><br>
-  <img src="docs/screenshots/hauptfenster-dunkel.png" alt="Hauptfenster im dunklen Farbschema" width="760">
+  <img src="docs/screenshots/hauptfenster-dunkel.png" alt="Hauptfenster im Farbschema Catppuccin Macchiato" width="760">
   <br>
-  <em>Hauptfenster (dunkles Farbschema, Demo-Daten)</em>
+  <em>Hauptfenster (Catppuccin Macchiato, Demo-Daten)</em>
+  <br><br>
+  <img src="docs/screenshots/hauptfenster-kompakt.png" alt="Platzsparmodus: Tabs in der Titelzeile, Baum sichtbar" width="760">
+  <br>
+  <em>Platzsparmodus (F10) mit Baum</em>
+  <br><br>
+  <img src="docs/screenshots/hauptfenster-kompakt-ohne-baum.png" alt="Platzsparmodus mit eingeklapptem Baum" width="760">
+  <br>
+  <em>Platzsparmodus mit eingeklapptem Baum (F9)</em>
 </p>
 
 ---
