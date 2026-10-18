@@ -20,12 +20,19 @@
 
 .PARAMETER DebugBuild
     Debug- statt Release-Bau.
+
+.PARAMETER CleanPaths
+    Keine Pfade des Bau-Rechners in den Programmen (für Veröffentlichungen): Rust mit
+    --remap-path-prefix für Benutzerprofil, Cargo-Registry (auch die Kurzform), Projekt- und
+    Qt-Ordner; C++ (MSVC) mit /d1trimfile: für dieselben Ordner; der Linker schreibt nur den
+    Dateinamen der PDB (/PDBALTPATH:%_PDB%). Ändert die Bau-Einstellungen, daher Neubau aller Pakete.
 #>
 param(
     [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { 'C:\vcpkg' }),
     [string]$QtDir = '',
     [switch]$Test,
-    [switch]$DebugBuild
+    [switch]$DebugBuild,
+    [switch]$CleanPaths
 )
 
 $ErrorActionPreference = 'Stop'
@@ -118,6 +125,30 @@ if (-not (Test-Path $env:PKG_CONFIG)) { Fehler "pkgconf.exe fehlt unter $($env:P
 $buildProfile = @()
 $outName = 'debug'
 if (-not $DebugBuild) { $buildProfile = @('--release'); $outName = 'release' }
+
+if ($CleanPaths) {
+    Schritt 'Pfade des Bau-Rechners entfernen'
+    # Jeder Ordner auch in Kurzform (8.3, z. B. CARGO~1) und in der Schreibweise des aktuellen Ordners.
+    $fso = New-Object -ComObject Scripting.FileSystemObject
+    function Formen([string]$Pfad) {
+        if (-not $Pfad -or -not (Test-Path $Pfad)) { return @() }
+        $voll = (Resolve-Path $Pfad).ProviderPath.TrimEnd('\')
+        @($voll, $fso.GetFolder($voll).ShortPath.TrimEnd('\'), $Pfad.TrimEnd('\')) | Select-Object -Unique
+    }
+    $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
+    # Reihenfolge: allgemein vor speziell (bei mehreren Treffern gilt die letzte passende Zuordnung).
+    $maps = @()
+    foreach ($p in Formen $env:USERPROFILE) { $maps += , @($p, '~') }
+    foreach ($p in Formen (Join-Path $cargoHome 'registry\src')) { $maps += , @($p, 'cargo-registry') }
+    foreach ($p in (@(Formen $Root) + @([IO.Directory]::GetCurrentDirectory()) | Select-Object -Unique)) { $maps += , @($p, 'remotejoe') }
+    if ($QtDir) { foreach ($p in Formen $QtDir) { $maps += , @($p, 'qt') } }
+    $flags = @($maps | ForEach-Object { "--remap-path-prefix=$($_[0])=$($_[1])" }) + @('-C', 'link-arg=/PDBALTPATH:%_PDB%')
+    # Durch 0x1F getrennt: Pfade mit Leerzeichen bleiben ganz.
+    $env:CARGO_ENCODED_RUSTFLAGS = $flags -join [char]0x1f
+    $trim = @($maps | Where-Object { $_[1] -ne '~' } | ForEach-Object { "/d1trimfile:$($_[0])\" }) | Select-Object -Unique
+    $env:CL = (@($trim) + @($env:CL) | Where-Object { $_ }) -join ' '
+    $maps | ForEach-Object { Write-Host "  $($_[0]) -> $($_[1])" }
+}
 
 Schritt 'Bauen'
 Ausfuehren 'cargo build' { cargo build @buildProfile --workspace }

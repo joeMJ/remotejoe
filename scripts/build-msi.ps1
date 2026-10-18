@@ -8,6 +8,8 @@
     baut die MSI mit candle/light (WiX 3.14), signiert sie und schreibt die SHA-256-Prüfsumme daneben.
     Installation pro Benutzer ohne Administratorrechte nach %LOCALAPPDATA%\Programs\remotejoe
     (packaging/windows/remotejoe.wxs). Jeder Fehler wird mit Ursache und nächstem Schritt gemeldet.
+    Für Veröffentlichungen das Paket vorher mit „build-windows.ps1 -CleanPaths“ bauen (keine Pfade
+    des Bau-Rechners in den Programmen).
 
 .PARAMETER PaketDir
     Paketordner aus dem Bau (Vorgabe: target\release\remotejoe-paket).
