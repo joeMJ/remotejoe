@@ -71,6 +71,15 @@ fn main() {
                         libc::signal(libc::SIGSEGV, libc::SIG_DFL);
                         libc::raise(libc::SIGSEGV);
                     }
+                    #[cfg(windows)]
+                    // SAFETY: Absichtlicher Absturz für den Test: unbehandelte Zugriffsverletzung,
+                    // der Prozess endet mit STATUS_ACCESS_VIOLATION (0xC0000005).
+                    unsafe {
+                        use windows_sys::Win32::Foundation::STATUS_ACCESS_VIOLATION;
+                        use windows_sys::Win32::System::Diagnostics::Debug::RaiseException;
+                        const EXCEPTION_NONCONTINUABLE: u32 = 1;
+                        RaiseException(STATUS_ACCESS_VIOLATION as u32, EXCEPTION_NONCONTINUABLE, 0, std::ptr::null());
+                    }
                 }
                 "hang" => {
                     beating.store(false, Ordering::Relaxed);
