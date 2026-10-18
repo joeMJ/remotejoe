@@ -52,6 +52,8 @@ enum Msg {
     LoginResult { text: String, script: zeroize::Zeroizing<String>, tries: u32 },
     /// Ein „Verbindung abgebrochen“ nach dem Laden zeigen, falls kein Download gestartet ist.
     PendingError,
+    /// Diagnose: gerenderte Seite als Bild speichern (nur mit `RJ_WEB_SHOTDIR`).
+    DebugShot(&'static str),
 }
 
 #[derive(Clone)]
@@ -252,6 +254,7 @@ impl Worker {
         match m {
             Msg::RetryLogin(script, tries) => self.run_login(script, tries),
             Msg::CheckRejected => self.check_rejected(),
+            Msg::DebugShot(tag) => self.debug_capture(tag),
             Msg::PendingError => {
                 if let Some(e) = self.0.pending_error.borrow_mut().take() {
                     *self.0.error.borrow_mut() = Some(e);
@@ -475,6 +478,7 @@ impl Worker {
             }
             me.trace(&format!("Ladeende{dur}: {}", trace_uri(&uri)));
             me.status();
+            me.0.queue.push_after(Duration::from_millis(1500), Msg::DebugShot("geladen"));
             if ok.as_bool() {
                 let action = me.0.flow.borrow_mut().page_loaded(&uri);
                 match action {
@@ -748,6 +752,34 @@ impl Worker {
         }
     }
 
+    /// Diagnose für Prüfläufe: Die gerenderte Seite (nicht das Fenster) als PNG in den Ordner `RJ_WEB_SHOTDIR`.
+    /// Ohne die Umgebungsvariable geschieht nichts.
+    fn debug_capture(&self, tag: &str) {
+        use windows::Win32::System::Com::{STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET};
+        let Some(dir) = std::env::var_os("RJ_WEB_SHOTDIR") else { return };
+        let Some(v) = self.view() else { return };
+        let Some(stream) = (unsafe { windows::Win32::UI::Shell::SHCreateMemStream(None) }) else { return };
+        let path = PathBuf::from(dir).join(format!("{}-{tag}-{}.png", std::process::id(), self.0.started.elapsed().as_secs()));
+        let s2 = stream.clone();
+        let h = webview2_com::CapturePreviewCompletedHandler::create(Box::new(move |_| {
+            // SAFETY: Datenstrom im Speicher, nur in diesem Rückruf gelesen.
+            unsafe {
+                let mut stat = STATSTG::default();
+                s2.Stat(&mut stat, STATFLAG_NONAME)?;
+                let len = stat.cbSize as usize;
+                s2.Seek(0, STREAM_SEEK_SET, None)?;
+                let mut buf = vec![0u8; len];
+                let mut read = 0u32;
+                s2.Read(buf.as_mut_ptr() as *mut _, len as u32, Some(&mut read)).ok()?;
+                let _ = std::fs::write(&path, &buf[..read as usize]);
+            }
+            Ok(())
+        }));
+        unsafe {
+            let _ = v.webview().CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, &stream, &h);
+        }
+    }
+
     fn status(&self) {
         let (back, forward) = match self.view() {
             Some(v) => {
@@ -775,7 +807,12 @@ impl Worker {
     fn command(&self, c: WebCommand) {
         match c {
             WebCommand::Embed { hwnd } => {
-                self.0.embed.set(hwnd as isize);
+                // Das Hauptfenster meldet die Kennung bei jedem Anzeigen erneut; nur bei einem Wechsel umsetzen
+                // (Umsetzen in dasselbe Elternfenster lässt die Seite leer oder veraltet stehen).
+                let old = self.0.embed.replace(hwnd as isize);
+                if old == hwnd as isize && self.view().is_some() {
+                    return;
+                }
                 match self.view() {
                     Some(v) if hwnd != 0 => {
                         if let Err(e) = v.reparent(hwnd as isize) {
@@ -804,6 +841,9 @@ impl Worker {
                 self.0.visible.set(on);
                 if let Some(v) = self.view() {
                     let _ = v.set_visible(on);
+                }
+                if on {
+                    self.0.queue.push_after(Duration::from_millis(800), Msg::DebugShot("gezeigt"));
                 }
             }
             WebCommand::Keys { keys } => *self.0.keys.borrow_mut() = keys,
