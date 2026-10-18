@@ -59,11 +59,23 @@ pub struct AppearanceSettings {
     /// (`system` = Farben des Desktops, sonst eine Kennung wie bei `scheme`).
     pub light_theme: String,
     pub dark_theme: String,
+    /// Größe des Eintragbaums: `klein`, `mittel` oder `gross` (Zeilenhöhe, Symbole, Schrift).
+    pub tree_size: String,
+    /// Eigene Symbolfarben je Art (`rdp`, `ssh`, …, `folder` → `#rrggbb`); leer = dem Theme folgen.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub icon_colors: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
-        AppearanceSettings { scheme: "system".into(), focus_frame: true, light_theme: "system".into(), dark_theme: "system".into() }
+        AppearanceSettings {
+            scheme: "system".into(),
+            focus_frame: true,
+            light_theme: "system".into(),
+            dark_theme: "system".into(),
+            tree_size: "mittel".into(),
+            icon_colors: Default::default(),
+        }
     }
 }
 

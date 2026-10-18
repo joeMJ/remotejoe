@@ -47,6 +47,12 @@ private:
 	QWidget* m_systemRow;
 	QWidget* m_fixedRow;
 	QCheckBox* m_focus;
+	QComboBox* m_treeSize;
+	QCheckBox* m_ownIcons;
+	QWidget* m_iconBox;
+	QMap<QString, QPushButton*> m_iconButtons;
+	QMap<QString, QString> m_iconColors;
+	void applyIcons();
 	QGridLayout* m_tiles;
 	QList<PaletteTile*> m_tileList;
 	QLabel* m_notes;

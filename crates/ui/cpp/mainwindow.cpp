@@ -127,9 +127,30 @@ QString protocolName(const QString& p)
 	return names.value(p, p.toUpper());
 }
 
+// Symbolfarben des aktuellen Themes (Art → Farbe) und Ringfarbe des Statuspunkts; eine Änderung
+// verwirft die schon gezeichneten Symbole.
+QHash<QString, QColor> g_iconColors;
+QColor g_iconRing(Qt::white);
+int g_iconGeneration = 0;
+
+void setIconColors(const QJsonObject& colors, const QColor& ring)
+{
+	g_iconColors.clear();
+	for (auto it = colors.begin(); it != colors.end(); ++it)
+		g_iconColors.insert(it.key(), QColor(it.value().toString()));
+	g_iconRing = ring;
+	++g_iconGeneration;
+}
+
 QIcon protocolIcon(const QString& protocol, const QString& light, bool folder)
 {
 	static QHash<QString, QIcon> cache;
+	static int generation = -1;
+	if (generation != g_iconGeneration)
+	{
+		cache.clear();
+		generation = g_iconGeneration;
+	}
 	const QString key = protocol + QLatin1Char('|') + light + (folder ? QStringLiteral("|f") : QString());
 	auto it = cache.find(key);
 	if (it != cache.end())
@@ -141,14 +162,14 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder)
 		const char* color;
 	};
 	// Gemeinsame Strichart der Piktogramme.
-	#define RJ_G(body) "<g fill='none' stroke='#ffffff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'>" body "</g>"
+	#define RJ_G(body) "<g fill='none' stroke='COLOR' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'>" body "</g>"
 	static const P table[] = {
 		// RDP: Bildschirm mit Fuß
 		{ "rdp", RJ_G("<rect x='6' y='7' width='20' height='13' rx='1.5'/><path d='M12 25h8M16 20v5'/>"), "#0b5cad" },
 		// SSH: Eingabeaufforderung „>_“
 		{ "ssh", RJ_G("<path d='M8 10l7 6-7 6'/><path d='M17 23h8'/>"), "#1b6e20" },
 		// VNC: Bildschirm mit Mauszeiger
-		{ "vnc", RJ_G("<rect x='5' y='7' width='19' height='13' rx='1.5'/><path d='M11 25h7'/><path d='M19 14l7 4-3 1 2 4-2 1-2-4-2 2z' fill='#ffffff'/>"), "#7a3e9d" },
+		{ "vnc", RJ_G("<rect x='5' y='7' width='19' height='13' rx='1.5'/><path d='M11 25h7'/><path d='M19 14l7 4-3 1 2 4-2 1-2-4-2 2z' fill='COLOR'/>"), "#7a3e9d" },
 		// Web: Weltkugel
 		{ "web", RJ_G("<circle cx='16' cy='16' r='10'/><ellipse cx='16' cy='16' rx='4.5' ry='10'/><path d='M6 16h20M7.5 10.5h17M7.5 21.5h17'/>"), "#8a5300" },
 		// PowerShell: Fenster mit Pfeilspitze und Strich
@@ -158,24 +179,27 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder)
 		// Hyper-V: zwei Server übereinander
 		{ "hyperv", RJ_G("<rect x='6' y='6' width='20' height='8' rx='1.5'/><rect x='6' y='18' width='20' height='8' rx='1.5'/><path d='M10 10h.1M10 22h.1M15 10h8M15 22h8'/>"), "#3a4a8c" },
 		// Makro: Abspielzeichen
-		{ "macro", RJ_G("<path d='M11 8l14 8-14 8z' fill='#ffffff'/>"), "#6a1b9a" },
+		{ "macro", RJ_G("<path d='M11 8l14 8-14 8z' fill='COLOR'/>"), "#6a1b9a" },
 	};
 	QString svg;
 	if (folder)
+	{
+		const QColor f = g_iconColors.value(QStringLiteral("folder"), QColor("#c9a227"));
 		svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
-		                     "<path d='M2 8h11l3 3h14v17H2z' fill='#c9a227' stroke='#6b5410' stroke-width='1.5'/></svg>");
+		                     "<path d='M2 8h11l3 3h14v17H2z' fill='%1' stroke='%2' stroke-width='1.5'/></svg>")
+		        .arg(f.name(), f.darker(170).name());
+	}
 	else
 	{
-		QString glyph = QStringLiteral(RJ_G("<path d='M12 12a4 4 0 1 1 6 3.5c-1.5 1-2 1.5-2 3'/><path d='M16 23h.1'/>")), color = QStringLiteral("#555555");
+		QString glyph = QStringLiteral(RJ_G("<path d='M12 12a4 4 0 1 1 6 3.5c-1.5 1-2 1.5-2 3'/><path d='M16 23h.1'/>")), color = g_iconColors.value(QStringLiteral("other"), QColor("#555555")).name();
 		for (const P& p : table)
 			if (protocol == QLatin1String(p.name))
 			{
 				glyph = QLatin1String(p.glyph);
-				color = QLatin1String(p.color);
+				color = g_iconColors.value(protocol, QColor(QLatin1String(p.color))).name();
 			}
-		svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
-		                     "<rect x='1' y='3' width='30' height='26' rx='5' fill='%1'/>%2</svg>")
-		        .arg(color, glyph);
+		// Ohne Kachel: das Piktogramm selbst in der Farbe des Zieltyps.
+		svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>%1</svg>").arg(glyph.replace(QLatin1String("COLOR"), color));
 	}
 	#undef RJ_G
 	QPixmap pm(32, 32);
@@ -192,7 +216,7 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder)
 			                                              : QColor("#8a8a8a");
 			p.setRenderHint(QPainter::Antialiasing);
 			p.setBrush(c);
-			p.setPen(QPen(Qt::white, 2));
+			p.setPen(QPen(g_iconRing, 2));
 			p.drawEllipse(QRect(19, 19, 12, 12));
 		}
 	}
@@ -465,7 +489,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_tree->setModel(m_model);
 	m_tree->setHeaderHidden(true);
 	m_tree->setUniformRowHeights(true);
-	m_tree->setIconSize(QSize(22, 22));
+	m_tree->setIconSize(QSize(20, 20));
 	m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
 	m_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
 	// Hinweis im leeren Baum: sagt, wie man ein erstes Ziel oder einen Ordner anlegt.
@@ -1116,8 +1140,27 @@ void MainWindow::applyTheme(bool dark)
 	const QColor textColor = c("text"), windowColor = c("window");
 	const QColor tabLine((textColor.red() * 55 + windowColor.red() * 45) / 100, (textColor.green() * 55 + windowColor.green() * 45) / 100,
 	                     (textColor.blue() * 55 + windowColor.blue() * 45) / 100);
+	// Symbolfarben des Themes; danach Baum und Tabs neu zeichnen.
+	{
+		QJsonObject icons = p.value(QStringLiteral("icons")).toObject();
+		icons.insert(QStringLiteral("other"), c("muted").name());
+		setIconColors(icons, c("base"));
+	}
+	// Baumgröße: Zeilenhöhe, Symbole und Schrift in drei Stufen.
+	const QString treeSize = p.value(QStringLiteral("tree_size")).toString(QStringLiteral("mittel"));
+	const int rowHeight = treeSize == QLatin1String("klein") ? 20 : treeSize == QLatin1String("gross") ? 30 : 24;
+	const int iconSize = treeSize == QLatin1String("klein") ? 16 : treeSize == QLatin1String("gross") ? 24 : 20;
+	const qreal fontDelta = treeSize == QLatin1String("klein") ? -1.0 : treeSize == QLatin1String("gross") ? 2.0 : 0.0;
+	if (m_tree)
+	{
+		m_tree->setIconSize(QSize(iconSize, iconSize));
+		QFont f = qApp->font();
+		if (f.pointSizeF() > 0)
+			f.setPointSizeF(f.pointSizeF() + fontDelta);
+		m_tree->setFont(f);
+	}
 	qApp->setStyleSheet(QStringLiteral(
-	  "QTreeView::item { min-height: 28px; padding: 2px; }"
+	  "QTreeView::item { min-height: %9px; padding: 0 2px; }"
 	  // Tabs: der aktive Tab hat Akzentbalken, kräftige Schrift und den Hintergrund der Fläche darunter;
 	  // inaktive Tabs sind abgesetzt (Schaltflächenfarbe, Nebentext) und durch Linien klar getrennt.
 	  "QTabWidget::pane { border: 1px solid %3; border-top: 2px solid %2; top: -1px; }"
@@ -1151,7 +1194,12 @@ void MainWindow::applyTheme(bool dark)
 	  "*[rjDirty=\"true\"] { border: 2px solid %2; }"
 	  "QRadioButton[rjDirty=\"true\"], QCheckBox[rjDirty=\"true\"] { border: none; font-weight: bold; color: %2; }")
 	                      .arg(c("warning").name(), c("highlight").name())
-	                      .arg(tabLine.name(), c("button").name(), c("muted").name(), c("base").name(), c("text").name(), c("alternate").name()));
+	                      .arg(tabLine.name(), c("button").name(), c("muted").name(), c("base").name(), c("text").name(), c("alternate").name())
+	                      .arg(rowHeight));
+	if (m_model)
+		reloadTree();
+	if (m_tabs)
+		rebuildTabs();
 }
 
 void MainWindow::reloadTree()

@@ -11,6 +11,7 @@ pub mod bridge;
 pub mod certcheck;
 pub mod editor;
 pub mod hyper;
+pub mod icons;
 pub mod idle;
 pub mod jobs;
 pub mod keys;

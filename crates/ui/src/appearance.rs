@@ -28,6 +28,9 @@ impl App {
             "dark_theme": a.dark_theme,
             "system_dark": theme::system_prefers_dark(),
             "focus_frame": a.focus_frame,
+            "tree_size": a.tree_size,
+            "icon_colors": a.icon_colors,
+            "icon_kinds": crate::icons::KINDS,
             "palettes": palettes,
             "dir": theme::custom_dir().map(|d| d.display().to_string()),
             "notes": notes,
@@ -64,6 +67,23 @@ impl App {
         if let Some(b) = c.get("focus_frame").and_then(Value::as_bool) {
             self.config.appearance.focus_frame = b;
         }
+        if let Some(s) = c.get("tree_size").and_then(Value::as_str) {
+            if !matches!(s, "klein" | "mittel" | "gross") {
+                return Err(format!("Unbekannte Baumgröße „{s}“"));
+            }
+            self.config.appearance.tree_size = s.to_string();
+        }
+        if let Some(m) = c.get("icon_colors").and_then(Value::as_object) {
+            let mut own = std::collections::BTreeMap::new();
+            for (k, v) in m {
+                let v = v.as_str().unwrap_or_default();
+                if !crate::icons::KINDS.contains(&k.as_str()) || !crate::icons::valid(v) {
+                    return Err(format!("Ungültige Symbolfarbe für „{k}“"));
+                }
+                own.insert(k.clone(), v.to_string());
+            }
+            self.config.appearance.icon_colors = own;
+        }
         if !self.demo {
             if let Some(cp) = self.config_path.clone() {
                 self.config.save(&cp).map_err(|e| e.to_string())?;
@@ -90,26 +110,39 @@ fn resolve(id: &str) -> Option<(bool, PaletteData)> {
 /// Palette für das Zeichnen: `mode` ist `system` (Farben aus der Qt-Stilpalette, die übrigen aus dem
 /// passenden Standardschema) oder `fixed` (alle Farben aus der Palette).
 pub fn palette_json(app: Option<&App>) -> Value {
+    let mut v = palette_only(app);
+    // Symbolfarben und Baumgröße gehören zur Darstellung und kommen mit der Palette.
+    let dark = v["dark"].as_bool().unwrap_or(false);
+    let id = v["id"].as_str().unwrap_or_default().to_string();
+    let none = std::collections::BTreeMap::new();
+    let own = app.map(|a| &a.config.appearance.icon_colors).unwrap_or(&none);
+    v["icons"] = json!(crate::icons::colors(&id, dark, own));
+    v["tree_size"] = json!(app.map(|a| a.config.appearance.tree_size.as_str()).unwrap_or("mittel"));
+    v
+}
+
+fn palette_only(app: Option<&App>) -> Value {
     let dark_sys = theme::system_prefers_dark();
-    let fixed = |dark: bool, colors: PaletteData| {
+    let fixed = |id: &str, dark: bool, colors: PaletteData| {
         let mut v = serde_json::to_value(colors).unwrap_or_default();
         v["mode"] = json!("fixed");
         v["dark"] = json!(dark);
+        v["id"] = json!(id);
         v
     };
     // Vorgabe für Bildschirmfotos: Umgebungsvariable erzwingt ein Standardschema.
     if std::env::var_os("REMOTEJOE_THEME").is_some() {
         // Bildschirmfotos: dunkles Bild auf Wunsch mit einem eingebauten Theme.
-        if let Some((dark, colors)) = std::env::var("RJ_SHOT_DARK_THEME").ok().filter(|_| dark_sys).and_then(|id| resolve(&id)) {
-            return fixed(dark, colors);
+        if let Some((id, (dark, colors))) = std::env::var("RJ_SHOT_DARK_THEME").ok().filter(|_| dark_sys).and_then(|id| resolve(&id).map(|r| (id, r))) {
+            return fixed(&id, dark, colors);
         }
-        return fixed(dark_sys, if dark_sys { DARK } else { LIGHT }.into());
+        return fixed(if dark_sys { "dunkel" } else { "hell" }, dark_sys, if dark_sys { DARK } else { LIGHT }.into());
     }
     let Some(a) = app.map(|a| &a.config.appearance) else { return system(dark_sys) };
     // „System“: je nach hellem oder dunklem Modus die zugeordnete Palette (oder die Desktopfarben).
     let id = if a.scheme == "system" { if dark_sys { a.dark_theme.as_str() } else { a.light_theme.as_str() } } else { a.scheme.as_str() };
     match resolve(id) {
-        Some((dark, colors)) => fixed(dark, colors),
+        Some((dark, colors)) => fixed(id, dark, colors),
         None => system(dark_sys),
     }
 }

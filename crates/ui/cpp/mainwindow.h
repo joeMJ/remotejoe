@@ -203,7 +203,7 @@ private:
 	QSet<QString> m_expandedIds;
 	QTimer* m_clipTimer = nullptr;
 	QByteArray m_clipHash;
-	QTreeView* m_tree;
+	QTreeView* m_tree = nullptr;
 	class QSplitter* m_split = nullptr;
 	class QLabel* m_emptyLabel = nullptr;
 	class QPushButton* m_emptyButton = nullptr;
@@ -228,8 +228,8 @@ private:
 	/// Strg+W: „outside“, „always“ oder „never“.
 	QString m_closeTabKey = QStringLiteral("outside");
 	bool m_macroShelfOpen = false;
-	QStandardItemModel* m_model;
-	QTabWidget* m_tabs;
+	QStandardItemModel* m_model = nullptr;
+	QTabWidget* m_tabs = nullptr;
 	QTimer m_poll;
 	// Fußzeile: Verbindungstyp, Ziel, Beginn und Benutzer der vorderen Sitzung.
 	QWidget* m_connInfo = nullptr;

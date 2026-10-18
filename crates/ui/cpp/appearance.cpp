@@ -180,6 +180,34 @@ AppearanceTab::AppearanceTab(RjBackend* backend, QWidget* parent)
 	form->addRow(QString(), m_fixedRow);
 	m_focus = new QCheckBox(T("appearance.focus"), page);
 	form->addRow(QString(), m_focus);
+	m_treeSize = new QComboBox(page);
+	for (const char* s : { "klein", "mittel", "gross" })
+		m_treeSize->addItem(T((QByteArray("appearance.tree_size.") + s).constData()), QString::fromLatin1(s));
+	form->addRow(T("appearance.tree_size"), m_treeSize);
+	// Symbolfarben: dem Theme folgen oder eigene Farbe je Art.
+	m_ownIcons = new QCheckBox(T("appearance.icons.own"), page);
+	form->addRow(T("appearance.icons"), m_ownIcons);
+	m_iconBox = new QWidget(page);
+	auto* ig = new QGridLayout(m_iconBox);
+	ig->setContentsMargins(0, 0, 0, 0);
+	int ii = 0;
+	for (const char* k : { "rdp", "ssh", "vnc", "web", "psrp", "proxmox", "hyperv", "macro", "folder" })
+	{
+		const QString key = QString::fromLatin1(k);
+		auto* b = new QPushButton(T((QByteArray("appearance.icons.kind.") + k).constData()), m_iconBox);
+		b->setAccessibleName(b->text());
+		m_iconButtons.insert(key, b);
+		ig->addWidget(b, ii / 3, ii % 3);
+		++ii;
+		connect(b, &QPushButton::clicked, this, [this, key] {
+			const QColor c = QColorDialog::getColor(QColor(m_iconColors.value(key)), this, m_iconButtons.value(key)->accessibleName());
+			if (!c.isValid())
+				return;
+			m_iconColors.insert(key, c.name());
+			applyIcons();
+		});
+	}
+	form->addRow(QString(), m_iconBox);
 	lay->addLayout(form);
 
 	auto* help = new QLabel(T("appearance.tiles.help"), page);
@@ -254,6 +282,17 @@ AppearanceTab::AppearanceTab(RjBackend* backend, QWidget* parent)
 	for (QComboBox* c : { m_mode, m_light, m_dark, m_fixed })
 		connect(c, &QComboBox::currentIndexChanged, this, [this] { applyFromControls(); });
 	connect(m_focus, &QCheckBox::toggled, this, [this] { applyFromControls(); });
+	connect(m_treeSize, &QComboBox::currentIndexChanged, this, [this] {
+		if (!m_loading)
+			apply({ { QStringLiteral("tree_size"), m_treeSize->currentData().toString() } });
+	});
+	connect(m_ownIcons, &QCheckBox::toggled, this, [this](bool on) {
+		if (m_loading)
+			return;
+		if (!on)
+			m_iconColors.clear();
+		applyIcons();
+	});
 	connect(reloadButton, &QPushButton::clicked, this, [this] { reload(); });
 	connect(create, &QPushButton::clicked, this, [this] { openEditor(); });
 	connect(save, &QPushButton::clicked, this, [this] { saveEditor(); });
@@ -305,6 +344,22 @@ void AppearanceTab::reload()
 	m_systemRow->setVisible(system);
 	m_fixedRow->setVisible(!system);
 	m_focus->setChecked(m_state.value(QStringLiteral("focus_frame")).toBool(true));
+	m_treeSize->setCurrentIndex(qMax(0, m_treeSize->findData(m_state.value(QStringLiteral("tree_size")).toString(QStringLiteral("mittel")))));
+	{
+		// Eigene Farben aus der Einstellung, sonst die Farben des Themes anzeigen.
+		const QJsonObject own = m_state.value(QStringLiteral("icon_colors")).toObject();
+		const QJsonObject theme = parse(m_backend->paletteJson()).value(QStringLiteral("icons")).toObject();
+		m_iconColors.clear();
+		for (auto it = own.begin(); it != own.end(); ++it)
+			m_iconColors.insert(it.key(), it.value().toString());
+		m_ownIcons->setChecked(!own.isEmpty());
+		m_iconBox->setEnabled(!own.isEmpty());
+		for (auto it = m_iconButtons.begin(); it != m_iconButtons.end(); ++it)
+		{
+			const QString c = m_iconColors.value(it.key(), theme.value(it.key()).toString());
+			it.value()->setStyleSheet(QStringLiteral("QPushButton { border-left: 14px solid %1; padding-left: 8px; }").arg(c));
+		}
+	}
 	m_dir = m_state.value(QStringLiteral("dir")).toString();
 
 	// Kacheln neu aufbauen; aktive Paletten tragen ein Kennzeichen.
@@ -385,6 +440,19 @@ void AppearanceTab::openEditor()
 	m_editor->show();
 	m_editName->setFocus();
 	m_editName->selectAll();
+}
+
+void AppearanceTab::applyIcons()
+{
+	// Eigene Farben: alle Arten festhalten (fehlende mit der Farbe des Themes), sonst leer.
+	QJsonObject o;
+	if (m_ownIcons->isChecked())
+	{
+		const QJsonObject theme = parse(m_backend->paletteJson()).value(QStringLiteral("icons")).toObject();
+		for (auto it = m_iconButtons.cbegin(); it != m_iconButtons.cend(); ++it)
+			o.insert(it.key(), m_iconColors.value(it.key(), theme.value(it.key()).toString()));
+	}
+	apply({ { QStringLiteral("icon_colors"), o } });
 }
 
 void AppearanceTab::pickColor(const QString& key)
