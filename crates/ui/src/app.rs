@@ -50,6 +50,9 @@ pub struct App {
     keyring_result: std::sync::Arc<std::sync::Mutex<Option<Result<(), String>>>>,
     /// Hinweis zum Schlüsselbund für die Statuszeile (einmal abholbar).
     keyring_note: Option<String>,
+    /// Schlüsseldatei des laufenden Entsperrens bzw. Anlegens; wird nach Erfolg in der Konfiguration
+    /// gemerkt. `None`: die gemerkte Angabe bleibt, wie sie ist (Entsperren aus dem Schlüsselbund).
+    unlock_key_file: Option<Option<PathBuf>>,
     /// Sperre der geöffneten Schlüsseldatenbank (fällt mit dem Tresor weg).
     vault_lock: Option<crate::vaultlock::VaultLock>,
     /// Laufendes „Felder erkennen“ (unsichtbare Web-Sitzung ohne Tab).
@@ -157,6 +160,7 @@ impl App {
             unlocking: None,
             keyring_result: Default::default(),
             keyring_note: None,
+            unlock_key_file: None,
             vault_lock: None,
             probe: None,
             lights: Default::default(),
@@ -177,6 +181,7 @@ impl App {
     /// Hauptkennwort im Schlüsselbund des Systems ablegen (nur auf ausdrücklichen Wunsch).
     pub fn unlock(&mut self, path: String, password: Secret, key_file: Option<String>, remember: bool) {
         let storage = self.config.index_storage;
+        self.unlock_key_file = Some(key_file.as_deref().filter(|k| !k.is_empty()).map(PathBuf::from));
         let (tx, rx) = mpsc::channel();
         self.unlocking = Some(rx);
         let outcome = self.keyring_result.clone();
@@ -202,6 +207,7 @@ impl App {
         let storage = self.config.index_storage;
         let (tx, rx) = mpsc::channel();
         self.unlocking = Some(rx);
+        self.unlock_key_file = None;
         std::thread::spawn(move || {
             let r = match crate::keyring::load(&path) {
                 Ok(Some(f)) => open_vault(&path, Secret::from_str_exact(&f.password), f.key_file.clone(), storage),
@@ -252,6 +258,7 @@ impl App {
             return;
         }
         self.unlocking = Some(rx);
+        self.unlock_key_file = Some(key_file.as_deref().filter(|k| !k.is_empty()).map(PathBuf::from));
         std::thread::spawn(move || {
             let result = (|| -> Result<(Vault, crate::vaultlock::VaultLock), String> {
                 if path.trim().is_empty() {
@@ -277,6 +284,8 @@ impl App {
                     let kp = std::path::Path::new(k);
                     if make_key_file {
                         rj_kdbx::generate_key_file(kp).map_err(|e| format!("Schlüsseldatei: {e}"))?;
+                    } else if !kp.is_file() {
+                        return Err(KEY_FILE_MISSING.into());
                     }
                     key = key.with_key_file(kp).map_err(|e| format!("Schlüsseldatei: {e}"))?;
                 }
@@ -404,15 +413,34 @@ impl App {
         self.set_terminal_settings(&json!({ "font_size": next }).to_string())
     }
 
-    /// Merkt sich den Pfad der geöffneten KDBX in der Konfiguration (nicht im Demomodus).
-    fn remember_kdbx_path(&mut self, path: &std::path::Path) {
-        if self.demo || self.config.kdbx_path.as_deref() == Some(path) {
+    /// Merkt sich den Pfad der geöffneten KDBX und ihrer Schlüsseldatei in der Konfiguration (nicht im
+    /// Demomodus). `key_file`: `None` lässt die gemerkte Schlüsseldatei unverändert.
+    fn remember_kdbx_path(&mut self, path: &std::path::Path, key_file: Option<Option<PathBuf>>) {
+        if self.demo {
             return;
         }
-        self.config.kdbx_path = Some(path.to_path_buf());
-        if let Some(cp) = self.config_path.clone() {
-            let _ = self.config.save(&cp);
+        let mut changed = false;
+        if self.config.kdbx_path.as_deref() != Some(path) {
+            self.config.kdbx_path = Some(path.to_path_buf());
+            changed = true;
         }
+        if let Some(k) = key_file {
+            if self.config.key_file != k {
+                self.config.key_file = k;
+                changed = true;
+            }
+        }
+        if changed {
+            if let Some(cp) = self.config_path.clone() {
+                let _ = self.config.save(&cp);
+            }
+        }
+    }
+
+    /// Gemerkte Schlüsseldatei, falls sie zu dieser KDBX gehört (zum Vorbelegen der Entsperrmaske).
+    pub fn key_file_for(&self, path: &str) -> Option<String> {
+        let same = self.config.kdbx_path.as_deref().is_some_and(|p| p == std::path::Path::new(path));
+        same.then(|| self.config.key_file.as_ref().map(|k| k.display().to_string())).flatten()
     }
 
     /// Sperren: KDBX-Schlüssel und alle Kennwortpuffer verwerfen
@@ -1469,7 +1497,8 @@ impl App {
                                 None => note,
                             });
                         }
-                        self.remember_kdbx_path(&kdbx);
+                        let key_file = self.unlock_key_file.take();
+                        self.remember_kdbx_path(&kdbx, key_file);
                         self.restore_session_credentials();
                         self.start_snmp();
                         // Hauptkennwort im Schlüsselbund gemerkt? (Ergebnis vom Hintergrundfaden)
@@ -1490,7 +1519,10 @@ impl App {
                         out.push(UiEvent::Unlocked { targets: n });
                         self.maybe_auto_check();
                     }
-                    Err(reason) => out.push(UiEvent::UnlockFailed { reason }),
+                    Err(reason) => {
+                        self.unlock_key_file = None;
+                        out.push(UiEvent::UnlockFailed { reason });
+                    }
                 }
             }
         }
@@ -1983,10 +2015,18 @@ mod web_options_tests {
 }
 
 /// Öffnet die Schlüsseldatenbank (Sperrdatei, Schlüsseldatei, Vault).
+/// Meldung, wenn die angegebene Schlüsseldatei fehlt. Nennt den eingegebenen Text bewusst nicht:
+/// Dort steht manchmal versehentlich das Kennwort.
+const KEY_FILE_MISSING: &str = "Die Schlüsseldatei wurde nicht gefunden. Bitte über „Wählen …“ die richtige Datei auswählen oder den Haken „Schlüsseldatei verwenden“ entfernen.";
+
 fn open_vault(path: &str, password: Secret, key_file: Option<String>, storage: rj_core::config::IndexStorage) -> Result<(Vault, crate::vaultlock::VaultLock), String> {
+    let key_file = key_file.filter(|k| !k.is_empty());
+    if key_file.as_deref().is_some_and(|k| !std::path::Path::new(k).is_file()) {
+        return Err(KEY_FILE_MISSING.into());
+    }
     let lock = crate::vaultlock::VaultLock::acquire(std::path::Path::new(path))?;
     let mut key = MasterKey { password: Some(password), key_file: None };
-    if let Some(k) = key_file.filter(|k| !k.is_empty()) {
+    if let Some(k) = key_file {
         key = key.with_key_file(std::path::Path::new(&k)).map_err(|e| format!("Schlüsseldatei: {e}"))?;
     }
     Vault::open(std::path::Path::new(path), key, storage).map(|v| (v, lock)).map_err(|e| e.to_string())

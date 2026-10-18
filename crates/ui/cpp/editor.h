@@ -519,22 +519,33 @@ signals:
 
 protected:
 	void paintEvent(QPaintEvent*) override;
+	void resizeEvent(QResizeEvent*) override;
 	bool eventFilter(QObject*, QEvent*) override;
 
 private:
 	void submit();
 	void setMode(bool create);
 	void browse();
+	void browseKeyFile();
+	/// Zeilen der Schlüsseldatei nur bei gesetztem Haken „Schlüsseldatei verwenden“ zeigen.
+	void updateKeyRows();
+	/// Gemerkte Schlüsseldatei der gewählten KDBX eintragen (setzt dann auch den Haken).
+	void prefillKeyFile();
+	void placeLogo();
 	void updateStrength();
 	RjBackend* m_backend;
 	bool m_create = false;
 	bool m_locked = false;
 	QLabel* m_title;
 	QLabel* m_hint;
+	QLabel* m_logo;
 	QLineEdit* m_path;
 	QLineEdit* m_password;
 	QLineEdit* m_password2;
+	QCheckBox* m_useKey;
+	QWidget* m_keyRow;
 	QLineEdit* m_keyFile;
+	QPushButton* m_browseKey;
 	QCheckBox* m_makeKey;
 	QCheckBox* m_remember;
 	QLabel* m_strength;

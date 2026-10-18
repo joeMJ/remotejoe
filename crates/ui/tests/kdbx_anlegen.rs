@@ -74,6 +74,44 @@ fn create_with_generated_key_file_needs_both() {
 }
 
 #[test]
+fn key_file_is_remembered_and_a_missing_one_is_reported_without_echo() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gemerkt.kdbx");
+    let key = dir.path().join("gemerkt.key");
+    let (p, k) = (path.display().to_string(), key.display().to_string());
+    let mut app = App::new(false);
+    app.config_path = None;
+
+    // Nach dem Anlegen mit Schlüsseldatei ist sie zu dieser KDBX gemerkt (Vorbelegung der Maske).
+    app.create_vault(p.clone(), Secret::from_str_exact("Kennwort 2"), Some(k.clone()), true, false);
+    assert!(matches!(warte(&mut app), UiEvent::Unlocked { .. }));
+    assert_eq!(app.key_file_for(&p).as_deref(), Some(k.as_str()));
+    assert_eq!(app.key_file_for("/anderswo/andere.kdbx"), None);
+
+    // Versehentlich das Kennwort ins Feld der Schlüsseldatei getippt: klare Meldung, der Text taucht nicht auf.
+    app.lock(false);
+    app.unlock(p.clone(), Secret::from_str_exact("Kennwort 2"), Some("Kennwort 2".into()), false);
+    match warte(&mut app) {
+        UiEvent::UnlockFailed { reason } => {
+            assert!(reason.contains("Schlüsseldatei wurde nicht gefunden"), "{reason}");
+            assert!(!reason.contains("Kennwort 2"), "{reason}");
+        }
+        e => panic!("unerwartet: {e:?}"),
+    }
+    // Der Fehlversuch ändert die gemerkte Schlüsseldatei nicht.
+    assert_eq!(app.key_file_for(&p).as_deref(), Some(k.as_str()));
+    app.unlock(p.clone(), Secret::from_str_exact("Kennwort 2"), Some(k.clone()), false);
+    assert!(matches!(warte(&mut app), UiEvent::Unlocked { .. }));
+
+    // Eine KDBX ohne Schlüsseldatei entfernt die gemerkte Angabe.
+    let plain = dir.path().join("ohne.kdbx").display().to_string();
+    app.lock(false);
+    app.create_vault(plain.clone(), Secret::from_str_exact("Kennwort 3"), None, false, false);
+    assert!(matches!(warte(&mut app), UiEvent::Unlocked { .. }));
+    assert_eq!(app.key_file_for(&plain), None);
+}
+
+#[test]
 fn create_rejects_missing_input() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = App::new(false);

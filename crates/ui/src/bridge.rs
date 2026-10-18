@@ -212,6 +212,10 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "kdbxPath"]
         fn kdbx_path(self: &RjBackend) -> QString;
+        /// Gemerkte Schlüsseldatei zu dieser KDBX (leer, wenn keine).
+        #[qinvokable]
+        #[cxx_name = "keyFileFor"]
+        fn key_file_for(self: &RjBackend, path: &QString) -> QString;
         #[qinvokable]
         fn text(self: &RjBackend, key: &QString) -> QString;
         #[qinvokable]
@@ -636,6 +640,10 @@ impl qobject::RjBackend {
 
     fn kdbx_path(&self) -> QString {
         q(self.app().and_then(|a| a.kdbx_path()).unwrap_or_default())
+    }
+
+    fn key_file_for(&self, path: &QString) -> QString {
+        q(self.app().and_then(|a| a.key_file_for(&path.to_string())).unwrap_or_default())
     }
 
     fn activity(self: Pin<&mut Self>) {

@@ -14,6 +14,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QStyle>
+#include <QtGui/QIcon>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
@@ -2360,6 +2361,11 @@ UnlockOverlay::UnlockOverlay(RjBackend* backend, QWidget* parent)
 	setObjectName(QStringLiteral("unlockOverlay"));
 	setAttribute(Qt::WA_StyledBackground, true);
 	setAutoFillBackground(false);
+	// Großes Logo unten rechts (außerhalb des Layouts, unter der Eingabebox).
+	m_logo = new QLabel(this);
+	m_logo->setObjectName(QStringLiteral("unlockLogo"));
+	m_logo->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+	m_logo->setAccessibleName(QStringLiteral("remotejoe"));
 	auto* outer = new QVBoxLayout(this);
 	auto* box = new QFrame(this);
 	box->setObjectName(QStringLiteral("unlockBox"));
@@ -2399,8 +2405,16 @@ UnlockOverlay::UnlockOverlay(RjBackend* backend, QWidget* parent)
 	m_password->setEchoMode(QLineEdit::Password);
 	m_password2 = new QLineEdit(box);
 	m_password2->setEchoMode(QLineEdit::Password);
+	m_useKey = new QCheckBox(rjText(backend, "unlock.usekey"), box);
+	m_useKey->setToolTip(rjText(backend, "unlock.usekey.tip"));
 	m_keyFile = new QLineEdit(box);
 	m_keyFile->setCompleter(new QCompleter(fs, this));
+	m_browseKey = new QPushButton(rjText(backend, "unlock.browse.key.button"), box);
+	m_keyRow = new QWidget(box);
+	auto* kl = new QHBoxLayout(m_keyRow);
+	kl->setContentsMargins(0, 0, 0, 0);
+	kl->addWidget(m_keyFile, 1);
+	kl->addWidget(m_browseKey);
 	m_makeKey = new QCheckBox(rjText(backend, "unlock.makekey"), box);
 	m_remember = new QCheckBox(rjText(backend, "unlock.remember"), box);
 	m_remember->setToolTip(rjText(backend, "unlock.remember.tip"));
@@ -2414,7 +2428,8 @@ UnlockOverlay::UnlockOverlay(RjBackend* backend, QWidget* parent)
 	addRow("unlock.file", pathRow, m_path);
 	addRow("unlock.password", m_password, m_password);
 	addRow("unlock.password2", m_password2, m_password2);
-	addRow("unlock.keyfile", m_keyFile, m_keyFile);
+	m_form->addRow(QString(), m_useKey);
+	addRow("unlock.keyfile", m_keyRow, m_keyFile);
 	m_form->addRow(QString(), m_makeKey);
 	m_form->addRow(QString(), m_remember);
 	m_form->addRow(QString(), m_strength);
@@ -2438,6 +2453,12 @@ UnlockOverlay::UnlockOverlay(RjBackend* backend, QWidget* parent)
 	connect(m_password2, &QLineEdit::returnPressed, this, &UnlockOverlay::submit);
 	connect(m_cancel, &QPushButton::clicked, this, &QWidget::hide);
 	connect(m_browse, &QPushButton::clicked, this, &UnlockOverlay::browse);
+	connect(m_browseKey, &QPushButton::clicked, this, &UnlockOverlay::browseKeyFile);
+	connect(m_useKey, &QCheckBox::toggled, this, [this](bool on) {
+		updateKeyRows();
+		if (on)
+			m_keyFile->setFocus();
+	});
 	connect(m_switch, &QPushButton::clicked, this, [this] { setMode(!m_create); });
 	connect(m_password, &QLineEdit::textChanged, this, &UnlockOverlay::updateStrength);
 	connect(m_password2, &QLineEdit::textChanged, this, &UnlockOverlay::updateStrength);
@@ -2462,13 +2483,20 @@ void UnlockOverlay::setMode(bool create)
 	m_ok->setText(rjText(m_backend, create ? "unlock.button.new" : "unlock.button"));
 	m_switch->setText(rjText(m_backend, create ? "unlock.switch.open" : "unlock.switch.new"));
 	m_form->setRowVisible(m_password2, create);
-	m_form->setRowVisible(m_makeKey, create);
 	m_form->setRowVisible(m_strength, create);
 	m_keyFile->setPlaceholderText(create ? rjText(m_backend, "unlock.keyfile.hint.new") : QString());
 	m_message->clear();
 	m_password->clear();
 	m_password2->clear();
 	m_makeKey->setChecked(false);
+	if (create)
+	{
+		m_useKey->setChecked(false);
+		m_keyFile->clear();
+	}
+	else
+		prefillKeyFile();
+	updateKeyRows();
 	m_hint->setText(create ? rjText(m_backend, "unlock.hint.new") : QString());
 	m_hint->setVisible(create);
 	updateStrength();
@@ -2480,7 +2508,10 @@ void UnlockOverlay::open(const QString& path, bool locked)
 	setMode(false);
 	m_switch->setVisible(!locked);
 	if (!path.isEmpty())
+	{
 		m_path->setText(path);
+		prefillKeyFile();
+	}
 	else if (!locked)
 	{
 		// Erster Start ohne bekannte KDBX: Öffnen oder neu anlegen anbieten.
@@ -2509,6 +2540,7 @@ void UnlockOverlay::openNew()
 		const QString base = home.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) : home;
 		m_path->setText(QDir(base).filePath(QStringLiteral("remotejoe.kdbx")));
 	}
+	m_useKey->setChecked(false);
 	m_keyFile->clear();
 	setBusy(false);
 	setGeometry(parentWidget()->rect());
@@ -2517,12 +2549,66 @@ void UnlockOverlay::openNew()
 	m_password->setFocus();
 }
 
+void UnlockOverlay::updateKeyRows()
+{
+	const bool on = m_useKey->isChecked();
+	m_form->setRowVisible(m_keyRow, on);
+	m_form->setRowVisible(m_makeKey, m_create && on);
+	if (!on)
+		m_makeKey->setChecked(false);
+}
+
+void UnlockOverlay::prefillKeyFile()
+{
+	const QString kf = m_backend->keyFileFor(m_path->text().trimmed());
+	m_keyFile->setText(kf);
+	m_useKey->setChecked(!kf.isEmpty());
+	updateKeyRows();
+}
+
+void UnlockOverlay::browseKeyFile()
+{
+	const QFileInfo db(m_path->text().trimmed());
+	const QString start = m_keyFile->text().trimmed().isEmpty() ? db.absolutePath() : m_keyFile->text().trimmed();
+	const QString title = rjText(m_backend, "unlock.browse.key");
+	const QString f = (m_create && m_makeKey->isChecked())
+	                    ? QFileDialog::getSaveFileName(this, title, start, QString(), nullptr, QFileDialog::DontConfirmOverwrite)
+	                    : QFileDialog::getOpenFileName(this, title, start);
+	if (!f.isEmpty())
+		m_keyFile->setText(f);
+}
+
+void UnlockOverlay::placeLogo()
+{
+	// Groß, aber nie über die Eingabebox: bei schmalen Fenstern ausblenden.
+	const int side = qBound(128, qMin(width(), height()) / 3, 320);
+	const int margin = 32;
+	if (width() < 1000 || height() < 560)
+	{
+		m_logo->hide();
+		return;
+	}
+	m_logo->setPixmap(QIcon(QStringLiteral(":/logo/remotejoe-512.png")).pixmap(side, side));
+	m_logo->setGeometry(width() - side - margin, height() - side - margin, side, side);
+	m_logo->lower();
+	m_logo->show();
+}
+
+void UnlockOverlay::resizeEvent(QResizeEvent* e)
+{
+	QWidget::resizeEvent(e);
+	placeLogo();
+}
+
 void UnlockOverlay::setBusy(bool busy, const QString& message)
 {
 	m_ok->setEnabled(!busy);
 	m_password->setEnabled(!busy);
 	m_password2->setEnabled(!busy);
 	m_browse->setEnabled(!busy);
+	m_useKey->setEnabled(!busy);
+	m_keyFile->setEnabled(!busy);
+	m_browseKey->setEnabled(!busy);
 	m_switch->setEnabled(!busy);
 	if (!message.isEmpty() || !busy)
 		m_message->setText(message);
@@ -2575,8 +2661,9 @@ void UnlockOverlay::submit()
 		const QString path = m_path->text().trimmed();
 		QString pw = m_password->text();
 		QString pw2 = m_password2->text();
-		QString kf = m_keyFile->text().trimmed();
-		const bool make = m_makeKey->isChecked();
+		const bool useKey = m_useKey->isChecked();
+		QString kf = useKey ? m_keyFile->text().trimmed() : QString();
+		const bool make = useKey && m_makeKey->isChecked();
 		auto wipe = [&] {
 			pw.fill(QLatin1Char(' '));
 			pw2.fill(QLatin1Char(' '));
@@ -2589,6 +2676,14 @@ void UnlockOverlay::submit()
 			m_message->setText(rjText(m_backend, "unlock.err.mismatch"));
 		else if (pw.isEmpty() && kf.isEmpty() && !make)
 			m_message->setText(rjText(m_backend, "unlock.err.empty"));
+		else if (useKey && !make && kf.isEmpty())
+			m_message->setText(rjText(m_backend, "unlock.err.keyfile.empty"));
+		else if (useKey && !make && !QFileInfo(kf).isFile())
+		{
+			// Der Text wird nicht wiederholt: Dort steht manchmal versehentlich das Kennwort.
+			m_keyFile->clear();
+			m_message->setText(rjText(m_backend, "unlock.err.keyfile.missing"));
+		}
 		else
 		{
 			if (make && kf.isEmpty())
@@ -2604,9 +2699,22 @@ void UnlockOverlay::submit()
 		wipe();
 		return;
 	}
+	const QString kf = m_useKey->isChecked() ? m_keyFile->text().trimmed() : QString();
+	if (m_useKey->isChecked() && kf.isEmpty())
+	{
+		m_message->setText(rjText(m_backend, "unlock.err.keyfile.empty"));
+		return;
+	}
+	if (!kf.isEmpty() && !QFileInfo(kf).isFile())
+	{
+		// Der Text wird nicht wiederholt: Dort steht manchmal versehentlich das Kennwort.
+		m_keyFile->clear();
+		m_message->setText(rjText(m_backend, "unlock.err.keyfile.missing"));
+		return;
+	}
 	QString pw = m_password->text();
 	setBusy(true, rjText(m_backend, "unlock.busy"));
-	emit unlockRequested(m_path->text(), pw, m_keyFile->text(), m_remember->isChecked());
+	emit unlockRequested(m_path->text(), pw, kf, m_remember->isChecked());
 	pw.fill(QLatin1Char(' '));
 	m_password->clear();
 }
