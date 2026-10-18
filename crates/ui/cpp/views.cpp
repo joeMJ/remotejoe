@@ -300,6 +300,12 @@ void FrameView::releasePressed()
 void FrameView::keyPressEvent(QKeyEvent* e)
 {
 	const std::uint32_t code = keyCode(e);
+	if (KeyCapture::logging())
+	{
+		KeyCapture::pump();
+		qInfo("[remotejoe-tasten] gedrückt: Qt-Taste 0x%x, System 0x%x, Umschalter 0x%x, an Sitzung 0x%x, Freigabe %s", unsigned(e->key()), unsigned(e->nativeVirtualKey()),
+		      unsigned(e->modifiers()), unsigned(code), KeyCapture::active() ? "an" : "aus");
+	}
 #ifdef Q_OS_LINUX
 	m_rightCtrlAlone = e->nativeVirtualKey() == kControlR && !e->isAutoRepeat() && m_pressed.isEmpty();
 #endif
@@ -314,6 +320,8 @@ void FrameView::keyReleaseEvent(QKeyEvent* e)
 	if (e->isAutoRepeat())
 		return;
 	const std::uint32_t code = keyCode(e);
+	if (KeyCapture::logging())
+		qInfo("[remotejoe-tasten] losgelassen: Qt-Taste 0x%x, System 0x%x, an Sitzung 0x%x", unsigned(e->key()), unsigned(e->nativeVirtualKey()), unsigned(code));
 	m_pressed.remove(code);
 	m_backend->keyEvent(m_session, code, std::uint32_t(e->modifiers()), e->text(), false);
 #ifdef Q_OS_LINUX
@@ -346,7 +354,13 @@ void FrameView::focusOutEvent(QFocusEvent* e)
 {
 	QWidget::focusOutEvent(e);
 	releasePressed();
-	KeyCapture::release();
+	// Wechselt nur das aktive Fenster (z. B. Abfrage des Desktops, anderes Programm), bleibt die
+	// Freigabe: Der Desktop schaltet sie mit dem Fokus selbst ab und wieder an. Abgegeben wird sie,
+	// wenn der Fokus innerhalb von remotejoe woandershin geht.
+	if (KeyCapture::logging())
+		qInfo("[remotejoe-tasten] Fokus verloren (Grund %d)", int(e->reason()));
+	if (e->reason() != Qt::ActiveWindowFocusReason && e->reason() != Qt::PopupFocusReason)
+		KeyCapture::release();
 	if (m_web)
 		m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":{\"op\":\"focus\",\"on\":false}}").arg(m_session));
 	update();

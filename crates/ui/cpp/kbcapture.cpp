@@ -21,6 +21,13 @@ struct wl_event_queue;
 namespace {
 
 QPointer<QWindow> s_grabbed;
+
+/// Diagnose (Start mit RJ_KEYLOG=1): Freigabe und Tastendrücke auf stderr, ohne Textinhalte.
+bool keylog()
+{
+	static const bool on = qEnvironmentVariableIsSet("RJ_KEYLOG");
+	return on;
+}
 bool s_active = false;
 
 #ifdef RJ_WAYLAND_INHIBIT
@@ -54,6 +61,7 @@ using GetVersion = uint32_t (*)(wl_proxy*);
 using CreateWrapper = void* (*)(void*);
 using WrapperDestroy = void (*)(void*);
 using GetClass = const char* (*)(wl_proxy*);
+using DispatchPending = int (*)(wl_display*, wl_event_queue*);
 
 struct Lib
 {
@@ -68,6 +76,7 @@ struct Lib
 	CreateWrapper wrapper = nullptr;
 	WrapperDestroy wrapperDestroy = nullptr;
 	GetClass className = nullptr;
+	DispatchPending dispatchPending = nullptr;
 	const RjWlInterface* registryIf = nullptr;
 	const RjWlInterface* surfaceIf = nullptr;
 	const RjWlInterface* seatIf = nullptr;
@@ -92,10 +101,11 @@ Lib& lib()
 		x.wrapper = reinterpret_cast<CreateWrapper>(dlsym(h, "wl_proxy_create_wrapper"));
 		x.wrapperDestroy = reinterpret_cast<WrapperDestroy>(dlsym(h, "wl_proxy_wrapper_destroy"));
 		x.className = reinterpret_cast<GetClass>(dlsym(h, "wl_proxy_get_class"));
+		x.dispatchPending = reinterpret_cast<DispatchPending>(dlsym(h, "wl_display_dispatch_queue_pending"));
 		x.registryIf = static_cast<const RjWlInterface*>(dlsym(h, "wl_registry_interface"));
 		x.surfaceIf = static_cast<const RjWlInterface*>(dlsym(h, "wl_surface_interface"));
 		x.seatIf = static_cast<const RjWlInterface*>(dlsym(h, "wl_seat_interface"));
-		x.ok = x.marshal && x.addListener && x.createQueue && x.setQueue && x.roundtrip && x.flush && x.version && x.wrapper && x.wrapperDestroy && x.className && x.registryIf && x.surfaceIf && x.seatIf;
+		x.ok = x.marshal && x.addListener && x.createQueue && x.setQueue && x.roundtrip && x.flush && x.version && x.wrapper && x.wrapperDestroy && x.className && x.dispatchPending && x.registryIf && x.surfaceIf && x.seatIf;
 		return x;
 	}();
 	return l;
@@ -115,6 +125,19 @@ constexpr uint32_t WL_MARSHAL_FLAG_DESTROY = 1;
 wl_proxy* s_manager = nullptr;
 wl_proxy* s_inhibitor = nullptr;
 bool s_managerLooked = false;
+wl_event_queue* s_queue = nullptr;
+
+void onActive(void*, wl_proxy*)
+{
+	if (keylog())
+		qInfo("[remotejoe-tasten] Desktop meldet: Tastenkürzel gehen an remotejoe (aktiv)");
+}
+
+void onInactive(void*, wl_proxy*)
+{
+	if (keylog())
+		qInfo("[remotejoe-tasten] Desktop meldet: Tastenkürzel wieder beim Desktop (inaktiv)");
+}
 
 void onGlobal(void*, wl_proxy* registry, uint32_t name, const char* interface, uint32_t version)
 {
@@ -141,6 +164,7 @@ wl_proxy* manager(wl_display* display)
 	wl_event_queue* queue = l.createQueue(display);
 	if (!queue)
 		return nullptr;
+	s_queue = queue;
 	// wl_display.get_registry (Opcode 1) über eine Hülle mit eigener Warteschlange, damit der
 	// Ereignisfaden von Qt die Antworten nicht abholt.
 	auto* wrapped = static_cast<wl_proxy*>(l.wrapper(display));
@@ -156,6 +180,8 @@ wl_proxy* manager(wl_display* display)
 	l.roundtrip(display, queue);
 	if (s_manager)
 		l.setQueue(s_manager, queue);
+	if (keylog())
+		qInfo("[remotejoe-tasten] Wayland: Freigabe-Schnittstelle des Desktops %s", s_manager ? "gefunden" : "NICHT vorhanden");
 	return s_manager;
 }
 
@@ -185,12 +211,31 @@ bool waylandInhibit(QWindow* window)
 	Lib& lc = lib();
 	// Unter Qt Wayland ist die Fensterkennung die wl_surface; zur Sicherheit prüfen.
 	if (std::strcmp(lc.className(surface), "wl_surface") != 0 || std::strcmp(lc.className(seat), "wl_seat") != 0)
+	{
+		if (keylog())
+			qInfo("[remotejoe-tasten] Wayland: Fenster- oder Sitzkennung unerwartet (%s, %s)", lc.className(surface), lc.className(seat));
 		return false;
-	dropInhibitor();
+	}
 	Lib& l = lib();
+	// Gleiches Fenster: Die vorhandene Freigabe gilt weiter (der Desktop schaltet sie mit dem Fokus selbst).
+	static wl_proxy* s_surface = nullptr;
+	if (s_inhibitor && s_surface == surface)
+	{
+		l.dispatchPending(display, s_queue);
+		return true;
+	}
+	dropInhibitor();
 	// zwp_keyboard_shortcuts_inhibit_manager_v1.inhibit_shortcuts (Opcode 1): neue Kennung, Oberfläche, Sitz.
 	s_inhibitor = l.marshal(m, 1, &inhibitorIf, l.version(m), 0, nullptr, surface, seat);
+	s_surface = surface;
+	if (s_inhibitor)
+	{
+		static void (*listener[2])(void) = { reinterpret_cast<void (*)(void)>(&onActive), reinterpret_cast<void (*)(void)>(&onInactive) };
+		l.addListener(s_inhibitor, listener, nullptr);
+	}
 	l.flush(display);
+	if (keylog())
+		qInfo("[remotejoe-tasten] Wayland: Freigabe angefordert (%s)", s_inhibitor ? "ok" : "fehlgeschlagen");
 	return s_inhibitor != nullptr;
 }
 
@@ -221,11 +266,30 @@ void capture(QWidget* w)
 			s_grabbed->setKeyboardGrabEnabled(false);
 		s_active = window->setKeyboardGrabEnabled(true);
 		s_grabbed = s_active ? window : nullptr;
+		if (keylog())
+			qInfo("[remotejoe-tasten] X11: Tastatur-Grab %s", s_active ? "ok" : "fehlgeschlagen");
 	}
+}
+
+void pump()
+{
+#ifdef RJ_WAYLAND_INHIBIT
+	// Antworten des Desktops (aktiv/inaktiv) abholen, nur für das Diagnoseprotokoll.
+	if (s_inhibitor && s_queue)
+		if (auto* app = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>())
+			lib().dispatchPending(reinterpret_cast<wl_display*>(app->display()), s_queue);
+#endif
+}
+
+bool logging()
+{
+	return keylog();
 }
 
 void release()
 {
+	if (keylog() && s_active)
+		qInfo("[remotejoe-tasten] Freigabe zurückgegeben");
 #ifdef RJ_WAYLAND_INHIBIT
 	dropInhibitor();
 #endif

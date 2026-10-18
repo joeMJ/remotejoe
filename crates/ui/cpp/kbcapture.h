@@ -13,5 +13,9 @@ void capture(QWidget* w);
 void release();
 /// Ist gerade eine Freigabe aktiv?
 bool active();
+/// Antworten des Desktops abholen (Diagnose).
+void pump();
+/// Diagnoseprotokoll eingeschaltet (RJ_KEYLOG)?
+bool logging();
 
 } // namespace KeyCapture
