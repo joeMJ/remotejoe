@@ -21,7 +21,7 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 > Dieses Repository ist für meinen eigenen Gebrauch gedacht und wird nur aus Bequemlichkeit öffentlich bereitgestellt.
 >
 > * **Keine Unterstützung zugesagt:** Pull Requests werden nicht bearbeitet, Feature-Wünsche nicht zugesagt. Fehler und Wünsche können als [Issue](https://github.com/joeMJ/remotejoe/issues) gemeldet werden – es kann aber dauern, bis ein Issue bearbeitet wird.
-> * **Keine Garantie:** Bereitstellung „wie besehen“, ohne jede Gewährleistung und Haftung. Nutzung auf eigenes Risiko.
+> * **Keine Garantie, Haftung:** Das Programm wird unentgeltlich als Privatprojekt „wie besehen“ bereitgestellt. Es besteht kein Anspruch auf Verfügbarkeit, Fehlerfreiheit, Aktualisierungen oder Support. Für Schäden aus der Nutzung hafte ich nur bei Vorsatz, grober Fahrlässigkeit sowie bei Verletzung von Leben, Körper oder Gesundheit; im Übrigen nur nach den gesetzlichen Vorschriften.
 > * **Eigene Umgebung:** Entwickelt und getestet nur auf meinen eigenen Ubuntu-Rechnern (zuletzt 26.04). Auf anderen Systemen kann es fehlschlagen. Die Windows-Fassung ist neu und bisher nur auf einer Windows-10-VM erprobt.
 > * **Zugangsdaten & Netzwerk:** Das Programm läuft mit den Rechten deines Benutzerkontos, öffnet Verbindungen zu den Zielen, die du einträgst, und verwaltet Zugangsdaten in einer KeePass-Datei (KDBX). Für die Update-Prüfung ruft es die Veröffentlichungen dieses Repositorys auf GitHub ab. **Lies den Code, bevor du ihn installierst.**
 > * **Keine Updates zugesichert:** Es kann jederzeit ohne Ankündigung Änderungen, Brüche oder die Löschung des Repos geben.
@@ -135,7 +135,9 @@ einmalig als vertrauenswürdig eintragen.
 
 - Datei: [`docs/zertifikat/documentjoe-codesigning.cer`](docs/zertifikat/documentjoe-codesigning.cer)
 - Name: `CN=documentjoe Code Signing (privat), O=documentjoe`, gültig bis 07.10.2041
-- Verwendung: **nur Code-Signatur** (nicht für Webseiten oder E-Mail)
+- Verwendung: **nur Code-Signatur** (Schlüsselverwendung „Digitale Signatur“, erweiterte Verwendung „Codesignatur“).
+  Es ist keine Zertifizierungsstelle und kann keine anderen Zertifikate ausstellen; für Webseiten (TLS) oder
+  E-Mail taugt es nicht.
 - Fingerabdruck (SHA-1): `C595450070432A501AADD72366C837AFB268740A`
 
 **Eintragen** – PowerShell **als Administrator** öffnen, den ganzen Block kopieren und einfügen
@@ -212,8 +214,12 @@ eingetragen, tut es nichts.
 }
 ```
 
-Damit vertraut Windows allem, was mit diesem Zertifikat signiert ist. Wer das nicht möchte, lässt es weg
-und bestätigt die Warnung bei der Installation von Hand. Die Warnung von SmartScreen zu selten
+Das Eintragen ist **freiwillig**. Weil das Zertifikat selbst ausgestellt ist, braucht Windows es an zwei Stellen:
+unter „Vertrauenswürdige Stammzertifizierungsstellen“, damit die Signatur überhaupt als gültig gilt, und unter
+„Vertrauenswürdige Herausgeber“, damit Windows den Herausgeber kennt. Danach vertraut Windows allem, was mit diesem
+Schlüssel signiert ist – nur als Programmsignatur, nicht für Webseiten oder E-Mail. Das verbleibende Risiko: Wer den
+privaten Schlüssel hätte, könnte Programme signieren, denen dieser Rechner dann vertraut. Wer das nicht möchte, lässt
+es weg und bestätigt die Warnung bei der Installation von Hand. Die Warnung von SmartScreen zu selten
 heruntergeladenen Dateien kann trotzdem erscheinen; sie hängt nicht am Zertifikat.
 
 **Wieder entfernen** – ebenfalls in einer PowerShell als Administrator einfügen:
@@ -396,7 +402,8 @@ neu aufklappen.
 - **Export (Datei → Exportieren …):** Ordner, Ziele und Optionen als **JSON** (remotejoe, wieder importierbar) oder als
   **CSV im Stil von RDM**, für den ganzen Baum oder die Auswahl. Benutzername und Domäne gehören dazu, Kennwörter nur
   auf Wunsch; JSON mit Kennwörtern gibt es nur in einem **verschlüsselten ZIP** (AES-256, öffnen mit 7-Zip oder
-  WinZip), das Kennwort dafür vergibst du beim Export. Die Datei ist nur für dein Konto lesbar. Der Import liest
+  WinZip), das Kennwort dafür vergibst du beim Export. AES-256 ist nur so sicher wie dieses Kennwort; ein Export
+  mit Kennwörtern enthält immer sensible Daten und gehört nicht in Mail oder Cloud ohne weiteren Schutz. Die Datei ist nur für dein Konto lesbar. Der Import liest
   JSON, CSV und ZIP und fragt bei einem verschlüsselten ZIP nach dem Kennwort.
 - **Zugangsdaten kopieren:** Im Kontextmenü eines Ziels „Benutzernamen kopieren“ und „Kennwort kopieren“
   (Eintrag als „geheim“ markiert, die Zwischenablage wird nach 30 s geleert; Frist unter Extras).
@@ -595,6 +602,19 @@ Daraus baut `scripts/build-msi.ps1` mit WiX 3.14 die signierte MSI unter `target
 - [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md) – remotejoe unter Windows bauen
 - [`docs/ZIELE-EINRICHTEN.md`](docs/ZIELE-EINRICHTEN.md) – Windows-Ziele für RDP und PowerShell-Remoting einrichten (mit Skripten unter [`tools/ziel-einrichten/`](tools/ziel-einrichten/))
 - [`THIRD_PARTY.md`](THIRD_PARTY.md) – verwendete Bibliotheken Dritter mit Lizenzen
+
+## Datenschutz und Netzwerkzugriffe
+
+remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Updates – mit GitHub:
+
+- **Update-Prüfung:** Bei **Hilfe → Nach Updates suchen …** fragt remotejoe die Veröffentlichungen dieses
+  Repositorys bei GitHub ab und lädt auf Wunsch das Paket. Dabei erhält GitHub deine IP-Adresse und übliche technische
+  Angaben der Anfrage (z. B. Programmname und Version im User-Agent). Zugangsdaten, Inhalte der Schlüsseldatenbank,
+  Verbindungsziele, Hostnamen oder Sitzungsinhalte werden **nicht** übertragen.
+- Die Prüfung läuft nur, wenn du sie auslöst. Beim Start prüft remotejoe nur, wenn du „Beim Start prüfen“
+  einschaltest (Vorgabe: aus).
+- **Hilfe → Fehler melden / Wünsche** und **Hilfe → Hilfe** öffnen nur Seiten auf GitHub im Standardbrowser.
+- Es gibt keine Telemetrie und keine Nutzungsstatistik.
 
 ## Fehler melden und Wünsche
 
