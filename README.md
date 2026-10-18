@@ -344,7 +344,7 @@ bzw. ssh-agent); das Kennwort aus der Schlüsseldatenbank wird dabei **nicht** v
    ```
 
    Für ein Konto **ohne** Administratorrechte gehört die Zeile stattdessen in
-   `%USERPROFILE%\.ssh\authorized_keys`.
+   `%USERPROFILE%\.ssh\authorized_keys` im Profil dieses Benutzers.
 3. Einmal von Hand verbinden und den Host-Schlüssel bestätigen, damit er in `~/.ssh/known_hosts` steht:
    `ssh benutzer@host exit`
 
