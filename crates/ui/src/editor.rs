@@ -365,7 +365,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_accept")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -521,6 +521,12 @@ impl App {
             }
             "save" => return self.save_with(str_of(&c, "choice")),
             "connect_all" => self.op_connect_all(&c),
+            "cert_check_start" => self.op_cert_check_start(&c),
+            "cert_check_rows" => Ok(json!({ "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() })),
+            "cert_check_accept" => {
+                let (saved, errors) = crate::certcheck::accept_new(&mut self.cert_rows, rj_ssh::known_hosts::KnownHosts::default_location());
+                Ok(json!({ "saved": saved, "errors": errors, "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() }))
+            }
             "update_task" => self.simple("Aufgabe ändern", |idx| {
                 let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
                 let t = idx.tasks.iter_mut().find(|t| t.id == id).ok_or(EditError::NotFound)?;
@@ -1200,6 +1206,55 @@ impl App {
             Err(rj_kdbx::VaultError::Conflict { mine, theirs }) => json!({ "conflict": { "mine": mine, "theirs": theirs } }).to_string(),
             Err(e) => err(format!("Speichern fehlgeschlagen: {e}")),
         }
+    }
+
+    /// „Schlüssel und Zertifikate prüfen“ für die markierten Ziele bzw. Ordner (`ids`) im Hintergrund
+    /// starten; das Ergebnis kommt als `JobResult` mit `kind = "cert_check"`.
+    fn op_cert_check_start(&mut self, c: &Value) -> Result<Value, String> {
+        let mut seen = HashSet::new();
+        let mut targets = Vec::new();
+        for id in ids_of(c, "ids") {
+            match edit::node(&self.index, id) {
+                Some(Node::Target(_)) => targets.push(id),
+                Some(Node::Folder(_)) => targets.extend(edit::targets_below(&self.index, id)),
+                None => {}
+            }
+        }
+        let mut specs = Vec::new();
+        for id in targets.into_iter().filter(|i| seen.insert(*i)) {
+            let Some(Node::Target(t)) = edit::node(&self.index, id) else { continue };
+            if !crate::certcheck::supported(t.protocol) {
+                continue;
+            }
+            let tunnel = rj_core::inherit::resolve_tunnel(&self.index, id).ok().flatten().is_some();
+            specs.push(crate::certcheck::ProbeSpec {
+                target: id,
+                name: t.name.clone(),
+                protocol: t.protocol,
+                host: t.host.clone(),
+                port: t.effective_port(),
+                legacy: matches!(&t.options, ProtocolOptions::Ssh(o) if o.legacy_algorithms),
+                skip: tunnel.then(|| "Verbindung über einen Tunnel – wird nicht direkt geprüft".to_string()),
+            });
+        }
+        if specs.is_empty() {
+            return Err("Keine prüfbaren Ziele in der Auswahl".into());
+        }
+        let n = specs.len();
+        self.cert_rows.clear();
+        let rt = self.rt_handle();
+        let job = self.jobs.spawn_cancellable(format!("Schlüssel prüfen ({n} Ziele)"), move |job, cancel| {
+            let rows = crate::certcheck::run(&rt, specs, cancel, rj_ssh::known_hosts::KnownHosts::default_location());
+            Box::new(move |app: &mut App, cancelled: bool| {
+                if cancelled {
+                    return Vec::new();
+                }
+                let json = json!({ "rows": rows.iter().map(|r| r.json()).collect::<Vec<_>>() }).to_string();
+                app.cert_rows = rows;
+                vec![crate::sessions::UiEvent::JobResult { job, kind: "cert_check".into(), target: String::new(), json }]
+            })
+        });
+        Ok(json!({ "job": job, "count": n }))
     }
 
     /// Alle Ziele eines Ordners (`id`) oder die markierten Ziele (`ids`, Ordner darin zählen nicht)

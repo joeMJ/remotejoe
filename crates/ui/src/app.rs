@@ -53,6 +53,8 @@ pub struct App {
     /// Schlüsseldatei des laufenden Entsperrens bzw. Anlegens; wird nach Erfolg in der Konfiguration
     /// gemerkt. `None`: die gemerkte Angabe bleibt, wie sie ist (Entsperren aus dem Schlüsselbund).
     unlock_key_file: Option<Option<PathBuf>>,
+    /// Ergebnis des letzten Prüflaufs „Schlüssel und Zertifikate prüfen“.
+    pub(crate) cert_rows: Vec<crate::certcheck::CheckRow>,
     /// Sperre der geöffneten Schlüsseldatenbank (fällt mit dem Tresor weg).
     vault_lock: Option<crate::vaultlock::VaultLock>,
     /// Laufendes „Felder erkennen“ (unsichtbare Web-Sitzung ohne Tab).
@@ -161,6 +163,7 @@ impl App {
             keyring_result: Default::default(),
             keyring_note: None,
             unlock_key_file: None,
+            cert_rows: Vec::new(),
             vault_lock: None,
             probe: None,
             lights: Default::default(),
@@ -171,6 +174,11 @@ impl App {
         app.sessions.set_scheme(scheme);
         app.sessions.set_scrollback(app.config.terminal.clamped_scrollback());
         app
+    }
+
+    /// Laufzeit für Netzarbeit in Hintergrundaufgaben.
+    pub(crate) fn rt_handle(&self) -> tokio::runtime::Handle {
+        self._rt.handle().clone()
     }
 
     pub fn kdbx_path(&self) -> Option<String> {

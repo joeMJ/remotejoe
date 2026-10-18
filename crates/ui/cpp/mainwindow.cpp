@@ -1703,6 +1703,12 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		menu.addAction(T(m_backend, "ctx.all.disconnect"), this, [this] { connectAll(QStringLiteral("disconnect")); });
 	}
 	menu.addSeparator();
+	menu.addAction(T(m_backend, "ctx.certcheck"), this, [this] {
+		// Ein laufender Prüf-Tab wird ersetzt, damit Ergebnisse eindeutig zugeordnet bleiben.
+		if (auto* old = findChild<CertCheckTab*>())
+			closeToolTab(old);
+		addToolTab(new CertCheckTab(m_backend, selectedIds(), m_tabs), T(m_backend, "certcheck.title"));
+	});
 	QMenu* tasks = menu.addMenu(T(m_backend, "ctx.tasks"));
 	tasks->addAction(T(m_backend, "ctx.tasks.updates"), this, [this] {
 		const QStringList ids = selectedTargets(m_tree, m_model);
@@ -2353,6 +2359,11 @@ void MainWindow::handleEvents(const QString& json)
 				}
 				else if (kind == QLatin1String("guests"))
 					applyGuests(e.value(QStringLiteral("target")).toString(), r);
+				else if (kind == QLatin1String("cert_check"))
+				{
+					if (auto* c = findChild<CertCheckTab*>())
+						c->handleResult(r);
+				}
 				else if (r.contains(QStringLiteral("error")))
 					statusBar()->showMessage(T(m_backend, "edit.error").arg(r.value(QStringLiteral("error")).toString()), 8000);
 				else if (kind == QLatin1String("guest_action"))

@@ -323,6 +323,30 @@ private:
 	QString m_program;
 };
 
+/// „Schlüssel und Zertifikate prüfen“: holt die Server-Schlüssel der gewählten Ziele ohne Anmeldung,
+/// zeigt sie mit Fingerabdruck und Zustand und übernimmt auf Wunsch nur die neuen.
+class CertCheckTab : public ToolTab
+{
+	Q_OBJECT
+public:
+	CertCheckTab(RjBackend* backend, const QStringList& ids, QWidget* parent = nullptr);
+	/// Prüfung (erneut) starten.
+	void start();
+	/// Ergebnis der Hintergrundaufgabe `cert_check`.
+	void handleResult(const QJsonObject& r);
+
+private:
+	void fill(const QJsonArray& rows);
+	void acceptNew();
+	QString edit(const QJsonObject& cmd) const;
+	RjBackend* m_backend;
+	QStringList m_ids;
+	QTableWidget* m_table;
+	QLabel* m_state;
+	QPushButton* m_accept;
+	QPushButton* m_again;
+};
+
 /// Rückfragen beim Verbinden eines Ziels, bevor eine Sitzung besteht
 /// (Auswahl des Zugangsdatensatzes, Host-Schlüssel eines Sprungservers,
 /// Zertifikat eines Hypervisors). Schließen lehnt ab.

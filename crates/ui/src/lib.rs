@@ -8,6 +8,7 @@ pub mod appearance;
 pub mod keyring;
 pub mod app;
 pub mod bridge;
+pub mod certcheck;
 pub mod editor;
 pub mod hyper;
 pub mod idle;

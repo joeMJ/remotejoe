@@ -28,7 +28,7 @@ remotejoe-snmp = { path = "../snmp" }
 remotejoe-worker-psrp = { path = "../worker-psrp" }
 remotejoe-proxmox = { path = "../proxmox" }
 remotejoe-update = { path = "../update" }
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "time"] }
 alacritty_terminal = "0.26"
 serde.workspace = true
 serde_json.workspace = true

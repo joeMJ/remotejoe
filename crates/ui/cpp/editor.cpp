@@ -3549,6 +3549,142 @@ void PatchdayTab::refresh()
 	maxRefreshMs = qMax(maxRefreshMs, t.elapsed());
 }
 
+// ---------- CertCheckTab ----------
+
+CertCheckTab::CertCheckTab(RjBackend* backend, const QStringList& ids, QWidget* parent)
+  : ToolTab(parent)
+  , m_backend(backend)
+  , m_ids(ids)
+{
+	auto T = [backend](const char* k) { return backend->text(QString::fromLatin1(k)); };
+	setObjectName(QStringLiteral("certCheckTab"));
+	auto* lay = new QVBoxLayout(this);
+	auto* head = new QLabel(T("certcheck.title"), this);
+	head->setObjectName(QStringLiteral("heading"));
+	lay->addWidget(head);
+	auto* info = new QLabel(T("certcheck.info"), this);
+	info->setWordWrap(true);
+	lay->addWidget(info);
+	m_table = new QTableWidget(0, 6, this);
+	m_table->setHorizontalHeaderLabels({ T("certcheck.col.target"), T("certcheck.col.protocol"), T("certcheck.col.address"), T("certcheck.col.kind"),
+	                                     T("certcheck.col.fingerprint"), T("certcheck.col.state") });
+	m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+	m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+	m_table->verticalHeader()->hide();
+	for (int c = 0; c < 4; ++c)
+		m_table->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
+	m_table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Interactive);
+	m_table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+	m_table->setColumnWidth(4, 420);
+	lay->addWidget(m_table, 1);
+	m_state = new QLabel(this);
+	m_state->setWordWrap(true);
+	m_state->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+	lay->addWidget(m_state);
+	auto* row = new QHBoxLayout;
+	m_accept = new QPushButton(T("certcheck.accept"), this);
+	m_again = new QPushButton(T("certcheck.again"), this);
+	auto* close = new QPushButton(T("certcheck.close"), this);
+	row->addWidget(m_accept);
+	row->addWidget(m_again);
+	row->addStretch(1);
+	row->addWidget(close);
+	lay->addLayout(row);
+	connect(m_accept, &QPushButton::clicked, this, &CertCheckTab::acceptNew);
+	connect(m_again, &QPushButton::clicked, this, &CertCheckTab::start);
+	connect(close, &QPushButton::clicked, this, &ToolTab::closeRequested);
+	start();
+}
+
+QString CertCheckTab::edit(const QJsonObject& cmd) const
+{
+	return m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact)));
+}
+
+void CertCheckTab::start()
+{
+	m_table->setRowCount(0);
+	m_accept->setEnabled(false);
+	const QJsonObject r = parse(edit({ { QStringLiteral("op"), QStringLiteral("cert_check_start") }, { QStringLiteral("ids"), QJsonArray::fromStringList(m_ids) } }));
+	if (r.contains(QStringLiteral("error")))
+	{
+		m_state->setText(r.value(QStringLiteral("error")).toString());
+		m_again->setEnabled(true);
+		return;
+	}
+	m_again->setEnabled(false);
+	m_state->setText(m_backend->text(QStringLiteral("certcheck.busy")).arg(r.value(QStringLiteral("count")).toInt()));
+}
+
+void CertCheckTab::handleResult(const QJsonObject& r)
+{
+	m_again->setEnabled(true);
+	fill(r.value(QStringLiteral("rows")).toArray());
+}
+
+void CertCheckTab::fill(const QJsonArray& rows)
+{
+	auto T = [this](const char* k) { return m_backend->text(QString::fromLatin1(k)); };
+	m_table->setRowCount(rows.size());
+	QMap<QString, int> count;
+	for (int i = 0; i < rows.size(); ++i)
+	{
+		const QJsonObject o = rows.at(i).toObject();
+		const QString state = o.value(QStringLiteral("state")).toString();
+		const QString detail = o.value(QStringLiteral("detail")).toString();
+		++count[state];
+		QString text;
+		if (state == QLatin1String("new"))
+			text = T("certcheck.state.new");
+		else if (state == QLatin1String("known"))
+			text = T("certcheck.state.known");
+		else if (state == QLatin1String("changed"))
+			text = T("certcheck.state.changed").arg(detail);
+		else if (state == QLatin1String("unreachable"))
+			text = T("certcheck.state.unreachable").arg(detail);
+		else if (state == QLatin1String("saved"))
+			text = T("certcheck.state.saved");
+		else
+			text = T("certcheck.state.skipped").arg(detail);
+		const QStringList cells = { o.value(QStringLiteral("name")).toString(), o.value(QStringLiteral("protocol")).toString().toUpper(),
+			                        o.value(QStringLiteral("address")).toString(), o.value(QStringLiteral("kind")).toString(),
+			                        o.value(QStringLiteral("fingerprint")).toString(), text };
+		for (int c = 0; c < cells.size(); ++c)
+		{
+			auto* it = new QTableWidgetItem(cells.at(c));
+			it->setToolTip(cells.at(c));
+			if (state == QLatin1String("changed"))
+			{
+				it->setForeground(QColor(0xc0, 0x20, 0x20));
+				QFont f = it->font();
+				f.setBold(true);
+				it->setFont(f);
+			}
+			m_table->setItem(i, c, it);
+		}
+	}
+	const int fresh = count.value(QStringLiteral("new"));
+	m_accept->setEnabled(fresh > 0);
+	m_accept->setText(T("certcheck.accept.n").arg(fresh));
+	m_state->setText(T("certcheck.summary")
+	                   .arg(fresh)
+	                   .arg(count.value(QStringLiteral("known")) + count.value(QStringLiteral("saved")))
+	                   .arg(count.value(QStringLiteral("changed")))
+	                   .arg(count.value(QStringLiteral("unreachable")) + count.value(QStringLiteral("skipped"))));
+}
+
+void CertCheckTab::acceptNew()
+{
+	const QJsonObject r = parse(edit({ { QStringLiteral("op"), QStringLiteral("cert_check_accept") } }));
+	fill(r.value(QStringLiteral("rows")).toArray());
+	QString msg = m_backend->text(QStringLiteral("certcheck.saved")).arg(r.value(QStringLiteral("saved")).toInt());
+	const QJsonArray errors = r.value(QStringLiteral("errors")).toArray();
+	for (const QJsonValue& e : errors)
+		msg += QStringLiteral("\n") + e.toString();
+	m_state->setText(m_state->text() + QStringLiteral("\n") + msg);
+	emit status(msg.section(QLatin1Char('\n'), 0, 0));
+}
+
 // ---------- UpdateTab ----------
 
 UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)

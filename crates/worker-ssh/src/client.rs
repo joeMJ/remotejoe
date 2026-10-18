@@ -126,6 +126,41 @@ impl client::Handler for Handler {
     }
 }
 
+/// Holt nur den Host-Schlüssel des Servers: Handshake bis zur Schlüsselprüfung, dann Abbruch.
+/// Es findet keine Anmeldung statt (kein Kontosperren-Risiko); `known_hosts` bleibt unverändert.
+pub async fn probe_host_key(host: &str, port: u16, timeout: Duration, legacy: bool) -> Result<PublicKey, SshError> {
+    struct Probe(Option<oneshot::Sender<PublicKey>>);
+    impl client::Handler for Probe {
+        type Error = SshError;
+        async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
+            let key = match key {
+                PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
+                PublicKeyOrCertificate::Certificate(c) => PublicKey::from(c.public_key().clone()),
+            };
+            if let Some(tx) = self.0.take() {
+                let _ = tx.send(key);
+            }
+            // Ablehnen beendet den Handshake vor jeder Anmeldung.
+            Ok(false)
+        }
+    }
+    let stream = tokio::time::timeout(timeout, tokio::net::TcpStream::connect((host, port)))
+        .await
+        .map_err(|_| SshError::Timeout)?
+        .map_err(|e| SshError::Connect(format!("{host}:{port}"), e.to_string()))?;
+    let config = Arc::new(client::Config { inactivity_timeout: Some(timeout), preferred: preferred(legacy), ..Default::default() });
+    let (tx, mut rx) = oneshot::channel();
+    let outcome = tokio::time::timeout(timeout, client::connect_stream(config, stream, Probe(Some(tx)))).await;
+    match rx.try_recv() {
+        Ok(key) => Ok(key),
+        Err(_) => Err(match outcome {
+            Err(_) => SshError::Timeout,
+            Ok(Err(e)) => e,
+            Ok(Ok(_)) => SshError::Closed,
+        }),
+    }
+}
+
 impl From<russh::keys::Error> for SshError {
     fn from(e: russh::keys::Error) -> Self {
         SshError::BadKey(e.to_string())
