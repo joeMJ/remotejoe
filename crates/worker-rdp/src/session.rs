@@ -379,6 +379,12 @@ impl RdpSession {
         f(&fr.buf, fr.width, fr.height)
     }
 
+    /// Grund des Servers für das Verbindungsende (0 = keiner).
+    pub fn error_info(&self) -> u32 {
+        // SAFETY: gültige Sitzung.
+        unsafe { ffi::rj_rdp_error_info(self.raw) }
+    }
+
     pub fn disconnect(&mut self) {
         // SAFETY: gültige Sitzung.
         unsafe { ffi::rj_rdp_disconnect(self.raw) };

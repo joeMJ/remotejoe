@@ -376,6 +376,11 @@ const char* rj_rdp_last_error(rj_rdp* rdp)
 	return rdp ? rdp->error : "";
 }
 
+uint32_t rj_rdp_error_info(rj_rdp* rdp)
+{
+	return (rdp && rdp->context && rdp->context->instance) ? freerdp_error_info(rdp->context->instance) : 0;
+}
+
 /* Lokales Konto: ohne Domäne (leer oder ".") und ohne "@" bzw. "\\" im Benutzernamen.
  * Dafür gibt es kein Kerberos; der Versuch kostet nur ein bis zwei Sekunden. */
 static BOOL rj_is_local_account(const rj_params* p)

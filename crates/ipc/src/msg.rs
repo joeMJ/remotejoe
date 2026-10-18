@@ -116,6 +116,8 @@ pub enum SessionState {
     Connected,
     Disconnected { reason: String },
     Failed { reason: String },
+    /// Gewollt beendet (z. B. in Windows abgemeldet): kein automatisches Neuverbinden.
+    Ended { reason: String },
 }
 
 /// Beschreibung eines Teilbilds im geteilten Speicher.

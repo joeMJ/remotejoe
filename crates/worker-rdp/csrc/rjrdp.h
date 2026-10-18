@@ -64,6 +64,8 @@ void rj_rdp_free(rj_rdp* rdp);
 /* 0 = verbunden, sonst Fehler (Text über rj_rdp_last_error). */
 int rj_rdp_connect(rj_rdp* rdp, const rj_params* params);
 const char* rj_rdp_last_error(rj_rdp* rdp);
+/* Grund des Servers für das Verbindungsende (MS-RDPBCGR Set Error Info, z. B. 0x0C Abmeldung). */
+uint32_t rj_rdp_error_info(rj_rdp* rdp);
 /* Ereignisse verarbeiten; 0 = weiter, -1 = getrennt. */
 int rj_rdp_poll(rj_rdp* rdp, uint32_t timeout_ms);
 void rj_rdp_disconnect(rj_rdp* rdp);

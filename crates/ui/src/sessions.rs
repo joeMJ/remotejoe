@@ -1038,6 +1038,7 @@ impl Manager {
     fn on_message(&mut self, s: SessionId, msg: FromWorker) {
         match msg {
             FromWorker::State(st) => {
+                let deliberate = matches!(st, SessionState::Ended { .. });
                 let (name, detail) = match st {
                     SessionState::Connecting => ("connecting", String::new()),
                     SessionState::Authenticating => ("connecting", String::new()),
@@ -1052,12 +1053,14 @@ impl Manager {
                     }
                     SessionState::Disconnected { reason } => ("disconnected", reason),
                     SessionState::Failed { reason } => ("failed", reason),
+                    // Gewollt beendet: wie „getrennt“ mit Grund und Knopf „Neu verbinden“, ohne Automatik.
+                    SessionState::Ended { reason } => ("disconnected", reason),
                 };
                 self.emit_state(s, name, detail);
                 if name == "connected" {
                     self.start_auto_keys(s);
                 }
-                if name == "disconnected" {
+                if name == "disconnected" && !deliberate {
                     self.schedule_reconnect(s);
                 }
             }

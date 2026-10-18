@@ -378,10 +378,16 @@ mod imp {
                 }
             }
             if !alive {
+                let info = w.session.as_ref().map(|s| s.error_info()).unwrap_or(0);
                 w.session = None;
                 w.fb = None;
                 w.connected_at = None;
-                w.send(FromWorker::State(SessionState::Disconnected { reason: "Verbindung getrennt".into() }));
+                // Abmelden, Trennen in Windows usw.: gewollt, kein automatisches Neuverbinden.
+                let state = match rj_rdp::deliberate_end(info) {
+                    Some(reason) => SessionState::Ended { reason: reason.into() },
+                    None => SessionState::Disconnected { reason: "Verbindung getrennt".into() },
+                };
+                w.send(FromWorker::State(state));
             }
         }
     }
