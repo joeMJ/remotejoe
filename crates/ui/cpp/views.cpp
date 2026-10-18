@@ -10,11 +10,14 @@
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
 #include <QtCore/QJsonDocument>
+#include <vector>
+#include <QtGui/QAction>
 #include <QtGui/QClipboard>
 #include <QtGui/QFontDatabase>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
+#include <QtGui/QShortcut>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QApplication>
 #include <QtCore/QPointer>
@@ -125,6 +128,229 @@ void FrameView::resizeEvent(QResizeEvent*)
 {
 	m_autoFits = 0;
 	m_fitTimer->start();
+	sendBounds();
+}
+
+// ---------- Web im Tab (Windows: WebView2 als Kindfenster) ----------
+
+namespace
+{
+#ifdef Q_OS_WIN
+/// Windows-Tastencode zu einer Qt-Taste (0: nicht abgebildet).
+int vkOf(Qt::Key k)
+{
+	if (k >= Qt::Key_F1 && k <= Qt::Key_F12)
+		return 0x70 + (k - Qt::Key_F1);
+	if ((k >= Qt::Key_A && k <= Qt::Key_Z) || (k >= Qt::Key_0 && k <= Qt::Key_9))
+		return int(k);
+	switch (k)
+	{
+		case Qt::Key_Tab: return 0x09;
+		case Qt::Key_Backtab: return 0x09;
+		case Qt::Key_Return: return 0x0D;
+		case Qt::Key_Enter: return 0x0D;
+		case Qt::Key_Escape: return 0x1B;
+		case Qt::Key_PageUp: return 0x21;
+		case Qt::Key_PageDown: return 0x22;
+		case Qt::Key_End: return 0x23;
+		case Qt::Key_Home: return 0x24;
+		case Qt::Key_Left: return 0x25;
+		case Qt::Key_Up: return 0x26;
+		case Qt::Key_Right: return 0x27;
+		case Qt::Key_Down: return 0x28;
+		case Qt::Key_Insert: return 0x2D;
+		case Qt::Key_Delete: return 0x2E;
+		default: return 0;
+	}
+}
+
+struct Reserved
+{
+	int vk;
+	bool ctrl, alt, shift;
+	QAction* action;
+	QShortcut* shortcut;
+};
+
+/// Kurzbefehle des Hauptfensters, die nicht der Seite gehören: alle Aktionen und Kurzbefehle mit Fenster- oder
+/// Anwendungsbereich, ohne die Bearbeiten-Tasten (Strg+C/X/V/A/Z/Y, Einfg, Entf) und ohne unmodifizierte Tasten außer F1 bis F12.
+std::vector<Reserved> collectReserved(QWidget* window)
+{
+	std::vector<Reserved> out;
+	auto add = [&](const QKeySequence& ks, QAction* a, QShortcut* sc) {
+		if (ks.count() != 1)
+			return;
+		const QKeyCombination kc = ks[0];
+		const Qt::KeyboardModifiers m = kc.keyboardModifiers();
+		const Qt::Key key = kc.key();
+		const int vk = vkOf(key);
+		if (!vk)
+			return;
+		const bool fkey = key >= Qt::Key_F1 && key <= Qt::Key_F12;
+		const bool ctrl = m.testFlag(Qt::ControlModifier), alt = m.testFlag(Qt::AltModifier), shift = m.testFlag(Qt::ShiftModifier);
+		if (!fkey && !ctrl && !alt)
+			return;
+		if (ctrl && !alt && (key == Qt::Key_C || key == Qt::Key_X || key == Qt::Key_V || key == Qt::Key_A || key == Qt::Key_Z || key == Qt::Key_Y ||
+		                     key == Qt::Key_Insert || key == Qt::Key_Delete))
+			return;
+		if (shift && !ctrl && !alt && (key == Qt::Key_Insert || key == Qt::Key_Delete))
+			return;
+		out.push_back({ vk, ctrl, alt, shift, a, sc });
+	};
+	for (QAction* a : window->findChildren<QAction*>())
+	{
+		if (a->shortcutContext() == Qt::WidgetShortcut || !a->isEnabled())
+			continue;
+		for (const QKeySequence& ks : a->shortcuts())
+			add(ks, a, nullptr);
+	}
+	for (QShortcut* sc : window->findChildren<QShortcut*>())
+	{
+		if (sc->context() == Qt::WidgetShortcut || !sc->isEnabled())
+			continue;
+		add(sc->key(), nullptr, sc);
+	}
+	return out;
+}
+#endif
+} // namespace
+
+void FrameView::setWeb(bool web)
+{
+	m_web = web;
+#ifdef Q_OS_WIN
+	if (!web || m_embedded)
+		return;
+	// Die Seite ist ein Kindfenster dieses Widgets: eigenes natives Fenster, ohne native Vorfahren.
+	m_embedded = true;
+	setAttribute(Qt::WA_NativeWindow);
+	setAttribute(Qt::WA_DontCreateNativeAncestors);
+	// Qt-Fokus und Windows-Fokus laufen sonst auseinander: Hatte die Seite einmal den Windows-Fokus, bekäme sie weiter
+	// alle Tasten, auch wenn danach ein Qt-Feld angeklickt wird. Darum bei jedem Fokuswechsel auf ein Qt-Feld den
+	// Windows-Fokus auf das Fenster setzen (einmal je Anwendung).
+	static bool hooked = false;
+	if (!hooked)
+	{
+		hooked = true;
+		connect(qApp, &QApplication::focusChanged, qApp, [](QWidget*, QWidget* now) {
+			auto* fv = qobject_cast<QWidget*>(now);
+			if (!fv || !fv->window() || !fv->window()->winId())
+				return;
+			for (QWidget* w = fv; w; w = w->parentWidget())
+				if (auto* f = dynamic_cast<FrameView*>(w); f && f->isEmbedded())
+					return;
+			::SetFocus(reinterpret_cast<HWND>(fv->window()->winId()));
+		});
+	}
+#endif
+}
+
+void FrameView::webCommand(const QString& cmd)
+{
+	m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":%2}").arg(m_session).arg(cmd));
+}
+
+void FrameView::sendBounds()
+{
+#ifdef Q_OS_WIN
+	if (!m_embedded || !testAttribute(Qt::WA_WState_Created))
+		return;
+	const qreal dpr = devicePixelRatioF();
+	webCommand(QStringLiteral("{\"op\":\"bounds\",\"x\":0,\"y\":0,\"w\":%1,\"h\":%2,\"scale\":%3}")
+	             .arg(qMax(1, qRound(width() * dpr)))
+	             .arg(qMax(1, qRound(height() * dpr)))
+	             .arg(qRound(dpr * 100)));
+#endif
+}
+
+void FrameView::resyncWeb()
+{
+#ifdef Q_OS_WIN
+	if (!m_embedded)
+		return;
+	webCommand(QStringLiteral("{\"op\":\"embed\",\"hwnd\":%1}").arg(QString::number(qulonglong(winId()))));
+	QJsonArray keys;
+	if (QWidget* top = window())
+		for (const Reserved& r : collectReserved(top))
+			keys.append(QJsonObject{ { QStringLiteral("vk"), r.vk }, { QStringLiteral("ctrl"), r.ctrl }, { QStringLiteral("alt"), r.alt }, { QStringLiteral("shift"), r.shift } });
+	webCommand(QStringLiteral("{\"op\":\"keys\",\"keys\":%1}").arg(QString::fromUtf8(QJsonDocument(keys).toJson(QJsonDocument::Compact))));
+	sendBounds();
+	webCommand(QStringLiteral("{\"op\":\"visible\",\"on\":%1}").arg(isVisible() ? QStringLiteral("true") : QStringLiteral("false")));
+#endif
+}
+
+void FrameView::showEvent(QShowEvent* e)
+{
+	QWidget::showEvent(e);
+#ifdef Q_OS_WIN
+	if (m_embedded)
+		resyncWeb();
+#endif
+}
+
+void FrameView::hideEvent(QHideEvent* e)
+{
+	QWidget::hideEvent(e);
+#ifdef Q_OS_WIN
+	if (m_embedded)
+		webCommand(QStringLiteral("{\"op\":\"visible\",\"on\":false}"));
+#endif
+}
+
+bool FrameView::event(QEvent* e)
+{
+#ifdef Q_OS_WIN
+	// Beim Abreißen in ein eigenes Fenster kann Qt das native Fenster neu erzeugen: dem Worker die neue Kennung geben.
+	if (m_embedded && e->type() == QEvent::WinIdChange)
+	{
+		const bool r = QWidget::event(e);
+		resyncWeb();
+		return r;
+	}
+#endif
+	return QWidget::event(e);
+}
+
+void FrameView::webFocus(bool on, bool forward)
+{
+#ifdef Q_OS_WIN
+	if (!m_embedded)
+		return;
+	if (on)
+	{
+		if (!hasFocus())
+			setFocus(Qt::MouseFocusReason);
+	}
+	else
+		// Tab am Ende der Seite: Qt-Fokus weiter (die eigene Überschreibung verhindert das sonst).
+		QWidget::focusNextPrevChild(forward);
+#else
+	Q_UNUSED(on);
+	Q_UNUSED(forward);
+#endif
+}
+
+void FrameView::triggerShortcut(QWidget* window, int vk, bool ctrl, bool alt, bool shift)
+{
+#ifdef Q_OS_WIN
+	if (!window)
+		return;
+	for (const Reserved& r : collectReserved(window))
+		if (r.vk == vk && r.ctrl == ctrl && r.alt == alt && r.shift == shift)
+		{
+			if (r.action)
+				r.action->trigger();
+			else if (r.shortcut)
+				QMetaObject::invokeMethod(r.shortcut, "activated");
+			return;
+		}
+#else
+	Q_UNUSED(window);
+	Q_UNUSED(vk);
+	Q_UNUSED(ctrl);
+	Q_UNUSED(alt);
+	Q_UNUSED(shift);
+#endif
 }
 
 void FrameView::requestFit()
@@ -885,6 +1111,9 @@ QWidget* SessionPane::view() const
 void SessionPane::setState(const QString& state, const QString& detail)
 {
 	m_state = state;
+	// Web unter Windows: Worker (neu) gestartet, Elternfenster und Bereich noch einmal melden.
+	if (m_frame && m_frame->isEmbedded() && (state == QLatin1String("connecting") || state == QLatin1String("authenticating") || state == QLatin1String("connected")))
+		m_frame->resyncWeb();
 	m_stateText = m_backend->text(QStringLiteral("state.") + state);
 	if (!detail.isEmpty())
 		m_stateText += QStringLiteral(": ") + detail;
