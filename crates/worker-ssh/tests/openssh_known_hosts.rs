@@ -26,7 +26,8 @@ fn file_is_interchangeable_with_openssh() {
     let file = dir.path().join("known_hosts");
     // 1. Von OpenSSH erzeugt (Port ≠ 22, also „[127.0.0.1]:port“).
     let scan = std::process::Command::new("ssh-keyscan").args(["-p", &sshd.port.to_string(), "-t", "ed25519", "127.0.0.1"]).output().unwrap();
-    let text = String::from_utf8(scan.stdout).unwrap();
+    // Neuere OpenSSH-Versionen schreiben vor den Schlüssel eine Kommentarzeile („# host:port SSH-2.0-…“).
+    let text: String = String::from_utf8(scan.stdout).unwrap().lines().filter(|l| !l.starts_with('#')).map(|l| format!("{l}\n")).collect();
     assert!(text.starts_with(&format!("[127.0.0.1]:{} ", sshd.port)), "{text}");
     std::fs::write(&file, &text).unwrap();
     let key = PublicKey::from_openssh(text.lines().find(|l| !l.starts_with('#')).unwrap().split_once(' ').unwrap().1).unwrap();
