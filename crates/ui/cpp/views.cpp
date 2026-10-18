@@ -1,5 +1,6 @@
 #include "views.h"
 #include "editor.h"
+#include "kbcapture.h"
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -48,6 +49,8 @@ FrameView::FrameView(RjBackend* backend, std::uint64_t session, QWidget* parent)
 
 FrameView::~FrameView()
 {
+	if (hasFocus())
+		KeyCapture::release();
 	unmap();
 }
 
@@ -212,6 +215,9 @@ void FrameView::mouseMoveEvent(QMouseEvent* e)
 void FrameView::mousePressEvent(QMouseEvent* e)
 {
 	setFocus();
+	// Nach dem Notausgang holt ein Klick in die Sitzung die Tastenkürzel zurück.
+	if (!KeyCapture::active())
+		captureKeys();
 	QPoint r = toRemote(e->position());
 	m_backend->mouseEvent(m_session, r.x(), r.y(), buttonId(e->button()), true);
 }
@@ -228,20 +234,105 @@ void FrameView::wheelEvent(QWheelEvent* e)
 	m_backend->mouseEvent(m_session, r.x(), r.y(), e->angleDelta().y() > 0 ? 4 : 5, true);
 }
 
+namespace {
+
+// X11-Keysyms (unter Linux liefert Qt sie als nativeVirtualKey).
+constexpr std::uint32_t kControlR = 0xffe4;
+
+/// Umschalt-, Windows- und Menütasten, deren Seite (links/rechts) erhalten bleiben soll.
+/// AltGr (ISO_Level3_Shift) bewusst nicht: Sonderzeichen wie @ und € kommen als Text.
+bool sidedKeysym(std::uint32_t k)
+{
+	return (k >= 0xffe1 && k <= 0xffe4) || k == 0xffe9 || k == 0xffea || (k >= 0xffeb && k <= 0xffec) || k == 0xff67;
+}
+
+} // namespace
+
+std::uint32_t FrameView::keyCode(QKeyEvent* e) const
+{
+#ifdef Q_OS_LINUX
+	const std::uint32_t native = e->nativeVirtualKey();
+	if (sidedKeysym(native))
+		return 0x40000000u | native; // NATIVE_KEYSYM in keys.rs
+	// Windows-Taste unter dem Namen „Meta“ (manche Belegungen): links/rechts nach Keysym.
+	if (native == 0xffe7 || native == 0xffe8)
+		return 0x40000000u | (native == 0xffe7 ? 0xffebu : 0xffecu);
+#endif
+	return std::uint32_t(e->key());
+}
+
+bool FrameView::event(QEvent* e)
+{
+	// Kürzel mit Alt oder der Windows-Taste und die Menütaste gehören der Sitzung, nicht dem Programm
+	// (sonst würden z. B. Menü-Kurzbefehle sie abfangen). Strg-Kürzel des Programms (Strg+Tab …) bleiben.
+	if (e->type() == QEvent::ShortcutOverride && !m_web && s_keyCapture)
+	{
+		auto* k = static_cast<QKeyEvent*>(e);
+		const bool winOrAlt = k->modifiers() & (Qt::AltModifier | Qt::MetaModifier);
+		const bool special = k->key() == Qt::Key_Menu || k->key() == Qt::Key_Super_L || k->key() == Qt::Key_Super_R || k->key() == Qt::Key_Meta || k->key() == Qt::Key_Alt;
+		if (winOrAlt || special)
+		{
+			e->accept();
+			return true;
+		}
+	}
+	return QWidget::event(e);
+}
+
+void FrameView::captureKeys()
+{
+	if (m_web || !s_keyCapture)
+		return;
+	KeyCapture::capture(this);
+	if (KeyCapture::active() && s_notice)
+		s_notice(m_backend->text(QStringLiteral("keys.captured")));
+}
+
+void FrameView::releasePressed()
+{
+	// Gegen hängende Tasten: alles, was hier gedrückt wurde, beim Ziel wieder lösen.
+	for (std::uint32_t k : std::as_const(m_pressed))
+		m_backend->keyEvent(m_session, k, 0, QString(), false);
+	m_pressed.clear();
+	m_rightCtrlAlone = false;
+}
+
 void FrameView::keyPressEvent(QKeyEvent* e)
 {
-	m_backend->keyEvent(m_session, std::uint32_t(e->key()), std::uint32_t(e->modifiers()), e->text(), true);
+	const std::uint32_t code = keyCode(e);
+#ifdef Q_OS_LINUX
+	m_rightCtrlAlone = e->nativeVirtualKey() == kControlR && !e->isAutoRepeat() && m_pressed.isEmpty();
+#endif
+	// Merken nur, was als Taste (nicht als Text) beim Ziel ankommt.
+	if (!e->isAutoRepeat() && (e->text().isEmpty() || (e->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))))
+		m_pressed.insert(code);
+	m_backend->keyEvent(m_session, code, std::uint32_t(e->modifiers()), e->text(), true);
 }
 
 void FrameView::keyReleaseEvent(QKeyEvent* e)
 {
-	if (!e->isAutoRepeat())
-		m_backend->keyEvent(m_session, std::uint32_t(e->key()), std::uint32_t(e->modifiers()), e->text(), false);
+	if (e->isAutoRepeat())
+		return;
+	const std::uint32_t code = keyCode(e);
+	m_pressed.remove(code);
+	m_backend->keyEvent(m_session, code, std::uint32_t(e->modifiers()), e->text(), false);
+#ifdef Q_OS_LINUX
+	// Notausgang: rechte Strg-Taste allein gibt die Tastenkürzel an den Desktop zurück.
+	if (e->nativeVirtualKey() == kControlR && m_rightCtrlAlone && KeyCapture::active())
+	{
+		releasePressed();
+		KeyCapture::release();
+		if (s_notice)
+			s_notice(m_backend->text(QStringLiteral("keys.released")));
+	}
+	m_rightCtrlAlone = false;
+#endif
 }
 
 void FrameView::focusInEvent(QFocusEvent* e)
 {
 	QWidget::focusInEvent(e);
+	captureKeys();
 	// Lokale Zwischenablage beim Betreten anbieten (Richtung prüft der Worker).
 	const QString text = QGuiApplication::clipboard()->text();
 	if (!text.isEmpty())
@@ -254,6 +345,8 @@ void FrameView::focusInEvent(QFocusEvent* e)
 void FrameView::focusOutEvent(QFocusEvent* e)
 {
 	QWidget::focusOutEvent(e);
+	releasePressed();
+	KeyCapture::release();
 	if (m_web)
 		m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":{\"op\":\"focus\",\"on\":false}}").arg(m_session));
 	update();

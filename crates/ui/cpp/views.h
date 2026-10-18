@@ -5,6 +5,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QSet>
 #include <QtCore/QSize>
 #include <QtCore/QTimer>
 #include <QtGui/QColor>
@@ -37,6 +38,10 @@ public:
 	/// Web-Sitzung: Fokuswechsel an den Worker melden.
 	void setWeb(bool web) { m_web = web; }
 	inline static bool s_focusFrame = true;
+	/// Tastenkürzel des Desktops (Windows-Taste, Alt+Tab …) bei Fokus an RDP/VNC geben (Extras-Menü).
+	inline static bool s_keyCapture = true;
+	/// Hinweis in der Fußzeile, wenn die Tastenkürzel an die Sitzung gehen bzw. zurückgegeben wurden.
+	inline static std::function<void(const QString&)> s_notice;
 	/// Bildpunkt der Gegenstelle in Koordinaten dieses Widgets.
 	QPoint toLocal(const QPoint& remote) const;
 
@@ -52,10 +57,20 @@ protected:
 	void focusInEvent(QFocusEvent*) override;
 	void focusOutEvent(QFocusEvent*) override;
 	bool focusNextPrevChild(bool) override { return false; }
+	bool event(QEvent*) override;
 
 private:
 	QPoint toRemote(const QPointF& p) const;
+	/// Tastencode für den Worker: unter Linux Umschalt-, Windows- und Menütasten als Keysym (links/rechts).
+	std::uint32_t keyCode(QKeyEvent* e) const;
+	/// Tastenkürzel an diese Sitzung geben (nicht bei Web).
+	void captureKeys();
+	/// Alle noch gedrückten Tasten als losgelassen melden.
+	void releasePressed();
 	bool m_web = false;
+	QSet<std::uint32_t> m_pressed;
+	/// Rechte Strg-Taste gedrückt und noch keine andere Taste dazu (Notausgang).
+	bool m_rightCtrlAlone = false;
 	QRect target() const;
 	/// Meldet nach einer Pause die Größe des Fensters als Wunschauflösung der Sitzung
 	/// (RDP: Anzeige-Steuerkanal oder Neuaufbau, VNC: ExtendedDesktopSize).

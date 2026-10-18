@@ -502,6 +502,7 @@ impl App {
                 "lock_after_idle_mins": self.config.security.lock_after_idle_mins,
                 "disconnect_on_lock": self.config.security.disconnect_on_lock,
                 "connect_all_parallel": self.config.connection.connect_all_parallel,
+                "keyboard_capture": self.config.connection.keyboard_capture,
             })),
             "set_settings" => {
                 if let Some(m) = c.get("lock_after_idle_mins").and_then(Value::as_u64) {
@@ -513,6 +514,9 @@ impl App {
                 }
                 if let Some(n) = c.get("connect_all_parallel").and_then(Value::as_u64) {
                     self.config.connection.connect_all_parallel = n.clamp(1, 64) as u32;
+                }
+                if let Some(b) = c.get("keyboard_capture").and_then(Value::as_bool) {
+                    self.config.connection.keyboard_capture = b;
                 }
                 match &self.config_path {
                     Some(p) => self.config.save(p).map(|_| json!({ "ok": true })).map_err(|e| e.to_string()),

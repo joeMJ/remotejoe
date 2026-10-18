@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "kbcapture.h"
 #include "titlebar.h"
 #include "exporttab.h"
 #include "appearance.h"
@@ -524,6 +525,8 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] { applyAppearance(); });
 #endif
 	FrameView::setFocusFrame(parseObject(m_backend->appearanceJson()).value(QStringLiteral("focus_frame")).toBool(true));
+	FrameView::s_keyCapture = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("settings") } })).value(QStringLiteral("keyboard_capture")).toBool(true);
+	FrameView::s_notice = [this](const QString& m) { statusBar()->showMessage(m, 8000); };
 	statusBar()->showMessage(T(m_backend, "status.ready"));
 	// Fußzeile rechts: womit, wohin, seit wann, als wer.
 	m_connInfo = new QWidget(this);
@@ -886,6 +889,19 @@ void MainWindow::buildMenus()
 	});
 	extras->addAction(T(m_backend, "menu.extras.terminal"), this, [this] { openTerminalSettings(); });
 	extras->addAction(T(m_backend, "menu.extras.appearance"), this, [this] { openAppearance(); });
+	{
+		QAction* kc = extras->addAction(T(m_backend, "menu.extras.keycapture"));
+		kc->setCheckable(true);
+		kc->setChecked(FrameView::s_keyCapture);
+		connect(kc, &QAction::toggled, this, [this](bool on) {
+			FrameView::s_keyCapture = on;
+			if (!on)
+				KeyCapture::release();
+			edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("keyboard_capture"), on } });
+			statusBar()->showMessage(T(m_backend, on ? "keys.on" : "keys.off"), 6000);
+		});
+		connect(extras, &QMenu::aboutToShow, kc, [kc] { kc->setChecked(FrameView::s_keyCapture); });
+	}
 	QMenu* help = nullptr;
 	QMenu* view = m_menuBar->addMenu(T(m_backend, "menu.view"));
 	const char* modes[] = { "single", "one_by_two", "two_by_two", "free" };

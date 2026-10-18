@@ -4,9 +4,19 @@
 pub const SHIFT: u32 = 0x0200_0000;
 pub const CTRL: u32 = 0x0400_0000;
 pub const ALT: u32 = 0x0800_0000;
+/// Windows-Taste (Qt::MetaModifier).
+pub const META: u32 = 0x1000_0000;
+
+/// Kennzeichen im Tastencode: Die unteren 16 Bit sind bereits ein X11-Keysym (unter Linux für
+/// Umschalt-, Windows- und Menütasten, damit links und rechts erhalten bleiben). Qt-Tastencodes
+/// benutzen dieses Bit nie.
+pub const NATIVE_KEYSYM: u32 = 0x4000_0000;
 
 /// Qt-Tastencode → X11-Keysym für Sondertasten.
 pub fn keysym(qt_key: u32) -> Option<u32> {
+    if qt_key & NATIVE_KEYSYM != 0 {
+        return Some(qt_key & 0xffff);
+    }
     Some(match qt_key {
         0x0100_0000 => 0xff1b,
         0x0100_0001 => 0xff09,
@@ -29,6 +39,10 @@ pub fn keysym(qt_key: u32) -> Option<u32> {
         0x0100_0022 => 0xffeb,
         0x0100_0023 => 0xffe9,
         0x0100_0024 => 0xffe5,
+        // Windows-Taste links/rechts und Kontextmenü-Taste (Qt::Key_Super_L, Key_Super_R, Key_Menu).
+        0x0100_0053 => 0xffeb,
+        0x0100_0054 => 0xffec,
+        0x0100_0055 => 0xff67,
         0x0100_0030..=0x0100_003b => 0xffbe + (qt_key - 0x0100_0030),
         0x20..=0x7e => {
             // Buchstaben als Kleinbuchstaben-Keysym (für Tastenkürzel mit Strg/Alt).
@@ -85,6 +99,11 @@ mod tests {
         assert_eq!(keysym(0x0100_003b), Some(0xffc9));
         assert_eq!(keysym('C' as u32), Some('c' as u32));
         assert_eq!(keysym(0xE4), None);
+        // Windows-Taste links/rechts, Kontextmenü-Taste.
+        assert_eq!((keysym(0x0100_0053), keysym(0x0100_0054), keysym(0x0100_0055)), (Some(0xffeb), Some(0xffec), Some(0xff67)));
+        // Unter Linux kommt die Seite (links/rechts) als Keysym aus dem System: Alt rechts, Strg rechts.
+        assert_eq!(keysym(NATIVE_KEYSYM | 0xffea), Some(0xffea));
+        assert_eq!(keysym(NATIVE_KEYSYM | 0xffe4), Some(0xffe4));
     }
 
     #[test]

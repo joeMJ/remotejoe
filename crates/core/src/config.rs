@@ -131,6 +131,9 @@ pub struct ConnectionDefaults {
     /// „Alle im Ordner verbinden“: höchstens so viele Verbindungsaufbauten
     /// gleichzeitig.
     pub connect_all_parallel: u32,
+    /// Tastenkürzel des Desktops (Windows-Taste, Alt+Tab, Menütaste) gehen an RDP/VNC, solange die
+    /// Sitzung den Tastaturfokus hat.
+    pub keyboard_capture: bool,
 }
 
 impl Default for ConnectionDefaults {
@@ -142,6 +145,7 @@ impl Default for ConnectionDefaults {
             reconnect_max_secs: 60,
             clipboard_limit: 16 * 1024 * 1024,
             connect_all_parallel: 4,
+            keyboard_capture: true,
         }
     }
 }

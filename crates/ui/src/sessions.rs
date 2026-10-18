@@ -643,14 +643,8 @@ impl Manager {
             }
             return;
         }
-        let ctrl_or_alt = modifiers & (crate::keys::CTRL | crate::keys::ALT) != 0;
-        let printable = !text.is_empty() && text.chars().all(|c| !c.is_control());
-        if printable && !ctrl_or_alt {
-            if down {
-                self.send(s, &ToWorker::Input(InputEvent::Text(text.to_string())));
-            }
-        } else if let Some(k) = crate::keys::keysym(qt_key) {
-            self.send(s, &ToWorker::Input(InputEvent::Key { keysym: k, down }));
+        if let Some(ev) = image_key_input(qt_key, modifiers, text, down) {
+            self.send(s, &ToWorker::Input(ev));
         }
     }
 
@@ -1243,9 +1237,42 @@ mod osc52_tests {
     }
 }
 
+/// Tastendruck für RDP/VNC: druckbarer Text als Text, alles mit Strg, Alt oder der Windows-Taste
+/// (Kürzel wie Win+E, Strg+C) und Sondertasten als Taste. Text nur beim Drücken.
+pub(crate) fn image_key_input(qt_key: u32, modifiers: u32, text: &str, down: bool) -> Option<InputEvent> {
+    let with_modifier = modifiers & (crate::keys::CTRL | crate::keys::ALT | crate::keys::META) != 0;
+    let printable = !text.is_empty() && text.chars().all(|c| !c.is_control());
+    if printable && !with_modifier {
+        return down.then(|| InputEvent::Text(text.to_string()));
+    }
+    crate::keys::keysym(qt_key).map(|k| InputEvent::Key { keysym: k, down })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_keys_windows_alt_and_menu() {
+        use crate::keys::{ALT, CTRL, META, NATIVE_KEYSYM, SHIFT};
+        let key = |k, d| Some(InputEvent::Key { keysym: k, down: d });
+        // Windows-Taste allein, links und rechts (unter Linux als Keysym aus dem System).
+        assert_eq!(image_key_input(NATIVE_KEYSYM | 0xffeb, 0, "", true), key(0xffeb, true));
+        assert_eq!(image_key_input(NATIVE_KEYSYM | 0xffec, META, "", false), key(0xffec, false));
+        // Win+E: das E geht als Taste, nicht als Text.
+        assert_eq!(image_key_input('E' as u32, META, "e", true), key('e' as u32, true));
+        // Alt+Tab, Alt+F4, Kontextmenü-Taste.
+        assert_eq!(image_key_input(0x0100_0001, ALT, "\t", true), key(0xff09, true));
+        assert_eq!(image_key_input(0x0100_0033, ALT, "", true), key(0xffc1, true));
+        assert_eq!(image_key_input(0x0100_0055, 0, "", true), key(0xff67, true));
+        assert_eq!(image_key_input(NATIVE_KEYSYM | 0xff67, 0, "", true), key(0xff67, true));
+        // Unverändert: normaler Text (auch mit Umschalt und AltGr-Zeichen), Strg+C, rechte Umschalttaste.
+        assert_eq!(image_key_input('A' as u32, SHIFT, "A", true), Some(InputEvent::Text("A".into())));
+        assert_eq!(image_key_input('@' as u32, 0, "@", true), Some(InputEvent::Text("@".into())));
+        assert_eq!(image_key_input('A' as u32, SHIFT, "A", false), None);
+        assert_eq!(image_key_input('C' as u32, CTRL, "\u{3}", true), key('c' as u32, true));
+        assert_eq!(image_key_input(NATIVE_KEYSYM | 0xffe2, SHIFT, "", true), key(0xffe2, true));
+    }
 
     #[test]
     fn demo_sessions_and_snapshot() {
