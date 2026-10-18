@@ -149,6 +149,9 @@ void screenshots(MainWindow& w, const QString& dir)
 	{
 		pump(300);
 		save(ed, dir, QStringLiteral("eigenschaften.png"));
+		ed->selectCategory(QStringLiteral("connection"));
+		pump(300);
+		save(ed, dir, QStringLiteral("eigenschaften-verbindung.png"));
 		ed->selectCategory(QStringLiteral("credentials"));
 		if (auto* r = ed->findChild<QWidget*>(QStringLiteral("cred_named")))
 			QMetaObject::invokeMethod(r, "click");

@@ -25,6 +25,49 @@ pub struct ConnectSpec {
     pub credentials: CredentialPayload,
 }
 
+/// Nachrichten an den Worker für einen Schritt der Tastenfolge. Die Werte der Zugangsdaten werden erst hier
+/// eingesetzt und erscheinen nirgends sonst.
+fn auto_step_messages(protocol: Protocol, creds: &CredentialPayload, step: &rj_core::autokeys::KeyStep) -> Result<Vec<ToWorker>, String> {
+    use rj_core::autokeys::{expand_text, Key, KeyStep};
+    let input = |e: InputEvent| ToWorker::Input(e);
+    let mut out = Vec::new();
+    match step {
+        KeyStep::Pause(_) => {}
+        KeyStep::Key(k) => {
+            if protocol == Protocol::Ssh {
+                out.push(input(InputEvent::Bytes(k.terminal_bytes().ok_or("Taste im Terminal nicht darstellbar")?)));
+            } else if let (0, Key::Char(c)) = (k.mods, k.key) {
+                // Gewöhnliche Zeichen als Text (unabhängig von der Tastaturbelegung).
+                out.push(input(InputEvent::Text(c.to_string())));
+            } else {
+                let mods = k.modifier_keysyms();
+                out.extend(mods.iter().map(|m| input(InputEvent::Key { keysym: *m, down: true })));
+                out.push(input(InputEvent::Key { keysym: k.keysym(), down: true }));
+                out.push(input(InputEvent::Key { keysym: k.keysym(), down: false }));
+                out.extend(mods.iter().rev().map(|m| input(InputEvent::Key { keysym: *m, down: false })));
+            }
+        }
+        KeyStep::Text(t) => {
+            let field = |name: &str| match name {
+                "password" => Some(rj_core::Secret::from_bytes(creds.password.0.clone())),
+                "username" => Some(rj_core::Secret::from_str_exact(&creds.username)),
+                "domain" => creds.domain.as_deref().filter(|d| !d.is_empty()).map(rj_core::Secret::from_str_exact),
+                _ => None,
+            };
+            let secret = expand_text(t, &field)?;
+            if protocol == Protocol::Ssh {
+                out.push(input(InputEvent::Bytes(secret.as_bytes().to_vec())));
+            } else {
+                out.push(input(InputEvent::Text(String::from_utf8(secret.as_bytes().to_vec()).map_err(|_| "Text ist kein gültiges UTF-8".to_string())?)));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Qt-Tastencode von Esc.
+const QT_KEY_ESCAPE: u32 = 0x0100_0000;
+
 /// OSC-52-Regel aus den SSH-Optionen des Ziels (`osc52_write`, Vorgabe an;
 /// `osc52_read`, Vorgabe aus).
 fn osc52_policy(options_json: &str) -> Osc52Policy {
@@ -131,6 +174,14 @@ struct Session {
     attempts: u32,
     reconnect_at: Option<Instant>,
     osc52_pending: Vec<std::sync::Arc<dyn Fn(&str) -> String + Send + Sync>>,
+    /// Tastenfolge nach dem Verbinden (läuft oder wartet auf ihren Auslöser).
+    auto: Option<crate::autokeys::AutoRun>,
+    /// Wie oft die Sitzung verbunden war (für das Verhalten beim Neuverbinden).
+    connect_count: u32,
+    /// Das nächste Verbinden kommt vom automatischen Neuverbinden.
+    auto_reconnect: bool,
+    /// Zeitpunkt des letzten Bild- bzw. Ausgabeereignisses (Auslöser „ruhig“).
+    last_activity: Instant,
     /// Hält den Bildspeicher einer Vorführsitzung am Leben.
     _demo_frame: Option<rj_ipc::shm::FrameBufferWriter>,
 }
@@ -319,6 +370,8 @@ impl Manager {
                 }
             } else {
                 x.connected_at = None;
+                // Ohne Verbindung läuft keine Tastenfolge weiter.
+                x.auto = None;
             }
             x.state = state.to_string();
         }
@@ -356,7 +409,7 @@ impl Manager {
             t.set_scheme(scheme);
             t
         });
-        self.sessions.insert(id, Session { spec, worker: None, term, state: String::new(), connected_at: None, attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None });
+        self.sessions.insert(id, Session { spec, worker: None, term, state: String::new(), connected_at: None, attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None });
         self.start(id);
         id
     }
@@ -397,7 +450,7 @@ impl Manager {
         term.set_scheme(self.scheme.clone());
         term.feed(content.as_bytes());
         let spec = demo_spec(title, Protocol::Ssh);
-        self.sessions.insert(id, Session { spec, worker: None, term: Some(term), state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: None });
+        self.sessions.insert(id, Session { spec, worker: None, term: Some(term), state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None });
         self.pending.push(UiEvent::State { s: id, state: "connected".into(), detail: String::new() });
         self.pending.push(UiEvent::Terminal { s: id });
         id
@@ -437,7 +490,7 @@ impl Manager {
         }
         let fd = fb.share_handle().map(into_raw).unwrap_or(-1);
         let spec = demo_spec(title, Protocol::Rdp);
-        self.sessions.insert(id, Session { spec, worker: None, term: None, state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), _demo_frame: Some(fb) });
+        self.sessions.insert(id, Session { spec, worker: None, term: None, state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: Some(fb) });
         self.pending.push(UiEvent::State { s: id, state: "connected".into(), detail: String::new() });
         self.pending.push(UiEvent::SharedFrame { s: id, fd, w, h });
         self.pending.push(UiEvent::Frame { s: id, x: 0, y: 0, w, h });
@@ -486,6 +539,13 @@ impl Manager {
 
     /// Taste aus der Oberfläche.
     pub fn key(&mut self, s: SessionId, qt_key: u32, modifiers: u32, text: &str, down: bool) {
+        // Esc bricht eine laufende oder wartende Tastenfolge ab (und geht nicht ans Ziel).
+        if qt_key == QT_KEY_ESCAPE && self.sessions.get(&s).is_some_and(|x| x.auto.is_some()) {
+            if down {
+                self.cancel_auto_keys(s, "Tastenfolge abgebrochen");
+            }
+            return;
+        }
         let Some(sess) = self.sessions.get(&s) else { return };
         if sess.spec.protocol == Protocol::Ssh {
             if down {
@@ -749,6 +809,10 @@ impl Manager {
         if !self.reconnect.auto && !window {
             return;
         }
+        // Das nächste Verbinden ist ein automatisches Neuverbinden (für die Tastenfolge).
+        if let Some(x) = self.sessions.get_mut(&s) {
+            x.auto_reconnect = true;
+        }
         if self.hold.contains(&s) {
             // Über einen Tunnel oder eine Konsolenbrücke: die App baut erst
             // Tunnel bzw. Brücke neu auf und verbindet dann.
@@ -806,6 +870,7 @@ impl Manager {
         for s in due {
             self.reconnect(s);
         }
+        self.run_auto_keys();
         let now = Instant::now();
         let expired: Vec<(SessionId, u32)> = self.questions.iter().filter(|(_, t)| **t <= now).map(|(k, _)| *k).collect();
         for (s, q) in expired {
@@ -814,6 +879,81 @@ impl Manager {
             self.pending.push(UiEvent::QuestionClosed { s, q, reason: "timeout".into() });
         }
         std::mem::take(&mut self.pending)
+    }
+
+    /// Startet die Tastenfolge des Ziels, wenn sie eingeschaltet ist und zum Verbinden passt.
+    fn start_auto_keys(&mut self, s: SessionId) {
+        let Some(x) = self.sessions.get_mut(&s) else { return };
+        x.connect_count += 1;
+        let (n, automatic) = (x.connect_count, std::mem::take(&mut x.auto_reconnect));
+        x.auto = None;
+        if !matches!(x.spec.protocol, Protocol::Rdp | Protocol::Ssh) {
+            return;
+        }
+        let cfg: Option<rj_core::autokeys::AutoKeys> = serde_json::from_str::<serde_json::Value>(&x.spec.request.options_json)
+            .ok()
+            .and_then(|v| v.get("auto_keys").cloned())
+            .and_then(|v| serde_json::from_value(v).ok());
+        let Some(cfg) = cfg.filter(|c| c.applies(n, automatic)) else { return };
+        match cfg.validate(x.spec.protocol == Protocol::Ssh) {
+            Ok(()) => {
+                let steps = cfg.steps().unwrap_or_default();
+                let now = Instant::now();
+                x.last_activity = now;
+                x.auto = Some(crate::autokeys::AutoRun::new(&cfg, steps, now));
+                self.pending.push(UiEvent::Notice { s, text: crate::texts::text("autokeys.waiting").to_string() });
+            }
+            Err(e) => self.pending.push(UiEvent::Notice { s, text: format!("{}: {e}", crate::texts::text("autokeys.invalid")) }),
+        }
+    }
+
+    /// Bricht die Tastenfolge der Sitzung ab; `message` erscheint kurz in der Fußzeile (leer: nur löschen).
+    pub fn cancel_auto_keys(&mut self, s: SessionId, message: &str) {
+        if let Some(x) = self.sessions.get_mut(&s) {
+            x.auto = None;
+        }
+        self.pending.push(UiEvent::Notice { s, text: message.to_string() });
+    }
+
+    /// Bringt alle Tastenfolgen voran und sendet fällige Schritte.
+    fn run_auto_keys(&mut self) {
+        let now = Instant::now();
+        let ids: Vec<SessionId> = self.sessions.iter().filter(|(_, x)| x.auto.is_some()).map(|(id, _)| *id).collect();
+        for s in ids {
+            let Some(x) = self.sessions.get_mut(&s) else { continue };
+            let last = x.last_activity;
+            let was_running = x.auto.as_ref().is_some_and(|a| a.is_running());
+            let Some(run) = x.auto.as_mut() else { continue };
+            let (steps, done) = run.poll(now, last);
+            let running = run.is_running();
+            let (protocol, creds) = (x.spec.protocol, x.spec.credentials.clone());
+            if running && !was_running {
+                self.pending.push(UiEvent::Notice { s, text: crate::texts::text("autokeys.running").to_string() });
+            }
+            let mut failed = None;
+            for step in steps {
+                if let Err(e) = self.send_auto_step(s, protocol, &creds, &step) {
+                    failed = Some(e);
+                    break;
+                }
+            }
+            if let Some(e) = failed {
+                self.cancel_auto_keys(s, &format!("{}: {e}", crate::texts::text("autokeys.failed")));
+            } else if done {
+                if let Some(x) = self.sessions.get_mut(&s) {
+                    x.auto = None;
+                }
+                // Hinweis löschen; Kennwort oder Text erscheint nirgends.
+                self.pending.push(UiEvent::Notice { s, text: String::new() });
+            }
+        }
+    }
+
+    fn send_auto_step(&mut self, s: SessionId, protocol: Protocol, creds: &CredentialPayload, step: &rj_core::autokeys::KeyStep) -> Result<(), String> {
+        for m in auto_step_messages(protocol, creds, step)? {
+            self.send(s, &m);
+        }
+        Ok(())
     }
 
     fn on_message(&mut self, s: SessionId, msg: FromWorker) {
@@ -835,6 +975,9 @@ impl Manager {
                     SessionState::Failed { reason } => ("failed", reason),
                 };
                 self.emit_state(s, name, detail);
+                if name == "connected" {
+                    self.start_auto_keys(s);
+                }
                 if name == "disconnected" {
                     self.schedule_reconnect(s);
                 }
@@ -848,8 +991,16 @@ impl Manager {
                     None => self.pending.push(UiEvent::Notice { s, text: "Bildpuffer des Workers nicht übergeben".into() }),
                 }
             }
-            FromWorker::Frame(f) => self.pending.push(UiEvent::Frame { s, x: f.x, y: f.y, w: f.w, h: f.h }),
+            FromWorker::Frame(f) => {
+                if let Some(x) = self.sessions.get_mut(&s) {
+                    x.last_activity = Instant::now();
+                }
+                self.pending.push(UiEvent::Frame { s, x: f.x, y: f.y, w: f.w, h: f.h })
+            }
             FromWorker::Output(bytes) => {
+                if let Some(x) = self.sessions.get_mut(&s) {
+                    x.last_activity = Instant::now();
+                }
                 if let Some(tap) = self.macro_taps.get(&s) {
                     let _ = tap.send(bytes.clone());
                 }
@@ -1067,5 +1218,132 @@ mod fixed_size_tests {
         assert!(!fixed_size(r#"{"height":720}"#));
         assert!(fixed_size(r#"{"width":1280,"height":720}"#));
         assert!(!fixed_size("kein json"));
+    }
+}
+
+#[cfg(test)]
+mod autokeys_tests {
+    use super::*;
+    use rj_core::autokeys::{parse_script, KeyStep};
+
+    fn creds() -> CredentialPayload {
+        CredentialPayload { username: "anna".into(), domain: None, password: SecretBytes(b"p\xc3\xa4ss{1}".to_vec()), private_key: None }
+    }
+
+    fn msgs(p: Protocol, line: &str) -> Result<Vec<ToWorker>, String> {
+        auto_step_messages(p, &creds(), &parse_script(line).unwrap()[0])
+    }
+
+    fn manager_with(auto_keys: serde_json::Value) -> (Manager, SessionId) {
+        let mut m = Manager::new(PathBuf::from("/nicht/vorhanden"), Reconnect { auto: false, max: Duration::from_secs(60) });
+        let id = m.open_demo_terminal("Ziel", "", 80, 24);
+        m.sessions.get_mut(&id).unwrap().spec.request.options_json = serde_json::json!({ "auto_keys": auto_keys }).to_string();
+        m.poll(Duration::from_millis(1));
+        (m, id)
+    }
+
+    fn notice_texts(m: &mut Manager) -> Vec<String> {
+        m.poll(Duration::from_millis(1)).into_iter().filter_map(|e| if let UiEvent::Notice { text, .. } = e { Some(text) } else { None }).collect()
+    }
+
+    #[test]
+    fn lifecycle_start_cancel_with_esc_and_reconnect_policy() {
+        let on = serde_json::json!({ "enabled": true, "script": "Taste Enter", "trigger": "delay", "wait_ms": 60000 });
+        let (mut m, id) = manager_with(on.clone());
+        m.start_auto_keys(id);
+        assert!(m.sessions[&id].auto.is_some(), "Tastenfolge wartet auf den Auslöser");
+        assert_eq!(notice_texts(&mut m), vec![crate::texts::text("autokeys.waiting").to_string()]);
+        // Esc bricht ab und geht nicht weiter; andere Tasten stören nicht.
+        m.key(id, 0x41, 0, "a", true);
+        assert!(m.sessions[&id].auto.is_some());
+        m.key(id, QT_KEY_ESCAPE, 0, "", true);
+        assert!(m.sessions[&id].auto.is_none());
+        assert_eq!(notice_texts(&mut m), vec!["Tastenfolge abgebrochen".to_string()]);
+
+        // Neuverbinden: „nur beim ersten Verbinden“ sendet beim zweiten Mal nichts.
+        let (mut m, id) = manager_with(serde_json::json!({ "enabled": true, "script": "Taste Enter", "on_reconnect": "first_only" }));
+        m.start_auto_keys(id);
+        assert!(m.sessions[&id].auto.is_some());
+        m.sessions.get_mut(&id).unwrap().auto = None;
+        m.start_auto_keys(id);
+        assert!(m.sessions[&id].auto.is_none(), "zweites Verbinden");
+        // „nur nach manuellem Neuverbinden“: automatisches Neuverbinden sendet nicht, manuelles schon.
+        let (mut m, id) = manager_with(serde_json::json!({ "enabled": true, "script": "Taste Enter", "on_reconnect": "manual_only" }));
+        m.start_auto_keys(id);
+        m.sessions.get_mut(&id).unwrap().auto = None;
+        m.sessions.get_mut(&id).unwrap().auto_reconnect = true;
+        m.start_auto_keys(id);
+        assert!(m.sessions[&id].auto.is_none(), "automatisches Neuverbinden");
+        m.start_auto_keys(id);
+        assert!(m.sessions[&id].auto.is_some(), "manuelles Neuverbinden");
+        // Ausgeschaltet oder ungültig: nichts bzw. nur ein Hinweis.
+        let (mut m, id) = manager_with(serde_json::json!({ "enabled": false, "script": "Taste Enter" }));
+        m.start_auto_keys(id);
+        assert!(m.sessions[&id].auto.is_none());
+        let (mut m, id) = manager_with(serde_json::json!({ "enabled": true, "script": "Taste Blubb" }));
+        m.start_auto_keys(id);
+        assert!(m.sessions[&id].auto.is_none());
+        assert!(notice_texts(&mut m).iter().any(|t| t.starts_with("Tastenfolge ungültig")));
+    }
+
+    #[test]
+    fn sequence_runs_to_the_end_and_clears_the_notice() {
+        let (mut m, id) = manager_with(serde_json::json!({ "enabled": true, "script": "Taste Enter\nPause 20\nText {cred:password}\nTaste Enter", "trigger": "delay", "wait_ms": 0 }));
+        m.start_auto_keys(id);
+        let mut texts = notice_texts(&mut m);
+        let t0 = Instant::now();
+        while m.sessions[&id].auto.is_some() && t0.elapsed() < Duration::from_secs(5) {
+            texts.extend(notice_texts(&mut m));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        texts.extend(notice_texts(&mut m));
+        assert!(m.sessions[&id].auto.is_none(), "Folge zu Ende");
+        assert_eq!(texts.first().map(String::as_str), Some(crate::texts::text("autokeys.waiting")));
+        assert!(texts.iter().any(|t| t == crate::texts::text("autokeys.running")));
+        assert_eq!(texts.last().map(String::as_str), Some(""), "Hinweis wird am Ende gelöscht");
+        assert!(!texts.iter().any(|t| t.contains("päss") || t.contains("pass")), "Kennwort nie in Hinweisen");
+    }
+
+    #[test]
+    fn connection_loss_ends_the_sequence() {
+        let (mut m, id) = manager_with(serde_json::json!({ "enabled": true, "script": "Taste Enter", "trigger": "delay", "wait_ms": 60000 }));
+        m.start_auto_keys(id);
+        assert!(m.sessions[&id].auto.is_some());
+        m.emit_state(id, "disconnected", String::new());
+        assert!(m.sessions[&id].auto.is_none());
+    }
+
+    #[test]
+    fn rdp_keys_text_and_modifiers() {
+        assert_eq!(msgs(Protocol::Rdp, "Taste Enter").unwrap(), vec![
+            ToWorker::Input(InputEvent::Key { keysym: 0xff0d, down: true }),
+            ToWorker::Input(InputEvent::Key { keysym: 0xff0d, down: false }),
+        ]);
+        // Gewöhnliches Zeichen: Text; Kombination: Umschalter drücken, Taste, Umschalter lösen (umgekehrt).
+        assert_eq!(msgs(Protocol::Rdp, "Taste x").unwrap(), vec![ToWorker::Input(InputEvent::Text("x".into()))]);
+        assert_eq!(msgs(Protocol::Rdp, "Taste Ctrl+Alt+t").unwrap(), vec![
+            ToWorker::Input(InputEvent::Key { keysym: 0xffe3, down: true }),
+            ToWorker::Input(InputEvent::Key { keysym: 0xffe9, down: true }),
+            ToWorker::Input(InputEvent::Key { keysym: 't' as u32, down: true }),
+            ToWorker::Input(InputEvent::Key { keysym: 't' as u32, down: false }),
+            ToWorker::Input(InputEvent::Key { keysym: 0xffe9, down: false }),
+            ToWorker::Input(InputEvent::Key { keysym: 0xffe3, down: false }),
+        ]);
+        // Kennwort wird byte-genau getippt, Klammern bleiben erhalten.
+        assert_eq!(msgs(Protocol::Rdp, "Text {cred:password}").unwrap(), vec![ToWorker::Input(InputEvent::Text("päss{1}".into()))]);
+        assert_eq!(msgs(Protocol::Rdp, "Text {cred:username}@x").unwrap(), vec![ToWorker::Input(InputEvent::Text("anna@x".into()))]);
+        assert!(msgs(Protocol::Rdp, "Text {cred:domain}").unwrap_err().contains("leer"));
+        assert!(msgs(Protocol::Rdp, "Pause 10").unwrap().is_empty());
+    }
+
+    #[test]
+    fn ssh_sends_terminal_bytes() {
+        assert_eq!(msgs(Protocol::Ssh, "Taste Enter").unwrap(), vec![ToWorker::Input(InputEvent::Bytes(b"\r".to_vec()))]);
+        assert_eq!(msgs(Protocol::Ssh, "Text cd /var/log").unwrap(), vec![ToWorker::Input(InputEvent::Bytes(b"cd /var/log".to_vec()))]);
+        assert_eq!(msgs(Protocol::Ssh, "Taste Ctrl+C").unwrap(), vec![ToWorker::Input(InputEvent::Bytes(vec![3]))]);
+        assert!(msgs(Protocol::Ssh, "Taste Win+R").is_err());
+        // Schrittfolgen des Beispiels aus der Beschreibung: Eingabe, Kennwort, Eingabe.
+        let steps = parse_script("Taste Enter\nText {cred:password}\nTaste Enter").unwrap();
+        assert!(matches!(steps[1], KeyStep::Text(_)));
     }
 }

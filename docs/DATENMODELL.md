@@ -33,6 +33,13 @@ Knoten im Baum (`children`, Feld `kind`):
   `hyperv`, `psrp`), `host`, optional `port` (sonst Standardport des Protokolls), `options`
   (protokollabhängig, z. B. Zwischenablage-Richtung, Auflösung, Formular-Anmeldung),
   `credential` (Name des benötigten Zugangsdatensatzes, Standard `default`), `settings`, `meta`.
+- `options.auto_keys` (RDP und SSH, optional): Tastenfolge nach dem Verbinden mit `enabled`, `script`
+  (eine Zeile je Schritt: `Taste <Name oder Ctrl+Alt+T>`, `Text <mit {cred:password|username|domain}>`,
+  `Pause <ms>`, `#` Kommentar), `trigger` (`quiet` oder `delay`), `wait_ms`, `max_ms` und
+  `on_reconnect` (`always`, `first_only`, `manual_only`). Die Zugangsdaten stehen nie im Index,
+  nur der Platzhalter.
+- `options.legacy_algorithms` am SSH-Ziel und je Tunnel-Stufe (`hops[].legacy_algorithms`): ältere SSH-Verfahren
+  zusätzlich zulassen; die Option des Ziels gilt auch für die Stufen seines Tunnels.
 - `meta` (beide, optional): `description`, `notes`, `fields` (eigene Felder Name → Wert),
   `tasks` und `macros` (zugeordnete Aufgaben und Makros per ID). Keine Geheimnisse.
 

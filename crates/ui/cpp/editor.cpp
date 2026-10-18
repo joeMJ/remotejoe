@@ -390,6 +390,12 @@ void PropertiesTab::build()
 	m_dirty.clear();
 	m_errors.clear();
 	m_opts.clear();
+	m_akEnabled = nullptr;
+	m_akScript = nullptr;
+	m_akTrigger = nullptr;
+	m_akWait = nullptr;
+	m_akMax = nullptr;
+	m_akReconnect = nullptr;
 	delete layout();
 	qDeleteAll(findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly));
 	auto* lay = new QVBoxLayout(this);
@@ -589,6 +595,55 @@ QWidget* PropertiesTab::pageConnection()
 			text("term", "edit.opt.term");
 			text("keepalive_secs", "edit.opt.keepalive_secs");
 			check("legacy_algorithms", "edit.opt.legacy_algorithms");
+		}
+		// Tastenfolge nach dem Verbinden: RDP (nicht Hyper-V-Konsole) und SSH.
+		if (proto == QLatin1String("rdp") || proto == QLatin1String("ssh"))
+		{
+			const QJsonObject ak = o.value(QStringLiteral("auto_keys")).toObject();
+			auto* head = new QLabel(rjText(m_backend, "edit.autokeys"), w);
+			head->setObjectName(QStringLiteral("heading"));
+			f->addRow(head);
+			m_akEnabled = new QCheckBox(rjText(m_backend, "edit.autokeys.enabled"), w);
+			m_akEnabled->setChecked(ak.value(QStringLiteral("enabled")).toBool());
+			track(m_akEnabled, QStringLiteral("options"));
+			f->addRow(QString(), m_akEnabled);
+			m_akScript = new QPlainTextEdit(ak.value(QStringLiteral("script")).toString(), w);
+			m_akScript->setPlaceholderText(rjText(m_backend, "edit.autokeys.placeholder"));
+			m_akScript->setTabChangesFocus(true);
+			m_akScript->setMinimumHeight(110);
+			m_akScript->setAccessibleName(rjText(m_backend, "edit.autokeys.script"));
+			track(m_akScript, QStringLiteral("options"));
+			f->addRow(rjText(m_backend, "edit.autokeys.script"), m_akScript);
+			auto* help = new QLabel(rjText(m_backend, "edit.autokeys.help"), w);
+			help->setWordWrap(true);
+			f->addRow(QString(), help);
+			m_akTrigger = new QComboBox(w);
+			m_akTrigger->addItem(rjText(m_backend, "edit.autokeys.trigger.quiet"), QStringLiteral("quiet"));
+			m_akTrigger->addItem(rjText(m_backend, "edit.autokeys.trigger.delay"), QStringLiteral("delay"));
+			m_akTrigger->setCurrentIndex(qMax(0, m_akTrigger->findData(ak.value(QStringLiteral("trigger")).toString(QStringLiteral("quiet")))));
+			track(m_akTrigger, QStringLiteral("options"));
+			f->addRow(rjText(m_backend, "edit.autokeys.trigger"), m_akTrigger);
+			m_akWait = new QLineEdit(QString::number(ak.value(QStringLiteral("wait_ms")).toInt(1000)), w);
+			m_akWait->setAccessibleName(rjText(m_backend, "edit.autokeys.wait"));
+			track(m_akWait, QStringLiteral("options"));
+			f->addRow(rjText(m_backend, "edit.autokeys.wait"), m_akWait);
+			m_akMax = new QLineEdit(QString::number(ak.value(QStringLiteral("max_ms")).toInt(20000)), w);
+			m_akMax->setAccessibleName(rjText(m_backend, "edit.autokeys.max"));
+			track(m_akMax, QStringLiteral("options"));
+			f->addRow(rjText(m_backend, "edit.autokeys.max"), m_akMax);
+			// „Spätestens nach“ gilt nur beim Auslöser „ruhig“.
+			auto syncMax = [this] { m_akMax->setEnabled(m_akTrigger->currentData().toString() == QLatin1String("quiet")); };
+			connect(m_akTrigger, &QComboBox::currentIndexChanged, this, syncMax);
+			syncMax();
+			m_akReconnect = new QComboBox(w);
+			m_akReconnect->addItem(rjText(m_backend, "edit.autokeys.reconnect.always"), QStringLiteral("always"));
+			m_akReconnect->addItem(rjText(m_backend, "edit.autokeys.reconnect.first_only"), QStringLiteral("first_only"));
+			m_akReconnect->addItem(rjText(m_backend, "edit.autokeys.reconnect.manual_only"), QStringLiteral("manual_only"));
+			m_akReconnect->setCurrentIndex(qMax(0, m_akReconnect->findData(ak.value(QStringLiteral("on_reconnect")).toString(QStringLiteral("always")))));
+			track(m_akReconnect, QStringLiteral("options"));
+			f->addRow(rjText(m_backend, "edit.autokeys.reconnect"), m_akReconnect);
+			m_errors.insert(QStringLiteral("auto_keys"), errorLabel(w));
+			f->addRow(QString(), m_errors.value(QStringLiteral("auto_keys")));
 		}
 		else if (proto == QLatin1String("vnc"))
 			check("view_only", "edit.opt.view_only");
@@ -1168,6 +1223,21 @@ QJsonObject PropertiesTab::collect() const
 				else
 					o.insert(i.key(), v);
 			}
+		}
+		if (m_akScript)
+		{
+			QJsonObject ak = o.value(QStringLiteral("auto_keys")).toObject();
+			ak.insert(QStringLiteral("enabled"), m_akEnabled->isChecked());
+			ak.insert(QStringLiteral("script"), m_akScript->toPlainText());
+			ak.insert(QStringLiteral("trigger"), m_akTrigger->currentData().toString());
+			ak.insert(QStringLiteral("wait_ms"), m_akWait->text().trimmed().toLongLong());
+			ak.insert(QStringLiteral("max_ms"), m_akMax->text().trimmed().toLongLong());
+			ak.insert(QStringLiteral("on_reconnect"), m_akReconnect->currentData().toString());
+			// Nichts anlegen, solange die Tastenfolge aus und leer ist.
+			if (!m_akEnabled->isChecked() && m_akScript->toPlainText().trimmed().isEmpty())
+				o.remove(QStringLiteral("auto_keys"));
+			else
+				o.insert(QStringLiteral("auto_keys"), ak);
 		}
 		if (m_clip)
 			o.insert(QStringLiteral("clipboard"), m_clip->currentData().toString());

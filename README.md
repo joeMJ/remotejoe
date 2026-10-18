@@ -198,6 +198,12 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
     dieses Ziel an, **Makro ausführen ▾** startet eines der zugeordneten. Schritte sind „Senden“
     und „Warten auf“ (Text oder regulärer Ausdruck, Zeitlimit, Fehlermuster); das Kennwort kommt
     als Platzhalter aus den Zugangsdaten der Sitzung und steht nie im Protokoll.
+    **Tastenfolge nach dem Verbinden** (RDP und SSH, je Ziel unter Verbindung → „Nach dem Verbinden“):
+    eine Zeile je Schritt – `Taste Enter`, `Text {cred:password}`, `Pause 500` –, zum Beispiel für die
+    zweite Anmeldung am Ubuntu-Desktop nach dem Verbinden. Auslöser ist eine feste Wartezeit oder „Bild
+    bzw. Ausgabe wird ruhig“; wählbar ist auch, ob beim Neuverbinden erneut gesendet wird. Die Folge
+    läuft nur, wenn man sie am Ziel einschaltet, das Kennwort wird getippt (nicht kopiert) und nie
+    protokolliert, **Esc** bricht sie ab.
 
 12. **Hilfe** enthält „Nach Updates suchen …“, „Hilfe“ (diese Anleitung auf GitHub) und „Über
     remotejoe …“; die **Darstellung** (Farbschema, Fokusrahmen) steht im Menü Extras.

@@ -199,6 +199,13 @@ private:
 	QLabel* m_hostWarn = nullptr;
 	QLineEdit* m_port = nullptr;
 	QHash<QString, QWidget*> m_opts;
+	// Tastenfolge nach dem Verbinden (RDP, SSH)
+	QCheckBox* m_akEnabled = nullptr;
+	QPlainTextEdit* m_akScript = nullptr;
+	QComboBox* m_akTrigger = nullptr;
+	QLineEdit* m_akWait = nullptr;
+	QLineEdit* m_akMax = nullptr;
+	QComboBox* m_akReconnect = nullptr;
 	QComboBox* m_psrp = nullptr;
 	QComboBox* m_psrpAuth = nullptr;
 	QLineEdit* m_psrpPort = nullptr;

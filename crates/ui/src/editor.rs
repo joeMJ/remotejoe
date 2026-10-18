@@ -156,6 +156,20 @@ pub fn validate_connection(protocol: Protocol, host: &str, port: Option<&Value>,
                 }
             }
         }
+        if matches!(protocol, Protocol::Rdp | Protocol::Ssh) {
+            if let Some(a) = o.get("auto_keys").filter(|a| a.is_object()) {
+                match serde_json::from_value::<rj_core::autokeys::AutoKeys>(a.clone()) {
+                    Ok(a) => {
+                        if let Err(m) = a.validate(protocol == Protocol::Ssh) {
+                            e.insert("auto_keys".into(), m);
+                        }
+                    }
+                    Err(x) => {
+                        e.insert("auto_keys".into(), format!("Tastenfolge: {x}"));
+                    }
+                }
+            }
+        }
         if let Some(l) = o.get("clipboard_limit").filter(|l| !l.is_null()) {
             if l.as_u64().is_none() {
                 e.insert("clipboard_limit".into(), "Größenlimit muss eine ganze Zahl sein".into());
@@ -1370,6 +1384,27 @@ mod tests {
         let c = check_text("Kassen\u{202E}txt.exe", false);
         assert_eq!(c["issues"], 1);
         assert_eq!(c["marked"], "Kassen⟦U+202E⟧txt.exe");
+    }
+
+    #[test]
+    fn auto_keys_are_validated_saved_and_shown_again() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        let rdp = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "rdp" }))["id"].as_str().unwrap().to_string();
+        let ssh = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh" }))["id"].as_str().unwrap().to_string();
+        // Ungültige Zeile: Fehler mit Zeilennummer, nichts gespeichert.
+        let r = cmd(&mut app, json!({ "op": "update", "id": rdp, "fields": { "options": { "auto_keys": { "enabled": true, "script": "Taste Enter\nTaste Blubb" } } } }));
+        assert!(r["errors"]["auto_keys"].as_str().unwrap().starts_with("Zeile 2:"), "{r}");
+        // Windows-Taste ist im Terminal nicht darstellbar, bei RDP schon.
+        let script = "Taste Win+R";
+        let r = cmd(&mut app, json!({ "op": "update", "id": ssh, "fields": { "options": { "auto_keys": { "enabled": true, "script": script } } } }));
+        assert!(r["errors"]["auto_keys"].as_str().unwrap().contains("Terminal"), "{r}");
+        let r = cmd(&mut app, json!({ "op": "update", "id": rdp, "fields": { "options": { "auto_keys": { "enabled": true, "script": script, "trigger": "delay", "wait_ms": 1500, "on_reconnect": "first_only" } } } }));
+        assert!(r["errors"].as_object().is_none_or(|e| e.is_empty()), "{r}");
+        // Gespeichert und im Editor wieder sichtbar.
+        let e = j(app.editor_json(Uuid::parse_str(&rdp).unwrap()));
+        let a = &e["options"]["auto_keys"];
+        assert_eq!((a["enabled"].as_bool(), a["script"].as_str(), a["trigger"].as_str(), a["wait_ms"].as_u64(), a["on_reconnect"].as_str()), (Some(true), Some(script), Some("delay"), Some(1500), Some("first_only")), "{e}");
     }
 
     #[test]

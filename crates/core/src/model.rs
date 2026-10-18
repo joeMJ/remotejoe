@@ -261,6 +261,9 @@ pub struct RdpOptions {
     pub ignore_certificate: bool,
     #[serde(default, skip_serializing_if = "GfxMode::is_auto")]
     pub gfx: GfxMode,
+    /// Tastenfolge, die nach dem Verbinden automatisch gesendet wird.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_keys: Option<crate::autokeys::AutoKeys>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -278,6 +281,9 @@ pub struct SshOptions {
     /// Ältere, unsichere SSH-Verfahren zusätzlich zulassen (für alte Geräte).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub legacy_algorithms: bool,
+    /// Tastenfolge, die nach dem Verbinden automatisch gesendet wird (z. B. Verzeichniswechsel).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_keys: Option<crate::autokeys::AutoKeys>,
 }
 
 fn yes() -> bool {
