@@ -263,6 +263,12 @@ mod imp {
                     let handled = self.session.as_mut().is_some_and(|s| s.resize(width, height));
                     if !handled {
                         if let Some((mut req, cred)) = self.last.clone() {
+                            // Kleine Änderungen (z. B. Kopfzeile des Tabs nach dem Verbinden): nicht neu
+                            // verbinden, die Oberfläche skaliert das Bild. Jede Neuverbindung ist eine neue
+                            // Anmeldung; mitten in der Anmeldung abgebrochen, meldet Windows die Sitzung ab.
+                            if rj_rdp::small_resize((req.width, req.height), (width, height)) {
+                                return true;
+                            }
                             self.send(FromWorker::Notice("Die Gegenstelle unterstützt keine Größenänderung im laufenden Betrieb; es wird neu verbunden.".into()));
                             req.width = width;
                             req.height = height;
@@ -388,11 +394,12 @@ mod imp {
             }
             if !alive {
                 let info = w.session.as_ref().map(|s| s.error_info()).unwrap_or(0);
+                let since = w.connected_at.map(|t| t.elapsed());
                 w.session = None;
                 w.fb = None;
                 w.connected_at = None;
                 // Abmelden, Trennen in Windows usw.: gewollt, kein automatisches Neuverbinden.
-                let state = match rj_rdp::deliberate_end(info) {
+                let state = match rj_rdp::deliberate_end(info).filter(|_| rj_rdp::counts_as_deliberate(since)) {
                     Some(reason) => SessionState::Ended { reason: reason.into() },
                     None => SessionState::Disconnected { reason: "Verbindung getrennt".into() },
                 };
