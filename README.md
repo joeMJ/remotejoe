@@ -8,7 +8,7 @@
 >
 > * **Keine Unterstützung:** Issues und Pull Requests werden nicht bearbeitet, Feature-Wünsche nicht umgesetzt. Bitte keine Issues eröffnen.
 > * **Keine Garantie:** Bereitstellung „wie besehen“, ohne jede Gewährleistung und Haftung. Nutzung auf eigenes Risiko.
-> * **Eigene Umgebung:** Entwickelt und getestet nur auf meinen eigenen Ubuntu-Rechnern (zuletzt 26.04). Auf anderen Systemen kann es fehlschlagen. Die Windows-Fassung ist bisher nur vorbereitet (Bauanleitung), aber nicht erprobt.
+> * **Eigene Umgebung:** Entwickelt und getestet nur auf meinen eigenen Ubuntu-Rechnern (zuletzt 26.04). Auf anderen Systemen kann es fehlschlagen. Die Windows-Fassung ist neu und bisher nur auf einer Windows-10-VM erprobt.
 > * **Zugangsdaten & Netzwerk:** Das Programm läuft mit den Rechten deines Benutzerkontos, öffnet Verbindungen zu den Zielen, die du einträgst, und verwaltet Zugangsdaten in einer KeePass-Datei (KDBX). Für die Update-Prüfung ruft es die Veröffentlichungen dieses Repositorys auf GitHub ab. **Lies den Code, bevor du ihn installierst.**
 > * **Keine Updates zugesichert:** Es kann jederzeit ohne Ankündigung Änderungen, Brüche oder die Löschung des Repos geben. Gern selbst forken und anpassen.
 >
@@ -27,7 +27,7 @@
 | Plattform | Status | Hinweis |
 | :--- | :--- | :--- |
 | **Linux (Ubuntu 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto; Pakete für 26.04 und für 24.04 (eigenes Paket mit Qt 6.4; gegen Qt 6.4.2 übersetzt und im Probelauf gestartet, auf einem echten 24.04-System noch nicht erprobt) |
-| **Windows 10/11** | Vorbereitet | Bauanleitung [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md); noch nicht erprobt, Web-Ziele im Tab fehlen noch |
+| **Windows 10/11** | In Erprobung | MSI pro Benutzer ohne Administratorrechte (siehe unten); Web-Ziele im Tab über WebView2; bisher nur auf einer Windows-10-VM gebaut und geprüft. Bauanleitung [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md) |
 
 ---
 
@@ -58,6 +58,30 @@ curl -fsSL https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh | b
 ```
 
 Entfernt Programm, Starter und Symbole. Dein Ordner `~/remotejoe` (Einstellungen, Daten) und deine Schlüsseldatenbank bleiben erhalten.
+
+---
+
+## Installation (Windows)
+
+**Voraussetzungen:** Windows 10 oder 11 (64 Bit). Keine Administratorrechte nötig.
+
+- **WebView2-Laufzeit** von Microsoft für Web-Ziele (Seiten im Tab). Unter Windows 10/11 meist schon
+  vorhanden; fehlt sie, weist remotejoe beim Start mit einem Link darauf hin. Alle anderen Verbindungen
+  gehen auch ohne.
+- **PowerShell 7** (`pwsh`) für PowerShell-Remoting und Hyper-V-Ziele, z. B. `winget install Microsoft.PowerShell`.
+
+**Installieren:** die Datei `remotejoe-<Version>-windows-x86_64.msi` von der
+[Release-Seite](https://github.com/joeMJ/remotejoe/releases/latest) laden und doppelklicken. Sie installiert
+nur für das eigene Benutzerkonto nach `%LOCALAPPDATA%\Programs\remotejoe`, legt eine Verknüpfung im
+Startmenü an und erscheint unter „Apps und Features“. Die Visual-C++-Laufzeit ist enthalten.
+Die MSI und die Programme sind signiert; damit Windows den Herausgeber kennt, siehe
+[Zertifikat des Herausgebers](#windows-zertifikat-des-herausgebers).
+
+**Aktualisieren:** **Hilfe → Nach Updates suchen …** zeigt eine neue Version an und öffnet die
+Release-Seite. Die neue MSI einfach darüber installieren; sie ersetzt die alte Fassung.
+
+**Deinstallieren:** unter „Apps und Features“ (bzw. „Installierte Apps“) bei **remotejoe**. Dein Ordner
+`%USERPROFILE%\remotejoe` (Einstellungen, Daten) und deine Schlüsseldatenbank bleiben erhalten.
 
 ---
 
@@ -327,6 +351,13 @@ nötigen DLLs an:
 
 ```powershell
 .\scripts\build-windows.ps1 -VcpkgRoot C:\vcpkg -QtDir C:\Qt\6.5.3\msvc2019_64
+```
+
+Daraus baut `scripts/build-msi.ps1` mit WiX 3.14 die signierte MSI unter `target\msi`
+(Beschreibung: [`packaging/windows/remotejoe.wxs`](packaging/windows/remotejoe.wxs)):
+
+```powershell
+.\scripts\build-msi.ps1 -WixDir C:\Program Files (x86)\WiX Toolset v3.14\bin
 ```
 
 ## Dokumentation
