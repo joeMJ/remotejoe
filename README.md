@@ -61,6 +61,47 @@ Entfernt Programm, Starter und Symbole. Dein Ordner `~/remotejoe` (Einstellungen
 
 ---
 
+## Windows: Zertifikat des Herausgebers
+
+Die Windows-Pakete sind mit einem **selbst ausgestellten** Zertifikat signiert. Damit Windows bei der
+Installation keinen „unbekannten Herausgeber“ meldet, kann man den öffentlichen Teil dieses Zertifikats
+einmalig als vertrauenswürdig eintragen.
+
+- Datei: [`docs/zertifikat/documentjoe-codesigning.cer`](docs/zertifikat/documentjoe-codesigning.cer)
+- Name: `CN=documentjoe Code Signing (privat), O=documentjoe`, gültig bis 07.10.2041
+- Verwendung: **nur Code-Signatur** (nicht für Webseiten oder E-Mail)
+- Fingerabdruck (SHA-1): `C595450070432A501AADD72366C837AFB268740A`
+
+**Eintragen** – in einer PowerShell **als Administrator**. Das Skript lädt die Datei, prüft den Fingerabdruck
+und trägt das Zertifikat nur dann ein, wenn er stimmt:
+
+```powershell
+$url  = "https://raw.githubusercontent.com/joeMJ/remotejoe/main/docs/zertifikat/documentjoe-codesigning.cer"
+$file = Join-Path $env:TEMP "documentjoe-codesigning.cer"
+Invoke-WebRequest -Uri $url -OutFile $file -UseBasicParsing
+$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $file
+if ($cert.Thumbprint -ne "C595450070432A501AADD72366C837AFB268740A") {
+    Remove-Item $file
+    throw "Fingerabdruck stimmt nicht – Zertifikat wird NICHT eingetragen."
+}
+Import-Certificate -FilePath $file -CertStoreLocation Cert:\LocalMachine\Root
+Import-Certificate -FilePath $file -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+Remove-Item $file
+```
+
+Damit vertraut Windows allem, was mit diesem Zertifikat signiert ist. Wer das nicht möchte, lässt es weg
+und bestätigt die Warnung bei der Installation von Hand. Die Warnung von SmartScreen zu selten
+heruntergeladenen Dateien kann trotzdem erscheinen; sie hängt nicht am Zertifikat.
+
+**Wieder entfernen** (PowerShell als Administrator):
+
+```powershell
+Get-ChildItem Cert:\LocalMachine\Root, Cert:\LocalMachine\TrustedPublisher |
+    Where-Object Thumbprint -eq "C595450070432A501AADD72366C837AFB268740A" | Remove-Item
+```
+
+---
+
 ## Was das Programm kann
 
 - **Baum links, Sitzungen rechts:** Ordner und Ziele in fester Reihenfolge, Suche über Namen
