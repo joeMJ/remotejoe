@@ -341,6 +341,11 @@ void FrameView::keyReleaseEvent(QKeyEvent* e)
 void FrameView::focusInEvent(QFocusEvent* e)
 {
 	QWidget::focusInEvent(e);
+	// Umschalt-, Strg-, Alt- und Windows-Tasten (links und rechts) beim Ziel lösen: Ging ein
+	// „losgelassen“ verloren (z. B. während der Desktop die Taste hatte), hinge sie sonst fest.
+	if (!m_web)
+		for (std::uint32_t k : { 0xffe1u, 0xffe2u, 0xffe3u, 0xffe4u, 0xffe9u, 0xffeau, 0xffebu, 0xffecu })
+			m_backend->keyEvent(m_session, 0x40000000u | k, 0, QString(), false);
 	captureKeys();
 	// Lokale Zwischenablage beim Betreten anbieten (Richtung prüft der Worker).
 	const QString text = QGuiApplication::clipboard()->text();

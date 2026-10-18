@@ -219,6 +219,9 @@ mod imp {
                     match ev {
                         InputEvent::Text(t) => s.send_text(&t),
                         InputEvent::Key { keysym, down } => {
+                            if std::env::var_os("RJ_KEYLOG").is_some() {
+                                eprintln!("[remotejoe-rdp] Taste Keysym 0x{keysym:x} → Scancode {:?} {}", rj_rdp::keymap::scancode(keysym).map(|c| format!("0x{c:x}")), if down { "gedrückt" } else { "losgelassen" });
+                            }
                             if !s.send_key(keysym, down) && down {
                                 if let Some(c) = char::from_u32(keysym).filter(|c| !c.is_control()) {
                                     s.send_text(&c.to_string());
