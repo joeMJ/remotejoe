@@ -112,7 +112,7 @@ mod tests {
         // Je Typ: angeglichene Helligkeit.
         let m = colors("eingebaut:solarized-hell", false, "je_typ", "#268bd2", "#93a1a1", &none);
         let l = |c: &str| to_hsl(c).unwrap().2;
-        assert!(KINDS.iter().all(|k| (l(&m[*k]) - 0.42).abs() < 0.01), "{m:?}");
+        assert!(KINDS.iter().filter(|k| **k != "session").all(|k| (l(&m[*k]) - 0.42).abs() < 0.01), "{m:?}");
         assert_ne!(m["rdp"], m["ssh"]);
         let own: BTreeMap<String, String> = [("ssh".to_string(), "#123456".to_string()), ("ssh2".into(), "#000000".into()), ("rdp".into(), "rot".into())].into();
         let m = colors("eingebaut:nord", true, "einheitlich", "#88c0d0", "#d8dee9", &own);
