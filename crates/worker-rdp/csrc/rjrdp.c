@@ -396,8 +396,19 @@ int rj_rdp_connect(rj_rdp* rdp, const rj_params* p)
 	if (p->domain && *p->domain)
 		ok &= freerdp_settings_set_string(s, FreeRDP_Domain, p->domain);
 	ok &= freerdp_settings_set_string(s, FreeRDP_Password, p->password);
-	ok &= freerdp_settings_set_uint32(s, FreeRDP_DesktopWidth, p->width);
-	ok &= freerdp_settings_set_uint32(s, FreeRDP_DesktopHeight, p->height);
+	/* Startgröße: Breite gerade (wie beim späteren Größenwechsel; GNOME-Remote-Desktop und andere Server
+	 * lehnen ungerade Breiten ab). Die angeforderte Größe steht zur Diagnose im Protokoll des Workers. */
+	{
+		UINT32 dw = p->width & ~1u;
+		UINT32 dh = p->height;
+		if (dw < 200)
+			dw = 200;
+		if (dh < 200)
+			dh = 200;
+		fprintf(stderr, "[remotejoe-rdp] Startgröße %ux%u (angefordert %ux%u)\n", dw, dh, p->width, p->height);
+		ok &= freerdp_settings_set_uint32(s, FreeRDP_DesktopWidth, dw);
+		ok &= freerdp_settings_set_uint32(s, FreeRDP_DesktopHeight, dh);
+	}
 	ok &= freerdp_settings_set_uint32(s, FreeRDP_ColorDepth, 32);
 	ok &= freerdp_settings_set_bool(s, FreeRDP_RedirectClipboard, p->clipboard ? TRUE : FALSE);
 	ok &= freerdp_settings_set_bool(s, FreeRDP_SupportDisplayControl, TRUE);
