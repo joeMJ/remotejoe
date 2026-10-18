@@ -11,6 +11,7 @@
 
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
+#include <QtCore/QSettings>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtGui/QAction>
@@ -359,6 +360,23 @@ protected:
 		p.drawEllipse(QRectF(isChecked() ? r.right() - d - 2 : r.left() + 2, r.top() + 2, d, d));
 	}
 };
+
+#ifdef Q_OS_WIN
+/// WebView2-Laufzeit vorhanden? Nach Microsoft: Wert „pv“ des Laufzeit-Clients (systemweit oder je Benutzer),
+/// weder leer noch 0.0.0.0.
+bool webView2Installed()
+{
+	const QString client = QStringLiteral("Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}");
+	for (const QString& root : { QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\"), QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\"),
+	                             QStringLiteral("HKEY_CURRENT_USER\\Software\\") })
+	{
+		const QString pv = QSettings(root + client, QSettings::NativeFormat).value(QStringLiteral("pv")).toString();
+		if (!pv.isEmpty() && pv != QLatin1String("0.0.0.0"))
+			return true;
+	}
+	return false;
+}
+#endif
 } // namespace
 
 MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
@@ -799,6 +817,18 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	reloadViews();
 	reloadTree();
 	rebuildTabs();
+#ifdef Q_OS_WIN
+	// Ohne WebView2-Laufzeit gehen Web-Ziele nicht: beim Start einmal deutlich darauf hinweisen (mit Link).
+	if (qEnvironmentVariableIsEmpty("RJ_DEMO") && qEnvironmentVariableIsEmpty("RJ_SCREENSHOTS") && !webView2Installed())
+		QTimer::singleShot(1500, this, [this] {
+			auto* box = new QMessageBox(QMessageBox::Information, QStringLiteral("remotejoe"), T(m_backend, "webview2.missing"), QMessageBox::Ok, this);
+			box->setTextFormat(Qt::RichText);
+			box->setTextInteractionFlags(Qt::TextBrowserInteraction);
+			box->setAttribute(Qt::WA_DeleteOnClose);
+			box->setWindowModality(Qt::NonModal);
+			box->show();
+		});
+#endif
 }
 
 MainWindow::~MainWindow() = default;

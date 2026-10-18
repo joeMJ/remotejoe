@@ -660,6 +660,7 @@
   "update.development.hint": "Entwicklungsstand: nicht ersetzt. Die neue Fassung steht hier bereit: %1",
   "update.package_managed.hint": "Installation über die Paketverwaltung: bitte das Paket von dort aktualisieren. Download: %1",
   "update.available": "Update verfügbar: remotejoe %1 (Hilfe → Nach Updates suchen …)",
+  "webview2.missing": "<b>Die WebView2-Laufzeit von Microsoft fehlt.</b><br>Web-Ziele (Seiten im Tab) brauchen sie; alle anderen Verbindungen gehen auch ohne.<br><br>Download (kostenlos, von Microsoft):<br><a href=\"https://developer.microsoft.com/microsoft-edge/webview2/\">https://developer.microsoft.com/microsoft-edge/webview2/</a><br>Dort „Evergreen Bootstrapper“ wählen und danach remotejoe neu starten.",
   "update.open_page": "Release-Seite öffnen",
   "update.windows.hint": "Unter Windows bitte die neue MSI von der Release-Seite installieren.",
   "update.page.opened": "Die Release-Seite ist im Browser geöffnet: %1. Unter Windows bitte die neue MSI von der Release-Seite installieren.",
