@@ -34,6 +34,11 @@ impl AutoRun {
         }
     }
 
+    /// Millisekunden seit dem Verbinden (für das Diagnoseprotokoll).
+    pub fn elapsed_ms(&self, now: Instant) -> u128 {
+        now.saturating_duration_since(self.started).as_millis()
+    }
+
     /// Läuft schon (Auslöser ist erreicht)?
     pub fn is_running(&self) -> bool {
         self.ready

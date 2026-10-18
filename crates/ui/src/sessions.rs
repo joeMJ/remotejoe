@@ -907,6 +907,7 @@ impl Manager {
                 let steps = cfg.steps().unwrap_or_default();
                 let now = Instant::now();
                 x.last_activity = now;
+                eprintln!("[remotejoe] Tastenfolge Sitzung {s}: gestartet ({} Schritte, Auslöser {:?}, Wartezeit {} ms, spätestens {} ms)", steps.len(), cfg.trigger, cfg.wait_ms, cfg.max_ms);
                 x.auto = Some(crate::autokeys::AutoRun::new(&cfg, steps, now));
                 self.pending.push(UiEvent::Notice { s, text: crate::texts::text("autokeys.waiting").to_string() });
             }
@@ -916,6 +917,7 @@ impl Manager {
 
     /// Bricht die Tastenfolge der Sitzung ab; `message` erscheint kurz in der Fußzeile (leer: nur löschen).
     pub fn cancel_auto_keys(&mut self, s: SessionId, message: &str) {
+        eprintln!("[remotejoe] Tastenfolge Sitzung {s}: beendet ({message})");
         if let Some(x) = self.sessions.get_mut(&s) {
             x.auto = None;
         }
@@ -935,10 +937,19 @@ impl Manager {
             let running = run.is_running();
             let (protocol, creds) = (x.spec.protocol, x.spec.credentials.clone());
             if running && !was_running {
+                let since_move = now.saturating_duration_since(last).as_millis();
+                eprintln!("[remotejoe] Tastenfolge Sitzung {s}: Auslöser erreicht nach {} ms (letzte Bildbewegung vor {since_move} ms)", self.sessions.get(&s).and_then(|x| x.auto.as_ref()).map(|a| a.elapsed_ms(now)).unwrap_or(0));
                 self.pending.push(UiEvent::Notice { s, text: crate::texts::text("autokeys.running").to_string() });
             }
             let mut failed = None;
             for step in steps {
+                // Nur Art und Länge, nie der Inhalt (Kennwort).
+                let what = match &step {
+                    rj_core::autokeys::KeyStep::Key(k) => format!("Taste (Keysym {:#x}, Umschalter {})", k.keysym(), k.mods),
+                    rj_core::autokeys::KeyStep::Text(t) => format!("Text ({} Zeichen)", t.chars().count()),
+                    rj_core::autokeys::KeyStep::Pause(ms) => format!("Pause {ms} ms"),
+                };
+                eprintln!("[remotejoe] Tastenfolge Sitzung {s}: sende {what}");
                 if let Err(e) = self.send_auto_step(s, protocol, &creds, &step) {
                     failed = Some(e);
                     break;
@@ -947,6 +958,7 @@ impl Manager {
             if let Some(e) = failed {
                 self.cancel_auto_keys(s, &format!("{}: {e}", crate::texts::text("autokeys.failed")));
             } else if done {
+                eprintln!("[remotejoe] Tastenfolge Sitzung {s}: fertig");
                 if let Some(x) = self.sessions.get_mut(&s) {
                     x.auto = None;
                 }
