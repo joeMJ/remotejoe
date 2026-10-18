@@ -524,7 +524,7 @@ impl App {
             "cert_check_start" => self.op_cert_check_start(&c),
             "cert_check_rows" => Ok(json!({ "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() })),
             "cert_check_accept" => {
-                let (saved, errors) = crate::certcheck::accept_new(&mut self.cert_rows, rj_ssh::known_hosts::KnownHosts::default_location());
+                let (saved, errors) = crate::certcheck::accept_new(&mut self.cert_rows, &crate::certcheck::Stores::default_location());
                 Ok(json!({ "saved": saved, "errors": errors, "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() }))
             }
             "update_task" => self.simple("Aufgabe ändern", |idx| {
@@ -1234,6 +1234,7 @@ impl App {
                 host: t.host.clone(),
                 port: t.effective_port(),
                 legacy: matches!(&t.options, ProtocolOptions::Ssh(o) if o.legacy_algorithms),
+                options_json: self.options_json(t),
                 skip: tunnel.then(|| "Verbindung über einen Tunnel – wird nicht direkt geprüft".to_string()),
             });
         }
@@ -1244,7 +1245,7 @@ impl App {
         self.cert_rows.clear();
         let rt = self.rt_handle();
         let job = self.jobs.spawn_cancellable(format!("Schlüssel prüfen ({n} Ziele)"), move |job, cancel| {
-            let rows = crate::certcheck::run(&rt, specs, cancel, rj_ssh::known_hosts::KnownHosts::default_location());
+            let rows = crate::certcheck::run(&rt, specs, cancel, crate::certcheck::Stores::default_location());
             Box::new(move |app: &mut App, cancelled: bool| {
                 if cancelled {
                     return Vec::new();

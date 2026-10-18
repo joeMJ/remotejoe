@@ -881,7 +881,7 @@ impl App {
         (t.host.clone(), t.effective_port())
     }
 
-    fn options_json(&self, t: &Target) -> String {
+    pub(crate) fn options_json(&self, t: &Target) -> String {
         let mut v = match &t.options {
             // Der Web-Worker erwartet eigene Optionsnamen: Anmeldefelder unter `login`, Profil je Ziel.
             ProtocolOptions::Web(o) if t.protocol == Protocol::Web => {

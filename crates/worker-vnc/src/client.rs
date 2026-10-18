@@ -62,12 +62,14 @@ impl KnownCerts {
         KnownCerts { path: path.into() }
     }
 
-    fn lookup(&self, id: &str) -> Option<String> {
+    /// Gespeicherter Fingerabdruck für `host:port`.
+    pub fn lookup(&self, id: &str) -> Option<String> {
         let text = std::fs::read_to_string(&self.path).ok()?;
         text.lines().find_map(|l| l.split_once(' ').filter(|(h, _)| *h == id).map(|(_, f)| f.trim().to_string()))
     }
 
-    fn remember(&self, id: &str, fp: &str) -> io::Result<()> {
+    /// Fingerabdruck für `host:port` speichern (ersetzt einen alten).
+    pub fn remember(&self, id: &str, fp: &str) -> io::Result<()> {
         if let Some(d) = self.path.parent() {
             std::fs::create_dir_all(d)?;
         }
@@ -77,6 +79,85 @@ impl KnownCerts {
         out.push_str(&format!("{id} {fp}\n"));
         rj_core::fsutil::atomic_write_locked(&self.path, out.as_bytes())
     }
+}
+
+/// SHA-256-Fingerabdruck eines Zertifikats in der Schreibweise von `vnc_certs` (kleine Hex-Ziffern mit `:`).
+pub fn cert_fingerprint(der: &[u8]) -> String {
+    Sha256::digest(der).iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":")
+}
+
+/// Holt nur das Serverzertifikat (VeNCrypt mit X.509), ohne Anmeldung: RFB-Begrüßung, VeNCrypt-Auswahl,
+/// TLS-Handshake bis zur Zertifikatsprüfung, dann Abbruch. `Ok(None)`: Der Server bietet kein
+/// VeNCrypt mit Zertifikat an (dann gibt es nichts zu prüfen).
+pub fn probe_certificate(host: &str, port: u16, timeout: Duration) -> Result<Option<Vec<u8>>, VncError> {
+    use std::net::ToSocketAddrs;
+    let addr = (host, port).to_socket_addrs()?.next().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Adresse nicht auflösbar"))?;
+    let mut sock = TcpStream::connect_timeout(&addr, timeout)?;
+    sock.set_read_timeout(Some(timeout))?;
+    sock.set_write_timeout(Some(timeout))?;
+    let mut ver = [0u8; 12];
+    sock.read_exact(&mut ver)?;
+    let vs = String::from_utf8_lossy(&ver).into_owned();
+    if !vs.starts_with("RFB ") {
+        return Err(VncError::NotRfb(vs));
+    }
+    if &vs[4..11] == "003.003" {
+        // RFB 3.3 kennt kein VeNCrypt.
+        return Ok(None);
+    }
+    sock.write_all(b"RFB 003.008\n")?;
+    let n = read_u8(&mut sock)?;
+    if n == 0 {
+        return Err(VncError::Refused(read_reason(&mut sock)));
+    }
+    let types = read_vec(&mut sock, n as usize)?;
+    if !types.contains(&19) {
+        return Ok(None);
+    }
+    sock.write_all(&[19])?;
+    let (maj, min) = (read_u8(&mut sock)?, read_u8(&mut sock)?);
+    if (maj, min) < (0, 2) {
+        return Ok(None);
+    }
+    sock.write_all(&[0, 2])?;
+    if read_u8(&mut sock)? != 0 {
+        return Err(VncError::Refused("VeNCrypt-Version abgelehnt".into()));
+    }
+    let k = read_u8(&mut sock)?;
+    let subs: Vec<u32> = (0..k).map(|_| read_u32(&mut sock)).collect::<io::Result<_>>()?;
+    // Nur X.509-Verfahren haben ein prüfbares Zertifikat (X509None, X509Vnc, X509Plain).
+    let Some(sub) = [260u32, 261, 262].into_iter().find(|s| subs.contains(s)) else { return Ok(None) };
+    sock.write_all(&sub.to_be_bytes())?;
+    if read_u8(&mut sock)? != 1 {
+        return Err(VncError::Refused("VeNCrypt-Verfahren abgelehnt".into()));
+    }
+    let seen: Arc<Mutex<Option<Vec<u8>>>> = Arc::default();
+    let seen2 = seen.clone();
+    let check: Box<dyn FnMut(&[u8]) -> bool + Send> = Box::new(move |der: &[u8]| {
+        *seen2.lock().unwrap_or_else(|e| e.into_inner()) = Some(der.to_vec());
+        // Ablehnen beendet den Handshake vor jeder Anmeldung.
+        false
+    });
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let verifier = Arc::new(FingerprintVerifier { provider: provider.clone(), check: Arc::new(Mutex::new(Some(check))) });
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| VncError::Tls(e.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| VncError::Tls(e.to_string()))?;
+    let mut conn = rustls::ClientConnection::new(Arc::new(config), name).map_err(|e| VncError::Tls(e.to_string()))?;
+    while conn.is_handshaking() {
+        if let Err(e) = conn.complete_io(&mut sock) {
+            if seen.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+                break;
+            }
+            return Err(VncError::Tls(e.to_string()));
+        }
+    }
+    let der = seen.lock().unwrap_or_else(|e| e.into_inner()).take();
+    der.map(Some).ok_or_else(|| VncError::Tls("kein Zertifikat erhalten".into()))
 }
 
 /// Verbindungsparameter.

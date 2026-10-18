@@ -27,6 +27,11 @@ remotejoe-importer = { path = "../importer" }
 remotejoe-snmp = { path = "../snmp" }
 remotejoe-worker-psrp = { path = "../worker-psrp" }
 remotejoe-proxmox = { path = "../proxmox" }
+remotejoe-worker-vnc = { path = "../worker-vnc" }
+remotejoe-worker-web = { path = "../worker-web" }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
+rustls-native-certs = "0.8"
+sha2.workspace = true
 remotejoe-update = { path = "../update" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "time"] }
 alacritty_terminal = "0.26"
