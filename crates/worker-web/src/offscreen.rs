@@ -217,6 +217,8 @@ impl Worker {
                 }
             }
             ToWorker::Clipboard(ClipData::Files(_)) => {}
+            // Terminal-Befehle gelten nur für den SSH-Worker.
+            ToWorker::Term(_) => {}
             ToWorker::Custom(bytes) => match serde_json::from_slice::<WebCommand>(&bytes) {
                 Ok(c) => self.command(c),
                 Err(e) => self.send(FromWorker::Log(format!("Unbekannter Befehl an den Web-Worker: {e}"))),
