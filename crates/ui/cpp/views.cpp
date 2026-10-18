@@ -283,6 +283,7 @@ void FrameView::captureKeys()
 {
 	if (m_web || !s_keyCapture)
 		return;
+	KeyCapture::pump();
 	KeyCapture::capture(this);
 	if (KeyCapture::active() && s_notice)
 		s_notice(m_backend->text(QStringLiteral("keys.captured")));

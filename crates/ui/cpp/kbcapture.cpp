@@ -126,15 +126,19 @@ wl_proxy* s_manager = nullptr;
 wl_proxy* s_inhibitor = nullptr;
 bool s_managerLooked = false;
 wl_event_queue* s_queue = nullptr;
+/// Hat der Desktop die Freigabe als aktiv gemeldet?
+bool s_desktopActive = false;
 
 void onActive(void*, wl_proxy*)
 {
+	s_desktopActive = true;
 	if (keylog())
 		qInfo("[remotejoe-tasten] Desktop meldet: Tastenkürzel gehen an remotejoe (aktiv)");
 }
 
 void onInactive(void*, wl_proxy*)
 {
+	s_desktopActive = false;
 	if (keylog())
 		qInfo("[remotejoe-tasten] Desktop meldet: Tastenkürzel wieder beim Desktop (inaktiv)");
 }
@@ -193,6 +197,7 @@ void dropInhibitor()
 	// zwp_keyboard_shortcuts_inhibitor_v1.destroy (Opcode 0).
 	l.marshal(s_inhibitor, 0, nullptr, l.version(s_inhibitor), WL_MARSHAL_FLAG_DESTROY);
 	s_inhibitor = nullptr;
+	s_desktopActive = false;
 	if (auto* app = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>())
 		l.flush(app->display());
 }
@@ -222,7 +227,12 @@ bool waylandInhibit(QWindow* window)
 	if (s_inhibitor && s_surface == surface)
 	{
 		l.dispatchPending(display, s_queue);
-		return true;
+		// Schon aktiv: weiter so. Noch nicht aktiv (z. B. lief die erste Anforderung, während der
+		// Desktop um Erlaubnis gefragt hat): neu anfordern, damit sie jetzt greift.
+		if (s_desktopActive)
+			return true;
+		if (keylog())
+			qInfo("[remotejoe-tasten] Wayland: Freigabe noch nicht aktiv, neu anfordern");
 	}
 	dropInhibitor();
 	// zwp_keyboard_shortcuts_inhibit_manager_v1.inhibit_shortcuts (Opcode 1): neue Kennung, Oberfläche, Sitz.
@@ -274,7 +284,7 @@ void capture(QWidget* w)
 void pump()
 {
 #ifdef RJ_WAYLAND_INHIBIT
-	// Antworten des Desktops (aktiv/inaktiv) abholen, nur für das Diagnoseprotokoll.
+	// Antworten des Desktops (aktiv/inaktiv) abholen.
 	if (s_inhibitor && s_queue)
 		if (auto* app = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>())
 			lib().dispatchPending(reinterpret_cast<wl_display*>(app->display()), s_queue);
