@@ -637,7 +637,7 @@ QWidget* PropertiesTab::pageConnection()
 			m_akWait->setAccessibleName(rjText(m_backend, "edit.autokeys.wait"));
 			track(m_akWait, QStringLiteral("options"));
 			f->addRow(rjText(m_backend, "edit.autokeys.wait"), m_akWait);
-			m_akMax = new QLineEdit(QString::number(ak.value(QStringLiteral("max_ms")).toInt(20000)), w);
+			m_akMax = new QLineEdit(QString::number(ak.value(QStringLiteral("max_ms")).toInt(10000)), w);
 			m_akMax->setAccessibleName(rjText(m_backend, "edit.autokeys.max"));
 			track(m_akMax, QStringLiteral("options"));
 			f->addRow(rjText(m_backend, "edit.autokeys.max"), m_akMax);

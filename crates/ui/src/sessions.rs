@@ -65,6 +65,13 @@ fn auto_step_messages(protocol: Protocol, creds: &CredentialPayload, step: &rj_c
     Ok(out)
 }
 
+/// Ab dieser Fläche (Bildpunkte) gilt eine Bildänderung als „Bewegung“ (etwa 100 × 100).
+const SIGNIFICANT_UPDATE_AREA: u64 = 10_000;
+
+fn is_significant_update(w: u32, h: u32) -> bool {
+    w as u64 * h as u64 >= SIGNIFICANT_UPDATE_AREA
+}
+
 /// Qt-Tastencode von Esc.
 const QT_KEY_ESCAPE: u32 = 0x0100_0000;
 
@@ -992,7 +999,8 @@ impl Manager {
                 }
             }
             FromWorker::Frame(f) => {
-                if let Some(x) = self.sessions.get_mut(&s) {
+                // Kleine Änderungen (blinkender Textcursor, Uhr) zählen nicht als Bewegung für den Auslöser „ruhig“.
+                if let Some(x) = self.sessions.get_mut(&s).filter(|_| is_significant_update(f.w, f.h)) {
                     x.last_activity = Instant::now();
                 }
                 self.pending.push(UiEvent::Frame { s, x: f.x, y: f.y, w: f.w, h: f.h })
@@ -1311,6 +1319,14 @@ mod autokeys_tests {
         assert!(m.sessions[&id].auto.is_some());
         m.emit_state(id, "disconnected", String::new());
         assert!(m.sessions[&id].auto.is_none());
+    }
+
+    #[test]
+    fn small_updates_do_not_count_as_activity() {
+        assert!(!is_significant_update(2, 20), "blinkender Cursor");
+        assert!(!is_significant_update(90, 100), "kleines Feld");
+        assert!(is_significant_update(100, 100));
+        assert!(is_significant_update(1564, 849), "ganzes Bild");
     }
 
     #[test]
