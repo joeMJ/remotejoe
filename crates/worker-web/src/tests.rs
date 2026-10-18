@@ -14,6 +14,29 @@ fn urls_are_checked() {
 }
 
 #[test]
+fn embedding_commands_round_trip_and_old_ones_stay() {
+    let cmds = [
+        WebCommand::Embed { hwnd: 0x1234_5678_9abc },
+        WebCommand::Bounds { x: 0, y: 0, w: 1280, h: 720, scale: 150 },
+        WebCommand::Visible { on: false },
+        WebCommand::Keys { keys: vec![ReservedKey { vk: 0x78, ..Default::default() }, ReservedKey { vk: 0x22, ctrl: true, ..Default::default() }] },
+    ];
+    for c in cmds {
+        let j = serde_json::to_vec(&c).unwrap();
+        assert_eq!(serde_json::from_slice::<WebCommand>(&j).unwrap(), c);
+    }
+    // Der Bildmaßstab ist optional (0: unverändert).
+    let b: WebCommand = serde_json::from_str(r#"{"op":"bounds","x":1,"y":2,"w":3,"h":4}"#).unwrap();
+    assert_eq!(b, WebCommand::Bounds { x: 1, y: 2, w: 3, h: 4, scale: 0 });
+    let n: WebCommand = serde_json::from_str(r#"{"op":"nav","action":"back"}"#).unwrap();
+    assert_eq!(n, WebCommand::Nav { action: NavAction::Back });
+    let e = serde_json::to_string(&WebEvent::Download { id: 1, state: "done".into(), name: "a.ica".into(), dir: "d".into(), received: 3, total: 3, error: None, opened: true }).unwrap();
+    assert!(e.contains(r#""ev":"download""#) && e.contains(r#""opened":true"#), "{e}");
+    let o: WebOptions = serde_json::from_str(r#"{"url":"https://x.test/","headless":true}"#).unwrap();
+    assert!(o.headless && !WebOptions::default().headless);
+}
+
+#[test]
 fn profiles_are_separate_per_target() {
     let base = Path::new("/daten");
     let a = profile_dir(base, "6f1c0000-0000-4000-8000-000000000001");

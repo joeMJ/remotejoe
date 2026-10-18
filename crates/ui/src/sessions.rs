@@ -124,6 +124,12 @@ pub enum UiEvent {
     WebMenu { s: SessionId, id: u32, kind: String, x: i32, y: i32, items: serde_json::Value },
     /// Felder und Knöpfe einer Web-Seite (Antwort auf „Felder erkennen“): `users`, `passwords`, `submits`.
     WebFields { s: SessionId, fields: serde_json::Value },
+    /// Windows: Eine Anwendungstaste wurde in der Seite gedrückt (Kurzbefehl des Hauptfensters auslösen).
+    WebKey { s: SessionId, vk: u32, ctrl: bool, alt: bool, shift: bool },
+    /// Windows: Die Seite hat den Systemfokus bekommen (`on`) oder gibt ihn ab (`forward`: weiter, sonst zurück).
+    WebFocus { s: SessionId, on: bool, forward: bool },
+    /// Windows: Download (`state`: started, progress, done, failed).
+    WebDownload { s: SessionId, id: u32, state: String, name: String, dir: String, received: u64, total: u64, error: Option<String>, opened: bool },
     /// Ergebnis von „Felder erkennen“ für ein Ziel (`error`: Grund, wenn nichts erkannt wurde).
     FieldsDetected { target: String, error: Option<String>, fields: serde_json::Value },
     Bell { s: SessionId },
@@ -699,7 +705,7 @@ impl Manager {
             return Err("Keine Web-Sitzung".into());
         }
         let op = cmd.get("op").and_then(|v| v.as_str()).unwrap_or("");
-        if !matches!(op, "nav" | "focus" | "edit" | "menu" | "detect") {
+        if !matches!(op, "nav" | "focus" | "edit" | "menu" | "detect" | "embed" | "bounds" | "visible" | "keys") {
             return Err(format!("Unbekannter Web-Befehl „{op}“"));
         }
         self.send(s, &ToWorker::Custom(cmd.to_string().into_bytes()));
@@ -1187,6 +1193,25 @@ fn web_event(s: SessionId, bytes: &[u8]) -> Option<UiEvent> {
             y: v.get("y").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
             items: v.get("items").cloned().unwrap_or_default(),
         }),
+        "key" => Some(UiEvent::WebKey {
+            s,
+            vk: v.get("vk").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+            ctrl: flag("ctrl"),
+            alt: flag("alt"),
+            shift: flag("shift"),
+        }),
+        "focus" => Some(UiEvent::WebFocus { s, on: flag("on"), forward: flag("forward") }),
+        "download" => Some(UiEvent::WebDownload {
+            s,
+            id: v.get("id").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+            state: text("state"),
+            name: text("name"),
+            dir: text("dir"),
+            received: v.get("received").and_then(|x| x.as_u64()).unwrap_or(0),
+            total: v.get("total").and_then(|x| x.as_u64()).unwrap_or(0),
+            error: v.get("error").and_then(|x| x.as_str()).map(|t| rj_core::charset::mark_visible(t, false).into_owned()),
+            opened: flag("opened"),
+        }),
         "fields" => {
             // Beschriftungen sichtbar machen (versteckte Zeichen markieren); Selektoren bleiben unverändert.
             let list = |k: &str| -> serde_json::Value {
@@ -1289,6 +1314,18 @@ mod web_tests {
         let menu = br#"{"ev":"menu","id":3,"kind":"option","x":10,"y":20,"items":[{"action":"","label":"a","enabled":true,"selected":false}]}"#;
         assert!(matches!(web_event(7, menu), Some(UiEvent::WebMenu { id: 3, x: 10, y: 20, .. })));
         assert!(web_event(7, b"kaputt").is_none());
+        let key = br#"{"ev":"key","vk":120,"ctrl":false,"alt":false,"shift":true}"#;
+        assert!(matches!(web_event(7, key), Some(UiEvent::WebKey { vk: 120, ctrl: false, shift: true, .. })));
+        let focus = br#"{"ev":"focus","on":false,"forward":true}"#;
+        assert!(matches!(web_event(7, focus), Some(UiEvent::WebFocus { on: false, forward: true, .. })));
+        let dl = "{\"ev\":\"download\",\"id\":2,\"state\":\"done\",\"name\":\"a\u{202e}.ica\",\"dir\":\"C:\\\\x\",\"received\":10,\"total\":10,\"error\":null,\"opened\":true}";
+        match web_event(7, dl.as_bytes()) {
+            Some(UiEvent::WebDownload { id: 2, state, name, opened: true, received: 10, total: 10, .. }) => {
+                assert_eq!(state, "done");
+                assert_eq!(name, "a⟦U+202E⟧.ica", "auffällige Zeichen im Dateinamen werden sichtbar gemacht");
+            }
+            other => panic!("{other:?}"),
+        }
         assert!(matches!(clipboard_event(1, "abc".into(), 3), UiEvent::Clipboard { .. }));
         match clipboard_event(1, "abcd".into(), 3) {
             UiEvent::Notice { text, .. } => assert!(!text.contains("abcd")),

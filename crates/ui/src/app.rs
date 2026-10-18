@@ -924,6 +924,8 @@ impl App {
         options["url"] = json!(url.trim());
         options["ignore_certificate"] = json!(ignore_certificate);
         options["profile"] = json!(format!("{target}-erkennen"));
+        // Ohne Fenster im Hauptprogramm (unter Windows legt der Worker dann ein unsichtbares Elternfenster an).
+        options["headless"] = json!(true);
         let (host, port) = Self::endpoint_of(&t);
         let spec = ConnectSpec {
             target,
