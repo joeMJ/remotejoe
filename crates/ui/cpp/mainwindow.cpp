@@ -2274,11 +2274,9 @@ void MainWindow::handleEvents(const QString& json)
 					                     : opened      ? T(m_backend, "web.download.opened").arg(p->title(), name, dir)
 					                                   : T(m_backend, "web.download.done").arg(p->title(), name, dir);
 					statusBar()->showMessage(text, 15000);
-					if (!error.isEmpty())
-					{
-						p->setNotice(text);
-						updateNotice();
-					}
+					// Wohin die Datei gekommen ist, soll stehen bleiben (Hinweiszeile), nicht nur kurz erscheinen.
+					p->setNotice(text);
+					updateNotice();
 				}
 				else if (state == QLatin1String("failed"))
 				{
