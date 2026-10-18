@@ -1644,8 +1644,9 @@ mod tests {
     fn demo_workspace() {
         let mut app = App::new(true);
         app.open_demo_sessions();
-        assert_eq!(app.workspace.tabs.len(), 2);
-        assert_eq!(app.workspace.tabs[0].sessions.len(), 4);
+        // Vorne eine einzelne SSH-Sitzung, drei weitere Tabs im Hintergrund.
+        assert_eq!(app.workspace.tabs.len(), 4);
+        assert!(app.workspace.tabs.iter().all(|t| t.sessions.len() == 1));
         assert!(app.tree_json("").len() > 10_000);
     }
 }

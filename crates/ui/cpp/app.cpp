@@ -243,7 +243,8 @@ void screenshots(MainWindow& w, const QString& dir)
 		about->close();
 	}
 	w.tabs()->setCurrentIndex(0);
-	w.detachTabAt(1);
+	// Ein Terminal-Tab als eigenes Fenster (kein Verlaufsbild: das wäre fast einfarbig und winzig als PNG).
+	w.detachTabAt(w.tabs()->count() > 3 ? 3 : 1);
 	pump(400);
 	save(w.detachedWindow(), dir, QStringLiteral("abgerissenes-fenster.png"));
 	QFile f(QDir(dir).filePath(QStringLiteral("messwerte.txt")));
