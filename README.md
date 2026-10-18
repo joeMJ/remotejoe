@@ -385,9 +385,9 @@ neu aufklappen.
 - **Aufgaben:** Aktualisierungen prüfen und einspielen (apt über SSH, Windows Update über
   PowerShell), als „Patchday“ für viele Ziele parallel.
 - **SNMP-Ampel** am Baum (CPU, Speicher, Schnittstellen) mit Verlauf.
-- **Import** aus Remote Desktop Manager (`.rdm`, JSON, CSV) und Royal TS (`.rtsz`, `.rtsx`). Eine
-  RDM-CSV enthält Kennwörter im Klartext: Sie werden nur in die Schlüsseldatenbank übernommen, der
-  Import weist darauf hin, die Datei danach sicher zu löschen.
+- **Import exportierter Dateien** anderer Verbindungsmanager (Dateiformate `.rdm`, `.rtsz`, `.rtsx`, JSON, CSV)
+  und eigener remotejoe-Exporte. Eine CSV-Datei mit Kennwörtern enthält diese im Klartext: Sie werden nur in die
+  Schlüsseldatenbank übernommen, der Import weist darauf hin, die Datei danach sicher zu löschen.
 - **Bearbeiten im Hauptfenster:** Ordner und Ziele anlegen, ändern, verschieben, duplizieren
   und löschen im Eigenschaften-Tab, Vorlagen je Zieltyp, Favoriten, Ansichten (z. B.
   „Patchday“), „Auf Unterobjekte anwenden“, Rückgängig.
@@ -400,7 +400,7 @@ neu aufklappen.
   Kennwort wieder nötig. Wer das Benutzerkonto entsperrt hat, kommt so an die Datenbank. Entfernen: Datei →
   „Gemerktes Hauptkennwort aus dem Schlüsselbund entfernen“.
 - **Export (Datei → Exportieren …):** Ordner, Ziele und Optionen als **JSON** (remotejoe, wieder importierbar) oder als
-  **CSV im Stil von RDM**, für den ganzen Baum oder die Auswahl. Benutzername und Domäne gehören dazu, Kennwörter nur
+  **CSV** (gängiges Spaltenformat für Verbindungslisten), für den ganzen Baum oder die Auswahl. Benutzername und Domäne gehören dazu, Kennwörter nur
   auf Wunsch; JSON mit Kennwörtern gibt es nur in einem **verschlüsselten ZIP** (AES-256, öffnen mit 7-Zip oder
   WinZip), das Kennwort dafür vergibst du beim Export. AES-256 ist nur so sicher wie dieses Kennwort; ein Export
   mit Kennwörtern enthält immer sensible Daten und gehört nicht in Mail oder Cloud ohne weiteren Schutz. Die Datei ist nur für dein Konto lesbar. Der Import liest
@@ -456,7 +456,7 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
    Vorlage. Das neue Objekt öffnet seinen **Eigenschaften-Tab** (später über F4, Alt+Eingabe oder das Kontextmenü „Eigenschaften“; der Doppelklick auf ein Ziel verbindet):
    Allgemein, Verbindung, Zugangsdaten, Tunnel, Aufgaben und Makros, Zwischenablage,
    Organisation, Übergeordneter Ordner; **Speichern** im Tab.
-   Oder **Datei → Importieren (RDM, Royal TS, remotejoe-Export) …** mit Vorschau.
+   Oder **Datei → Importieren …** (exportierte Dateien anderer Verbindungsmanager oder remotejoe-Export) mit Vorschau.
 3. Zugangsdaten je Ordner oder Ziel: keine, vom übergeordneten Ordner, Benutzername und
    Kennwort direkt (neuer Eintrag in der Gruppe `remotejoe` der Schlüsseldatenbank), vorhandener Datensatz oder
    Datensatz nach Name. Der Tab zeigt, woher der wirksame Wert kommt.

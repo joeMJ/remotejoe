@@ -34,7 +34,7 @@ anderen Sitzungen unberührt.
 | `proxmox` | Proxmox-VE-REST, Aktionen, Konsole über VNC-Websocket mit lokaler Brücke |
 | `tunnel` | SSH-Sprungserver-Ketten, WireGuard im Prozess (boringtun + smoltcp), System-Tunnel |
 | `tasks` | Makros, apt-Aktualisierung, Windows-Update-Skript, Patchday (parallel) |
-| `importer` | Import aus Remote Desktop Manager und Royal TS (Planen, dann Anwenden) |
+| `importer` | Import exportierter Dateien anderer Verbindungsmanager (Planen, dann Anwenden) |
 | `update` | Update-Funktion: SemVer, Abruf von Veröffentlichungen (Gitea, GitHub), HTTPS mit Systemzertifikaten, Ed25519-Signatur und SHA-256, sicheres Entpacken, Installation mit `.alt`-Sicherung |
 | `snmp` | SNMP v2c/v3, Zähler mit Überlauf, Verlauf, Ampel |
 | `ui` | Hauptprogramm `remotejoe`: Qt-Oberfläche, Sitzungsverwaltung, Arbeitsbereich, Bearbeitungsschicht (`editor`), Hintergrundaufgaben (`jobs`), Leerlauf und Standby (`idle`), überschreibende Speicherverwaltung (`alloc`) |
