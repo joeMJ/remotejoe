@@ -1080,6 +1080,9 @@ impl Manager {
                 // Kleine Änderungen (blinkender Textcursor, Uhr) zählen nicht als Bewegung für den Auslöser „ruhig“.
                 if let Some(x) = self.sessions.get_mut(&s).filter(|_| is_significant_update(f.w, f.h)) {
                     x.last_activity = Instant::now();
+                    if let Some(a) = x.auto.as_mut() {
+                        a.note_activity();
+                    }
                 }
                 self.pending.push(UiEvent::Frame { s, x: f.x, y: f.y, w: f.w, h: f.h })
             }
@@ -1087,6 +1090,9 @@ impl Manager {
             FromWorker::Output(bytes) => {
                 if let Some(x) = self.sessions.get_mut(&s) {
                     x.last_activity = Instant::now();
+                    if let Some(a) = x.auto.as_mut() {
+                        a.note_activity();
+                    }
                 }
                 if let Some(tap) = self.macro_taps.get(&s) {
                     let _ = tap.send(bytes);
@@ -1098,6 +1104,9 @@ impl Manager {
                         x.view = Some(v);
                         // Für den Auslöser „ruhig“ der Tastenfolge: Das Terminal hat sich geändert.
                         x.last_activity = Instant::now();
+                        if let Some(a) = x.auto.as_mut() {
+                            a.note_activity();
+                        }
                         self.pending.push(UiEvent::Terminal { s });
                     }
                 }

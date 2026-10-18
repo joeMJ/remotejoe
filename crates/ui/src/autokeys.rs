@@ -15,6 +15,8 @@ pub struct AutoRun {
     max: Duration,
     started: Instant,
     ready: bool,
+    /// Nach dem Verbinden ist schon etwas Sichtbares erschienen (Bild bzw. Ausgabe).
+    seen: bool,
     idx: usize,
     resume_at: Instant,
 }
@@ -29,9 +31,16 @@ impl AutoRun {
             max: Duration::from_millis(cfg.max_ms as u64),
             started: now,
             ready: false,
+            seen: false,
             idx: 0,
             resume_at: now,
         }
+    }
+
+    /// Meldet sichtbare Bewegung (größere Bildänderung bzw. neue Ausgabe). Der Auslöser „ruhig“ wartet darauf,
+    /// dass nach dem Verbinden überhaupt etwas erschienen ist; sonst würde eine noch leere Sitzung als ruhig gelten.
+    pub fn note_activity(&mut self) {
+        self.seen = true;
     }
 
     /// Millisekunden seit dem Verbinden (für das Diagnoseprotokoll).
@@ -50,7 +59,7 @@ impl AutoRun {
         if !self.ready {
             let go = match self.trigger {
                 AutoTrigger::Delay => now >= self.started + self.wait,
-                AutoTrigger::Quiet => now >= last_activity.max(self.started) + self.wait || now >= self.started + self.max,
+                AutoTrigger::Quiet => (self.seen && now >= last_activity.max(self.started) + self.wait) || now >= self.started + self.max,
             };
             if !go {
                 return (Vec::new(), false);
@@ -112,16 +121,32 @@ mod tests {
         let ms = |n| t0 + Duration::from_millis(n);
         // Ständige Bewegung: erst nach `max` wird gesendet.
         let mut r = run(AutoTrigger::Quiet, 800, 5000, "Taste Enter", t0);
+        r.note_activity();
         for n in (0..5000).step_by(300) {
             assert_eq!(r.poll(ms(n), ms(n)).0.len(), 0, "bei Bewegung (t={n}) nichts");
         }
         assert_eq!(r.poll(ms(5000), ms(4900)).0.len(), 1, "spätestens nach max");
         // Letzte Bewegung bei 300 ms: Ruhe erst ab 1100 ms.
         let mut r = run(AutoTrigger::Quiet, 800, 20_000, "Taste Enter", t0);
+        r.note_activity();
         assert_eq!(r.poll(ms(1000), ms(300)).0.len(), 0, "Ruhe erst seit 700 ms");
         let (a, done) = r.poll(ms(1100), ms(300));
         assert_eq!(a.len(), 1);
         assert!(done);
+    }
+
+    #[test]
+    fn quiet_waits_for_the_first_visible_content() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        // Noch nichts erschienen: selbst nach langer „Ruhe“ wird nicht gesendet, bis die Rückfallzeit abläuft.
+        let mut r = run(AutoTrigger::Quiet, 800, 10_000, "Taste Enter", t0);
+        assert_eq!(r.poll(ms(5000), t0).0.len(), 0, "leere Sitzung ist nicht „ruhig“");
+        assert_eq!(r.poll(ms(10_000), t0).0.len(), 1, "Rückfallzeit");
+        // Sobald etwas erschienen ist und Ruhe herrscht, geht es los.
+        let mut r = run(AutoTrigger::Quiet, 800, 10_000, "Taste Enter", t0);
+        r.note_activity();
+        assert_eq!(r.poll(ms(2000), ms(1000)).0.len(), 1);
     }
 
     #[test]
