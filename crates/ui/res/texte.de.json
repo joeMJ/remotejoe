@@ -474,6 +474,7 @@
   "edit.autokeys": "Nach dem Verbinden",
   "edit.autokeys.enabled": "Tastenfolge nach dem Verbinden senden",
   "edit.autokeys.script": "Tastenfolge",
+  "edit.autokeys.example": "Beispiel einfügen",
   "edit.autokeys.placeholder": "Taste Enter\nPause 500\nText {cred:password}\nTaste Enter",
   "edit.autokeys.help": "Eine Zeile je Schritt: „Taste Enter“, „Text …“, „Pause 500“ (Millisekunden). Tasten auch als Kombination (Ctrl+Alt+T, Win+R; bei SSH nur terminalfähige Tasten). {cred:password}, {cred:username} und {cred:domain} setzen die Zugangsdaten des Ziels ein; das Kennwort wird getippt und nie protokolliert. Zeilen mit # sind Kommentar. Esc bricht den Ablauf ab.",
   "edit.autokeys.trigger": "Auslöser",

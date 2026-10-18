@@ -614,8 +614,18 @@ QWidget* PropertiesTab::pageConnection()
 			m_akScript->setAccessibleName(rjText(m_backend, "edit.autokeys.script"));
 			track(m_akScript, QStringLiteral("options"));
 			f->addRow(rjText(m_backend, "edit.autokeys.script"), m_akScript);
+			auto* example = new QPushButton(rjText(m_backend, "edit.autokeys.example"), w);
+			connect(example, &QPushButton::clicked, this, [this] {
+				const QString ex = rjText(m_backend, "edit.autokeys.placeholder");
+				if (!m_akScript->toPlainText().trimmed().isEmpty())
+					m_akScript->appendPlainText(QString());
+				m_akScript->appendPlainText(ex);
+				m_akScript->setFocus();
+			});
+			f->addRow(QString(), example);
 			auto* help = new QLabel(rjText(m_backend, "edit.autokeys.help"), w);
 			help->setWordWrap(true);
+			help->setTextInteractionFlags(Qt::TextSelectableByMouse);
 			f->addRow(QString(), help);
 			m_akTrigger = new QComboBox(w);
 			m_akTrigger->addItem(rjText(m_backend, "edit.autokeys.trigger.quiet"), QStringLiteral("quiet"));

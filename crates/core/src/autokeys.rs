@@ -307,6 +307,7 @@ pub fn parse_script(script: &str) -> Result<Vec<KeyStep>, String> {
                 }
                 KeyStep::Pause(ms)
             }
+            w if w.starts_with('{') => return Err(format!("Zeile {n}: Es fehlt das Wort „Text“ davor, z. B. „Text {t}“")),
             other => return Err(format!("Zeile {n}: Unbekannter Schritt „{other}“ (erlaubt: Taste, Text, Pause)")),
         };
         steps.push(step);
@@ -417,6 +418,7 @@ mod tests {
         assert!(parse_script("Pause lang").unwrap_err().contains("Millisekunden"));
         assert!(parse_script("Pause 999999999").unwrap_err().contains("höchstens"));
         assert!(parse_script("Tanzen").unwrap_err().contains("Unbekannter Schritt"));
+        assert!(parse_script("Taste Enter\n{cred:password}").unwrap_err().contains("Es fehlt das Wort „Text“"));
         assert!(parse_script("Text {cred:token}").unwrap_err().contains("unbekannt"));
         assert!(parse_script("Text {unsinn}").unwrap_err().contains("unbekannt"));
         assert!(parse_script("Text {offen").unwrap_err().contains("schließende"));
