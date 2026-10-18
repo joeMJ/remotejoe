@@ -109,7 +109,24 @@ mod imp {
     use windows_sys::Win32::System::Memory::{
         CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS, FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
     };
+    use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    /// In den letzten Bytes der Section steht die Größe des Bildpuffers (u64):
+    /// Windows meldet die Größe einer Section nur auf Seiten gerundet. Die
+    /// Bildpunkte beginnen weiter bei Versatz 0.
+    const TRAILER: usize = std::mem::size_of::<u64>();
+
+    /// Größe der Section für `size` Bytes Bildpunkte: auf Seiten gerundet, mit Platz für den Nachsatz.
+    fn section_len(size: usize) -> usize {
+        // SAFETY: GetSystemInfo füllt nur die übergebene Struktur.
+        let page = unsafe {
+            let mut si: SYSTEM_INFO = std::mem::zeroed();
+            GetSystemInfo(&mut si);
+            (si.dwPageSize as usize).max(4096)
+        };
+        (size + TRAILER).div_ceil(page) * page
+    }
 
     pub struct View {
         ptr: MEMORY_MAPPED_VIEW_ADDRESS,
@@ -146,18 +163,21 @@ mod imp {
 
     pub fn create(size: usize) -> io::Result<Writer> {
         let size = size.max(1);
+        let total = section_len(size);
         // SAFETY: anonymes Mapping im Auslagerungsspeicher.
-        let h = unsafe { CreateFileMappingW(INVALID_HANDLE_VALUE, std::ptr::null(), PAGE_READWRITE, (size as u64 >> 32) as u32, size as u32, std::ptr::null()) };
+        let h = unsafe { CreateFileMappingW(INVALID_HANDLE_VALUE, std::ptr::null(), PAGE_READWRITE, (total as u64 >> 32) as u32, total as u32, std::ptr::null()) };
         if h.is_null() {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: frische Kennung, gehört ab hier `fd`.
         let fd = unsafe { OwnedHandle::from_raw_handle(h as _) };
         // SAFETY: Abbildung der eigenen Section.
-        let ptr = unsafe { MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, size) };
+        let ptr = unsafe { MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, total) };
         if ptr.Value.is_null() {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: Die Abbildung ist `total` Bytes lang; der Nachsatz liegt am Ende.
+        unsafe { (ptr.Value as *mut u8).add(total - TRAILER).cast::<u64>().write_unaligned(size as u64) };
         Ok(Writer { fd, map: View { ptr, len: size } })
     }
 
@@ -177,9 +197,30 @@ mod imp {
         Ok(unsafe { OwnedHandle::from_raw_handle(out as _) })
     }
 
+    /// Angelegte Größe einer Section in Bytes (`NtQuerySection`, SectionBasicInformation).
+    fn section_size(h: HANDLE) -> io::Result<u64> {
+        #[repr(C)]
+        struct SectionBasicInformation {
+            base_address: *mut core::ffi::c_void,
+            allocation_attributes: u32,
+            maximum_size: i64,
+        }
+        #[link(name = "ntdll")]
+        extern "system" {
+            fn NtQuerySection(section: HANDLE, class: i32, info: *mut core::ffi::c_void, len: usize, ret: *mut usize) -> i32;
+        }
+        let mut info = SectionBasicInformation { base_address: std::ptr::null_mut(), allocation_attributes: 0, maximum_size: 0 };
+        // SAFETY: Ausgabepuffer mit passender Größe; scheitert bei Kennungen, die keine Section sind.
+        let status = unsafe { NtQuerySection(h, 0, &mut info as *mut _ as _, std::mem::size_of_val(&info), std::ptr::null_mut()) };
+        if status < 0 || info.maximum_size < 0 {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Bildpuffer ist kein Dateimapping"));
+        }
+        Ok(info.maximum_size as u64)
+    }
+
     pub fn validate(fd: &OwnedHandle, need: usize) -> io::Result<()> {
-        // Eine Section lässt sich nicht verkleinern; die Abbildung mit der
-        // vollen Länge scheitert, wenn sie zu klein oder keine Section ist.
+        // Eine Section lässt sich nicht verkleinern; ihre Größe ist nur seitenweise
+        // bekannt, die genaue Größe steht im Nachsatz.
         open(fd.try_clone()?, need).map(|_| ())
     }
 
@@ -189,12 +230,23 @@ mod imp {
 
     pub fn open(fd: OwnedHandle, need: usize) -> io::Result<Reader> {
         let len = need.max(1);
-        // SAFETY: nur lesende Abbildung; scheitert bei falscher Art oder Größe.
-        let ptr = unsafe { MapViewOfFile(fd.as_raw_handle() as HANDLE, FILE_MAP_READ, 0, 0, len) };
+        let total = section_size(fd.as_raw_handle() as HANDLE)?;
+        if total < (len + TRAILER) as u64 || total > section_len(1 << 30) as u64 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Bildpuffer zu klein"));
+        }
+        let total = total as usize;
+        // SAFETY: nur lesende Abbildung der ganzen Section; scheitert bei falscher Art.
+        let ptr = unsafe { MapViewOfFile(fd.as_raw_handle() as HANDLE, FILE_MAP_READ, 0, 0, total) };
         if ptr.Value.is_null() {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Bildpuffer ist kein passendes Dateimapping"));
         }
-        Ok(Reader { map: View { ptr, len } })
+        let view = View { ptr, len };
+        // SAFETY: Die Abbildung ist `total` Bytes lang; der Nachsatz liegt am Ende.
+        let size = unsafe { (ptr.Value as *const u8).add(total - TRAILER).cast::<u64>().read_unaligned() };
+        if size < len as u64 || size as usize > total - TRAILER {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Bildpuffer zu klein"));
+        }
+        Ok(Reader { map: view })
     }
 }
 
@@ -303,6 +355,10 @@ mod tests {
         assert!(FrameBufferReader::open(w.share_handle().unwrap(), 4, 4).is_err());
         assert!(FrameBufferReader::open(w.share_handle().unwrap(), u32::MAX, u32::MAX).is_err());
         assert!(FrameBufferReader::open(w.share_handle().unwrap(), 2, 2).is_ok());
+        // Ein größerer Puffer darf mit kleineren Maßen gelesen werden.
+        let big = FrameBufferWriter::create(64, 64).unwrap();
+        assert!(FrameBufferReader::open(big.share_handle().unwrap(), 2, 2).is_ok());
+        assert!(FrameBufferReader::open(big.share_handle().unwrap(), 64, 65).is_err());
     }
 
     #[cfg(target_os = "linux")]
