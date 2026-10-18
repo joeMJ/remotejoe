@@ -29,6 +29,7 @@ impl App {
             "system_dark": theme::system_prefers_dark(),
             "focus_frame": a.focus_frame,
             "tree_size": a.tree_size,
+            "icon_style": a.icon_style,
             "icon_colors": a.icon_colors,
             "icon_kinds": crate::icons::KINDS,
             "palettes": palettes,
@@ -73,6 +74,12 @@ impl App {
             }
             self.config.appearance.tree_size = s.to_string();
         }
+        if let Some(s) = c.get("icon_style").and_then(Value::as_str) {
+            if !crate::icons::STYLES.contains(&s) {
+                return Err(format!("Unbekannter Farbstil „{s}“"));
+            }
+            self.config.appearance.icon_style = s.to_string();
+        }
         if let Some(m) = c.get("icon_colors").and_then(Value::as_object) {
             let mut own = std::collections::BTreeMap::new();
             for (k, v) in m {
@@ -116,7 +123,9 @@ pub fn palette_json(app: Option<&App>) -> Value {
     let id = v["id"].as_str().unwrap_or_default().to_string();
     let none = std::collections::BTreeMap::new();
     let own = app.map(|a| &a.config.appearance.icon_colors).unwrap_or(&none);
-    v["icons"] = json!(crate::icons::colors(&id, dark, own));
+    let style = app.map(|a| a.config.appearance.icon_style.as_str()).unwrap_or("einheitlich");
+    let (accent, muted) = (v["highlight"].as_str().unwrap_or_default().to_string(), v["muted"].as_str().unwrap_or_default().to_string());
+    v["icons"] = json!(crate::icons::colors(&id, dark, style, &accent, &muted, own));
     v["tree_size"] = json!(app.map(|a| a.config.appearance.tree_size.as_str()).unwrap_or("mittel"));
     v
 }

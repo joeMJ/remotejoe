@@ -48,6 +48,7 @@ private:
 	QWidget* m_fixedRow;
 	QCheckBox* m_focus;
 	QComboBox* m_treeSize;
+	QComboBox* m_iconStyle;
 	QCheckBox* m_ownIcons;
 	QWidget* m_iconBox;
 	QMap<QString, QPushButton*> m_iconButtons;

@@ -27,18 +27,69 @@ const THEMES: [(&str, Set); 11] = [
     ("dracula", ["#8be9fd", "#50fa7b", "#bd93f9", "#ffb86c", "#6be5c8", "#ff5555", "#a9b6ff", "#ff79c6", "#f1fa8c"]),
 ];
 
-/// Farben für das Theme mit der Kennung `id` (`eingebaut:<Name>`, `hell`, `dunkel`, eigene Palette …),
-/// danach eigene Farben aus `own` (Art → `#rrggbb`).
-pub fn colors(id: &str, dark: bool, own: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+/// Farbstil: `einheitlich` (alle Ziele in der Akzentfarbe des Themes, Ordner gedämpft) oder `je_typ`
+/// (eine Farbe je Zieltyp, in Helligkeit und Sättigung angeglichen).
+pub const STYLES: [&str; 2] = ["einheitlich", "je_typ"];
+
+/// Farben für das Theme mit der Kennung `id` (`eingebaut:<Name>`, `hell`, `dunkel`, eigene Palette …)
+/// im Stil `style`; `accent` und `muted` sind Hervorhebungs- und Nebentextfarbe des Themes. Danach
+/// gelten eigene Farben aus `own` (Art → `#rrggbb`).
+pub fn colors(id: &str, dark: bool, style: &str, accent: &str, muted: &str, own: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let name = id.strip_prefix("eingebaut:").unwrap_or(id);
     let set = THEMES.iter().find(|(n, _)| *n == name).map(|(_, s)| *s).unwrap_or(if dark { STANDARD_DARK } else { STANDARD_LIGHT });
-    let mut m: BTreeMap<String, String> = KINDS.iter().zip(set).map(|(k, c)| (k.to_string(), c.to_string())).collect();
+    let mut m: BTreeMap<String, String> = if style == "je_typ" {
+        // Gleiche Helligkeit und höchstens mittlere Sättigung, damit keine Farbe heraussticht.
+        KINDS.iter().zip(set).map(|(k, c)| (k.to_string(), harmonize(c, dark))).collect()
+    } else {
+        let accent = if valid(accent) { accent } else { set[0] };
+        let folder = if valid(muted) { muted } else { set[8] };
+        KINDS.iter().map(|k| (k.to_string(), if *k == "folder" { folder } else { accent }.to_string())).collect()
+    };
     for (k, c) in own {
         if KINDS.contains(&k.as_str()) && valid(c) {
             m.insert(k.clone(), c.clone());
         }
     }
     m
+}
+
+/// Farbe auf einheitliche Helligkeit (hell: 42 %, dunkel: 72 %) und höchstens 60 % Sättigung bringen.
+fn harmonize(c: &str, dark: bool) -> String {
+    let Some((h, s, _)) = to_hsl(c) else { return c.to_string() };
+    from_hsl(h, s.min(0.6), if dark { 0.72 } else { 0.42 })
+}
+
+fn to_hsl(c: &str) -> Option<(f64, f64, f64)> {
+    if !valid(c) {
+        return None;
+    }
+    let v = |i: usize| u8::from_str_radix(&c[i..i + 2], 16).map(|x| f64::from(x) / 255.0).ok();
+    let (r, g, b) = (v(1)?, v(3)?, v(5)?);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let l = (max + min) / 2.0;
+    if (max - min).abs() < f64::EPSILON {
+        return Some((0.0, 0.0, l));
+    }
+    let d = max - min;
+    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let h = if max == r { (g - b) / d + if g < b { 6.0 } else { 0.0 } } else if max == g { (b - r) / d + 2.0 } else { (r - g) / d + 4.0 };
+    Some((h / 6.0, s, l))
+}
+
+fn from_hsl(h: f64, s: f64, l: f64) -> String {
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    let t = |mut t: f64| {
+        if t < 0.0 {
+            t += 1.0;
+        }
+        if t > 1.0 {
+            t -= 1.0;
+        }
+        let v = if t < 1.0 / 6.0 { p + (q - p) * 6.0 * t } else if t < 0.5 { q } else if t < 2.0 / 3.0 { p + (q - p) * (2.0 / 3.0 - t) * 6.0 } else { p };
+        (v * 255.0).round().clamp(0.0, 255.0) as u8
+    };
+    format!("#{:02x}{:02x}{:02x}", t(h + 1.0 / 3.0), t(h), t(h - 1.0 / 3.0))
 }
 
 /// `#rrggbb`?
@@ -53,13 +104,17 @@ mod tests {
     #[test]
     fn theme_colors_and_overrides() {
         let none = BTreeMap::new();
-        let m = colors("eingebaut:catppuccin-macchiato", true, &none);
-        assert_eq!(m["rdp"], "#8aadf4");
-        assert_eq!(m["folder"], "#eed49f");
-        assert_eq!(colors("hell", false, &none)["ssh"], "#1b6e20");
-        assert_eq!(colors("datei:x", true, &none)["ssh"], "#5fc463");
+        // Einheitlich: Ziele in der Akzentfarbe, Ordner gedämpft.
+        let m = colors("eingebaut:catppuccin-macchiato", true, "einheitlich", "#8aadf4", "#a5adcb", &none);
+        assert_eq!((m["rdp"].as_str(), m["ssh"].as_str(), m["folder"].as_str()), ("#8aadf4", "#8aadf4", "#a5adcb"));
+        // Je Typ: angeglichene Helligkeit.
+        let m = colors("eingebaut:solarized-hell", false, "je_typ", "#268bd2", "#93a1a1", &none);
+        let l = |c: &str| to_hsl(c).unwrap().2;
+        assert!(KINDS.iter().all(|k| (l(&m[*k]) - 0.42).abs() < 0.01), "{m:?}");
+        assert_ne!(m["rdp"], m["ssh"]);
         let own: BTreeMap<String, String> = [("ssh".to_string(), "#123456".to_string()), ("ssh2".into(), "#000000".into()), ("rdp".into(), "rot".into())].into();
-        let m = colors("eingebaut:nord", true, &own);
+        let m = colors("eingebaut:nord", true, "einheitlich", "#88c0d0", "#d8dee9", &own);
         assert_eq!((m["ssh"].as_str(), m["rdp"].as_str(), m.len()), ("#123456", "#88c0d0", KINDS.len()));
+        assert_eq!(from_hsl(0.0, 1.0, 0.5), "#ff0000");
     }
 }

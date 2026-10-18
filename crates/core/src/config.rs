@@ -61,6 +61,8 @@ pub struct AppearanceSettings {
     pub dark_theme: String,
     /// Größe des Eintragbaums: `klein`, `mittel` oder `gross` (Zeilenhöhe, Symbole, Schrift).
     pub tree_size: String,
+    /// Farbstil der Symbole: `einheitlich` oder `je_typ`.
+    pub icon_style: String,
     /// Eigene Symbolfarben je Art (`rdp`, `ssh`, …, `folder` → `#rrggbb`); leer = dem Theme folgen.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub icon_colors: std::collections::BTreeMap<String, String>,
@@ -74,6 +76,7 @@ impl Default for AppearanceSettings {
             light_theme: "system".into(),
             dark_theme: "system".into(),
             tree_size: "mittel".into(),
+            icon_style: "einheitlich".into(),
             icon_colors: Default::default(),
         }
     }

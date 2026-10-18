@@ -594,6 +594,8 @@
   "appearance.tree_size.mittel": "Mittel",
   "appearance.tree_size.gross": "Groß",
   "appearance.icons": "Symbolfarben",
+  "appearance.icons.style.einheitlich": "Einheitlich (Akzentfarbe des Themes)",
+  "appearance.icons.style.je_typ": "Je Zieltyp eine Farbe (angeglichen)",
   "appearance.icons.own": "Eigene Farben (sonst folgen die Symbole dem Theme)",
   "appearance.icons.kind.rdp": "RDP",
   "appearance.icons.kind.ssh": "SSH",

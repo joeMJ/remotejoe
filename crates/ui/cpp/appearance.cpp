@@ -185,8 +185,12 @@ AppearanceTab::AppearanceTab(RjBackend* backend, QWidget* parent)
 		m_treeSize->addItem(T((QByteArray("appearance.tree_size.") + s).constData()), QString::fromLatin1(s));
 	form->addRow(T("appearance.tree_size"), m_treeSize);
 	// Symbolfarben: dem Theme folgen oder eigene Farbe je Art.
+	m_iconStyle = new QComboBox(page);
+	for (const char* s : { "einheitlich", "je_typ" })
+		m_iconStyle->addItem(T((QByteArray("appearance.icons.style.") + s).constData()), QString::fromLatin1(s));
+	form->addRow(T("appearance.icons"), m_iconStyle);
 	m_ownIcons = new QCheckBox(T("appearance.icons.own"), page);
-	form->addRow(T("appearance.icons"), m_ownIcons);
+	form->addRow(QString(), m_ownIcons);
 	m_iconBox = new QWidget(page);
 	auto* ig = new QGridLayout(m_iconBox);
 	ig->setContentsMargins(0, 0, 0, 0);
@@ -286,6 +290,10 @@ AppearanceTab::AppearanceTab(RjBackend* backend, QWidget* parent)
 		if (!m_loading)
 			apply({ { QStringLiteral("tree_size"), m_treeSize->currentData().toString() } });
 	});
+	connect(m_iconStyle, &QComboBox::currentIndexChanged, this, [this] {
+		if (!m_loading)
+			apply({ { QStringLiteral("icon_style"), m_iconStyle->currentData().toString() } });
+	});
 	connect(m_ownIcons, &QCheckBox::toggled, this, [this](bool on) {
 		if (m_loading)
 			return;
@@ -345,6 +353,7 @@ void AppearanceTab::reload()
 	m_fixedRow->setVisible(!system);
 	m_focus->setChecked(m_state.value(QStringLiteral("focus_frame")).toBool(true));
 	m_treeSize->setCurrentIndex(qMax(0, m_treeSize->findData(m_state.value(QStringLiteral("tree_size")).toString(QStringLiteral("mittel")))));
+	m_iconStyle->setCurrentIndex(qMax(0, m_iconStyle->findData(m_state.value(QStringLiteral("icon_style")).toString(QStringLiteral("einheitlich")))));
 	{
 		// Eigene Farben aus der Einstellung, sonst die Farben des Themes anzeigen.
 		const QJsonObject own = m_state.value(QStringLiteral("icon_colors")).toObject();
