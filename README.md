@@ -254,6 +254,105 @@ heruntergeladenen Dateien kann trotzdem erscheinen; sie hängt nicht am Zertifik
 
 ---
 
+## Hyper-V und PowerShell-Remoting
+
+remotejoe holt die Gäste eines Hyper-V-Hosts (Liste, Starten, Herunterfahren, Neu starten, Ausschalten)
+und öffnet PowerShell-Sitzungen über ein **lokal installiertes PowerShell 7** (`pwsh`):
+
+- Ubuntu: `sudo snap install powershell --classic`
+- Windows: `winget install Microsoft.PowerShell`
+
+Für die Verbindung zum Host gibt es zwei Transporte (Eigenschaften des Ziels → **PowerShell-Transport**):
+
+| Transport | Von Windows aus | Von Ubuntu aus |
+| :--- | :--- | :--- |
+| **WinRM über HTTPS/HTTP** | ja – Einrichtung des Hosts siehe [`docs/ZIELE-EINRICHTEN.md`](docs/ZIELE-EINRICHTEN.md) | **nein** – PowerShell 7 hat unter Linux keinen WinRM-Client („…requires WSMan, and no supported WSMan client library was found“) |
+| **SSH** | ja | ja |
+
+Der Benutzer braucht auf dem Host Rechte für Hyper-V (Mitglied der Gruppe „Hyper-V-Administratoren“ oder
+Administrator), sonst liefert `Get-VM` keine Gäste.
+
+### Host für PowerShell über SSH einrichten
+
+In einer PowerShell **als Administrator** auf dem Hyper-V-Host einfügen. Voraussetzung ist PowerShell 7 auf dem
+Host. Der Block installiert bei Bedarf den OpenSSH-Server, startet ihn automatisch, trägt PowerShell als
+SSH-Subsystem in `C:\ProgramData\ssh\sshd_config` ein (mit Sicherung) und gibt Port 22 in der Firewall frei.
+Er ist mehrfach ausführbar.
+
+```powershell
+& {
+    $ErrorActionPreference = 'Stop'
+    $pwsh = 'C:\Program Files\PowerShell\7\pwsh.exe'
+    $cfg  = Join-Path $env:ProgramData 'ssh\sshd_config'
+    $line = 'Subsystem powershell c:/progra~1/powershell/7/pwsh.exe -sshs -nologo'
+    function Ok($t)   { Write-Host "  OK      $t" -ForegroundColor Green }
+    function Fail($t) { Write-Host "  FEHLER  $t" -ForegroundColor Red }
+    Write-Host ''
+    Write-Host '  remotejoe - PowerShell über SSH einrichten' -ForegroundColor Cyan
+    Write-Host ''
+    if (-not (whoami /groups | Select-String -SimpleMatch 'S-1-16-12288' -Quiet)) { Fail 'Bitte PowerShell als Administrator starten.'; return }
+    if (-not (Test-Path $pwsh)) { Fail 'PowerShell 7 fehlt. Bitte zuerst installieren: https://aka.ms/powershell-release?tag=stable'; return }
+    Ok 'PowerShell 7 vorhanden'
+    try {
+        $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
+        if ($cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name $cap.Name | Out-Null; Ok 'OpenSSH-Server installiert' } else { Ok 'OpenSSH-Server vorhanden' }
+        Set-Service sshd -StartupType Automatic
+        Start-Service sshd
+        $lines = @(Get-Content -LiteralPath $cfg)
+        if ($lines | Select-String '^\s*Subsystem\s+powershell\b' -Quiet) {
+            Ok 'Eintrag für PowerShell ist schon vorhanden'
+        } else {
+            Copy-Item -LiteralPath $cfg -Destination "$cfg.bak-remotejoe" -Force
+            $at = -1
+            for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^\s*Subsystem\s') { $at = $i + 1; break } }
+            if ($at -lt 0) { for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^\s*Match\s') { $at = $i; break } } }
+            if ($at -lt 0) { $at = $lines.Count }
+            $new = @($lines[0..($at - 1)]) + $line + @(if ($at -lt $lines.Count) { $lines[$at..($lines.Count - 1)] })
+            Set-Content -LiteralPath $cfg -Value $new -Encoding ascii
+            Ok "Eintrag ergänzt (Sicherung: $cfg.bak-remotejoe)"
+        }
+        Restart-Service sshd
+        Ok 'sshd neu gestartet'
+        if (-not (Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue)) {
+            New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow | Out-Null
+            Ok 'Firewall: Port 22 freigegeben'
+        } else { Ok 'Firewall-Regel für SSH vorhanden' }
+        Write-Host ''
+        Write-Host '  Fertig. In remotejoe beim Hyper-V-Ziel den PowerShell-Transport auf SSH stellen.' -ForegroundColor Green
+    } catch { Fail $_.Exception.Message }
+    Write-Host ''
+}
+```
+
+### Anmeldung per Schlüssel
+
+Beim Transport SSH meldet sich PowerShell mit dem SSH-Schlüssel des eigenen Benutzerkontos an (`~/.ssh`,
+bzw. ssh-agent); das Kennwort aus der Schlüsseldatenbank wird dabei **nicht** verwendet. Einmalig:
+
+1. Auf dem eigenen Rechner einen Schlüssel erzeugen, falls noch keiner da ist: `ssh-keygen -t ed25519`
+2. Den Inhalt von `~/.ssh/id_ed25519.pub` auf dem Host eintragen. Für ein Konto **mit Administratorrechten**
+   in einer PowerShell als Administrator auf dem Host (Schlüsselzeile einsetzen):
+
+   ```powershell
+   & {
+       $key = 'ssh-ed25519 AAAA… benutzer@rechner'
+       $f   = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
+       Add-Content -LiteralPath $f -Value $key -Encoding ascii
+       icacls $f /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' | Out-Null
+       Write-Host '  OK  Schlüssel eingetragen' -ForegroundColor Green
+   }
+   ```
+
+   Für ein Konto **ohne** Administratorrechte gehört die Zeile stattdessen in
+   `%USERPROFILE%\.ssh\authorized_keys`.
+3. Einmal von Hand verbinden und den Host-Schlüssel bestätigen, damit er in `~/.ssh/known_hosts` steht:
+   `ssh benutzer@host exit`
+
+Danach in remotejoe beim Hyper-V-Ziel den **PowerShell-Transport** auf **SSH** stellen und den Knoten im Baum
+neu aufklappen.
+
+---
+
 ## Was das Programm kann
 
 - **Baum links, Sitzungen rechts:** Ordner und Ziele in fester Reihenfolge, Suche über Namen
