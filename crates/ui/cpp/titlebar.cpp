@@ -65,6 +65,22 @@ BrandStrip::BrandStrip(QWidget* window, const QString& name, const QString& vers
 	l->addStretch(1);
 }
 
+QSize BrandStrip::sizeHint() const
+{
+	QSize s = QWidget::sizeHint();
+	if (minimumHeight() > 0)
+		s.setHeight(minimumHeight());
+	return s;
+}
+
+QSize WindowControls::sizeHint() const
+{
+	QSize s = QWidget::sizeHint();
+	if (minimumHeight() > 0)
+		s.setHeight(minimumHeight());
+	return s;
+}
+
 void toggleMaximized(QWidget* window)
 {
 	if (window->isMaximized())

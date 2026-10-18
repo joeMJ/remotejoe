@@ -30,6 +30,7 @@
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QToolButton>
 #include <QtGui/QScreen>
+#include <QtGui/QResizeEvent>
 #include <QtWidgets/QComboBox>
 #include <QtCore/QPointer>
 #include <QtWidgets/QFileDialog>
@@ -511,6 +512,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 				carry(a->menu());
 	}
 	m_tabs->tabBar()->installEventFilter(this);
+	m_tabs->installEventFilter(this);
 	m_fitTimer.setSingleShot(true);
 	m_fitTimer.setInterval(300);
 	connect(&m_fitTimer, &QTimer::timeout, this, &MainWindow::fitToScreen);
@@ -669,7 +671,8 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(m_treeButton, &QToolButton::clicked, this, [this] { setTreeVisible(m_treeHidden); });
 	statusBar()->insertPermanentWidget(0, m_treeButton);
 	m_noticeLabel = new QLabel(this);
-	m_noticeLabel->setAlignment(Qt::AlignCenter);
+	m_noticeLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+	m_noticeLabel->setContentsMargins(8, 0, 8, 0);
 	m_noticeLabel->setObjectName(QStringLiteral("statusNotice"));
 	m_noticeLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 	statusBar()->insertPermanentWidget(1, m_noticeLabel, 1);
@@ -1021,6 +1024,8 @@ void MainWindow::applyTheme(bool dark)
 	  "QTabBar::close-button { subcontrol-position: right; margin-right: 8px; }"
   "QTabBar::tab:selected { background: %6; color: %7; border-top: 3px solid %2; padding-top: 3px; }"
 	  "QTabBar::tab:!selected { margin-top: 3px; }"
+	  "QTabBar[compact=\"true\"]::tab { min-height: 20px; padding: 2px 14px 2px 10px; }"
+	  "QTabBar[compact=\"true\"]::tab:selected { padding-top: 1px; }"
 	  "QTabBar::tab:!selected:hover { background: %8; color: %7; }"
 	  "QLabel#paneHeader { font-weight: bold; padding: 1px 4px; }"
 	  "QLabel#paneNotice { color: %1; padding: 4px; }"
@@ -1031,6 +1036,7 @@ void MainWindow::applyTheme(bool dark)
 	  "QStatusBar QPushButton { min-height: 12px; padding: 0 6px; }"
 	  "QToolButton#statusTreeButton { padding: 0 6px; margin: 0; min-height: 0; }"
 	  "QLabel#statusNotice { color: %1; }"
+	  "QLabel#statusNotice[severe=\"true\"] { color: #e53935; font-weight: bold; }"
 	  "QLabel#fieldError, QLabel#dirtyLabel { color: %1; font-weight: bold; }"
 	  "QFrame#actionBar { border: 2px solid %2; border-radius: 4px; }"
 	  "QFrame#securityBar { border: 2px solid %2; border-radius: 4px; }"
@@ -2149,6 +2155,7 @@ void MainWindow::handleEvents(const QString& json)
 			{
 				if (p)
 					p->setState(e.value(QStringLiteral("state")).toString(), e.value(QStringLiteral("detail")).toString());
+				updateNotice();
 				updateStatus();
 			}
 			else if (t == QLatin1String("shared_frame"))
@@ -2335,10 +2342,13 @@ bool MainWindow::eventFilter(QObject* o, QEvent* e)
 	if (m_compact && m_tabs && o == m_tabs->tabBar() && e->type() == QEvent::Resize)
 		QTimer::singleShot(0, this, [this] { syncStripHeight(); });
 	// Platzsparmodus: die freie Fläche der Tab-Leiste ist die Titelzeile (Ziehen, Doppelklick maximiert).
-	if (m_compact && m_tabs && o == m_tabs->tabBar() && (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonDblClick))
+	// Ohne Tab hat die Leiste keine Fläche; dann gilt die Streifenhöhe oben im Tab-Widget selbst.
+	if (m_compact && m_tabs && (o == m_tabs->tabBar() || o == m_tabs) && (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonDblClick))
 	{
 		auto* me = static_cast<QMouseEvent*>(e);
-		if (me->button() == Qt::LeftButton && m_tabs->tabBar()->tabAt(me->position().toPoint()) < 0)
+		const QPoint pt = me->position().toPoint();
+		const bool inStrip = o == m_tabs ? pt.y() < qMax(26, m_titleBar->controls()->height()) : m_tabs->tabBar()->tabAt(pt) < 0;
+		if (me->button() == Qt::LeftButton && inStrip)
 		{
 			if (e->type() == QEvent::MouseButtonDblClick)
 			{
@@ -2732,6 +2742,10 @@ void MainWindow::setCompact(bool on)
 	if (m_compact == on && m_titleBar->controls()->parentWidget() != m_titleBar)
 		return;
 	m_compact = on;
+	// Niedrigere Tabs im Platzsparmodus (Stylesheet: QTabBar[compact="true"]).
+	m_tabs->tabBar()->setProperty("compact", on);
+	m_tabs->tabBar()->style()->unpolish(m_tabs->tabBar());
+	m_tabs->tabBar()->style()->polish(m_tabs->tabBar());
 	QWidget* top = m_menuBar->parentWidget();
 	if (on)
 	{
@@ -2753,8 +2767,9 @@ void MainWindow::setCompact(bool on)
 	m_titleBar->updateState();
 }
 
-/// Baum und Logo-Streifen anordnen. Im Platzsparmodus steht Logo, Name und Version oben in der linken
-/// Spalte; bei eingeklapptem Baum bleibt von ihr nur dieser Streifen, und die Tabs rücken daneben.
+/// Baum und Logo-Streifen anordnen. Im Platzsparmodus steht Logo, Name und Version bei angepinntem Baum
+/// oben in der linken Spalte; bei eingeklapptem Baum links neben den Tabs, und die Sitzungsfläche reicht
+/// darunter bis zum Fensterrand.
 void MainWindow::placeBrand()
 {
 	if (!m_leftPane || !m_split)
@@ -2771,34 +2786,30 @@ void MainWindow::placeBrand()
 		return;
 	}
 	BrandStrip* brand = m_titleBar->brand();
-	const int bh = m_tabs->tabBar()->height();
-	const int h = qMax(32, bh > 20 ? bh : m_tabs->tabBar()->sizeHint().height());
-	brand->setFixedHeight(h);
-	m_titleBar->controls()->setFixedHeight(h);
 	brand->setStyleSheet(QStringLiteral("QWidget#brandStrip { background: palette(button); border-bottom: 1px solid palette(mid); }"
 	                                    "QWidget#brandStrip QLabel { background: transparent; }"));
 	brand->setAttribute(Qt::WA_StyledBackground, true);
-	if (brand->parentWidget() != m_brandSlot)
-	{
-		brand->setParent(m_brandSlot);
-		m_brandSlotLay->addWidget(brand);
-	}
-	brand->show();
-	m_brandSlot->show();
-	m_leftPane->show();
-	m_leftInner->setVisible(on);
+	m_leftPane->setVisible(on);
+	m_leftInner->setVisible(true);
 	if (on)
 	{
-		m_leftPane->setMinimumWidth(0);
-		m_leftPane->setMaximumWidth(QWIDGETSIZE_MAX);
+		m_tabs->setCornerWidget(nullptr, Qt::TopLeftCorner);
+		if (brand->parentWidget() != m_brandSlot)
+		{
+			brand->setParent(m_brandSlot);
+			m_brandSlotLay->addWidget(brand);
+		}
+		m_brandSlot->show();
 		m_split->setSizes({ m_treeWidth, qMax(200, m_split->width() - m_treeWidth) });
 	}
 	else
 	{
-		const int w = brand->sizeHint().width();
-		m_leftPane->setFixedWidth(w);
-		m_split->setSizes({ w, qMax(200, m_split->width() - w) });
+		m_brandSlotLay->removeWidget(brand);
+		m_brandSlot->hide();
+		m_tabs->setCornerWidget(brand, Qt::TopLeftCorner);
 	}
+	brand->show();
+	syncStripHeight();
 	QTimer::singleShot(0, this, [this] { syncStripHeight(); });
 }
 
@@ -2807,12 +2818,23 @@ void MainWindow::syncStripHeight()
 {
 	if (!m_compact)
 		return;
+	// Die Ecken-Widgets enden an der Oberkante der Seite; so hoch wie dieser Abstand liegen sie bündig zu den Tabs.
 	const int bh = m_tabs->tabBar()->height();
-	const int h = qMax(32, bh > 20 ? bh : m_tabs->tabBar()->sizeHint().height());
-	if (m_titleBar->brand()->height() != h)
-		m_titleBar->brand()->setFixedHeight(h);
-	if (m_titleBar->controls()->height() != h)
-		m_titleBar->controls()->setFixedHeight(h);
+	const int py = m_tabs->currentWidget() ? m_tabs->currentWidget()->mapTo(m_tabs, QPoint(0, 0)).y() : 0;
+	const int h = qMax(26, py > 16 ? py : (bh > 16 ? bh : m_tabs->tabBar()->sizeHint().height()));
+	bool changed = false;
+	for (QWidget* w : { static_cast<QWidget*>(m_titleBar->brand()), static_cast<QWidget*>(m_titleBar->controls()) })
+		if (w->height() != h || w->minimumHeight() != h)
+		{
+			w->setFixedHeight(h);
+			changed = true;
+		}
+	// Die Ecken-Widgets werden erst bei einem neuen Layout der Tab-Leiste an die Höhe angepasst.
+	if (changed)
+	{
+		QResizeEvent ev(m_tabs->size(), m_tabs->size());
+		QApplication::sendEvent(m_tabs, &ev);
+	}
 }
 
 /// Hinweis der vorderen Sitzung in der Mitte der Fußzeile (statt der orangen Zeile in der Sitzung).
@@ -2820,14 +2842,33 @@ void MainWindow::updateNotice()
 {
 	if (!m_noticeLabel)
 		return;
-	QString text;
+	// Zustand (nicht „Verbunden“) und Hinweis der Sitzungen im vorderen Tab; schwere Fehler rot und fett.
+	QStringList parts;
+	bool severe = false;
 	if (QWidget* cur = m_tabs->currentWidget())
+	{
+		QList<SessionPane*> here;
 		for (SessionPane* p : std::as_const(m_panes))
-			if (p && (p == cur || cur->isAncestorOf(p)) && !p->notice().isEmpty())
-			{
-				text = p->notice();
-				break;
-			}
+			if (p && (p == cur || cur->isAncestorOf(p)))
+				here.append(p);
+		std::sort(here.begin(), here.end(), [](SessionPane* a, SessionPane* b) { return a->session() < b->session(); });
+		for (SessionPane* p : here)
+		{
+			QString line = p->statusLine();
+			if (line.isEmpty() && p->notice().isEmpty())
+				continue;
+			if (!p->notice().isEmpty())
+				line += (line.isEmpty() ? QString() : QStringLiteral(" · ")) + p->notice();
+			if (here.size() > 1)
+				line = p->title() + QStringLiteral(": ") + line;
+			severe = severe || p->severe();
+			parts.append(line);
+		}
+	}
+	const QString text = parts.join(QStringLiteral("   |   "));
+	m_noticeLabel->setProperty("severe", severe);
+	m_noticeLabel->style()->unpolish(m_noticeLabel);
+	m_noticeLabel->style()->polish(m_noticeLabel);
 	m_noticeLabel->setText(text);
 	m_noticeLabel->setToolTip(text);
 }

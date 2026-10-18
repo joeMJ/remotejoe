@@ -138,6 +138,10 @@ public:
 	void setState(const QString& state, const QString& detail);
 	void setNotice(const QString& text);
 	QString notice() const { return m_noticeText; }
+	/// Zustand für die Fußzeile des Hauptfensters; leer bei „Verbunden“.
+	QString statusLine() const { return m_state.isEmpty() || m_state == QLatin1String("connected") ? QString() : m_stateText; }
+	/// Schwerer Fehler (Verbindung fehlgeschlagen oder Worker abgestürzt).
+	bool severe() const { return m_state == QLatin1String("failed") || m_state == QLatin1String("crashed"); }
 	FrameView* frame() const { return m_frame; }
 	TerminalView* terminal() const { return m_terminal; }
 	QWidget* view() const;

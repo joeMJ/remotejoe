@@ -15,6 +15,8 @@ class BrandStrip : public QWidget
 	Q_OBJECT
 public:
 	BrandStrip(QWidget* window, const QString& name, const QString& version, QWidget* parent = nullptr);
+	/// Die Tab-Leiste legt Eck-Widgets nach `sizeHint` an; bei festgesetzter Höhe gilt diese.
+	QSize sizeHint() const override;
 
 protected:
 	void mousePressEvent(QMouseEvent* e) override;
@@ -35,6 +37,7 @@ public:
 	/// Menü des Hamburger-Knopfs; ohne Menü bleibt der Knopf verborgen.
 	void setBurgerMenu(QMenu* menu);
 	void setBurgerVisible(bool on);
+	QSize sizeHint() const override;
 
 protected:
 	void changeEvent(QEvent* e) override;

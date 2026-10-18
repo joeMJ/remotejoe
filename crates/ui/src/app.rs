@@ -1306,16 +1306,11 @@ impl App {
         let b = self.sessions.open_demo_frame("rdp-002", 800, 600, 120);
         let c = self.sessions.open_demo_frame("vnc-003", 800, 600, 30);
         let d = self.sessions.open_demo_terminal("ssh-004", "root@labor:~# uptime\r\n 10:15:02 up 12 days,  3:04,  1 user,  load average: 0,08, 0,05, 0,01\r\nroot@labor:~# ", 90, 20);
+        // Vorne eine einzelne SSH-Sitzung, die anderen als Tabs im Hintergrund.
         let t1 = self.workspace.open(a, "ssh-001");
         self.workspace.open(b, "rdp-002");
-        self.workspace.tile(b, t1);
         self.workspace.open(c, "vnc-003");
-        self.workspace.tile(c, t1);
         self.workspace.open(d, "ssh-004");
-        self.workspace.tile(d, t1);
-        self.workspace.set_arrangement(t1, Arrangement::TwoByTwo);
-        let e = self.sessions.open_demo_terminal("ssh-005", "admin@netz-01:~$ ip -br addr\r\nlo   UNKNOWN 127.0.0.1/8\r\neth0 UP      192.0.2.15/24\r\nadmin@netz-01:~$ ", 90, 20);
-        self.workspace.open(e, "ssh-005");
         // Echte Web-Sitzungen für das Bildschirmfoto des Web-Tabs (Adressen aus
         // RJ_DEMO_WEB, durch Komma getrennt), nebeneinander gekachelt.
         let urls = std::env::var("RJ_DEMO_WEB").unwrap_or_default();

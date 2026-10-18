@@ -15,7 +15,7 @@
 > *Private hobby project, unmaintained, provided as-is. No support, no issues, no warranty. Fork it if you like.*
 
 <p align="center">
-  <img src="docs/screenshots/hauptfenster-hell.png" alt="Hauptfenster: Baum mit Ordnern und Zielen links, Sitzungen gekachelt rechts" width="760">
+  <img src="docs/screenshots/hauptfenster-hell.png" alt="Hauptfenster: Baum mit Ordnern und Zielen links, Terminal-Sitzung im Tab rechts" width="760">
   <br>
   <em>Hauptfenster (helles Farbschema, Demo-Daten)</em>
 </p>

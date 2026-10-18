@@ -768,7 +768,8 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 	auto* lay = new QVBoxLayout(this);
 	lay->setContentsMargins(2, 2, 2, 2);
 	lay->setSpacing(2);
-	m_header = new QLabel(title, this);
+	m_header = new QLabel(this);
+	m_header->hide();
 	m_header->setObjectName(QStringLiteral("paneHeader"));
 	m_header->setMinimumHeight(28);
 	m_notice = new QLabel(this);
@@ -785,7 +786,6 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 	auto* headRow = new QWidget(this);
 	auto* hl = new QHBoxLayout(headRow);
 	hl->setContentsMargins(0, 0, 0, 0);
-	hl->addWidget(m_header, 1);
 	if (protocol == QLatin1String("ssh"))
 	{
 		m_macroState = new QLabel(headRow);
@@ -799,10 +799,10 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 		auto* menu = new QMenu(m_macroRun);
 		m_macroRun->setMenu(menu);
 		connect(menu, &QMenu::aboutToShow, this, [this] { fillMacroMenu(); });
-		hl->addWidget(m_macroState);
-		hl->addWidget(m_macroCancel);
 		hl->addWidget(m_macroNew);
 		hl->addWidget(m_macroRun);
+		hl->addWidget(m_macroCancel);
+		hl->addWidget(m_macroState);
 		connect(m_macroCancel, &QPushButton::clicked, this, [this] {
 			m_backend->edit(QStringLiteral("{\"op\":\"cancel_macro\",\"session\":%1}").arg(m_session));
 		});
@@ -850,6 +850,11 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 		bf.setPointSizeF(bf.pointSizeF() * 0.9);
 		b->setFont(bf);
 	}
+	// Seitentitel (Web) füllt den Rest der Zeile; alle Knöpfe stehen links.
+	hl->addWidget(m_header, 1);
+	hl->addStretch(1);
+	// Ohne Bedienknöpfe (RDP, VNC) entfällt die Zeile; sie erscheint, sobald es dort Knöpfe gibt.
+	headRow->setVisible(protocol == QLatin1String("ssh") || protocol == QLatin1String("web") || protocol == QLatin1String("proxmox"));
 	lay->addWidget(headRow);
 	lay->addWidget(m_notice);
 	lay->addWidget(m_security);
@@ -888,14 +893,13 @@ void SessionPane::setState(const QString& state, const QString& detail)
 
 void SessionPane::updateHeader()
 {
-	QString text = m_title;
-	if (!m_pageTitle.isEmpty())
-		text += QStringLiteral(" · ") + m_pageTitle;
-	text += QStringLiteral(" — ") + m_stateText;
+	// Name und Zustand stehen im Tab und in der Fußzeile des Hauptfensters; hier nur Seitentitel und Ladevorgang.
+	QString text = m_pageTitle;
 	if (m_loading)
-		text += QStringLiteral(" · ")
+		text += (text.isEmpty() ? QString() : QStringLiteral(" · "))
 		  + m_backend->text(QStringLiteral("web.header.loading")).arg(m_loadClock.elapsed() / 1000).arg(m_progress);
 	m_header->setText(text);
+	m_header->setVisible(!text.isEmpty());
 }
 
 void SessionPane::webCommand(const QString& json)
