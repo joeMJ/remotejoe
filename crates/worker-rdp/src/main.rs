@@ -251,6 +251,15 @@ mod imp {
                     }
                 }
                 ToWorker::Resize { width, height } => {
+                    // Keine laufende Sitzung (abgemeldet, getrennt): nur die Größe für das nächste
+                    // Verbinden merken, nicht selbst neu verbinden.
+                    if self.session.is_none() {
+                        if let Some((req, _)) = self.last.as_mut() {
+                            req.width = width;
+                            req.height = height;
+                        }
+                        return true;
+                    }
                     let handled = self.session.as_mut().is_some_and(|s| s.resize(width, height));
                     if !handled {
                         if let Some((mut req, cred)) = self.last.clone() {
