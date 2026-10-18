@@ -1204,6 +1204,54 @@ QSize MainWindow::contentSize(bool terminal) const
 
 void MainWindow::connectSelected(const QString& credential, bool remember)
 {
+	// Mehrere markierte Ziele: alle gestaffelt öffnen (Ordner in der Markierung zählen nicht).
+	QStringList ids;
+	for (const QModelIndex& i : m_tree->selectionModel()->selectedIndexes())
+		if (!i.data(RoleFolder).toBool() && !i.data(RoleGuest).isValid() && !i.data(RolePlaceholder).toBool() && !i.data(RoleMacro).toInt())
+			ids << i.data(RoleId).toString();
+	ids.removeDuplicates();
+	if (ids.size() > 1 && credential.isEmpty())
+	{
+		connectMany({ { QStringLiteral("ids"), QJsonArray::fromStringList(ids) } });
+		return;
+	}
+	connectCurrent(credential, remember);
+}
+
+bool MainWindow::confirmManyTargets(int n)
+{
+	if (n <= kConnectWithoutAsking)
+		return true;
+	QMessageBox box(QMessageBox::Question, T(m_backend, "connect.many.title"), T(m_backend, "connect.many.text").arg(n), QMessageBox::NoButton, this);
+	auto* ok = box.addButton(T(m_backend, "connect.many.ok"), QMessageBox::AcceptRole);
+	box.setDefaultButton(box.addButton(T(m_backend, "connect.many.cancel"), QMessageBox::RejectRole));
+	box.exec();
+	return box.clickedButton() == ok;
+}
+
+void MainWindow::connectMany(const QJsonObject& which)
+{
+	QJsonObject count = which;
+	count.insert(QStringLiteral("op"), QStringLiteral("connect_all"));
+	count.insert(QStringLiteral("count_only"), true);
+	if (!confirmManyTargets(parseObject(edit(count)).value(QStringLiteral("count")).toInt()))
+		return;
+	const QSize px = contentSize(false);
+	QJsonObject cmd = which;
+	cmd.insert(QStringLiteral("op"), QStringLiteral("connect_all"));
+	cmd.insert(QStringLiteral("mode"), QStringLiteral("connect"));
+	cmd.insert(QStringLiteral("width"), px.width());
+	cmd.insert(QStringLiteral("height"), px.height());
+	const QJsonObject r = parseObject(edit(cmd));
+	if (r.contains(QStringLiteral("error")))
+		statusBar()->showMessage(r.value(QStringLiteral("error")).toString(), 8000);
+	else
+		statusBar()->showMessage(T(m_backend, "status.connect_all").arg(r.value(QStringLiteral("count")).toInt()).arg(4), 8000);
+	rebuildTabs();
+}
+
+void MainWindow::connectCurrent(const QString& credential, bool remember)
+{
 	const QModelIndex i = m_tree->currentIndex();
 	if (!i.isValid() || i.data(RoleFolder).toBool())
 		return;
@@ -1609,7 +1657,7 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		menu.addAction(T(m_backend, "ctx.connect"), this, [this] { connectSelected(); });
 		menu.addAction(T(m_backend, "ctx.tile"), this, [this] {
 			const auto tab = currentTab();
-			connectSelected();
+			connectCurrent();
 			const auto s = currentSession();
 			if (tab && s && m_backend->tileSession(s, tab))
 				rebuildTabs();
@@ -3231,6 +3279,11 @@ void MainWindow::connectAll(const QString& mode)
 	const QString id = currentId();
 	if (id.isEmpty())
 		return;
+	if (mode == QLatin1String("connect"))
+	{
+		connectMany({ { QStringLiteral("id"), id } });
+		return;
+	}
 	const QSize px = contentSize(false);
 	const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("connect_all") },
 	                                         { QStringLiteral("id"), id },

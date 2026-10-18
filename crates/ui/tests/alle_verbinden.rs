@@ -87,3 +87,57 @@ fn connect_all_ten_targets_staggered() {
     let r = app.edit(&serde_json::json!({ "op": "connect_all", "id": fid, "mode": "disconnect" }).to_string());
     assert!(r.contains("\"count\":10"), "{r}");
 }
+
+/// Mehrere markierte Ziele verbinden: jedes markierte Ziel bekommt eine Sitzung, markierte Ordner
+/// zählen nicht mit; `count_only` meldet nur die Zahl (für die Rückfrage) und verbindet nichts.
+#[test]
+fn connect_selected_targets_opens_each_of_them() {
+    let dir = tempfile::tempdir().unwrap();
+    std::env::set_var("XDG_DATA_HOME", dir.path().join("data"));
+    std::env::set_var("XDG_CONFIG_HOME", dir.path().join("config"));
+    let mut vault = Vault::create(&dir.path().join("t.kdbx"), MasterKey::password("pw"), KdfChoice::Weak, rj_core::config::IndexStorage::KdbxCustomData);
+    let entry = vault
+        .add_credential(CredentialData { title: "Testkonto".into(), username: "probe".into(), password: Secret::from_str_exact("probe"), ..Default::default() })
+        .unwrap();
+    // Geschlossene Ports: die Verbindungen scheitern schnell, es kommt nur auf die Sitzungen an.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let mut idx = Index::default();
+    let mut f = Folder::new("Auswahl");
+    f.settings.credentials.insert("default".into(), CredentialRef { entry, last_title: Some("Testkonto".into()) });
+    let mut ids = Vec::new();
+    for i in 0..3 {
+        let mut t = Target::new(format!("ziel-{i}"), Protocol::Ssh, "127.0.0.1");
+        t.port = Some(closed);
+        ids.push(t.id);
+        f.children.push(Node::Target(t));
+    }
+    let sub = Folder::new("Unterordner");
+    let sub_id = sub.id;
+    f.children.push(Node::Folder(sub));
+    idx.root.children.push(Node::Folder(f));
+
+    let mut app = App::new(false);
+    app.index = idx;
+    app.vault = Some(vault);
+    let workers = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
+    app.sessions = Manager::new(workers, Reconnect { auto: false, max: Duration::from_secs(60) });
+
+    let chosen = [ids[0], ids[2]];
+    let r = app.edit(&serde_json::json!({ "op": "connect_all", "ids": [chosen[0], chosen[1], sub_id], "count_only": true }).to_string());
+    assert!(r.contains("\"count\":2"), "{r}");
+    assert!(app.sessions.ids().is_empty(), "count_only verbindet nicht");
+
+    let r = app.edit(&serde_json::json!({ "op": "connect_all", "ids": [chosen[0], chosen[1], sub_id] }).to_string());
+    assert!(r.contains("\"count\":2"), "{r}");
+    let start = Instant::now();
+    while app.stagger_done.is_none() {
+        app.poll();
+        assert!(start.elapsed() < Duration::from_secs(30), "Zeitüberschreitung");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut got: Vec<_> = app.sessions.ids().into_iter().filter_map(|s| app.sessions.target(s)).collect();
+    got.sort();
+    let mut want = chosen.to_vec();
+    want.sort();
+    assert_eq!(got, want);
+}

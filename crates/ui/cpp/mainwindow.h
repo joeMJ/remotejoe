@@ -128,7 +128,14 @@ private:
 	void poll();
 	void rebuildTabs();
 	QWidget* buildTabContent(const QJsonObject& tab);
+	/// Alle markierten Ziele verbinden (bei nur einem: das aktuelle).
 	void connectSelected(const QString& credential = QString(), bool remember = false);
+	/// Nur das aktuelle Ziel verbinden.
+	void connectCurrent(const QString& credential = QString(), bool remember = false);
+	/// Gestaffeltes Verbinden mehrerer Ziele (`ids` oder Ordner `id`), ab `kConnectWithoutAsking` mit Rückfrage.
+	void connectMany(const QJsonObject& which);
+	bool confirmManyTargets(int n);
+	static constexpr int kConnectWithoutAsking = 5;
 	void handleConnectResult(const QString& id, const QString& json);
 	void showProperties(const QString& id);
 	void treeContextMenu(const QPoint& pos);

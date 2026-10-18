@@ -1202,9 +1202,17 @@ impl App {
         }
     }
 
+    /// Alle Ziele eines Ordners (`id`) oder die markierten Ziele (`ids`, Ordner darin zählen nicht)
+    /// verbinden, neu verbinden oder trennen. `count_only`: nur die Zahl der Ziele melden (für die Rückfrage).
     fn op_connect_all(&mut self, c: &Value) -> Result<Value, String> {
-        let id = id_of(c, "id").ok_or("ID fehlt")?;
-        let targets = edit::targets_below(&self.index, id);
+        let targets: Vec<Uuid> = if c.get("ids").is_some() {
+            ids_of(c, "ids").into_iter().filter(|i| matches!(edit::node(&self.index, *i), Some(Node::Target(_)))).collect()
+        } else {
+            edit::targets_below(&self.index, id_of(c, "id").ok_or("ID fehlt")?)
+        };
+        if c.get("count_only").and_then(Value::as_bool).unwrap_or(false) {
+            return Ok(json!({ "count": targets.len() }));
+        }
         let mode = str_of(c, "mode").unwrap_or("connect");
         let open: Vec<SessionId> = self.sessions.ids().into_iter().filter(|s| self.sessions.target(*s).is_some_and(|t| targets.contains(&t))).collect();
         match mode {
