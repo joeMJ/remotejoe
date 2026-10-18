@@ -1,4 +1,5 @@
-erstes_zeichnen_ms=148
+erstes_zeichnen_ms=160
 baum_eintraege=525
-patchday_neuzeichnen_max_ms=4
-patchday_neuzeichnen_anzahl=32
+patchday_neuzeichnen_max_ms=1
+patchday_neuzeichnen_anzahl=31
+mehrere_ziele=4 Ziele werden angelegt, 3 Zeilen mit Fehlern (höchstens 500 Zeilen).
