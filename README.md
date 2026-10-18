@@ -22,7 +22,7 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 >
 > * **Keine Unterstützung zugesagt:** Pull Requests werden nicht bearbeitet, Feature-Wünsche nicht zugesagt. Fehler und Wünsche können als [Issue](https://github.com/joeMJ/remotejoe/issues) gemeldet werden – es kann aber dauern, bis ein Issue bearbeitet wird.
 > * **Keine Garantie, Haftung:** Das Programm wird unentgeltlich als Privatprojekt „wie besehen“ bereitgestellt. Es besteht kein Anspruch auf Verfügbarkeit, Fehlerfreiheit, Aktualisierungen oder Support. Für Schäden aus der Nutzung hafte ich nur bei Vorsatz, grober Fahrlässigkeit sowie bei Verletzung von Leben, Körper oder Gesundheit; im Übrigen nur nach den gesetzlichen Vorschriften.
-> * **Eigene Umgebung:** Entwickelt und getestet nur auf meinen eigenen Ubuntu-Rechnern (zuletzt 26.04). Auf anderen Systemen kann es fehlschlagen. Die Windows-Fassung ist neu und bisher nur auf einer Windows-10-VM erprobt.
+> * **Eigene Umgebung:** Entwickelt und getestet nur auf meinen eigenen Ubuntu-Rechnern (zuletzt 26.04). Auf anderen Systemen kann es fehlschlagen. Die Windows-Fassung ist neu (Windows 10 und 11).
 > * **Zugangsdaten & Netzwerk:** Das Programm läuft mit den Rechten deines Benutzerkontos, öffnet Verbindungen zu den Zielen, die du einträgst, und verwaltet Zugangsdaten in einer KeePass-Datei (KDBX). Für die Update-Prüfung ruft es die Veröffentlichungen dieses Repositorys auf GitHub ab. **Lies den Code, bevor du ihn installierst.**
 > * **Keine Updates zugesichert:** Es kann jederzeit ohne Ankündigung Änderungen, Brüche oder die Löschung des Repos geben.
 >
@@ -52,14 +52,14 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 
 | Plattform | Status | Hinweis |
 | :--- | :--- | :--- |
-| **Linux (Ubuntu 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto; Pakete für 26.04 und für 24.04 (eigenes Paket mit Qt 6.4; gegen Qt 6.4.2 übersetzt und im Probelauf gestartet, auf einem echten 24.04-System noch nicht erprobt) |
-| **Windows 10/11** | In Erprobung | MSI pro Benutzer ohne Administratorrechte (siehe unten); Web-Ziele im Tab über WebView2; bisher nur auf einer Windows-10-VM gebaut und geprüft. Bauanleitung [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md) |
+| **Linux (Ubuntu 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto; Pakete für 26.04 und für 24.04 (eigenes Paket mit Qt 6.4) |
+| **Windows 10/11** | Aktiv | MSI pro Benutzer ohne Administratorrechte (siehe unten); Web-Ziele im Tab über WebView2. Bauanleitung [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md) |
 
 ---
 
 ## Installation (Linux, Ubuntu)
 
-**Voraussetzungen:** Ubuntu 26.04 oder 24.04 (24.04: eigenes Paket, noch nicht auf einem echten System erprobt), `curl`, `tar`, `zstd` und `openssl`. Kein `sudo` für das Programm selbst nötig – es wird im eigenen Benutzerkonto installiert (`~/.local`). Die benötigten Systembibliotheken (Qt 6, FreeRDP 3, WebKitGTK) kommen aus den Ubuntu-Paketquellen; das Skript prüft sie und nennt fehlende Pakete.
+**Voraussetzungen:** Ubuntu 26.04 oder 24.04 (24.04: eigenes Paket), `curl`, `tar`, `zstd` und `openssl`. Kein `sudo` für das Programm selbst nötig – es wird im eigenen Benutzerkonto installiert (`~/.local`). Die benötigten Systembibliotheken (Qt 6, FreeRDP 3, WebKitGTK) kommen aus den Ubuntu-Paketquellen; das Skript prüft sie und nennt fehlende Pakete.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joeMJ/remotejoe/main/install.sh | bash
