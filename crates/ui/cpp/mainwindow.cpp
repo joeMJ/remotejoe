@@ -10,6 +10,7 @@
 #include "views.h"
 
 #include <QtCore/QDateTime>
+#include <QtCore/QDir>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtGui/QAction>
@@ -2316,6 +2317,45 @@ void MainWindow::handleEvents(const QString& json)
 			}
 			else if (t == QLatin1String("web_menu") && p)
 				p->showWebMenu(e);
+			else if (t == QLatin1String("web_focus") && p && p->frame())
+				p->frame()->webFocus(e.value(QStringLiteral("on")).toBool(), e.value(QStringLiteral("forward")).toBool());
+			else if (t == QLatin1String("web_key") && p)
+				FrameView::triggerShortcut(this, e.value(QStringLiteral("vk")).toInt(), e.value(QStringLiteral("ctrl")).toBool(),
+				                           e.value(QStringLiteral("alt")).toBool(), e.value(QStringLiteral("shift")).toBool());
+			else if (t == QLatin1String("web_download") && p)
+			{
+				// Download einer Web-Sitzung (Windows): Fortschritt und Ergebnis in der Fußzeile, Fehler zusätzlich als Hinweis.
+				const QString state = e.value(QStringLiteral("state")).toString();
+				const QString name = e.value(QStringLiteral("name")).toString();
+				const QString dir = QDir::toNativeSeparators(e.value(QStringLiteral("dir")).toString());
+				const QString error = e.value(QStringLiteral("error")).toString();
+				if (state == QLatin1String("started"))
+					statusBar()->showMessage(T(m_backend, "web.download.started").arg(p->title(), name), 5000);
+				else if (state == QLatin1String("progress"))
+				{
+					const qlonglong total = e.value(QStringLiteral("total")).toVariant().toLongLong();
+					const qlonglong got = e.value(QStringLiteral("received")).toVariant().toLongLong();
+					statusBar()->showMessage(T(m_backend, "web.download.progress").arg(p->title(), name).arg(total > 0 ? int(got * 100 / total) : 0), 3000);
+				}
+				else if (state == QLatin1String("done"))
+				{
+					const bool opened = e.value(QStringLiteral("opened")).toBool();
+					const QString text = !error.isEmpty() ? T(m_backend, "web.download.open_failed").arg(p->title(), name, dir, error)
+					                     : opened      ? T(m_backend, "web.download.opened").arg(p->title(), name, dir)
+					                                   : T(m_backend, "web.download.done").arg(p->title(), name, dir);
+					statusBar()->showMessage(text, 15000);
+					// Wohin die Datei gekommen ist, soll stehen bleiben (Hinweiszeile), nicht nur kurz erscheinen.
+					p->setNotice(text);
+					updateNotice();
+				}
+				else if (state == QLatin1String("failed"))
+				{
+					const QString text = T(m_backend, "web.download.failed").arg(p->title(), name, error);
+					statusBar()->showMessage(text, 15000);
+					p->setNotice(text);
+					updateNotice();
+				}
+			}
 			else if (t == QLatin1String("tree_changed"))
 				reloadTree();
 			else if (t == QLatin1String("unlocked"))

@@ -462,6 +462,8 @@ impl Worker {
                 });
             }
             WebCommand::Focus { on } => self.focus(on),
+            // Einbetten, Bereich, Sichtbarkeit und Tastenliste gibt es nur unter Windows (WebView2 als Kindfenster).
+            WebCommand::Embed { .. } | WebCommand::Bounds { .. } | WebCommand::Visible { .. } | WebCommand::Keys { .. } => {}
             WebCommand::Edit { action } => self.schedule_edit(action),
             WebCommand::Menu { id, index, action } => {
                 if id == 0 {
