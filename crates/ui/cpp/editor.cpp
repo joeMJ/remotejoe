@@ -3644,6 +3644,8 @@ void CertCheckTab::fill(const QJsonArray& rows)
 			text = T("certcheck.state.unreachable").arg(detail);
 		else if (state == QLatin1String("saved"))
 			text = T("certcheck.state.saved");
+		else if (state == QLatin1String("valid"))
+			text = T("certcheck.state.valid");
 		else
 			text = T("certcheck.state.skipped").arg(detail);
 		const QStringList cells = { o.value(QStringLiteral("name")).toString(), o.value(QStringLiteral("protocol")).toString().toUpper(),
@@ -3668,7 +3670,7 @@ void CertCheckTab::fill(const QJsonArray& rows)
 	m_accept->setText(T("certcheck.accept.n").arg(fresh));
 	m_state->setText(T("certcheck.summary")
 	                   .arg(fresh)
-	                   .arg(count.value(QStringLiteral("known")) + count.value(QStringLiteral("saved")))
+	                   .arg(count.value(QStringLiteral("known")) + count.value(QStringLiteral("saved")) + count.value(QStringLiteral("valid")))
 	                   .arg(count.value(QStringLiteral("changed")))
 	                   .arg(count.value(QStringLiteral("unreachable")) + count.value(QStringLiteral("skipped"))));
 }
