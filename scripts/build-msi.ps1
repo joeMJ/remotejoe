@@ -15,7 +15,8 @@
     Paketordner aus dem Bau (Vorgabe: target\release\remotejoe-paket).
 
 .PARAMETER WixDir
-    Ordner mit candle.exe und light.exe (Vorgabe: Umgebungsvariable WIX bzw. deren bin, sonst C:\Program Files (x86)\WiX Toolset v3.14\bin).
+    Ordner mit candle.exe und light.exe (Vorgabe: Umgebungsvariable WIX bzw. deren bin, sonst
+    C:\Program Files (x86)\WiX Toolset v3.14\bin).
 
 .PARAMETER Thumbprint
     Fingerabdruck des Signaturzertifikats in Cert:\CurrentUser\My (mit privatem Schlüssel).

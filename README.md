@@ -357,7 +357,7 @@ Daraus baut `scripts/build-msi.ps1` mit WiX 3.14 die signierte MSI unter `target
 (Beschreibung: [`packaging/windows/remotejoe.wxs`](packaging/windows/remotejoe.wxs)):
 
 ```powershell
-.\scripts\build-msi.ps1 -WixDir C:\Program Files (x86)\WiX Toolset v3.14\bin
+.\scripts\build-msi.ps1 -WixDir "C:\Program Files (x86)\WiX Toolset v3.14\bin"
 ```
 
 ## Dokumentation
