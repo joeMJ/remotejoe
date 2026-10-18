@@ -1,23 +1,41 @@
+<p align="center">
+  <img src="assets/logo/remotejoe-512.png" alt="remotejoe" width="220">
+</p>
+
 # remotejoe
 
 > **Verbindungsmanager für Ubuntu und Windows – RDP, SSH, VNC, Web, PowerShell, Proxmox VE und Hyper-V in einem Fenster, mit KeePass-Schlüsseldatenbank**
+
+remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
+
+- **Robust:** Jede Sitzung läuft in einem eigenen, überwachten Prozess mit eigener Speichergrenze.
+  Stürzt eine Verbindung ab oder hängt sie, bleiben das Hauptfenster und alle anderen Sitzungen
+  unberührt. Nach Standby oder Netzabbruch baut remotejoe die Verbindungen selbst wieder auf, Tunnel zuerst.
+- **Extrem schnell, schlanker Quelltext:** Rust und natives Qt 6 – kein Electron, keine
+  Laufzeitumgebung. Das Hauptfenster steht im Testlauf nach rund 150 ms, mit über 500 Einträgen im Baum.
+- **Kompakt:** Im Platzsparmodus (F10) wandern die Tabs in die Titelzeile, das Menü hinter einen
+  Knopf, und der Baum lässt sich einklappen (F9) – fast die ganze Fensterfläche gehört der Sitzung.
 
 > [!WARNING]
 > **Privates Hobbyprojekt – nicht gepflegt / unmaintained.**
 > Dieses Repository ist für meinen eigenen Gebrauch gedacht und wird nur aus Bequemlichkeit öffentlich bereitgestellt.
 >
-> * **Keine Unterstützung:** Issues und Pull Requests werden nicht bearbeitet, Feature-Wünsche nicht umgesetzt. Bitte keine Issues eröffnen.
+> * **Keine Unterstützung zugesagt:** Pull Requests werden nicht bearbeitet, Feature-Wünsche nicht zugesagt. Fehler und Wünsche können als [Issue](https://github.com/joeMJ/remotejoe/issues) gemeldet werden – es kann aber dauern, bis ein Issue bearbeitet wird.
 > * **Keine Garantie:** Bereitstellung „wie besehen“, ohne jede Gewährleistung und Haftung. Nutzung auf eigenes Risiko.
 > * **Eigene Umgebung:** Entwickelt und getestet nur auf meinen eigenen Ubuntu-Rechnern (zuletzt 26.04). Auf anderen Systemen kann es fehlschlagen. Die Windows-Fassung ist neu und bisher nur auf einer Windows-10-VM erprobt.
 > * **Zugangsdaten & Netzwerk:** Das Programm läuft mit den Rechten deines Benutzerkontos, öffnet Verbindungen zu den Zielen, die du einträgst, und verwaltet Zugangsdaten in einer KeePass-Datei (KDBX). Für die Update-Prüfung ruft es die Veröffentlichungen dieses Repositorys auf GitHub ab. **Lies den Code, bevor du ihn installierst.**
-> * **Keine Updates zugesichert:** Es kann jederzeit ohne Ankündigung Änderungen, Brüche oder die Löschung des Repos geben. Gern selbst forken und anpassen.
+> * **Keine Updates zugesichert:** Es kann jederzeit ohne Ankündigung Änderungen, Brüche oder die Löschung des Repos geben.
 >
-> *Private hobby project, unmaintained, provided as-is. No support, no issues, no warranty. Fork it if you like.*
+> *Private hobby project, unmaintained, provided as-is. No guaranteed support, no warranty. Issues are welcome, but it may take a while until they are handled.*
 
 <p align="center">
   <img src="docs/screenshots/hauptfenster-hell.png" alt="Hauptfenster: Baum mit Ordnern und Zielen links, Terminal-Sitzung im Tab rechts" width="760">
   <br>
   <em>Hauptfenster (helles Farbschema, Demo-Daten)</em>
+  <br><br>
+  <img src="docs/screenshots/hauptfenster-dunkel.png" alt="Hauptfenster im dunklen Farbschema" width="760">
+  <br>
+  <em>Hauptfenster (dunkles Farbschema, Demo-Daten)</em>
 </p>
 
 ---
@@ -245,7 +263,7 @@ heruntergeladenen Dateien kann trotzdem erscheinen; sie hängt nicht am Zertifik
   Tab-Titel, Zwischenablage über das Hauptprogramm, eigenes Browserprofil je Ziel und
   automatische Formular-Anmeldung mit „Felder erkennen“ (auch bei Seiten, die ihr Formular erst nach
   dem Laden aufbauen). Anmeldung und Seitenwechsel werden je Ziel mit Zeiten protokolliert
-  (`protokoll.log` im Profilordner, ohne Eingaben). Unter Windows noch nicht verfügbar.
+  (`protokoll.log` im Profilordner, ohne Eingaben). Unter Windows über WebView2 (Microsoft Edge).
 - **PowerShell-Remoting** (WinRM oder SSH) über ein lokal installiertes PowerShell 7.
 - **Proxmox VE und Hyper-V:** Ziele im Baum aufklappen, Gäste starten, herunterfahren, neu
   starten, ausschalten und deren Konsole öffnen.
