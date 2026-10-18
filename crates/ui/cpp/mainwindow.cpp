@@ -8,12 +8,14 @@
 #include "editor.h"
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 #include "views.h"
+#include <cstdio>
 
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QSettings>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QElapsedTimer>
 #include <QtGui/QAction>
 #include <QtGui/QActionGroup>
 #include <QtCore/QCryptographicHash>
@@ -786,7 +788,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_filterTimer.setSingleShot(true);
 	m_filterTimer.setInterval(150);
 	connect(m_search, &QLineEdit::textChanged, this, [this] { m_filterTimer.start(); });
-	connect(&m_filterTimer, &QTimer::timeout, this, &MainWindow::reloadTree);
+	connect(&m_filterTimer, &QTimer::timeout, this, &MainWindow::applySearch);
 	connect(m_tabs, &QTabWidget::tabCloseRequested, this, [this](int i) {
 		if (auto* st = qobject_cast<SnmpTab*>(m_tabs->widget(i)))
 		{
@@ -1207,7 +1209,7 @@ void MainWindow::reloadTree()
 	// Aufgeklappte Ordner, Auswahl und Bildlauf merken, damit eine Änderung den Baum nicht zuklappt.
 	// Während einer Suche klappt alles auf; dann bleibt der zuletzt bekannte Zustand ohne Suche erhalten.
 	const bool searching = !m_search->text().isEmpty();
-	if (!searching && m_treeLoaded)
+	if (!searching && m_treeLoaded && !m_searchApplied)
 	{
 		m_expandedIds.clear();
 		std::function<void(const QModelIndex&)> collect = [&](const QModelIndex& parent) {
@@ -1228,11 +1230,16 @@ void MainWindow::reloadTree()
 	const QString current = m_tree->currentIndex().isValid() ? m_tree->currentIndex().data(RoleId).toString() : QString();
 	const int scroll = m_tree->verticalScrollBar()->value();
 
-	const QString json = m_backend->treeJson(m_search->text());
+	// Immer den ganzen Baum aufbauen; eine Suche blendet danach nur Zeilen aus (applySearch).
+	const QString json = m_backend->treeJson(QString());
+	m_tree->setUpdatesEnabled(false);
 	m_model->clear();
 	addNodes(m_model->invisibleRootItem(), QJsonDocument::fromJson(json.toUtf8()).array());
+	m_searchApplied = false;
 	if (searching)
-		m_tree->expandAll();
+	{
+		// Aufklappen und Ausblenden übernimmt applySearch.
+	}
 	else if (m_treeLoaded)
 	{
 		std::function<void(const QModelIndex&)> restore = [&](const QModelIndex& parent) {
@@ -1271,7 +1278,76 @@ void MainWindow::reloadTree()
 		if (const QModelIndex i = find(QModelIndex()); i.isValid())
 			m_tree->setCurrentIndex(i);
 	}
-	m_tree->verticalScrollBar()->setValue(scroll);
+	m_tree->setUpdatesEnabled(true);
+	if (searching)
+		applySearch();
+	else
+		m_tree->verticalScrollBar()->setValue(scroll);
+	updateEmptyHint();
+}
+
+void MainWindow::applySearch()
+{
+	QElapsedTimer t;
+	t.start();
+	const QString text = m_search->text();
+	if (text.isEmpty())
+	{
+		// Suche verlassen: einmal neu aufbauen, damit Aufklappzustand und Makro-Fach zurückkommen.
+		if (m_searchApplied)
+		{
+			m_searchApplied = false;
+			reloadTree();
+		}
+		return;
+	}
+	if (!m_searchApplied && m_treeLoaded)
+	{
+		// Zustand ohne Suche merken (wie in reloadTree).
+		m_expandedIds.clear();
+		std::function<void(const QModelIndex&)> collect = [&](const QModelIndex& parent) {
+			for (int r = 0; r < m_model->rowCount(parent); ++r)
+			{
+				const QModelIndex i = m_model->index(r, 0, parent);
+				if (m_tree->isExpanded(i) && !i.data(RoleId).toString().isEmpty())
+					m_expandedIds.insert(i.data(RoleId).toString());
+				collect(i);
+			}
+		};
+		collect(QModelIndex());
+	}
+	// Treffer samt übergeordneter Ordner liefert Rust; hier werden nur Zeilen aus- und eingeblendet.
+	QSet<QString> keep;
+	std::function<void(const QJsonArray&)> ids = [&](const QJsonArray& nodes) {
+		for (const QJsonValue& v : nodes)
+		{
+			const QJsonObject n = v.toObject();
+			keep.insert(n.value(QStringLiteral("id")).toString());
+			ids(n.value(QStringLiteral("children")).toArray());
+		}
+	};
+	ids(QJsonDocument::fromJson(m_backend->treeJson(text).toUtf8()).array());
+	const qint64 rustMs = t.elapsed();
+	m_tree->setUpdatesEnabled(false);
+	std::function<void(const QModelIndex&)> apply = [&](const QModelIndex& parent) {
+		for (int r = 0; r < m_model->rowCount(parent); ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			const QString id = i.data(RoleId).toString();
+			// Einträge ohne Kennung (Gäste, Platzhalter) folgen ihrem Hypervisor; das Makro-Fach nie.
+			const bool hide = i.data(RoleMacro).toInt() == 1 || (!id.isEmpty() && !keep.contains(id));
+			m_tree->setRowHidden(r, parent, hide);
+			if (!hide && !i.data(RoleGuest).isValid())
+				apply(i);
+		}
+	};
+	apply(QModelIndex());
+	m_tree->expandAll();
+	m_tree->setUpdatesEnabled(true);
+	m_searchApplied = true;
+	if (qEnvironmentVariableIsSet("RJ_TIMING"))
+		std::fprintf(stderr, "Suche „%s“: Treffer %lld ms, gesamt %lld ms, %lld Einträge\n", qPrintable(text), static_cast<long long>(rustMs),
+		             static_cast<long long>(t.elapsed()), static_cast<long long>(keep.size()));
 	updateEmptyHint();
 }
 

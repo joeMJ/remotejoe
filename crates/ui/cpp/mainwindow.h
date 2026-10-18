@@ -125,6 +125,8 @@ private:
 	void updateNotice();
 	void screenLayoutChanged();
 	void reloadTree();
+	/// Suchtext anwenden, ohne den Baum neu aufzubauen: Nicht passende Zeilen werden ausgeblendet.
+	void applySearch();
 	void poll();
 	void rebuildTabs();
 	QWidget* buildTabContent(const QJsonObject& tab);
@@ -200,6 +202,8 @@ private:
 	QLineEdit* m_search;
 	bool m_edgeOverride = false;
 	bool m_treeLoaded = false;
+	/// Suche aktiv (Zeilen ausgeblendet); beim Verlassen wird der Baum einmal neu aufgebaut.
+	bool m_searchApplied = false;
 	QSet<QString> m_expandedIds;
 	QTimer* m_clipTimer = nullptr;
 	QByteArray m_clipHash;
