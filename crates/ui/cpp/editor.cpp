@@ -656,11 +656,11 @@ QWidget* PropertiesTab::pageConnection()
 			m_akTrigger->setCurrentIndex(qMax(0, m_akTrigger->findData(ak.value(QStringLiteral("trigger")).toString(QStringLiteral("quiet")))));
 			track(m_akTrigger, QStringLiteral("options"));
 			f->addRow(rjText(m_backend, "edit.autokeys.trigger"), m_akTrigger);
-			m_akWait = new QLineEdit(QString::number(ak.value(QStringLiteral("wait_ms")).toInt(1000)), w);
+			m_akWait = new QLineEdit(QString::number(ak.value(QStringLiteral("wait_ms")).toInt(3000)), w);
 			m_akWait->setAccessibleName(rjText(m_backend, "edit.autokeys.wait"));
 			track(m_akWait, QStringLiteral("options"));
 			f->addRow(rjText(m_backend, "edit.autokeys.wait"), m_akWait);
-			m_akMax = new QLineEdit(QString::number(ak.value(QStringLiteral("max_ms")).toInt(10000)), w);
+			m_akMax = new QLineEdit(QString::number(ak.value(QStringLiteral("max_ms")).toInt(15000)), w);
 			m_akMax->setAccessibleName(rjText(m_backend, "edit.autokeys.max"));
 			track(m_akMax, QStringLiteral("options"));
 			f->addRow(rjText(m_backend, "edit.autokeys.max"), m_akMax);

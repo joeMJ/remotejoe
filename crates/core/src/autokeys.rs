@@ -68,7 +68,7 @@ pub struct AutoKeys {
 
 impl Default for AutoKeys {
     fn default() -> Self {
-        AutoKeys { enabled: false, script: String::new(), trigger: AutoTrigger::Quiet, wait_ms: 1000, max_ms: 10_000, on_reconnect: AutoReconnect::Always }
+        AutoKeys { enabled: false, script: String::new(), trigger: AutoTrigger::Quiet, wait_ms: 3000, max_ms: 15_000, on_reconnect: AutoReconnect::Always }
     }
 }
 
@@ -511,7 +511,7 @@ mod tests {
     #[test]
     fn options_roundtrip_old_files_and_defaults() {
         let a: AutoKeys = serde_json::from_str(r#"{"enabled":true,"script":"Taste Enter"}"#).unwrap();
-        assert_eq!((a.trigger, a.wait_ms, a.max_ms, a.on_reconnect), (AutoTrigger::Quiet, 1000, 10_000, AutoReconnect::Always));
+        assert_eq!((a.trigger, a.wait_ms, a.max_ms, a.on_reconnect), (AutoTrigger::Quiet, 3000, 15_000, AutoReconnect::Always));
         let j = serde_json::to_string(&AutoKeys { trigger: AutoTrigger::Delay, on_reconnect: AutoReconnect::ManualOnly, ..a }).unwrap();
         assert!(j.contains("\"delay\"") && j.contains("\"manual_only\""), "{j}");
     }
