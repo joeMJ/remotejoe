@@ -239,11 +239,13 @@ impl Supervisor {
             (parent, child_end)
         };
         // Angehalten starten, damit der Worker erst im Job-Objekt (Speichergrenze,
-        // kein Fehlerdialog) zu laufen beginnt.
+        // kein Fehlerdialog) zu laufen beginnt; ohne eigenes Konsolenfenster (das
+        // Hauptprogramm ist ein Fensterprogramm, Worker sind Konsolenprogramme).
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
+            use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+            cmd.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
         }
         let mut child = cmd.spawn()?;
         #[cfg(windows)]

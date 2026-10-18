@@ -283,8 +283,11 @@ pub fn system_prefers_dark() -> bool {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: ohne aufblitzendes Konsolenfenster (das Hauptprogramm hat keine Konsole).
         let out = std::process::Command::new("reg")
             .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "/v", "AppsUseLightTheme"])
+            .creation_flags(0x0800_0000)
             .output();
         if let Ok(o) = out {
             return String::from_utf8_lossy(&o.stdout).contains("0x0");
