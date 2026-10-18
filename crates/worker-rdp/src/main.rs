@@ -213,7 +213,7 @@ mod imp {
                     return false;
                 }
                 ToWorker::Ping => self.send(FromWorker::Pong),
-                ToWorker::Answer { .. } | ToWorker::Custom(_) => {}
+                ToWorker::Answer { .. } | ToWorker::Custom(_) | ToWorker::Term(_) => {}
                 ToWorker::Input(ev) => {
                     let Some(s) = self.session.as_mut() else { return true };
                     match ev {

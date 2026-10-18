@@ -26,7 +26,7 @@ anderen Sitzungen unberührt.
 | `kdbx` | KDBX lesen/schreiben (KDBX 4), Zugangsdaten auflösen, Index-Ablage in der KDBX oder als `.rjindex`, Zusammenführen bei fremder Änderung |
 | `ipc` | Nachrichten Hauptprozess ⇄ Worker, Rahmung, geteilter Bildspeicher |
 | `supervisor` | Worker starten, Herzschlag, Absturzerkennung, Neustart mit Rückstau, Speichergrenze |
-| `worker-ssh` | SSH-Client (russh), Terminal (alacritty_terminal), Host-Schlüssel, Makros |
+| `worker-ssh` | SSH-Client (russh), Terminal-Zustandsmaschine im Worker (alacritty_terminal, Schnappschüsse), Host-Schlüssel, Makros |
 | `worker-rdp` | RDP über FreeRDP 3 (eigene C-Hülle + bindgen), Zwischenablage, Tastaturbelegung |
 | `worker-vnc` | VNC/RFB (Raw, CopyRect, Hextile, ZRLE), VeNCrypt mit TLS, erweiterte Zwischenablage |
 | `worker-web` | WebKitGTK in einem `GtkOffscreenWindow` (kein sichtbares Fenster), Bild in den geteilten Speicher, Eingaben als GDK-Ereignisse, Formular-Anmeldung, Profil je Ziel, Zertifikatsrückfrage |
@@ -72,11 +72,14 @@ anderen Sitzungen unberührt.
 - Rahmen: Länge (u32, little endian) ‖ Kennung (u32) ‖ Nutzlast im Format `postcard`.
   Höchstens 64 MiB je Rahmen.
 - Nachrichten an den Worker (`ToWorker`): `Connect`, `Credentials`, `Answer` (Antwort auf eine
-  Rückfrage), `Input` (Tasten, Text, Maus), `Resize`, `Clipboard`, `Ping`, `Shutdown`, `Custom`.
+  Rückfrage), `Input` (Tasten, Text, Maus), `Resize`, `Clipboard`, `Ping`, `Shutdown`, `Custom`,
+  `Term` (Befehle an das Terminal im SSH-Worker).
 - Nachrichten vom Worker (`FromWorker`): `Hello`, `Heartbeat`, `State`, `SharedFrame`, `Frame`
-  (geänderter Bereich), `Output` (Terminalbytes), `Clipboard`, `Question` (Sicherheitsabfrage
-  mit `SecurityInfo`: Art, Host, Port, Schlüsseltyp, vollständiger und bisheriger
-  Fingerabdruck), `Notice`, `Log`, `Pong`, `Custom`. Protokollversion 3.
+  (geänderter Bereich), `Output` (Terminalrohbytes, nur mit Abgriff für Makros), `Clipboard`,
+  `Question` (Sicherheitsabfrage mit `SecurityInfo`: Art, Host, Port, Schlüsseltyp,
+  vollständiger und bisheriger Fingerabdruck), `Notice`, `Log`, `Pong`, `Custom`, `Term`
+  (Schnappschuss und Ereignisse des Terminals). Neue Varianten stehen immer am Ende der
+  Aufzählungen, weil `postcard` Varianten nach ihrer Reihenfolge kodiert. Protokollversion 4.
 - Bilddaten (RDP, VNC, Web): anonymer geteilter Speicher ohne Dateinamen, BGRA mit 32 Bit je
   Bildpunkt; über den Kanal laufen nur die geänderten Rechtecke und eine laufende Nummer.
   Linux: `memfd` mit Versiegelung gegen Verkleinern und Vergrößern; der Hauptprozess prüft
@@ -92,6 +95,47 @@ anderen Sitzungen unberührt.
   eingespeistes Skript im Web-Worker).
 - Protokolle (`Log`) enthalten nur Fehler und Verbindungsereignisse, nie Kennwörter,
   Tastatureingaben oder Inhalte der Zwischenablage.
+
+## Terminal (SSH)
+
+Die Terminal-Zustandsmaschine (`alacritty_terminal`, `worker-ssh/src/terminal.rs`) läuft im
+SSH-Worker, nicht im Hauptprozess. Ein Absturz oder Hänger des Emulators durch bösartige
+Terminalausgabe trifft so nur diese eine Sitzung (Zustand „abgestürzt“, Neuverbinden startet
+einen neuen Worker); der Hauptprozess verarbeitet keine Terminalbytes des Ziels mehr.
+
+- **Worker** (`host.rs`, `TermHost`): füttert das Terminal mit der Ausgabe des Ziels, beantwortet
+  Anfragen des Terminals (z. B. Cursorposition) selbst am Ziel, bildet beim Einfügen die Bytes
+  (Zeilenenden, Klammerung `ESC[200~ … ESC[201~` bei gesetztem `?2004h`) und führt die Befehle
+  der Oberfläche aus (`TermCmd`: Scrollen, Seite, ans Ende, Farbschema, Rücklaufgröße, Einfügen,
+  Antwort auf eine Leseanfrage, Abgriff). Er schickt **zusammengefasste Schnappschüsse**
+  (`TermMsg::Snapshot`): höchstens alle 33 ms und nur bei Änderung, sofort nach einem Befehl,
+  der die Anzeige ändert (Scrollen, Größe, Farben). Ereignisse (`TermMsg::Event`): Zwischenablage
+  setzen (OSC 52), Leseanfrage mit Kennung, Titel, Klingel; Fluten innerhalb eines Pakets werden
+  zusammengefasst.
+- **Schnappschuss** (`TermView`): je Zeile Läufe gleicher Darstellung (Text, Vordergrund,
+  Hintergrund, Kennzeichen), Größe, Cursor, Alt-Bildschirm, Rücklaufstand, Farben des Schemas;
+  dazu `grid` (je Zeile eine Spalte je Eintrag, damit die Oberfläche die Auswahl ohne Rückfrage
+  bilden kann) und `tail` (die letzten Zeilen für den Start eines Makros). Ein Schnappschuss
+  umfasst nur die sichtbaren Zeilen und bleibt auch bei 400 × 120 unter 1 MiB; übersteigt er
+  8 MiB, entfallen die Zellentexte.
+- **Oberfläche** (`ui/src/sessions.rs`): hält je SSH-Sitzung nur den zuletzt empfangenen
+  Schnappschuss (nach Prüfung von Maßen und Zeilenzahlen), baut daraus `TermSnapshot` für
+  `terminal_json` (Form und Feldnamen unverändert) und den Auswahltext mit
+  `selection_text_from_grid` (dasselbe Ergebnis wie `Terminal::select`). Eingaben, Scrollen,
+  Einfügen und Größenänderung gehen als `ToWorker::Term(..)` bzw. `Resize` an den Worker.
+- **Makros**: Die Engine liest Rohbytes. Dafür schaltet die Oberfläche beim Start eines Makros
+  `Tap(true)` und danach `Tap(false)`; nur dazwischen schickt der Worker zusätzlich
+  `FromWorker::Output`. Der Stand des Bildschirms beim Start kommt aus `tail`.
+- **Vorführsitzungen** (`open_demo_terminal`, Bildschirmfotos): haben keinen Worker und halten
+  ein lokales `Terminal`, das nie Bytes von einem Ziel bekommt.
+- **Schutz**: Mindestgröße 2 × 1 und Höchstgrößen für Spalten, Zeilen und Zellen; Begrenzung
+  kombinierender Zeichen je Zelle, der Titellänge und der Zeilen des Endes; ein Wächter beendet
+  den Worker, wenn eine Verarbeitung des Terminals länger als 10 s dauert (der Herzschlag läuft
+  in einem eigenen Faden und würde den Hänger nicht anzeigen). Der Speicher des Terminals zählt
+  nun zur Speichergrenze des Workers (1 GiB).
+- **Testbau**: Mit dem Merkmal `test-hooks` (nur als Entwicklungsabhängigkeit der Oberfläche,
+  nie im Auslieferungsbau) löst bestimmte Ausgabe eine Panik oder einen Hänger im Terminal des
+  Workers aus; die Isolationstests prüfen damit den Absturz einer einzelnen Sitzung.
 
 ## Oberfläche
 

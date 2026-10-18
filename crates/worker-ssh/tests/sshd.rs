@@ -379,6 +379,8 @@ fn worker_process_end_to_end() {
         matches!(m, FromWorker::State(SessionState::Connected))
     }));
     assert_eq!(questions, 1, "Host-Schlüssel wird abgefragt");
+    // Rohbytes gibt es nur mit Abgriff (Makro).
+    sup.send(id, &ToWorker::Term(TermCmd::Tap(true))).unwrap();
     sup.send(id, &ToWorker::Input(InputEvent::Bytes(b"echo RJ-$((20+3))\r".to_vec()))).unwrap();
     let mut out = Vec::new();
     assert!(wait(&mut sup, &mut |m, _| {
@@ -392,6 +394,114 @@ fn worker_process_end_to_end() {
     assert!(sup.is_running(id), "Worker bleibt nach Verbindungsabbruch am Leben");
     connect(&mut sup);
     assert!(wait(&mut sup, &mut |m, _| matches!(m, FromWorker::State(SessionState::Connected))), "Neu verbinden");
+    sup.shutdown();
+}
+
+/// Das Terminal im Worker: Schnappschüsse, Rücklauf, Einfügen mit Klammerung,
+/// Antworten auf Terminal-Anfragen und Ereignisse (echter sshd, echter Worker).
+#[test]
+fn worker_terminal_snapshots() {
+    use rj_ipc::*;
+    use rj_supervisor::*;
+    let _g = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(f) = fixture() else { return };
+    let mut sup = Supervisor::new();
+    let (id, _) = sup.spawn(WorkerSpec::new(env!("CARGO_BIN_EXE_rj-worker-ssh"))).unwrap();
+    sup.send(id, &ToWorker::Connect(ConnectRequest {
+        host: "127.0.0.1".into(),
+        port: f.sshd.port,
+        width: 60,
+        height: 10,
+        options_json: serde_json::json!({ "known_hosts": f.known.path() }).to_string(),
+        connect_timeout_secs: 15,
+        keepalive_secs: 30,
+    }))
+    .unwrap();
+    sup.send(id, &ToWorker::Credentials(CredentialPayload { username: USER.into(), domain: None, password: SecretBytes(PASSWORD.as_bytes().to_vec()), private_key: None })).unwrap();
+
+    /// Nachrichten einsammeln, bis `pred` auf den neuesten Schnappschuss und die Ereignisse zutrifft.
+    struct Seen {
+        view: Option<TermView>,
+        notices: Vec<TermNotice>,
+        snapshots: u32,
+        raw: Vec<u8>,
+    }
+    let mut seen = Seen { view: None, notices: Vec::new(), snapshots: 0, raw: Vec::new() };
+    let wait = |sup: &mut Supervisor, seen: &mut Seen, what: &str, pred: &dyn Fn(&Seen) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            for ev in sup.tick(Duration::from_millis(50)) {
+                if let SupervisorEvent::Message { msg, .. } = ev {
+                    match msg {
+                        FromWorker::Question { id: q, .. } => sup.send(id, &ToWorker::Answer { question: q, accept: true }).unwrap(),
+                        FromWorker::Term(TermMsg::Snapshot(v)) => {
+                            seen.snapshots += 1;
+                            seen.view = Some(v);
+                        }
+                        FromWorker::Term(TermMsg::Event(e)) => seen.notices.push(e),
+                        FromWorker::Output(d) => seen.raw.extend_from_slice(&d),
+                        _ => {}
+                    }
+                }
+            }
+            if pred(seen) {
+                return;
+            }
+        }
+        panic!("{what}: Zeitüberschreitung; zuletzt {:?}", seen.view.as_ref().map(|v| &v.tail));
+    };
+    let tail_has = |s: &Seen, needle: &str| s.view.as_ref().is_some_and(|v| v.tail.iter().any(|l| l.contains(needle)));
+
+    wait(&mut sup, &mut seen, "erster Schnappschuss", &|s| s.view.is_some());
+    let v = seen.view.clone().unwrap();
+    assert_eq!((v.cols, v.rows), (60, 10));
+    assert_eq!(v.grid.len(), 10);
+    // Erst wenn die Eingabeaufforderung steht, ist die Shell offen.
+    wait(&mut sup, &mut seen, "Eingabeaufforderung", &|s| tail_has(s, "$"));
+
+    // Ausgabe erscheint im Schnappschuss (Zeile und Zellen), der Rücklauf wächst.
+    sup.send(id, &ToWorker::Input(InputEvent::Bytes(b"printf 'RJ-%s \\033[1;31mrot\\033[0m \\346\\227\\245\\n' $((20+3)); seq 1 40\r".to_vec()))).unwrap();
+    wait(&mut sup, &mut seen, "Ausgabe", &|s| s.view.as_ref().is_some_and(|v| v.tail.iter().any(|l| l == "40")));
+    let v = seen.view.clone().unwrap();
+    assert!(v.history > 0, "Rücklauf wächst");
+    assert!(seen.raw.is_empty(), "ohne Abgriff gehen keine Rohbytes an die Oberfläche");
+
+    // Zurückblättern ändert die Anzeige sofort; der Text der Auswahl kommt aus den Zellen.
+    sup.send(id, &ToWorker::Term(TermCmd::Scroll(100))).unwrap();
+    wait(&mut sup, &mut seen, "Scrollen", &|s| s.view.as_ref().is_some_and(|v| v.scroll_offset > 0));
+    let v = seen.view.clone().unwrap();
+    assert!(!v.cursor_visible, "Cursor ist beim Zurückblättern verborgen");
+    sup.send(id, &ToWorker::Term(TermCmd::ScrollBottom)).unwrap();
+    wait(&mut sup, &mut seen, "Ende", &|s| s.view.as_ref().is_some_and(|v| v.scroll_offset == 0));
+
+    // Terminal-Anfrage: die Antwort schreibt der Worker selbst ans Ziel (die Zeilenschaltung des Ziels zeigt sie an).
+    sup.send(id, &ToWorker::Input(InputEvent::Bytes(b"clear; printf '\\033[6n'; sleep 3\r".to_vec()))).unwrap();
+    wait(&mut sup, &mut seen, "Cursorposition", &|s| tail_has(s, "^[[1;1R") || tail_has(s, "^[[2;1R"));
+
+    wait(&mut sup, &mut seen, "Ende von sleep", &|s| s.view.as_ref().is_some_and(|v| v.tail.iter().any(|l| l.contains("$"))));
+
+    // Titel und Klingel kommen als Ereignisse.
+    sup.send(id, &ToWorker::Input(InputEvent::Bytes(b"\x15printf '\\033]0;Mein Titel\\007\\007'\r".to_vec()))).unwrap();
+    wait(&mut sup, &mut seen, "Ereignisse", &|s| s.notices.contains(&TermNotice::Bell) && s.notices.contains(&TermNotice::Title("Mein Titel".into())));
+    // Einfügen mit Klammerung, sobald die Anwendung ?2004h gesetzt hat; der Worker bildet die Bytes.
+    sup.send(id, &ToWorker::Input(InputEvent::Bytes(b"clear; printf '\\033[?2004h'; echo BEREIT-$((1+1)); cat -v\r".to_vec()))).unwrap();
+    wait(&mut sup, &mut seen, "Anwendung bereit", &|s| tail_has(s, "BEREIT-2"));
+    sup.send(id, &ToWorker::Term(TermCmd::Paste("hi".into()))).unwrap();
+    wait(&mut sup, &mut seen, "Einfügen", &|s| tail_has(s, "^[[200~hi^[[201~"));
+
+    // Abgriff für Makros: nur solange er eingeschaltet ist, kommen Rohbytes. (`cat -v` läuft noch: Strg-C beendet es.)
+    sup.send(id, &ToWorker::Input(InputEvent::Bytes(b"\x03".to_vec()))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    sup.send(id, &ToWorker::Term(TermCmd::Tap(true))).unwrap();
+    sup.send(id, &ToWorker::Input(InputEvent::Bytes(b"\x15echo TAP-$((1+1))\r".to_vec()))).unwrap();
+    wait(&mut sup, &mut seen, "Abgriff", &|s| String::from_utf8_lossy(&s.raw).contains("TAP-2"));
+    sup.send(id, &ToWorker::Term(TermCmd::Tap(false))).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    wait(&mut sup, &mut seen, "Nachlauf abholen", &|_| true);
+    seen.raw.clear();
+    sup.send(id, &ToWorker::Input(InputEvent::Bytes(b"echo OHNE-$((1+1))\r".to_vec()))).unwrap();
+    wait(&mut sup, &mut seen, "ohne Abgriff", &|s| s.view.as_ref().is_some_and(|v| v.tail.iter().any(|l| l == "OHNE-2")));
+    assert!(seen.raw.is_empty());
     sup.shutdown();
 }
 

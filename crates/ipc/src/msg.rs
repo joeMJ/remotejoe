@@ -104,6 +104,8 @@ pub enum ToWorker {
     Shutdown,
     /// Worker-spezifische Erweiterung.
     Custom(Vec<u8>),
+    /// Befehl an die Terminal-Zustandsmaschine des Workers (nur SSH).
+    Term(TermCmd),
 }
 
 /// Zustand einer Sitzung.
@@ -154,4 +156,211 @@ pub enum FromWorker {
     Log(String),
     Pong,
     Custom(Vec<u8>),
+    /// Schnappschuss oder Ereignis der Terminal-Zustandsmaschine (nur SSH).
+    Term(TermMsg),
+}
+
+/// Farbe als (Rot, Grün, Blau).
+pub type Rgb3 = [u8; 3];
+
+/// Farben des Terminals: Vordergrund, Hintergrund, Cursor und die 16 ANSI-Farben.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TermScheme {
+    pub fg: Rgb3,
+    pub bg: Rgb3,
+    pub cursor: Rgb3,
+    pub ansi: [Rgb3; 16],
+}
+
+/// Regel für OSC 52 (Zwischenablage durch das Ziel).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Osc52Rule {
+    pub allow_write: bool,
+    pub allow_read_with_prompt: bool,
+}
+
+/// Befehle an das Terminal im Worker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TermCmd {
+    /// Anzeige um n Zeilen zurück (positiv) oder vor (negativ).
+    Scroll(i32),
+    ScrollPage { back: bool },
+    ScrollBottom,
+    SetScheme(TermScheme),
+    /// Größe des Rücklaufs in Zeilen.
+    SetHistory(u32),
+    /// Rohbytes der Ausgabe zusätzlich als `FromWorker::Output` senden (Makro-Abgriff).
+    Tap(bool),
+    /// Text einfügen; der Worker bildet die Bytes (Zeilenenden, Klammerung) und sendet sie ans Ziel.
+    Paste(String),
+    SetOsc52(Osc52Rule),
+    /// Antwort auf eine Leseanfrage (OSC 52); `None`: abgelehnt.
+    ClipboardAnswer { id: u32, text: Option<String> },
+}
+
+/// Nachrichten des Terminals im Worker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TermMsg {
+    Snapshot(TermView),
+    Event(TermNotice),
+}
+
+/// Ereignisse des Terminals für die Oberfläche.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TermNotice {
+    /// Ziel setzt die Zwischenablage (OSC 52).
+    ClipboardStore(String),
+    /// Ziel möchte die Zwischenablage lesen; Antwort mit `TermCmd::ClipboardAnswer`.
+    ClipboardLoad { id: u32 },
+    Title(String),
+    Bell,
+}
+
+/// Lauf gleicher Darstellung innerhalb einer Zeile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TermRun {
+    pub text: String,
+    pub fg: Rgb3,
+    pub bg: Rgb3,
+    /// Bit 0 fett, 1 kursiv, 2 unterstrichen, 3 doppelt breit.
+    pub flags: u8,
+}
+
+/// Eine Bildschirmzeile für die Textauswahl (eine Spalte je Eintrag).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GridRow {
+    /// Zeichen samt kombinierenden Zeichen; Platzhalter hinter doppelt breiten
+    /// Zeichen sind leer.
+    pub cells: Vec<String>,
+    /// Belegte Länge (ohne Leerzeichen am Ende; bei umbrochener Zeile die volle Breite).
+    pub len: u32,
+    /// Die Zeile ist am Ende umbrochen (die nächste setzt sie fort).
+    pub wrapped: bool,
+    /// Die letzte Spalte ist der Platzhalter eines doppelt breiten Zeichens, das in der nächsten Zeile steht.
+    pub lead_spacer: bool,
+    /// Für diesen Fall das Zeichen, das die Auswahl am Zeilenende anhängt.
+    pub lead_prev: Option<char>,
+}
+
+/// Schnappschuss des Terminals: alles, was die Oberfläche zum Zeichnen,
+/// Auswählen und für den Makrostart braucht.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TermView {
+    pub cols: u32,
+    pub rows: u32,
+    pub cursor: (u32, u32),
+    pub cursor_visible: bool,
+    pub alt_screen: bool,
+    pub scroll_offset: u32,
+    pub history: u32,
+    pub bg: Rgb3,
+    pub fg: Rgb3,
+    pub cursor_color: Rgb3,
+    /// Je Zeile Läufe gleicher Darstellung.
+    pub lines: Vec<Vec<TermRun>>,
+    /// Je Zeile die Zellen für die Textauswahl.
+    pub grid: Vec<GridRow>,
+    /// Die letzten Zeilen bis zur letzten nichtleeren (höchstens 5, ohne Leerraum am Ende), für den Makrostart.
+    pub tail: Vec<String>,
+}
+
+impl TermView {
+    /// Ungefähre Größe in Bytes bei der Übertragung (ohne die Kodierung auszuführen).
+    pub fn approx_size(&self) -> usize {
+        let runs: usize = self.lines.iter().flatten().map(|r| r.text.len() + 9).sum();
+        let grid: usize = self.grid.iter().map(|r| r.cells.iter().map(|c| c.len() + 1).sum::<usize>() + 12).sum();
+        let tail: usize = self.tail.iter().map(|l| l.len() + 2).sum();
+        96 + runs + grid + tail
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn enc<T: Serialize>(v: &T) -> Vec<u8> {
+        postcard::to_stdvec(v).unwrap()
+    }
+
+    fn round<T: Serialize + serde::de::DeserializeOwned + PartialEq + fmt::Debug>(v: T) {
+        let b = enc(&v);
+        assert_eq!(postcard::from_bytes::<T>(&b).unwrap(), v);
+    }
+
+    fn scheme() -> TermScheme {
+        let mut ansi = [[0u8; 3]; 16];
+        for (i, c) in ansi.iter_mut().enumerate() {
+            *c = [i as u8, 255 - i as u8, 7];
+        }
+        TermScheme { fg: [1, 2, 3], bg: [4, 5, 6], cursor: [7, 8, 9], ansi }
+    }
+
+    fn view() -> TermView {
+        TermView {
+            cols: 3,
+            rows: 2,
+            cursor: (1, 2),
+            cursor_visible: true,
+            alt_screen: false,
+            scroll_offset: 4,
+            history: 5,
+            bg: [0, 0, 0],
+            fg: [229, 229, 229],
+            cursor_color: [1, 1, 1],
+            lines: vec![vec![TermRun { text: "日本".into(), fg: [1, 2, 3], bg: [4, 5, 6], flags: 8 }], vec![]],
+            grid: vec![
+                GridRow { cells: vec!["日".into(), String::new(), "a\u{308}".into()], len: 3, wrapped: true, lead_spacer: false, lead_prev: None },
+                GridRow { cells: vec![" ".into(); 3], len: 0, wrapped: false, lead_spacer: true, lead_prev: Some('x') },
+            ],
+            tail: vec!["rjtest@srv-01:~$".into()],
+        }
+    }
+
+    #[test]
+    fn new_messages_round_trip() {
+        for c in [
+            TermCmd::Scroll(-3),
+            TermCmd::ScrollPage { back: true },
+            TermCmd::ScrollBottom,
+            TermCmd::SetScheme(scheme()),
+            TermCmd::SetHistory(10_000),
+            TermCmd::Tap(true),
+            TermCmd::Paste("a\r\nb 日本".into()),
+            TermCmd::SetOsc52(Osc52Rule { allow_write: true, allow_read_with_prompt: false }),
+            TermCmd::ClipboardAnswer { id: 7, text: Some("ä".into()) },
+            TermCmd::ClipboardAnswer { id: 8, text: None },
+        ] {
+            round(ToWorker::Term(c));
+        }
+        for m in [
+            TermMsg::Snapshot(view()),
+            TermMsg::Event(TermNotice::ClipboardStore("Grüße".into())),
+            TermMsg::Event(TermNotice::ClipboardLoad { id: 3 }),
+            TermMsg::Event(TermNotice::Title("Titel".into())),
+            TermMsg::Event(TermNotice::Bell),
+        ] {
+            round(FromWorker::Term(m));
+        }
+    }
+
+    /// Postcard kodiert Varianten nach Reihenfolge: die alten behalten ihre Nummer,
+    /// die neuen hängen hinten an.
+    #[test]
+    fn old_messages_keep_their_encoding() {
+        assert_eq!(enc(&ToWorker::Answer { question: 1, accept: true }), [2, 1, 1]);
+        assert_eq!(enc(&ToWorker::Input(InputEvent::Bytes(vec![9]))), [3, 2, 1, 9]);
+        assert_eq!(enc(&ToWorker::Resize { width: 80, height: 24 }), [4, 80, 24]);
+        assert_eq!(enc(&ToWorker::Ping), [6]);
+        assert_eq!(enc(&ToWorker::Shutdown), [7]);
+        assert_eq!(enc(&ToWorker::Custom(vec![1])), [8, 1, 1]);
+        assert_eq!(enc(&ToWorker::Term(TermCmd::ScrollBottom))[0], 9);
+
+        assert_eq!(enc(&FromWorker::Heartbeat { seq: 5 }), [1, 5]);
+        assert_eq!(enc(&FromWorker::Output(vec![7])), [5, 1, 7]);
+        assert_eq!(enc(&FromWorker::Notice(String::new())), [8, 0]);
+        assert_eq!(enc(&FromWorker::Log(String::new())), [9, 0]);
+        assert_eq!(enc(&FromWorker::Pong), [10]);
+        assert_eq!(enc(&FromWorker::Custom(vec![1])), [11, 1, 1]);
+        assert_eq!(enc(&FromWorker::Term(TermMsg::Event(TermNotice::Bell)))[0], 12);
+    }
 }

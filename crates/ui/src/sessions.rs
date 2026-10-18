@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use rj_core::Protocol;
 use rj_ipc::*;
-use rj_ssh::terminal::{Osc52Policy, Scheme, TermEvent, Terminal};
+use rj_ssh::terminal::{selection_text_from_grid, Osc52Policy, Scheme, Terminal};
 use rj_supervisor::{ExitReason, RestartPolicy, Supervisor, SupervisorEvent, WorkerId, WorkerSpec};
 use serde::Serialize;
 use uuid::Uuid;
@@ -82,15 +82,6 @@ fn is_significant_update(w: u32, h: u32) -> bool {
 
 /// Qt-Tastencode von Esc.
 const QT_KEY_ESCAPE: u32 = 0x0100_0000;
-
-/// OSC-52-Regel aus den SSH-Optionen des Ziels (`osc52_write`, Vorgabe an;
-/// `osc52_read`, Vorgabe aus).
-fn osc52_policy(options_json: &str) -> Osc52Policy {
-    let o: rj_core::model::SshOptions = serde_json::from_str(options_json).unwrap_or_else(|_| {
-        serde_json::from_str("{}").expect("leere Optionen sind gültig")
-    });
-    Osc52Policy { allow_write: o.osc52_write, allow_read_with_prompt: o.osc52_read }
-}
 
 /// Größenlimit der Zwischenablage aus den Optionen (Vorgabe 16 MiB).
 fn clipboard_limit(options_json: &str) -> u64 {
@@ -179,16 +170,64 @@ pub struct TermSnapshot {
     pub lines: Vec<Vec<(String, String, String, u8)>>,
 }
 
+/// Größte Zeilen- und Spaltenzahl und Zellenzahl, die ein Schnappschuss des Workers haben darf.
+const MAX_TERM_SIDE: u32 = 1000;
+const MAX_TERM_CELLS: u32 = 250_000;
+
+/// Prüft einen Schnappschuss des Workers, bevor die Oberfläche ihn benutzt.
+fn valid_view(v: &TermView) -> bool {
+    let (cols, rows) = (v.cols as usize, v.rows as usize);
+    (1..=MAX_TERM_SIDE).contains(&v.cols)
+        && (1..=MAX_TERM_SIDE).contains(&v.rows)
+        && v.cols * v.rows <= MAX_TERM_CELLS
+        && v.lines.len() == rows
+        && v.grid.len() == rows
+        && v.grid.iter().all(|r| r.cells.len() == cols && r.len as usize <= cols)
+        && v.tail.len() <= 5
+}
+
+fn hex(c: Rgb3) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+}
+
+/// Darstellung für die Oberfläche aus dem Schnappschuss des Terminals.
+fn snapshot_from_view(v: &TermView) -> TermSnapshot {
+    TermSnapshot {
+        cols: v.cols as usize,
+        rows: v.rows as usize,
+        cursor: (v.cursor.0 as usize, v.cursor.1 as usize),
+        cursor_visible: v.cursor_visible,
+        alt_screen: v.alt_screen,
+        scroll_offset: v.scroll_offset as usize,
+        history: v.history as usize,
+        bg: hex(v.bg),
+        fg: hex(v.fg),
+        cursor_color: hex(v.cursor_color),
+        lines: v.lines.iter().map(|l| l.iter().map(|r| (r.text.clone(), hex(r.fg), hex(r.bg), r.flags)).collect()).collect(),
+    }
+}
+
+/// Leerer Bildschirm in der Größe des Verbindungsauftrags (bis der erste Schnappschuss des Workers da ist).
+fn blank_view(cols: usize, rows: usize, scheme: &Scheme) -> TermView {
+    let mut t = Terminal::with_history(cols.max(1), rows.max(1), Osc52Policy::default(), rj_ssh::terminal::HISTORY_MIN);
+    t.set_scheme(scheme.clone());
+    t.view()
+}
+
 struct Session {
     spec: ConnectSpec,
     worker: Option<WorkerId>,
-    term: Option<Terminal>,
+    /// Zuletzt empfangener Schnappschuss des Terminals im Worker (nur SSH).
+    view: Option<TermView>,
+    /// Nur Vorführung: lokales Terminal ohne Worker, das nie Bytes von einem Ziel bekommt.
+    demo_term: Option<Terminal>,
     state: String,
     /// Seit wann die Verbindung steht (Systemzeit); `None`, solange sie nicht steht.
     connected_at: Option<std::time::SystemTime>,
     attempts: u32,
     reconnect_at: Option<Instant>,
-    osc52_pending: Vec<std::sync::Arc<dyn Fn(&str) -> String + Send + Sync>>,
+    /// Offene Leseanfragen des Ziels (OSC 52) nach Kennung des Workers.
+    osc52_pending: Vec<u32>,
     /// Tastenfolge nach dem Verbinden (läuft oder wartet auf ihren Auslöser).
     auto: Option<crate::autokeys::AutoRun>,
     /// Wie oft die Sitzung verbunden war (für das Verhalten beim Neuverbinden).
@@ -288,8 +327,12 @@ impl Manager {
 
     /// Setzt das Farbschema aller offenen und künftigen Terminals.
     pub fn set_scheme(&mut self, scheme: Scheme) {
+        let cmd = TermCmd::SetScheme(TermScheme::from(&scheme));
+        for id in self.terminal_sessions() {
+            self.term_cmd(id, cmd.clone());
+        }
         for x in self.sessions.values_mut() {
-            if let Some(t) = x.term.as_mut() {
+            if let Some(t) = x.demo_term.as_mut() {
                 t.set_scheme(scheme.clone());
             }
         }
@@ -298,8 +341,11 @@ impl Manager {
 
     /// Größe des Rücklaufs aller Terminals (wirkt sofort und für neue).
     pub fn set_scrollback(&mut self, lines: usize) {
+        for id in self.terminal_sessions() {
+            self.term_cmd(id, TermCmd::SetHistory(lines.min(u32::MAX as usize) as u32));
+        }
         for x in self.sessions.values_mut() {
-            if let Some(t) = x.term.as_mut() {
+            if let Some(t) = x.demo_term.as_mut() {
                 t.set_history(lines);
             }
         }
@@ -308,14 +354,30 @@ impl Manager {
 
     /// Terminal-Anzeige um `lines` zurück (positiv) oder vor (negativ) blättern.
     pub fn scroll_terminal(&mut self, s: SessionId, lines: i32) {
-        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.term.as_mut()) {
+        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.demo_term.as_mut()) {
             t.scroll(lines);
+        } else {
+            self.term_cmd(s, TermCmd::Scroll(lines));
         }
     }
 
     pub fn scroll_terminal_page(&mut self, s: SessionId, back: bool) {
-        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.term.as_mut()) {
+        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.demo_term.as_mut()) {
             t.scroll_page(back);
+        } else {
+            self.term_cmd(s, TermCmd::ScrollPage { back });
+        }
+    }
+
+    /// Sitzungen mit Terminal (SSH).
+    fn terminal_sessions(&self) -> Vec<SessionId> {
+        self.sessions.iter().filter(|(_, x)| x.spec.protocol == Protocol::Ssh).map(|(id, _)| *id).collect()
+    }
+
+    /// Befehl an das Terminal im Worker einer SSH-Sitzung.
+    fn term_cmd(&mut self, s: SessionId, cmd: TermCmd) {
+        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol == Protocol::Ssh) {
+            self.send(s, &ToWorker::Term(cmd));
         }
     }
 
@@ -418,13 +480,8 @@ impl Manager {
     pub fn open(&mut self, spec: ConnectSpec) -> SessionId {
         let id = self.next;
         self.next += 1;
-        let scheme = self.scheme.clone();
-        let term = (spec.protocol == Protocol::Ssh).then(|| {
-            let mut t = Terminal::with_history(spec.request.width as usize, spec.request.height as usize, osc52_policy(&spec.request.options_json), self.scrollback);
-            t.set_scheme(scheme);
-            t
-        });
-        self.sessions.insert(id, Session { spec, worker: None, term, state: String::new(), connected_at: None, attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None });
+        let view = (spec.protocol == Protocol::Ssh).then(|| blank_view(spec.request.width as usize, spec.request.height as usize, &self.scheme));
+        self.sessions.insert(id, Session { spec, worker: None, view, demo_term: None, state: String::new(), connected_at: None, attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None });
         self.start(id);
         id
     }
@@ -451,6 +508,14 @@ impl Manager {
                 x.worker = Some(wid);
                 let _ = self.sup.send(wid, &ToWorker::Connect(spec.request));
                 let _ = self.sup.send(wid, &ToWorker::Credentials(spec.credentials));
+                if spec.protocol == Protocol::Ssh {
+                    // Farben und Rücklauf gelten für das neue Terminal im Worker; ein laufendes Makro behält den Abgriff.
+                    let _ = self.sup.send(wid, &ToWorker::Term(TermCmd::SetScheme(TermScheme::from(&self.scheme))));
+                    let _ = self.sup.send(wid, &ToWorker::Term(TermCmd::SetHistory(self.scrollback.min(u32::MAX as usize) as u32)));
+                    if self.macro_taps.contains_key(&id) {
+                        let _ = self.sup.send(wid, &ToWorker::Term(TermCmd::Tap(true)));
+                    }
+                }
                 self.emit_state(id, "connecting", String::new());
             }
             Err(e) => self.emit_state(id, "failed", e.to_string()),
@@ -465,7 +530,7 @@ impl Manager {
         term.set_scheme(self.scheme.clone());
         term.feed(content.as_bytes());
         let spec = demo_spec(title, Protocol::Ssh);
-        self.sessions.insert(id, Session { spec, worker: None, term: Some(term), state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None });
+        self.sessions.insert(id, Session { spec, worker: None, view: None, demo_term: Some(term), state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None });
         self.pending.push(UiEvent::State { s: id, state: "connected".into(), detail: String::new() });
         self.pending.push(UiEvent::Terminal { s: id });
         id
@@ -505,7 +570,7 @@ impl Manager {
         }
         let fd = fb.share_handle().map(into_raw).unwrap_or(-1);
         let spec = demo_spec(title, Protocol::Rdp);
-        self.sessions.insert(id, Session { spec, worker: None, term: None, state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: Some(fb) });
+        self.sessions.insert(id, Session { spec, worker: None, view: None, demo_term: None, state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: Some(fb) });
         self.pending.push(UiEvent::State { s: id, state: "connected".into(), detail: String::new() });
         self.pending.push(UiEvent::SharedFrame { s: id, fd, w, h });
         self.pending.push(UiEvent::Frame { s: id, x: 0, y: 0, w, h });
@@ -532,19 +597,24 @@ impl Manager {
     /// Ausgabe der Sitzung an ein Makro weitergeben (bis `detach_macro_tap`).
     pub fn attach_macro_tap(&mut self, s: SessionId, tap: std::sync::mpsc::Sender<Vec<u8>>) {
         self.macro_taps.insert(s, tap);
+        self.term_cmd(s, TermCmd::Tap(true));
     }
 
     pub fn detach_macro_tap(&mut self, s: SessionId) {
-        self.macro_taps.remove(&s);
+        if self.macro_taps.remove(&s).is_some() {
+            self.term_cmd(s, TermCmd::Tap(false));
+        }
     }
 
     /// Sichtbarer Text des Terminals (für den Start eines Makros: Eingabeaufforderung steht schon da).
     pub fn screen_text(&self, s: SessionId) -> Option<String> {
-        let t = self.sessions.get(&s)?.term.as_ref()?;
-        let lines: Vec<String> = t.screen_text().into_iter().map(|l| l.trim_end().to_string()).collect();
-        let last = lines.iter().rposition(|l| !l.is_empty())?;
-        let first = last.saturating_sub(4);
-        Some(lines[first..=last].join("\n"))
+        let x = self.sessions.get(&s)?;
+        let tail = match (&x.demo_term, &x.view) {
+            (Some(t), _) => t.tail_text(),
+            (None, Some(v)) => v.tail.clone(),
+            _ => return None,
+        };
+        (!tail.is_empty()).then(|| tail.join("\n"))
     }
 
     /// Zugangsdaten der Sitzung (für Platzhalter in Makros).
@@ -567,9 +637,7 @@ impl Manager {
                 let bytes = crate::keys::terminal_bytes(qt_key, modifiers, text, false);
                 if !bytes.is_empty() {
                     // Eingabe springt ans Ende zurück.
-                    if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.term.as_mut()) {
-                        t.scroll_bottom();
-                    }
+                    self.scroll_bottom(s);
                     self.send(s, &ToWorker::Input(InputEvent::Bytes(bytes)));
                 }
             }
@@ -597,11 +665,11 @@ impl Manager {
     pub fn resize(&mut self, s: SessionId, w: u32, h: u32) {
         if let Some(sess) = self.sessions.get(&s) {
             // Bild-Sitzungen mit fest eingetragener Breite und Höhe folgen dem Fenster nicht.
-            if sess.term.is_none() && fixed_size(&sess.spec.request.options_json) {
+            if sess.spec.protocol != Protocol::Ssh && fixed_size(&sess.spec.request.options_json) {
                 return;
             }
         }
-        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.term.as_mut()) {
+        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.demo_term.as_mut()) {
             t.resize(w as usize, h as usize);
         }
         self.send(s, &ToWorker::Resize { width: w, height: h });
@@ -609,14 +677,20 @@ impl Manager {
 
     /// Einfügen ins Terminal (mit Klammerung) bzw. Zwischenablage anbieten (RDP/VNC).
     pub fn paste(&mut self, s: SessionId, text: &str) {
-        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.term.as_mut()) {
+        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol == Protocol::Ssh) {
+            // Der Worker bildet die Bytes (Zeilenenden, Klammerung) und springt ans Ende.
+            self.term_cmd(s, TermCmd::Paste(text.to_string()));
+        } else {
+            self.send(s, &ToWorker::Clipboard(ClipData::Text(text.to_string())));
+        }
+    }
+
+    /// Anzeige ans Ende zurück (Eingabe).
+    fn scroll_bottom(&mut self, s: SessionId) {
+        if let Some(t) = self.sessions.get_mut(&s).and_then(|x| x.demo_term.as_mut()) {
             t.scroll_bottom();
         }
-        let bytes = self.sessions.get(&s).and_then(|x| x.term.as_ref()).map(|t| t.paste_bytes(text));
-        match bytes {
-            Some(b) => self.send(s, &ToWorker::Input(InputEvent::Bytes(b))),
-            None => self.send(s, &ToWorker::Clipboard(ClipData::Text(text.to_string()))),
-        }
+        self.term_cmd(s, TermCmd::ScrollBottom);
     }
 
     /// Befehl an eine Web-Sitzung (Zurück, Vor, Neu laden, Fokus, Bearbeiten, Menüauswahl).
@@ -634,7 +708,7 @@ impl Manager {
 
     /// Lokale Zwischenablage an eine grafische Sitzung anbieten.
     pub fn offer_clipboard(&mut self, s: SessionId, text: &str) {
-        if self.sessions.get(&s).is_some_and(|x| x.term.is_none()) {
+        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol != Protocol::Ssh) {
             self.send(s, &ToWorker::Clipboard(ClipData::Text(text.to_string())));
         }
     }
@@ -643,11 +717,9 @@ impl Manager {
     pub fn clipboard_read_answer(&mut self, s: SessionId, allow: bool, text: &str) {
         let Some(sess) = self.sessions.get_mut(&s) else { return };
         let pend = std::mem::take(&mut sess.osc52_pending);
-        if allow {
-            for f in pend {
-                let reply = f(text);
-                self.send(s, &ToWorker::Input(InputEvent::Bytes(reply.into_bytes())));
-            }
+        // Der Worker schreibt die Antwort ans Ziel; bei Ablehnung verwirft er die Anfrage.
+        for id in pend {
+            self.term_cmd(s, TermCmd::ClipboardAnswer { id, text: allow.then(|| text.to_string()) });
         }
     }
 
@@ -659,37 +731,23 @@ impl Manager {
         self.send(s, &ToWorker::Answer { question: q, accept });
     }
 
+    /// Text der Auswahl aus den Zellen des letzten Schnappschusses (ohne Rückfrage an den Worker).
     pub fn select(&mut self, s: SessionId, start: (usize, usize), end: (usize, usize)) -> Option<String> {
-        let t = self.sessions.get_mut(&s)?.term.as_mut()?;
-        t.select(start, end);
-        t.selection_text()
+        let x = self.sessions.get(&s)?;
+        match (&x.demo_term, &x.view) {
+            (Some(t), _) => selection_text_from_grid(&t.grid_rows(), start, end),
+            (None, Some(v)) => selection_text_from_grid(&v.grid, start, end),
+            _ => None,
+        }
     }
 
     pub fn terminal(&self, s: SessionId) -> Option<TermSnapshot> {
-        let t = self.sessions.get(&s)?.term.as_ref()?;
-        let hex = |c: alacritty_terminal::vte::ansi::Rgb| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
-        let mut lines = Vec::with_capacity(t.rows());
-        for r in 0..t.rows() {
-            let mut runs: Vec<(String, String, String, u8)> = Vec::new();
-            for c in 0..t.columns() {
-                let cell = t.cell(r, c);
-                if cell.spacer {
-                    continue;
-                }
-                let (mut fg, mut bg) = (hex(cell.fg), hex(cell.bg));
-                if cell.inverse {
-                    std::mem::swap(&mut fg, &mut bg);
-                }
-                let flags = cell.bold as u8 | (cell.italic as u8) << 1 | (cell.underline as u8) << 2 | (cell.wide as u8) << 3;
-                match runs.last_mut() {
-                    Some(last) if last.1 == fg && last.2 == bg && last.3 == flags && !cell.wide => last.0.push(cell.ch),
-                    _ => runs.push((cell.ch.to_string(), fg, bg, flags)),
-                }
-            }
-            lines.push(runs);
+        let x = self.sessions.get(&s)?;
+        match (&x.demo_term, &x.view) {
+            (Some(t), _) => Some(snapshot_from_view(&t.view())),
+            (None, Some(v)) => Some(snapshot_from_view(v)),
+            _ => None,
         }
-        let sc = t.scheme();
-        Some(TermSnapshot { cols: t.columns(), rows: t.rows(), cursor: t.cursor(), cursor_visible: t.cursor_visible() && t.display_offset() == 0, alt_screen: t.alt_screen(), scroll_offset: t.display_offset(), history: t.history_size(), bg: hex(sc.bg), fg: hex(sc.fg), cursor_color: hex(sc.cursor), lines })
     }
 
     pub fn disconnect(&mut self, s: SessionId) {
@@ -1025,46 +1083,39 @@ impl Manager {
                 }
                 self.pending.push(UiEvent::Frame { s, x: f.x, y: f.y, w: f.w, h: f.h })
             }
+            // Rohbytes kommen nur noch, solange ein Makro mitliest (Tap).
             FromWorker::Output(bytes) => {
                 if let Some(x) = self.sessions.get_mut(&s) {
                     x.last_activity = Instant::now();
                 }
                 if let Some(tap) = self.macro_taps.get(&s) {
-                    let _ = tap.send(bytes.clone());
+                    let _ = tap.send(bytes);
                 }
-                let mut replies = Vec::new();
-                if let Some(x) = self.sessions.get_mut(&s) {
-                    if let Some(t) = x.term.as_mut() {
-                        t.feed(&bytes);
-                        for e in t.take_events() {
-                            match e {
-                                TermEvent::ClipboardStore(text) => {
-                                    let limit = clipboard_limit(&x.spec.request.options_json);
-                                    if text.len() as u64 <= limit {
-                                        self.pending.push(UiEvent::Clipboard { s, text });
-                                    } else {
-                                        self.pending.push(UiEvent::Notice {
-                                            s,
-                                            text: format!("Zwischenablage vom Ziel verworfen: {} Bytes überschreiten das Limit von {limit} Bytes", text.len()),
-                                        });
-                                    }
-                                }
-                                TermEvent::ClipboardLoad(f) => {
-                                    x.osc52_pending.push(f);
-                                    self.pending.push(UiEvent::ClipboardReadRequest { s });
-                                }
-                                TermEvent::Reply(r) => replies.push(r),
-                                TermEvent::Title(title) => self.pending.push(UiEvent::Title { s, title: rj_core::charset::mark_visible(&title, false).into_owned() }),
-                                TermEvent::Bell => self.pending.push(UiEvent::Bell { s }),
-                            }
-                        }
+            }
+            FromWorker::Term(TermMsg::Snapshot(v)) => {
+                if let Some(x) = self.sessions.get_mut(&s).filter(|x| x.spec.protocol == Protocol::Ssh) {
+                    if valid_view(&v) {
+                        x.view = Some(v);
+                        // Für den Auslöser „ruhig“ der Tastenfolge: Das Terminal hat sich geändert.
+                        x.last_activity = Instant::now();
+                        self.pending.push(UiEvent::Terminal { s });
                     }
                 }
-                for r in replies {
-                    self.send(s, &ToWorker::Input(InputEvent::Bytes(r.into_bytes())));
-                }
-                self.pending.push(UiEvent::Terminal { s });
             }
+            FromWorker::Term(TermMsg::Event(e)) => match e {
+                TermNotice::ClipboardStore(text) => {
+                    let limit = self.sessions.get(&s).map(|x| clipboard_limit(&x.spec.request.options_json)).unwrap_or(16 * 1024 * 1024);
+                    self.pending.push(clipboard_event(s, text, limit));
+                }
+                TermNotice::ClipboardLoad { id } => {
+                    if let Some(x) = self.sessions.get_mut(&s) {
+                        x.osc52_pending.push(id);
+                        self.pending.push(UiEvent::ClipboardReadRequest { s });
+                    }
+                }
+                TermNotice::Title(title) => self.pending.push(UiEvent::Title { s, title: rj_core::charset::mark_visible(&title, false).into_owned() }),
+                TermNotice::Bell => self.pending.push(UiEvent::Bell { s }),
+            },
             FromWorker::Clipboard(ClipData::Text(text)) => {
                 // Größenlimit des Ziels auch für grafische Sitzungen; protokolliert wird nie der Inhalt.
                 let limit = self.sessions.get(&s).map(|x| clipboard_limit(&x.spec.request.options_json)).unwrap_or(16 * 1024 * 1024);
@@ -1170,6 +1221,7 @@ fn demo_spec(title: &str, protocol: Protocol) -> ConnectSpec {
 #[cfg(test)]
 mod osc52_tests {
     use super::*;
+    use rj_ssh::terminal::osc52_policy;
 
     #[test]
     fn policy_follows_target_options() {

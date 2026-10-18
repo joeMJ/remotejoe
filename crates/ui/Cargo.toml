@@ -43,6 +43,8 @@ cxx-qt-build = "0.10"
 [dev-dependencies]
 tempfile.workspace = true
 remotejoe-testkit = { path = "../testkit" }
+# Testschalter im Worker (Absturz und Hänger des Emulators), nur für Testbauten.
+remotejoe-worker-ssh = { path = "../worker-ssh", features = ["test-hooks"] }
 
 # Hauptkennwort im Schlüsselbund des Systems (Linux: Secret Service über D-Bus, reines Rust; Windows: Anmeldeinformationsverwaltung).
 [target.'cfg(target_os = "linux")'.dependencies]

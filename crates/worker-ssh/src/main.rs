@@ -2,13 +2,15 @@
 //! Standardkanäle (siehe `rj_ipc`).
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rj_core::Secret;
 use rj_ipc::worker::WorkerLink;
 use rj_ipc::{ConnectRequest, CredentialPayload, FromWorker, InputEvent, SessionState, ToWorker};
 use rj_ssh::client::{Auth, Shell, ShellEvent, SshConnection, SshParams};
+use rj_ssh::host::{watchdog_limit, HostOut, TermHost};
 use rj_ssh::known_hosts::KnownHosts;
+use rj_ssh::terminal::osc52_policy;
 use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot};
 
@@ -25,6 +27,11 @@ struct Options {
 }
 
 fn main() {
+    // Für Tests: meldet, ob die Testschalter eingebaut sind (nie im Auslieferungsbau).
+    if std::env::args().any(|a| a == "--build-info") {
+        println!("test-hooks={}", cfg!(feature = "test-hooks"));
+        return;
+    }
     let mut link = match WorkerLink::stdio("ssh", Duration::from_secs(2)) {
         Ok(l) => l,
         Err(e) => {
@@ -64,13 +71,38 @@ async fn run(mut rx: mpsc::UnboundedReceiver<ToWorker>, out: rj_ipc::worker::Sen
     let mut pending: HashMap<u32, oneshot::Sender<bool>> = HashMap::new();
     let mut next_q = 1u32;
     let mut connecting: Option<tokio::task::JoinHandle<Result<(SshConnection, Shell), String>>> = None;
+    let mut host = TermHost::default();
+    // Hängt der Emulator, endet der Worker; der Supervisor meldet die Sitzung als abgestürzt.
+    host.watchdog().spawn(watchdog_limit(), || {
+        eprintln!("Terminal reagiert nicht mehr; Worker wird beendet");
+        std::process::abort()
+    });
+
+    // Nachrichten des Terminals an die Oberfläche, Antworten und eingefügten Text ans Ziel.
+    async fn deliver(out: HostOut, shell: &Option<Shell>, send: &impl Fn(FromWorker)) {
+        for m in out.msgs {
+            send(FromWorker::Term(m));
+        }
+        if !out.to_target.is_empty() {
+            if let Some(s) = shell {
+                let _ = s.write(&out.to_target).await;
+            }
+        }
+    }
 
     loop {
+        let snapshot_wait = host.wait(Instant::now());
         tokio::select! {
+            _ = async { tokio::time::sleep(snapshot_wait.unwrap_or_default()).await }, if snapshot_wait.is_some() => {
+                if let Some(m) = host.poll(Instant::now()) {
+                    send(FromWorker::Term(m));
+                }
+            }
             msg = rx.recv() => {
                 let Some(msg) = msg else { break };
                 match msg {
                     ToWorker::Connect(r) => {
+                        host.reset(r.width as usize, r.height as usize, osc52_policy(&r.options_json));
                         request = Some(r);
                         shell = None;
                         conn = None;
@@ -89,7 +121,13 @@ async fn run(mut rx: mpsc::UnboundedReceiver<ToWorker>, out: rj_ipc::worker::Sen
                     }
                     ToWorker::Input(_) => {}
                     ToWorker::Resize { width, height } => {
+                        let out = host.resize(width as usize, height as usize, Instant::now());
+                        deliver(out, &shell, &send).await;
                         if let Some(s) = &shell { let _ = s.resize(width, height).await; }
+                    }
+                    ToWorker::Term(cmd) => {
+                        let out = host.command(cmd, Instant::now());
+                        deliver(out, &shell, &send).await;
                     }
                     ToWorker::Ping => send(FromWorker::Pong),
                     ToWorker::Shutdown => {
@@ -130,7 +168,18 @@ async fn run(mut rx: mpsc::UnboundedReceiver<ToWorker>, out: rj_ipc::worker::Sen
             }
             ev = async { shell.as_mut().unwrap().events.recv().await }, if shell.is_some() => {
                 match ev {
-                    Some(ShellEvent::Data(d)) => send(FromWorker::Output(d)),
+                    Some(ShellEvent::Data(d)) => {
+                        let out = host.feed(&d);
+                        deliver(out, &shell, &send).await;
+                        // Bei dauernder Ausgabe kommt der Zeitgeber nicht zum Zug: fälligen Schnappschuss hier senden.
+                        if let Some(m) = host.poll(Instant::now()) {
+                            send(FromWorker::Term(m));
+                        }
+                        // Rohbytes nur, solange ein Makro mitliest.
+                        if host.tap() {
+                            send(FromWorker::Output(d));
+                        }
+                    }
                     Some(ShellEvent::Exit(code)) => send(FromWorker::Log(format!("Shell beendet mit Code {code}"))),
                     Some(ShellEvent::Closed) | None => {
                         shell = None;
