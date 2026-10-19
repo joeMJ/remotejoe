@@ -6,11 +6,16 @@ use std::process::Command;
 #[test]
 fn offscreen_screenshots_and_start_time() {
     let dir = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_remotejoe"))
-        .args(["--screenshots", dir.path().to_str().unwrap()])
-        .env("QT_QPA_PLATFORM", "offscreen")
-        .output()
-        .unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_remotejoe"));
+    cmd.args(["--screenshots", dir.path().to_str().unwrap()]).env("QT_QPA_PLATFORM", "offscreen");
+    // Offscreen findet unter Windows keine Schriften von selbst (nur Kästchen in den Bildern).
+    #[cfg(windows)]
+    if std::env::var_os("QT_QPA_FONTDIR").is_none() {
+        if let Some(w) = std::env::var_os("WINDIR") {
+            cmd.env("QT_QPA_FONTDIR", std::path::Path::new(&w).join("Fonts"));
+        }
+    }
+    let out = cmd.output().unwrap();
     let log = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{log}");
     for f in ["hauptfenster-hell.png", "hauptfenster-dunkel.png", "hauptfenster-kompakt.png", "hauptfenster-kompakt-ohne-baum.png", "suche.png", "hypervisor.png", "verbinden-zugangsdaten.png", "hostschluessel-unbekannt.png", "hostschluessel-geaendert.png", "import-vorschau.png", "patchday.png", "abgerissenes-fenster.png", "eigenschaften.png", "zugangsdaten-auswahl.png", "hinzufuegen-menue.png", "entsperren.png", "mehrere-ziele.png"] {
