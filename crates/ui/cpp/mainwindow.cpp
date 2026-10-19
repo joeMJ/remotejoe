@@ -1419,13 +1419,21 @@ void MainWindow::applyTheme(bool dark)
 	  "QLabel#securityTitle { font-weight: bold; }"
 	  "QLabel#heading { font-weight: bold; padding: 4px 0; }"
 	  "QFrame#unlockBox { border: 2px solid %2; border-radius: 6px; padding: 12px; }"
-	  // Optionsknöpfe und Kästchen immer über das Stylesheet zeichnen, damit die Markierung „geändert“ die Abstände nicht verschiebt.
-	  "QRadioButton, QCheckBox { border: none; }"
-	  "*[rjDirty=\"true\"]:enabled { border: 2px solid %2; }"
-	  "QRadioButton[rjDirty=\"true\"]:enabled, QCheckBox[rjDirty=\"true\"]:enabled { border: none; color: %2; }")
+	  // Optionsknöpfe und Kästchen markiert der Eigenschaften-Tab über die Palette (Textfarbe), nicht hier.
+	  "*[rjDirty=\"true\"]:enabled { border: 2px solid %2; }")
 	                      .arg(c("warning").name(), c("highlight").name())
 	                      .arg(tabLine.name(), c("button").name(), c("muted").name(), c("base").name(), c("text").name(), c("alternate").name())
-	                      .arg(rowHeight));
+	                      .arg(rowHeight)
+	                  // Feste Farbschemata: Der Stil leitet den Rand der Optionsknöpfe und Kästchen aus der Fensterfarbe ab;
+	                  // bei dunklen Schemata wäre er unsichtbar. Darum eigener Rand und Füllung in der Akzentfarbe.
+	                  + (system ? QString()
+	                            : QStringLiteral("QRadioButton::indicator, QCheckBox::indicator { width: 13px; height: 13px; border: 1px solid %1; background: %2; }"
+	                                             "QRadioButton::indicator { border-radius: 7px; }"
+	                                             "QCheckBox::indicator { border-radius: 2px; }"
+	                                             "QRadioButton::indicator:checked { background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 %3, stop:0.5 %3, stop:0.6 %2, stop:1 %2); border-color: %3; }"
+	                                             "QCheckBox::indicator:checked { background: %3; border-color: %3; }"
+	                                             "QRadioButton::indicator:disabled, QCheckBox::indicator:disabled { border-color: %4; background: %5; }")
+	                                  .arg(c("muted").name(), c("base").name(), c("highlight").name(), c("alternate").name(), c("window").name())));
 	if (m_model)
 		reloadTree();
 	if (m_tabs)
@@ -1884,6 +1892,9 @@ void MainWindow::addToolTab(ToolTab* t, const QString& title)
 	connect(t, &ToolTab::indexChanged, this, [this] {
 		reloadTree();
 		reloadViews();
+		// Offene Eigenschaften-Tabs: neue oder geänderte Anmeldungen in der Auswahlliste zeigen.
+		for (auto* p : findChildren<PropertiesTab*>())
+			p->refreshLogins();
 	});
 	connect(t, &ToolTab::status, this, [this](const QString& m) { statusBar()->showMessage(m, 8000); });
 	connect(t, &ToolTab::closeRequested, this, [this, t] { closeToolTab(t); });

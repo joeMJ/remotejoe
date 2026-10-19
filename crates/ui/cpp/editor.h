@@ -133,6 +133,8 @@ public:
 	/// Schließen; bei ungespeicherten Änderungen wird in der Leiste gefragt.
 	void requestClose(std::function<void()> close);
 	void selectCategory(const QString& key);
+	/// Auswahlliste der Anmeldungen neu laden (nach dem Anlegen oder Ändern einer Anmeldung).
+	void refreshLogins();
 	void reload();
 	ActionBar* bar() const { return m_bar; }
 	/// Beim Sperren: eingegebene Kennwörter verwerfen.
@@ -230,6 +232,7 @@ private:
 	/// Anmeldeobjekt als Zugangsdaten.
 	QWidget* m_loginBox = nullptr;
 	QComboBox* m_login = nullptr;
+	QLabel* m_loginHint = nullptr;
 	QWidget* m_namedBox = nullptr;
 	// Tunnel
 	QComboBox* m_tunnel = nullptr;

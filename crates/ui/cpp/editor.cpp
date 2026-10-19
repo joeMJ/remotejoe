@@ -375,6 +375,18 @@ void PropertiesTab::setMarked(QWidget* w, bool on)
 	if (w->property("rjDirty").toBool() == on)
 		return;
 	w->setProperty("rjDirty", on);
+	if (qobject_cast<QAbstractButton*>(w) && !qobject_cast<QPushButton*>(w))
+	{
+		// Optionsknöpfe und Kästchen: nur die Textfarbe. Kein Stylesheet, sonst zeichnet Qt die Knöpfe selbst
+		// (bei dunklen Schemata kaum sichtbar) und die Abstände ändern sich.
+		QPalette p = w->palette();
+		if (on)
+			p.setColor(QPalette::WindowText, palette().color(QPalette::Highlight));
+		else
+			p = QPalette();
+		w->setPalette(p);
+		return;
+	}
 	w->style()->unpolish(w);
 	w->style()->polish(w);
 }
@@ -878,12 +890,10 @@ QWidget* PropertiesTab::pageCredentials()
 			auto* ll = new QLabel(rjText(m_backend, "edit.cred.login.label"), m_loginBox);
 			ll->setBuddy(m_login);
 			f->addRow(ll, row);
-			if (m_login->count() == 0)
-			{
-				auto* hint = new QLabel(rjText(m_backend, "edit.cred.login.none"), m_loginBox);
-				hint->setWordWrap(true);
-				f->addRow(QString(), hint);
-			}
+			m_loginHint = new QLabel(rjText(m_backend, "edit.cred.login.none"), m_loginBox);
+			m_loginHint->setWordWrap(true);
+			f->addRow(QString(), m_loginHint);
+			m_loginHint->setVisible(m_login->count() == 0);
 			v->addWidget(m_loginBox);
 		}
 		else if (mode == QLatin1String("direct"))
@@ -1007,6 +1017,30 @@ QWidget* PropertiesTab::pageCredentials()
 	v->addWidget(m_errors.value(QStringLiteral("credential")));
 	v->addStretch(1);
 	return w;
+}
+
+void PropertiesTab::refreshLogins()
+{
+	if (!m_login)
+		return;
+	const QJsonObject r = parse(edit({ { QStringLiteral("op"), QStringLiteral("logins") } }));
+	if (!r.contains(QStringLiteral("logins")))
+		return;
+	const QString current = m_login->currentData().toString();
+	const QSignalBlocker block(m_login); // Auffrischen ist keine Änderung des Nutzers
+	m_login->clear();
+	for (const QJsonValue& e : r.value(QStringLiteral("logins")).toArray())
+	{
+		const QJsonObject o = e.toObject();
+		const QString path = o.value(QStringLiteral("path")).toString();
+		const QString user = o.value(QStringLiteral("username")).toString();
+		m_login->addItem(o.value(QStringLiteral("name")).toString() + (user.isEmpty() ? QString() : QStringLiteral(" – ") + user) +
+		                     (path.isEmpty() ? QString() : QStringLiteral("  (") + path + QLatin1Char(')')),
+		                 o.value(QStringLiteral("id")).toString());
+	}
+	m_login->setCurrentIndex(qMax(0, m_login->findData(current)));
+	if (m_loginHint)
+		m_loginHint->setVisible(m_login->count() == 0);
 }
 
 void PropertiesTab::updateCredentialMode()
