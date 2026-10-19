@@ -2734,6 +2734,13 @@ void MainWindow::handleEvents(const QString& json)
 			}
 			else if (t == QLatin1String("macro_done") && p)
 				p->setMacroResult(e.value(QStringLiteral("message")).toString(), e.value(QStringLiteral("ok")).toBool());
+			else if (t == QLatin1String("pointer") && p)
+			{
+				if (auto* fv = dynamic_cast<FrameView*>(p->view()))
+					fv->setRemotePointer(e.value(QStringLiteral("kind")).toInt(), QByteArray::fromBase64(e.value(QStringLiteral("bgra")).toString().toLatin1()),
+					                     e.value(QStringLiteral("w")).toInt(), e.value(QStringLiteral("h")).toInt(), e.value(QStringLiteral("hx")).toInt(),
+					                     e.value(QStringLiteral("hy")).toInt());
+			}
 			else if (t == QLatin1String("title") && p)
 				p->setToolTip(e.value(QStringLiteral("title")).toString());
 			else if (t == QLatin1String("web_status") && p)

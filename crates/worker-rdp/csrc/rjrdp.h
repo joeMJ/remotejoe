@@ -31,6 +31,10 @@ typedef struct
 	uint32_t (*verify_certificate)(void* user, const char* host, uint16_t port, const char* subject,
 	                               const char* issuer, const char* fingerprint,
 	                               const char* old_fingerprint);
+	/* Mauszeiger der Gegenstelle: kind 0 = Standardzeiger, 1 = ausgeblendet, 2 = Bild
+	 * (BGRA32, w × h, Klickpunkt hx/hy). */
+	void (*on_pointer)(void* user, int kind, const uint8_t* bgra, uint32_t w, uint32_t h, uint32_t hx,
+	                   uint32_t hy);
 } rj_callbacks;
 
 enum rj_security

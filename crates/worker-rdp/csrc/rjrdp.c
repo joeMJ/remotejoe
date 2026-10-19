@@ -18,6 +18,8 @@
 #include <freerdp/event.h>
 #include <freerdp/freerdp.h>
 #include <freerdp/gdi/gdi.h>
+#include <freerdp/graphics.h>
+#include <freerdp/codec/color.h>
 #include <freerdp/input.h>
 #include <freerdp/settings.h>
 #include <winpr/synch.h>
@@ -257,10 +259,93 @@ static BOOL rj_pre_connect(freerdp* instance)
 	return TRUE;
 }
 
+/* ---------- Mauszeiger der Gegenstelle ---------- */
+
+typedef struct
+{
+	rdpPointer pointer;
+	BYTE* data; /* BGRA32, width × height */
+} rjPointer;
+
+static BOOL rj_pointer_new(rdpContext* context, rdpPointer* pointer)
+{
+	rjPointer* p = (rjPointer*)pointer;
+	if (pointer->width == 0 || pointer->height == 0 || pointer->width > 384 || pointer->height > 384)
+		return TRUE;
+	p->data = calloc((size_t)pointer->width * pointer->height, 4);
+	if (!p->data)
+		return FALSE;
+	rdpGdi* gdi = context->gdi;
+	if (!freerdp_image_copy_from_pointer_data(p->data, PIXEL_FORMAT_BGRA32, 0, 0, 0, pointer->width, pointer->height,
+	                                          pointer->xorMaskData, pointer->lengthXorMask, pointer->andMaskData,
+	                                          pointer->lengthAndMask, pointer->xorBpp, gdi ? &gdi->palette : NULL))
+	{
+		free(p->data);
+		p->data = NULL;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static void rj_pointer_free(rdpContext* context, rdpPointer* pointer)
+{
+	(void)context;
+	rjPointer* p = (rjPointer*)pointer;
+	free(p->data);
+	p->data = NULL;
+}
+
+static BOOL rj_pointer_set(rdpContext* context, rdpPointer* pointer)
+{
+	rj_rdp* rdp = owner_of(context);
+	rjPointer* p = (rjPointer*)pointer;
+	if (rdp && rdp->cb.on_pointer)
+	{
+		if (p->data)
+			rdp->cb.on_pointer(rdp->cb.user, 2, p->data, pointer->width, pointer->height, pointer->xPos, pointer->yPos);
+		else
+			rdp->cb.on_pointer(rdp->cb.user, 0, NULL, 0, 0, 0, 0);
+	}
+	return TRUE;
+}
+
+static BOOL rj_pointer_set_null(rdpContext* context)
+{
+	rj_rdp* rdp = owner_of(context);
+	if (rdp && rdp->cb.on_pointer)
+		rdp->cb.on_pointer(rdp->cb.user, 1, NULL, 0, 0, 0, 0);
+	return TRUE;
+}
+
+static BOOL rj_pointer_set_default(rdpContext* context)
+{
+	rj_rdp* rdp = owner_of(context);
+	if (rdp && rdp->cb.on_pointer)
+		rdp->cb.on_pointer(rdp->cb.user, 0, NULL, 0, 0, 0, 0);
+	return TRUE;
+}
+
+static BOOL rj_pointer_set_position(rdpContext* context, UINT32 x, UINT32 y)
+{
+	(void)context;
+	(void)x;
+	(void)y;
+	return TRUE;
+}
+
 static BOOL rj_post_connect(freerdp* instance)
 {
 	if (!gdi_init(instance, PIXEL_FORMAT_BGRA32))
 		return FALSE;
+	rdpPointer pointer = { 0 };
+	pointer.size = sizeof(rjPointer);
+	pointer.New = rj_pointer_new;
+	pointer.Free = rj_pointer_free;
+	pointer.Set = rj_pointer_set;
+	pointer.SetNull = rj_pointer_set_null;
+	pointer.SetDefault = rj_pointer_set_default;
+	pointer.SetPosition = rj_pointer_set_position;
+	graphics_register_pointer(instance->context->graphics, &pointer);
 	rdpUpdate* up = instance->context->update;
 	up->BeginPaint = rj_begin_paint;
 	up->EndPaint = rj_end_paint;

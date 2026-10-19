@@ -369,6 +369,7 @@ mod imp {
                 match ev {
                     RdpEvent::Frame { x, y, w: fw, h } => w.frame(x, y, fw, h),
                     RdpEvent::Resized { .. } => {}
+                    RdpEvent::Pointer(p) => w.send(FromWorker::Pointer(p)),
                     RdpEvent::ClipReady => {
                         if let (Some(t), Some(s)) = (w.clip_wait.take(), w.session.as_mut()) {
                             let _ = s.offer_text(&t);

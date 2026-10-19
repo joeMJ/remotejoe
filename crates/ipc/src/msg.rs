@@ -160,6 +160,21 @@ pub enum FromWorker {
     Custom(Vec<u8>),
     /// Schnappschuss oder Ereignis der Terminal-Zustandsmaschine (nur SSH).
     Term(TermMsg),
+    /// Mauszeiger der Gegenstelle (RDP, VNC).
+    Pointer(PointerShape),
+}
+
+/// Form des Mauszeigers der Gegenstelle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointerShape {
+    /// 0 = Standardzeiger, 1 = ausgeblendet, 2 = Bild.
+    pub kind: u8,
+    pub width: u32,
+    pub height: u32,
+    pub hot_x: u32,
+    pub hot_y: u32,
+    /// BGRA32, `width × height` (nur bei `kind = 2`).
+    pub bgra: Vec<u8>,
 }
 
 /// Farbe als (Rot, Grün, Blau).

@@ -3995,6 +3995,7 @@ name = "remotejoe-ui"
 version = "0.1.10"
 dependencies = [
  "alacritty_terminal",
+ "base64 0.22.1",
  "cxx",
  "cxx-qt",
  "cxx-qt-build",
