@@ -4,7 +4,7 @@
 
 # remotejoe
 
-> **Schlanker, sehr schneller und robuster Verbindungsmanager für Hunderte von Zielen – unter Ubuntu und Windows.**
+> **Schlanker, sehr schneller und robuster Verbindungsmanager für Tausende von Zielen – unter Ubuntu und Windows.**
 > RDP, SSH, VNC, Web, PowerShell, Proxmox VE und Hyper-V in einem Fenster, Zugangsdaten in einer KeePass-Schlüsseldatenbank.
 
 <p align="center">
