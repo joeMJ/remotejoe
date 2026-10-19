@@ -87,6 +87,8 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	lay->addWidget(m_inventoryBox);
 	m_queryState = new QLabel(page);
 	m_queryState->setWordWrap(true);
+	m_queryState->setTextFormat(Qt::RichText);
+	m_queryState->setOpenExternalLinks(true);
 	lay->addWidget(m_queryState);
 	connect(m_query, &QPushButton::clicked, this, [this] { query(); });
 
@@ -236,7 +238,7 @@ void OverviewTab::query()
 	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_query") } });
 	if (r.contains(QStringLiteral("error")))
 	{
-		m_queryState->setText(r.value(QStringLiteral("error")).toString());
+		m_queryState->setText(r.value(QStringLiteral("error")).toString().toHtmlEscaped());
 		return;
 	}
 	m_query->setEnabled(false);
@@ -268,7 +270,13 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 			m_aruba->setVisible(aruba);
 		}
 		if (r.value(QStringLiteral("error")).isString())
-			m_queryState->setText(r.value(QStringLiteral("error")).toString());
+		{
+			// Fehlermeldung mit Verweisen auf die passende Anleitung (WinRM bzw. OpenSSH unter Windows).
+			QString html = r.value(QStringLiteral("error")).toString().toHtmlEscaped();
+			for (const QJsonValue& h : r.value(QStringLiteral("help")).toArray())
+				html += QStringLiteral("<br><a href=\"%1\">%2</a>").arg(h.toObject().value(QStringLiteral("url")).toString().toHtmlEscaped(), h.toObject().value(QStringLiteral("text")).toString().toHtmlEscaped());
+			m_queryState->setText(html);
+		}
 	}
 }
 
@@ -329,7 +337,7 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 				return;
 			const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_field") }, { QStringLiteral("field"), key }, { QStringLiteral("value"), edit->text() } });
 			if (r.contains(QStringLiteral("error")))
-				m_queryState->setText(r.value(QStringLiteral("error")).toString());
+				m_queryState->setText(r.value(QStringLiteral("error")).toString().toHtmlEscaped());
 			else
 				QTimer::singleShot(0, this, [this, inv = r.value(QStringLiteral("inventory")).toArray()] { renderInventory(inv); });
 		});

@@ -2,7 +2,7 @@
 //! Prüfungen (Ping, Traceroute).
 //!
 //! Ohne Anmeldung (beim Anzeigen): Namensauflösung, Portprüfung, MAC aus der Nachbartabelle und
-//! – bei offenem RDP mit NLA – Rechnername und Windows-Version. Mit Anmeldung nur auf Knopfdruck:
+//! – bei offenem RDP mit NLA – der Rechnername. Mit Anmeldung nur auf Knopfdruck:
 //! SSH (Linux, Aruba `show version`) oder PowerShell (Windows). Notizen sind die Notizen des Ziels
 //! (Index in der KDBX); das Inventar liegt als Datei im Datenordner.
 
@@ -33,6 +33,28 @@ use uuid::Uuid;
 use crate::app::App;
 use crate::sessions::UiEvent;
 use inventory::{now, Inventory, Store};
+
+/// Anleitungen, auf die Fehlermeldungen von „Inventar abfragen“ verweisen.
+pub const HELP_WINRM: &str = "https://github.com/joeMJ/remotejoe/blob/main/docs/ZIELE-EINRICHTEN.md";
+pub const HELP_OPENSSH: &str = "https://github.com/joeMJ/remotejoe#host-f%C3%BCr-powershell-%C3%BCber-ssh-einrichten";
+
+/// Verweise zu einer gescheiterten Abfrage: PowerShell → WinRM einrichten (bei Windows auch OpenSSH als
+/// Alternative); SSH auf einem Windows-Ziel → OpenSSH einrichten.
+fn help_links(windows: bool, windows_target: bool) -> Value {
+    let winrm = json!({ "text": "Anleitung: WinRM auf dem Windows-Ziel einrichten", "url": HELP_WINRM });
+    let ssh = json!({ "text": "Anleitung: OpenSSH (mit PowerShell) auf Windows einrichten", "url": HELP_OPENSSH });
+    match (windows, windows_target) {
+        (true, _) => json!([winrm, ssh]),
+        (false, true) => json!([ssh, winrm]),
+        (false, false) => json!([]),
+    }
+}
+
+/// Scheiterte die Abfrage, weil der Dienst fehlt oder nicht erreichbar ist (und nicht an Schlüssel oder Anmeldung)?
+fn service_missing(e: &str) -> bool {
+    let l = e.to_lowercase();
+    !["host-schlüssel", "anmeld", "auth", "kennwort", "passwor", "zugriff verweigert", "access is denied", "zugangsdaten"].iter().any(|w| l.contains(w))
+}
 
 /// Wie lange ein Ergebnis der Portprüfung gilt.
 const SERVICES_TTL: Duration = Duration::from_secs(60);
@@ -224,12 +246,11 @@ impl App {
                         found.push(("mac", mac, "ARP"));
                     }
                     if svc.iter().any(|x| x.port == rdp_port && x.open) {
+                        // Nur den Namen: Die Version in der NTLM-Antwort ist bei Nicht-Windows-Servern (FreeRDP,
+                        // GNOME-Remote-Desktop, xrdp) eine feste Angabe; das System kommt aus „Inventar abfragen“.
                         if let Ok(i) = rdpname::query(std::net::SocketAddr::new(ip, rdp_port), host.as_deref().unwrap_or_default(), Duration::from_secs(4)) {
                             if let Some(n) = i.machine_name() {
                                 found.push(("name", n, "RDP (NTLM)"));
-                            }
-                            if let Some(sys) = i.system() {
-                                found.push(("system", sys, "RDP (NTLM)"));
                             }
                         }
                     }
@@ -295,6 +316,9 @@ impl App {
             legacy: self.target_legacy_of(t.id),
         };
         let ssh_port = if t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
+        // Windows-Ziel: Protokoll RDP/PowerShell oder RDP bzw. WinRM offen.
+        let windows_target = matches!(t.protocol, Protocol::Rdp | Protocol::Psrp) || open(3389) == Some(true) || open(5985) == Some(true);
+        let help = help_links(windows, windows_target);
         let known = self.known_hosts_ref();
         let ip = self.overview.services.get(&key).and_then(|(_, v)| v["ip"].as_str().map(str::to_string));
         let job_key = key.clone();
@@ -316,7 +340,8 @@ impl App {
                         let saved = app.overview.store.save_key(&job_key, &inv);
                         json!({ "inventory": inventory_json(&inv), "error": saved.err() })
                     }
-                    Err(e) => json!({ "error": e }),
+                    // Verweise nur, wenn der Dienst fehlt oder nicht erreichbar ist – nicht bei Host-Schlüssel oder Anmeldung.
+                    Err(e) => json!({ "error": e, "help": if service_missing(&e) { help } else { json!([]) } }),
                 };
                 vec![UiEvent::JobResult { job, kind: "ov_query".into(), target: job_key, json: json.to_string() }]
             })
@@ -427,6 +452,16 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_queries_link_the_matching_guide() {
+        let h = help_links(true, true);
+        assert_eq!((h[0]["url"].as_str(), h[1]["url"].as_str()), (Some(HELP_WINRM), Some(HELP_OPENSSH)));
+        assert_eq!(help_links(false, true)[0]["url"], HELP_OPENSSH);
+        assert!(help_links(false, false).as_array().unwrap().is_empty(), "Linux über SSH: keine Windows-Anleitung");
+        assert!(service_missing("Verbindung abgelehnt (os error 111)") && service_missing("WinRM-Client nicht verfügbar"));
+        assert!(!service_missing("Host-Schlüssel unbekannt – bitte zuerst einmal direkt verbinden") && !service_missing("Authentication failed"));
+    }
 
     #[test]
     fn hosts_that_could_be_options_are_refused() {
