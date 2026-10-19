@@ -353,6 +353,11 @@ fn form_login_with_script_and_profile_per_target() {
     let trace = std::fs::read_to_string(profile.join("protokoll.log")).unwrap();
     assert!(!trace.contains("Kennwort") || !trace.contains("Prüf-"), "{trace}");
     assert!(!trace.contains(PASSWORD));
+    // Angemeldet wurde wie von Hand: Felder fokussiert, echte Eingabe (DevTools), Länge geprüft, abgeschickt;
+    // nicht über den bisherigen Weg (Werte per Skript).
+    assert!(trace.contains("Anmeldung in Schritten gestartet"), "{trace}");
+    assert!(trace.contains("Schritt Check") && trace.contains("rj:eingabe-ok"), "{trace}");
+    assert!(!trace.contains("Anmeldeskript gestartet"), "{trace}");
 }
 
 #[test]
