@@ -141,8 +141,11 @@ function vis(e){var w=(e.ownerDocument&&e.ownerDocument.defaultView)||window,r=e
 var BTNRE=/^(anmelden|anmeldung|login|log in|sign in|einloggen)$/i;
 function btn(pe){var box=pe.form||pe.getRootNode();if(!box.querySelector)return null;
 var s=box.querySelector('[type=submit],button:not([type=button]):not([type=reset])');if(s)return s;
-var c=[].slice.call(box.querySelectorAll('button,input[type=button],a,div,span,[role=button]'));
-for(var i=0;i<c.length;i++){var t=String(c[i].value||c[i].textContent||'').replace(/\s+/g,' ').trim();if(BTNRE.test(t)&&vis(c[i]))return c[i];}return null;}
+function txt(e){return String(e.value||e.textContent||'').replace(/\s+/g,' ').trim();}
+var c=[].slice.call(box.querySelectorAll('button,input[type=button],[role=button]'));
+for(var i=0;i<c.length;i++){if(BTNRE.test(txt(c[i]))&&vis(c[i]))return c[i];}
+c=[].slice.call(box.querySelectorAll('a,div,span'));
+for(i=0;i<c.length;i++){if(BTNRE.test(txt(c[i]))&&vis(c[i])&&![].some.call(c[i].children,function(k){return BTNRE.test(txt(k));}))return c[i];}return null;}
 function fill(el,v){if(!el)return false;el.focus();var p=Object.getPrototypeOf(el);var d=Object.getOwnPropertyDescriptor(p,'value');
 if(d&&d.set){d.set.call(el,v);}else{el.value=v;}
 el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));return true;}"####;
@@ -194,6 +197,85 @@ return '{RESULT_OK}';",
     Ok(s)
 }
 
+// ------------------------------------------------------------ Anmeldung in Schritten
+
+/// Schritte der Anmeldung wie von Hand. Die Skripte enthalten nie Zugangsdaten: Sie suchen,
+/// fokussieren und klicken nur; getippt wird vom Worker als echte Eingabe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Benutzerfeld fokussieren und markieren.
+    FocusUser,
+    /// Kennwortfeld fokussieren und markieren.
+    FocusPassword,
+    /// Länge der eingetragenen Werte prüfen (nie der Inhalt).
+    Check,
+    /// Feld verlassen, auf den freigegebenen Knopf warten, dann klicken.
+    Submit,
+    /// Knopf blieb gesperrt: Kennwortfeld fokussieren, danach Enter als echte Taste.
+    FocusForEnter,
+}
+
+/// Welches Feld der Worker tippen soll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Field {
+    User,
+    Password,
+}
+
+/// Art der echten Eingabe: zuerst Text einfügen wie eine Eingabehilfe, im zweiten Durchgang
+/// Taste für Taste (für Seiten, die nur auf Tastendrücke reagieren).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeMode {
+    Insert,
+    Keys,
+}
+
+pub const RESULT_FOCUS_USER: &str = "rj:fokus-benutzer";
+pub const RESULT_NO_USER_AUTO: &str = "rj:kein-benutzerfeld-auto";
+pub const RESULT_FOCUS_PASSWORD: &str = "rj:fokus-kennwort";
+pub const RESULT_INPUT_OK: &str = "rj:eingabe-ok";
+pub const RESULT_INPUT_MISSING: &str = "rj:eingabe-fehlt";
+pub const RESULT_BUTTON_LOCKED: &str = "rj:knopf-gesperrt";
+
+/// Suche der Felder: gleiche Regeln wie im alten Anmeldeskript (Selektor oder Automatik).
+const FIELDS: &str = r####"function fields(us,ps){var pe=ps?q(ps):(qa('input[type=password]').filter(vis)[0]||null);if(!pe)return null;var ue=null;
+if(us){ue=q(us);}else{var box=pe.form||pe.getRootNode(),all=[].slice.call(box.querySelectorAll('input')).filter(vis),i=all.indexOf(pe);
+for(i=i-1;i>=0;i--){var t=(all[i].type||'text').toLowerCase();if(['text','email','tel','search','url'].indexOf(t)>=0){ue=all[i];break;}}}return {u:ue,p:pe};}
+function focusSel(e){try{e.scrollIntoView({block:'center'});}catch(x){}e.focus();try{if(e.select)e.select();}catch(x){}}
+function locked(b){return !b||b.disabled||b.getAttribute('aria-disabled')==='true'||/(^|\s)(disabled|is-disabled)(\s|$)/.test(String(b.className||''));}"####;
+
+/// Wiederholung eines Schritts: (Abstand, Höchstzahl) für Ergebnisse, die „noch nicht so weit“ bedeuten.
+pub fn step_retry(result: &str) -> Option<(std::time::Duration, u32)> {
+    match result.trim_matches('"') {
+        // Formular wird erst nach dem Laden aufgebaut: alle 500 ms, höchstens 10 Sekunden.
+        RESULT_NO_PASSWORD_FIELD => Some((std::time::Duration::from_millis(500), 20)),
+        // Knopf noch gesperrt (Seite prüft die Eingabe): alle 100 ms, höchstens 3 Sekunden.
+        RESULT_BUTTON_LOCKED => Some((std::time::Duration::from_millis(100), 30)),
+        _ => None,
+    }
+}
+
+/// Skript eines Schritts. `user_len` und `pw_len` (Zeichen) braucht nur `Check`.
+pub fn step_script(l: &FormLogin, step: Step, user_len: usize, pw_len: usize) -> String {
+    let (us, ps, ss) = (js_opt(&l.username_selector), js_opt(&l.password_selector), js_opt(&l.submit_selector));
+    let body = match step {
+        Step::FocusUser => format!(
+            "var f=fields({us},{ps});if(!f)return '{RESULT_NO_PASSWORD_FIELD}';if(!f.u)return {us}?'{RESULT_NO_USERNAME_FIELD}':'{RESULT_NO_USER_AUTO}';focusSel(f.u);return '{RESULT_FOCUS_USER}';"
+        ),
+        Step::FocusPassword => format!("var f=fields({us},{ps});if(!f)return '{RESULT_NO_PASSWORD_FIELD}';focusSel(f.p);return '{RESULT_FOCUS_PASSWORD}';"),
+        Step::Check => format!(
+            "var f=fields({us},{ps});if(!f)return '{RESULT_NO_PASSWORD_FIELD}';var n=function(v){{return Array.from(String(v)).length;}},m=[];if(f.u&&n(f.u.value)!=={user_len})m.push('benutzer');if(n(f.p.value)!=={pw_len})m.push('kennwort');return m.length?'{RESULT_INPUT_MISSING}:'+m.join(','):'{RESULT_INPUT_OK}';"
+        ),
+        // Erst das Feld verlassen (manche Seiten übernehmen Werte erst dann), dann den Knopf
+        // klicken, sobald er freigegeben ist; der Klick folgt mit kurzer Verzögerung.
+        Step::Submit => format!(
+            "var f=fields({us},{ps});if(!f)return '{RESULT_NO_PASSWORD_FIELD}';var a=f.p.ownerDocument.activeElement;if(a&&a.blur){{a.blur();}}f.p.dispatchEvent(new FocusEvent('focusout',{{bubbles:true}}));var se={ss}?q({ss}):btn(f.p);if(se){{if(locked(se))return '{RESULT_BUTTON_LOCKED}';setTimeout(function(){{se.click();}},400);return '{RESULT_OK}';}}if(f.p.form){{setTimeout(function(){{if(f.p.form.requestSubmit)f.p.form.requestSubmit();else f.p.form.submit();}},400);return '{RESULT_OK}';}}return '{RESULT_BUTTON_LOCKED}';"
+        ),
+        Step::FocusForEnter => format!("var f=fields({us},{ps});if(!f)return '{RESULT_NO_PASSWORD_FIELD}';focusSel(f.p);return '{RESULT_FOCUS_PASSWORD}';"),
+    };
+    format!("(function(){{{HELPERS}{FIELDS}{body}}})()")
+}
+
 /// Was der Worker nach einem Ereignis tun soll.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlowAction {
@@ -204,6 +286,12 @@ pub enum FlowAction {
     Notice(String),
     /// Nach dem Abschicken prüfen, ob wieder ein Kennwortfeld erscheint (Anmeldung abgelehnt?).
     CheckRejected,
+    /// Schritt-Skript ausführen (Ergebnis an `step_result`).
+    Script(Step),
+    /// Feld als echte Eingabe tippen (danach `typed`).
+    Type(Field, TypeMode),
+    /// Enter als echte Taste im fokussierten Feld (danach `typed`).
+    PressEnter,
 }
 
 /// Ablauf der Formular-Anmeldung: höchstens ein Versuch je Seitenaufruf
@@ -217,13 +305,27 @@ pub struct LoginFlow {
     /// Formular wurde abgeschickt; kein weiterer Versuch, nur Prüfung auf Ablehnung.
     submitted: bool,
     rejected_noted: bool,
+    /// Hinweis „abgelehnt“ wurde wieder zurückgenommen (Anmeldung später doch gelungen).
+    rejected_cleared: bool,
+    /// Nachprüfungen, solange der Hinweis steht (manche Seiten laden nach der Anmeldung nicht neu).
+    rechecks: u32,
+    /// Laufende Anmeldung in Schritten: Art der Eingabe und zuletzt getipptes Feld.
+    mode: TypeMode,
+    last: Option<Typed>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Typed {
+    User,
+    Password,
+    Enter,
 }
 
 impl LoginFlow {
     pub const MAX_ATTEMPTS: u32 = 3;
 
     pub fn new(login: Option<FormLogin>) -> Self {
-        LoginFlow { login, attempts: 0, done: false, submitted: false, rejected_noted: false }
+        LoginFlow { login, attempts: 0, done: false, submitted: false, rejected_noted: false, rejected_cleared: false, rechecks: 0, mode: TypeMode::Insert, last: None }
     }
 
     pub fn page_loaded(&mut self, url: &str) -> FlowAction {
@@ -233,7 +335,8 @@ impl LoginFlow {
             return FlowAction::None;
         }
         if self.done {
-            return if self.submitted && !self.rejected_noted { FlowAction::CheckRejected } else { FlowAction::None };
+            let pending = !self.rejected_noted || !self.rejected_cleared;
+            return if self.submitted && pending { FlowAction::CheckRejected } else { FlowAction::None };
         }
         if let Some(m) = l.url_contains.as_ref().filter(|m| !m.is_empty()) {
             if !url.contains(m.as_str()) {
@@ -268,13 +371,85 @@ impl LoginFlow {
         }
     }
 
-    /// Ergebnis der Prüfung nach `CheckRejected`.
+    /// Höchstzahl der Nachprüfungen (alle 2 s, also etwa 5 Minuten), solange der Hinweis steht.
+    pub const MAX_RECHECKS: u32 = 150;
+
+    /// Ergebnis der Prüfung nach `CheckRejected`. Steht der Hinweis „abgelehnt“, wird weiter
+    /// nachgeprüft (`CheckRejected`), bis kein Kennwortfeld mehr da ist; dann wird er mit einem
+    /// leeren Hinweis zurückgenommen.
     pub fn rejected_check(&mut self, result: &str) -> FlowAction {
-        if result.trim_matches('"') != RESULT_PASSWORD_VISIBLE || self.rejected_noted {
+        let visible = result.trim_matches('"') == RESULT_PASSWORD_VISIBLE;
+        if self.rejected_noted {
+            if self.rejected_cleared {
+                return FlowAction::None;
+            }
+            if !visible {
+                self.rejected_cleared = true;
+                return FlowAction::Notice(String::new());
+            }
+            self.rechecks += 1;
+            return if self.rechecks < Self::MAX_RECHECKS { FlowAction::CheckRejected } else { FlowAction::None };
+        }
+        if !visible {
             return FlowAction::None;
         }
         self.rejected_noted = true;
         FlowAction::Notice("Nach dem Abschicken zeigt die Seite wieder ein Kennwortfeld: Die Anmeldung wurde vermutlich abgelehnt oder die Seite hat neu geladen. Es wird nicht erneut abgeschickt; bitte Zugangsdaten prüfen oder von Hand anmelden.".into())
+    }
+
+    /// Beginn der Anmeldung nach `InjectLogin`: mit eigenem Skript der alte Weg (`InjectLogin`),
+    /// sonst Schritte mit echter Eingabe.
+    pub fn begin(&mut self) -> FlowAction {
+        let Some(l) = &self.login else { return FlowAction::None };
+        if l.script.as_ref().is_some_and(|s| !s.trim().is_empty()) {
+            return FlowAction::InjectLogin;
+        }
+        self.mode = TypeMode::Insert;
+        self.last = None;
+        FlowAction::Script(Step::FocusUser)
+    }
+
+    /// Ergebnis eines Schritt-Skripts (nach den Wiederholungen aus `step_retry`).
+    pub fn step_result(&mut self, step: Step, result: &str) -> FlowAction {
+        let r = result.trim_matches('"');
+        match (step, r) {
+            (Step::FocusUser, RESULT_FOCUS_USER) => FlowAction::Type(Field::User, self.mode),
+            (Step::FocusUser, RESULT_NO_USER_AUTO) => FlowAction::Script(Step::FocusPassword),
+            (Step::FocusPassword, RESULT_FOCUS_PASSWORD) => FlowAction::Type(Field::Password, self.mode),
+            (Step::Check, RESULT_INPUT_OK) => FlowAction::Script(Step::Submit),
+            (Step::Check, m) if m.starts_with(RESULT_INPUT_MISSING) => match self.mode {
+                // Einfügen kam nicht an: zweiter Durchgang Taste für Taste.
+                TypeMode::Insert => {
+                    self.mode = TypeMode::Keys;
+                    FlowAction::Script(Step::FocusUser)
+                }
+                // Auch Tastendrücke kamen nicht an: alter Weg über das Skript.
+                TypeMode::Keys => FlowAction::InjectLogin,
+            },
+            (Step::Submit, RESULT_BUTTON_LOCKED) => FlowAction::Script(Step::FocusForEnter),
+            (Step::FocusForEnter, RESULT_FOCUS_PASSWORD) => FlowAction::PressEnter,
+            (Step::Submit, RESULT_OK) => self.script_result(RESULT_OK),
+            _ => self.script_result(r),
+        }
+    }
+
+    /// Der Worker hat ein Feld getippt bzw. Enter gedrückt.
+    pub fn typed(&mut self, action: &FlowAction) -> FlowAction {
+        match action {
+            FlowAction::Type(Field::User, _) => {
+                self.last = Some(Typed::User);
+                FlowAction::Script(Step::FocusPassword)
+            }
+            FlowAction::Type(Field::Password, _) => {
+                self.last = Some(Typed::Password);
+                FlowAction::Script(Step::Check)
+            }
+            FlowAction::PressEnter => {
+                self.last = Some(Typed::Enter);
+                self.script_result(RESULT_OK)
+            }
+            _ => FlowAction::None,
+        }
     }
 
     pub fn login(&self) -> Option<&FormLogin> {

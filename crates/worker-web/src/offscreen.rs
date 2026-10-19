@@ -12,6 +12,7 @@ use gtk::prelude::*;
 use gtk::{cairo, gdk, glib};
 use javascriptcore::ValueExt;
 use rj_core::Secret;
+use zeroize::Zeroizing;
 use rj_ipc::shm::FrameBufferWriter;
 use rj_ipc::worker::{Sender, WorkerLink};
 use rj_ipc::*;
@@ -305,6 +306,7 @@ impl Worker {
                     FlowAction::Notice(n) => me.send(FromWorker::Notice(n)),
                     FlowAction::CheckRejected => me.check_rejected(),
                     FlowAction::None => {}
+                    other => me.drive(other),
                 }
             }
         });
@@ -659,7 +661,7 @@ impl Worker {
     }
 
     fn inject(&self) {
-        let Some(page) = self.page() else {
+        if self.page().is_none() {
             self.0.inject_pending.set(true);
             return;
         };
@@ -678,12 +680,118 @@ impl Worker {
             self.trace("Anmeldeskript läuft bereits: zweiter Lauf übersprungen");
             return;
         }
+        // Anmeldung wie von Hand (Schritte mit echter Eingabe); eigenes Skript: alter Weg.
+        let first = self.0.flow.borrow_mut().begin();
+        match first {
+            FlowAction::InjectLogin => self.legacy_login(&login),
+            other => {
+                self.trace("Anmeldung in Schritten gestartet");
+                self.drive(other);
+            }
+        }
+    }
+
+    /// Benutzername (mit Domäne) und Kennwort der Sitzung.
+    fn login_strings(&self) -> Option<(String, Zeroizing<String>)> {
+        let c = self.0.creds.borrow().clone()?;
         let user = match &c.domain {
             Some(d) if !d.is_empty() && !c.username.contains('@') && !c.username.contains('\\') => format!("{d}\\{}", c.username),
             _ => c.username.clone(),
         };
-        let pw = Secret::from_bytes(c.password.0.clone());
-        match login_script(&login, &user, &pw) {
+        let pw = Zeroizing::new(String::from_utf8_lossy(&c.password.0).to_string());
+        Some((user, pw))
+    }
+
+    /// Nächste Aktion der Anmeldung ausführen.
+    fn drive(&self, action: FlowAction) {
+        match action {
+            FlowAction::InjectLogin => {
+                let Some(login) = self.0.flow.borrow().login().cloned() else { return self.0.login_busy.set(false) };
+                self.send(FromWorker::Notice("Eingabe wie von Hand kam auf dieser Seite nicht an; es wird der bisherige Weg versucht.".into()));
+                self.legacy_login(&login);
+            }
+            FlowAction::Script(step) => self.run_step(step, 0),
+            FlowAction::Type(field, _) => {
+                let Some((user, pw)) = self.login_strings() else { return self.0.login_busy.set(false) };
+                let text: Zeroizing<String> = match field {
+                    Field::User => Zeroizing::new(user),
+                    Field::Password => pw,
+                };
+                self.type_text(&text);
+                let next = self.0.flow.borrow_mut().typed(&action);
+                // Kurz warten, damit die Seite die Tasten verarbeitet hat.
+                let me = self.clone();
+                glib::timeout_add_local_once(Duration::from_millis(150), move || me.drive(next));
+            }
+            FlowAction::PressEnter => {
+                if let Some(page) = self.page() {
+                    self.focus(true);
+                    let state = self.state();
+                    events::key(&page.window, 0xff0d, true, state, false);
+                    events::key(&page.window, 0xff0d, false, state, false);
+                }
+                let next = self.0.flow.borrow_mut().typed(&action);
+                self.drive(next);
+            }
+            FlowAction::Notice(n) => {
+                self.0.login_busy.set(false);
+                self.send(FromWorker::Notice(n));
+            }
+            FlowAction::CheckRejected => {
+                self.0.login_busy.set(false);
+                self.check_rejected();
+            }
+            FlowAction::None => self.0.login_busy.set(false),
+        }
+    }
+
+    /// Text als echte Tastenanschläge in das fokussierte Feld.
+    fn type_text(&self, text: &str) {
+        let Some(page) = self.page() else { return };
+        // Tasten erreichen die Seite nur, wenn die Ansicht den Fokus hat (auch im Hintergrund-Tab).
+        self.focus(true);
+        let state = self.state();
+        for c in text.chars() {
+            // SAFETY: reine Umrechnung ohne Zeiger.
+            let keyval = unsafe { gdk::ffi::gdk_unicode_to_keyval(c as u32) };
+            events::key(&page.window, keyval, true, state, false);
+            events::key(&page.window, keyval, false, state, false);
+        }
+    }
+
+    /// Schritt-Skript ausführen; „noch nicht so weit“ wird wiederholt (`step_retry`).
+    fn run_step(&self, step: Step, tries: u32) {
+        let Some(page) = self.page() else { return self.0.login_busy.set(false) };
+        let Some(login) = self.0.flow.borrow().login().cloned() else { return self.0.login_busy.set(false) };
+        let (ulen, plen) = self.login_strings().map(|(u, p)| (u.chars().count(), p.chars().count())).unwrap_or((0, 0));
+        let script = step_script(&login, step, ulen, plen);
+        // Die Ansicht braucht den Tastaturfokus, bevor die Seite ein Feld fokussiert.
+        if matches!(step, Step::FocusUser | Step::FocusPassword | Step::FocusForEnter) {
+            self.focus(true);
+        }
+        let me = self.clone();
+        page.view.evaluate_javascript(&script, None, None, None::<&gtk::gio::Cancellable>, move |r| {
+            let text = match r {
+                Ok(v) => v.to_str().to_string(),
+                Err(e) => e.message().to_string(),
+            };
+            if let Some((every, max)) = step_retry(&text) {
+                if tries < max {
+                    glib::timeout_add_local_once(every, move || me.run_step(step, tries + 1));
+                    return;
+                }
+            }
+            me.trace(&format!("Schritt {step:?} nach {tries} Wiederholungen: {}", text.chars().take(80).collect::<String>()));
+            let next = me.0.flow.borrow_mut().step_result(step, &text);
+            me.drive(next);
+        });
+    }
+
+    /// Bisheriger Weg: Werte per Skript eintragen (eigene Skripte, Rückfall).
+    fn legacy_login(&self, login: &FormLogin) {
+        let Some((user, pw)) = self.login_strings() else { return self.0.login_busy.set(false) };
+        let pw = Secret::from_bytes(pw.as_bytes().to_vec());
+        match login_script(login, &user, &pw) {
             Ok(script) => {
                 self.trace("Anmeldeskript gestartet");
                 self.run_login(script, 0)
@@ -704,8 +812,12 @@ impl Worker {
             page.view.evaluate_javascript(&presence_script(), None, None, None::<&gtk::gio::Cancellable>, move |r| {
                 let text = r.map(|v| v.to_str().to_string()).unwrap_or_default();
                 me2.trace(&format!("Prüfung nach dem Abschicken: {text}"));
-                if let FlowAction::Notice(n) = me2.0.flow.borrow_mut().rejected_check(&text) {
-                    me2.send(FromWorker::Notice(n));
+                let action = me2.0.flow.borrow_mut().rejected_check(&text);
+                match action {
+                    FlowAction::Notice(n) => me2.send(FromWorker::Notice(n)),
+                    // Hinweis steht noch: später erneut nachsehen (Anmeldung von Hand?).
+                    FlowAction::CheckRejected => me2.check_rejected(),
+                    _ => {}
                 }
             });
         });
