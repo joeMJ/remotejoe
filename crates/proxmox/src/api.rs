@@ -63,6 +63,81 @@ pub struct Guest {
     pub maxmem: u64,
 }
 
+/// Inventar eines Gasts (Konfiguration und, wenn er läuft, Adressen).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GuestInfo {
+    pub name: Option<String>,
+    pub vcpu: Option<u64>,
+    pub mem_bytes: Option<u64>,
+    pub macs: Vec<String>,
+    pub ips: Vec<String>,
+}
+
+fn num(v: Option<&Value>) -> Option<u64> {
+    match v? {
+        Value::Number(n) => n.as_u64(),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn looks_like_mac(s: &str) -> bool {
+    s.len() == 17 && s.split(':').count() == 6 && s.split(':').all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// `GET …/config`: VM (`cores`×`sockets` bzw. `vcpus`, `memory` in MiB, `netN` = `virtio=MAC,…`) oder
+/// Container (`cores`, `memory`, `netN` = `name=eth0,hwaddr=MAC,ip=…`).
+pub fn parse_guest_config(cfg: &Value, kind: GuestKind) -> GuestInfo {
+    let mut info = GuestInfo::default();
+    info.name = cfg.get(if kind == GuestKind::Lxc { "hostname" } else { "name" }).and_then(Value::as_str).map(str::to_string);
+    info.vcpu = match kind {
+        GuestKind::Qemu => num(cfg.get("vcpus")).or_else(|| Some(num(cfg.get("cores")).unwrap_or(1) * num(cfg.get("sockets")).unwrap_or(1))),
+        GuestKind::Lxc => num(cfg.get("cores")),
+    };
+    info.mem_bytes = num(cfg.get("memory")).map(|m| m * 1024 * 1024);
+    let mut nets: Vec<(&String, &Value)> = cfg.as_object().into_iter().flatten().filter(|(k, _)| k.starts_with("net") && k[3..].parse::<u32>().is_ok()).collect();
+    nets.sort_by_key(|(k, _)| k[3..].parse::<u32>().unwrap_or(0));
+    for (_, v) in nets {
+        for part in v.as_str().unwrap_or_default().split(',') {
+            let Some((k, val)) = part.split_once('=') else { continue };
+            if looks_like_mac(val) && (k == "hwaddr" || kind == GuestKind::Qemu) {
+                info.macs.push(val.to_ascii_lowercase());
+            } else if k == "ip" && val.contains('.') {
+                info.ips.push(val.split('/').next().unwrap_or(val).to_string());
+            }
+        }
+    }
+    info
+}
+
+fn usable_ip(ip: &str) -> bool {
+    !(ip.is_empty() || ip.starts_with("127.") || ip == "::1" || ip.starts_with("fe80:"))
+}
+
+/// Gast-Agent: `{"result":[{"name":"eth0","ip-addresses":[{"ip-address":"…"}]}]}`.
+pub fn parse_agent_interfaces(v: &Value) -> Vec<String> {
+    let list = v.get("result").unwrap_or(v);
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|i| i.get("name").and_then(Value::as_str) != Some("lo"))
+        .flat_map(|i| i.get("ip-addresses").and_then(Value::as_array).cloned().unwrap_or_default())
+        .filter_map(|a| a.get("ip-address").and_then(Value::as_str).map(str::to_string))
+        .filter(|ip| usable_ip(ip))
+        .collect()
+}
+
+/// Container: `[{"name":"eth0","inet":"192.0.2.5/24","inet6":"…"}]`.
+pub fn parse_lxc_interfaces(v: &Value) -> Vec<String> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|i| i.get("name").and_then(Value::as_str) != Some("lo"))
+        .flat_map(|i| ["inet", "inet6"].into_iter().filter_map(|k| i.get(k).and_then(Value::as_str).map(|a| a.split('/').next().unwrap_or(a).to_string())).collect::<Vec<_>>())
+        .filter(|ip| usable_ip(ip))
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Start,
@@ -216,6 +291,24 @@ impl Client {
         Ok(out)
     }
 
+    /// Inventar eines Gasts aus seiner Konfiguration; bei laufenden Gästen zusätzlich die Adressen
+    /// (VM: über den Gast-Agenten, falls installiert; Container: über die Schnittstellen).
+    pub fn guest_info(&self, g: &Guest) -> Result<GuestInfo, ProxmoxError> {
+        let path = Self::guest_path(g);
+        let cfg = self.call("GET", &format!("{path}/config"), "")?;
+        let mut info = parse_guest_config(&cfg, g.kind);
+        if g.status == "running" {
+            let ifs = match g.kind {
+                GuestKind::Qemu => self.call("GET", &format!("{path}/agent/network-get-interfaces"), "").ok().map(|v| parse_agent_interfaces(&v)),
+                GuestKind::Lxc => self.call("GET", &format!("{path}/interfaces"), "").ok().map(|v| parse_lxc_interfaces(&v)),
+            };
+            if let Some(ips) = ifs.filter(|i| !i.is_empty()) {
+                info.ips = ips;
+            }
+        }
+        Ok(info)
+    }
+
     fn guest_path(g: &Guest) -> String {
         format!("/api2/json/nodes/{}/{}/{}", form_encode(g.node.as_bytes()), g.kind.path(), g.vmid)
     }
@@ -357,5 +450,37 @@ mod tests {
         assert_eq!(form_encode("a b&c=ß".as_bytes()), "a%20b%26c%3D%C3%9F");
         // Zerlegtes „ä“ bleibt zerlegt.
         assert_eq!(form_encode("a\u{308}".as_bytes()), "a%CC%88");
+    }
+}
+
+#[cfg(test)]
+mod guest_info_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn vm_and_container_configs_are_read() {
+        let vm = json!({ "name": "web01", "cores": 2, "sockets": 2, "memory": "4096", "net0": "virtio=BC:24:11:AA:BB:CC,bridge=vmbr0,firewall=1", "net1": "e1000=bc:24:11:00:00:01,bridge=vmbr1" });
+        let i = parse_guest_config(&vm, GuestKind::Qemu);
+        assert_eq!((i.name.as_deref(), i.vcpu, i.mem_bytes), (Some("web01"), Some(4), Some(4096 * 1024 * 1024)));
+        assert_eq!(i.macs, vec!["bc:24:11:aa:bb:cc", "bc:24:11:00:00:01"]);
+        assert_eq!(parse_guest_config(&json!({ "vcpus": 3, "cores": 4 }), GuestKind::Qemu).vcpu, Some(3));
+        assert_eq!(parse_guest_config(&json!({}), GuestKind::Qemu).vcpu, Some(1));
+        let ct = json!({ "hostname": "dns1", "cores": 1, "memory": 512, "net0": "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:0A:0B:0C,ip=192.0.2.53/24,type=veth" });
+        let i = parse_guest_config(&ct, GuestKind::Lxc);
+        assert_eq!((i.name.as_deref(), i.vcpu, i.mem_bytes), (Some("dns1"), Some(1), Some(512 * 1024 * 1024)));
+        assert_eq!((i.macs, i.ips), (vec!["bc:24:11:0a:0b:0c".to_string()], vec!["192.0.2.53".to_string()]));
+        assert_eq!(parse_guest_config(&json!({ "hostname": "x" }), GuestKind::Lxc).vcpu, None, "ohne Begrenzung keine Angabe");
+    }
+
+    #[test]
+    fn addresses_from_agent_and_container_skip_loopback_and_link_local() {
+        let agent = json!({ "result": [
+            { "name": "lo", "ip-addresses": [{ "ip-address": "127.0.0.1" }] },
+            { "name": "eth0", "ip-addresses": [{ "ip-address": "192.0.2.10" }, { "ip-address": "fe80::1" }, { "ip-address": "2001:db8::10" }] }
+        ] });
+        assert_eq!(parse_agent_interfaces(&agent), vec!["192.0.2.10", "2001:db8::10"]);
+        let ct = json!([{ "name": "lo", "inet": "127.0.0.1/8" }, { "name": "eth0", "inet": "192.0.2.53/24", "inet6": "fe80::2/64" }]);
+        assert_eq!(parse_lxc_interfaces(&ct), vec!["192.0.2.53"]);
     }
 }

@@ -624,7 +624,7 @@ impl App {
                 self.overview_stop();
                 Ok(json!({ "ok": true }))
             }
-            "ov_output" => id_of(&c, "id").map(|id| json!({ "run": self.overview_output(id) })).ok_or_else(|| "ID fehlt".to_string()),
+            "ov_output" => Ok(json!({ "run": self.overview_output(&c) })),
             "ov_notes" => self.overview_notes(&c),
             "connect_all" => self.op_connect_all(&c),
             "cert_check_start" => self.op_cert_check_start(&c),

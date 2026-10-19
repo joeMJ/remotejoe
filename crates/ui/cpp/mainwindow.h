@@ -77,7 +77,7 @@ public:
 	/// Anmeldeobjekt öffnen (`id` leer: neu im Ordner `folder` bzw. im Ordner des Ziels `folder`).
 	void openLogin(const QString& id, const QString& folder);
 	/// Objektübersicht des Ziels (ein Tab für alle, Einfachklick im Baum).
-	void openOverview(const QString& id);
+	void openOverview(const QJsonObject& subject);
 	/// Ist `id` ein Anmeldeobjekt im Baum?
 	bool isLogin(const QString& id) const;
 	/// Für Bildschirmfotos: Eigenschaften des ersten Ziels, Hinzufügen-Menü, Entsperren.

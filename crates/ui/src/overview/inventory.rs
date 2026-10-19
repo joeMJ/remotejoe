@@ -110,16 +110,26 @@ impl Store {
         Store { dir: rj_core::config::data_dir().map(|d| d.join("inventar")) }
     }
 
-    fn path(&self, id: Uuid) -> Option<PathBuf> {
-        self.dir.as_ref().map(|d| d.join(format!("{id}.json")))
+    /// Datei für einen Schlüssel: Ziel-ID oder `gast-<Hypervisor-ID>-<Gast>` (nur sichere Zeichen).
+    fn path(&self, key: &str) -> Option<PathBuf> {
+        let safe: String = key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+        self.dir.as_ref().map(|d| d.join(format!("{safe}.json")))
     }
 
     pub fn load(&self, id: Uuid) -> Inventory {
-        self.path(id).and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        self.load_key(&id.to_string())
     }
 
     pub fn save(&self, id: Uuid, inv: &Inventory) -> Result<(), String> {
-        let p = self.path(id).ok_or("kein Datenordner")?;
+        self.save_key(&id.to_string(), inv)
+    }
+
+    pub fn load_key(&self, key: &str) -> Inventory {
+        self.path(key).and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+
+    pub fn save_key(&self, key: &str, inv: &Inventory) -> Result<(), String> {
+        let p = self.path(key).ok_or("kein Datenordner")?;
         if let Some(d) = p.parent() {
             std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
         }
@@ -201,6 +211,10 @@ mod tests {
         assert_eq!(store.load(id), inv);
         store.save(id, &Inventory::default()).unwrap();
         assert!(!dir.path().join("inventar").join(format!("{id}.json")).exists());
+        // Gäste: Schlüssel mit Schrägstrichen werden zu einem sicheren Dateinamen.
+        store.save_key("gast-x-pve1/qemu/100", &inv).unwrap();
+        assert!(dir.path().join("inventar").join("gast-x-pve1_qemu_100.json").exists());
+        assert_eq!(store.load_key("gast-x-pve1/qemu/100"), inv);
     }
 
     #[test]

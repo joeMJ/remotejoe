@@ -91,7 +91,8 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	connect(m_query, &QPushButton::clicked, this, [this] { query(); });
 
 	// Notizen
-	lay->addWidget(heading(T("ov.notes"), page));
+	m_notesHead = heading(T("ov.notes"), page);
+	lay->addWidget(m_notesHead);
 	m_notes = new QPlainTextEdit(page);
 	m_notes->setTabChangesFocus(true);
 	m_notes->setMinimumHeight(70);
@@ -151,18 +152,21 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	connect(m_poll, &QTimer::timeout, this, [this] { pollRun(); });
 }
 
-QJsonObject OverviewTab::call(const QJsonObject& cmd) const
+QJsonObject OverviewTab::call(const QJsonObject& c) const
 {
+	QJsonObject cmd = m_subject;
+	for (auto it = c.begin(); it != c.end(); ++it)
+		cmd.insert(it.key(), it.value());
 	return QJsonDocument::fromJson(m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact))).toUtf8()).object();
 }
 
-void OverviewTab::showTarget(const QString& id)
+void OverviewTab::showSubject(const QJsonObject& subject)
 {
-	if (id == m_id)
+	if (subject == m_subject)
 		return;
-	if (m_notesSave->isEnabled() && !m_id.isEmpty())
+	if (m_notesSave->isEnabled() && !m_subject.isEmpty())
 		saveNotes(); // Ungespeicherte Notiz des vorherigen Ziels nicht verlieren.
-	m_id = id;
+	m_subject = subject;
 	m_output->clear();
 	m_output->hide();
 	m_scroll->verticalScrollBar()->setValue(0);
@@ -177,15 +181,20 @@ QString OverviewTab::fieldLabel(const QString& key) const
 
 void OverviewTab::load()
 {
-	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("overview") }, { QStringLiteral("id"), m_id } });
+	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("overview") } });
 	if (r.contains(QStringLiteral("error")))
 	{
 		m_title->setText(r.value(QStringLiteral("error")).toString());
 		return;
 	}
+	m_key = r.value(QStringLiteral("key")).toString();
 	m_name = r.value(QStringLiteral("name")).toString();
 	m_title->setText(m_name);
-	m_sub->setText(QStringLiteral("%1 · %2:%3").arg(r.value(QStringLiteral("protocol")).toString(), r.value(QStringLiteral("host")).toString()).arg(r.value(QStringLiteral("port")).toInt()));
+	m_sub->setText(r.value(QStringLiteral("sub")).toString());
+	const bool guest = r.value(QStringLiteral("guest")).toBool();
+	m_query->setVisible(r.value(QStringLiteral("can_query")).toBool());
+	for (QWidget* w : { static_cast<QWidget*>(m_notesHead), static_cast<QWidget*>(m_notes), static_cast<QWidget*>(m_notesSave), static_cast<QWidget*>(m_notesState) })
+		w->setVisible(!guest);
 	emit titleChanged();
 	renderServices(r.value(QStringLiteral("services")));
 	renderInventory(r.value(QStringLiteral("inventory")).toArray());
@@ -210,7 +219,7 @@ void OverviewTab::load()
 
 void OverviewTab::probe(bool force)
 {
-	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_probe") }, { QStringLiteral("id"), m_id }, { QStringLiteral("force"), force } });
+	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_probe") }, { QStringLiteral("force"), force } });
 	if (r.contains(QStringLiteral("pending")))
 	{
 		m_services->setText(m_backend->text(QStringLiteral("ov.services.running")));
@@ -224,7 +233,7 @@ void OverviewTab::probe(bool force)
 
 void OverviewTab::query()
 {
-	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_query") }, { QStringLiteral("id"), m_id } });
+	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_query") } });
 	if (r.contains(QStringLiteral("error")))
 	{
 		m_queryState->setText(r.value(QStringLiteral("error")).toString());
@@ -236,7 +245,7 @@ void OverviewTab::query()
 
 void OverviewTab::handleResult(const QString& kind, const QString& target, const QJsonObject& r)
 {
-	if (target != m_id)
+	if (target != m_key)
 		return;
 	if (kind == QLatin1String("ov_probe"))
 	{
@@ -253,7 +262,7 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 			renderInventory(r.value(QStringLiteral("inventory")).toArray());
 			m_queryState->setText(m_backend->text(QStringLiteral("ov.inventory.done")));
 			// Aruba erst nach der Abfrage bekannt.
-			const QJsonObject o = call({ { QStringLiteral("op"), QStringLiteral("overview") }, { QStringLiteral("id"), m_id } });
+			const QJsonObject o = call({ { QStringLiteral("op"), QStringLiteral("overview") } });
 			const bool aruba = o.value(QStringLiteral("aruba")).toBool();
 			m_arubaHead->setVisible(aruba);
 			m_aruba->setVisible(aruba);
@@ -318,7 +327,7 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 		connect(edit, &QLineEdit::editingFinished, this, [this, edit, key, before] {
 			if (edit->text().trimmed() == before)
 				return;
-			const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_field") }, { QStringLiteral("id"), m_id }, { QStringLiteral("field"), key }, { QStringLiteral("value"), edit->text() } });
+			const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_field") }, { QStringLiteral("field"), key }, { QStringLiteral("value"), edit->text() } });
 			if (r.contains(QStringLiteral("error")))
 				m_queryState->setText(r.value(QStringLiteral("error")).toString());
 			else
@@ -341,7 +350,7 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 			h->addWidget(keep);
 			for (auto [b, accept] : { std::pair{ take, true }, std::pair{ keep, false } })
 				connect(b, &QPushButton::clicked, this, [this, key, accept] {
-					const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_field") }, { QStringLiteral("id"), m_id }, { QStringLiteral("field"), key }, { QStringLiteral("accept"), accept } });
+					const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_field") }, { QStringLiteral("field"), key }, { QStringLiteral("accept"), accept } });
 					QTimer::singleShot(0, this, [this, inv = r.value(QStringLiteral("inventory")).toArray()] { renderInventory(inv); });
 				});
 			m_inventory->addWidget(box, row, 1, 1, 2);
@@ -352,7 +361,7 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 
 void OverviewTab::startCheck(const QString& kind)
 {
-	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_run") }, { QStringLiteral("id"), m_id }, { QStringLiteral("kind"), kind } });
+	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_run") }, { QStringLiteral("kind"), kind } });
 	m_output->show();
 	if (r.contains(QStringLiteral("error")))
 	{
@@ -368,7 +377,7 @@ void OverviewTab::startCheck(const QString& kind)
 
 void OverviewTab::pollRun()
 {
-	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_output") }, { QStringLiteral("id"), m_id } }).value(QStringLiteral("run")).toObject();
+	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_output") } }).value(QStringLiteral("run")).toObject();
 	const bool done = r.isEmpty() || r.value(QStringLiteral("done")).toBool();
 	if (!r.isEmpty())
 	{
@@ -390,7 +399,7 @@ void OverviewTab::pollRun()
 
 void OverviewTab::saveNotes()
 {
-	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_notes") }, { QStringLiteral("id"), m_id }, { QStringLiteral("notes"), m_notes->toPlainText() } });
+	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_notes") }, { QStringLiteral("notes"), m_notes->toPlainText() } });
 	if (r.contains(QStringLiteral("error")))
 	{
 		m_notesState->setText(r.value(QStringLiteral("error")).toString());

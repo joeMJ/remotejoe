@@ -356,6 +356,60 @@ fn run_action(c: &Ctx, guest: &str, action: &str, timeout: Duration) -> String {
     }
 }
 
+/// Abfrage des Gast-Inventars über den Hypervisor (Hintergrund): Felder und Quelle.
+pub(crate) type GuestFetch = Box<dyn FnOnce() -> Result<(Vec<(&'static str, String)>, &'static str), String> + Send>;
+
+impl App {
+    /// Bereitet die Inventarabfrage eines Gasts vor (Zugangsdaten des Hypervisors); `running` nur für Proxmox (Adressen).
+    pub(crate) fn guest_inventory_task(&self, hv: Uuid, guest: &str, running: bool) -> Result<GuestFetch, String> {
+        let c = self.hyper_ctx(hv)?;
+        let timeout = Duration::from_secs(self.config.connection.connect_timeout_secs as u64);
+        let guest = guest.to_string();
+        Ok(Box::new(move || match c.protocol {
+            Protocol::Proxmox => {
+                let mut g = guest_of(&guest).ok_or("unbekannter Gast")?;
+                if running {
+                    g.status = "running".into();
+                }
+                let seen = Arc::new(Mutex::new(None));
+                let i = proxmox_client(&c, seen.clone(), timeout).and_then(|cl| cl.guest_info(&g).map_err(|e| App::proxmox_error(&c, e, &seen)))?;
+                let mut f: Vec<(&'static str, String)> = Vec::new();
+                if let Some(n) = i.name {
+                    f.push(("name", n));
+                }
+                if let Some(v) = i.vcpu {
+                    f.push(("vcpu", v.to_string()));
+                }
+                if let Some(m) = i.mem_bytes {
+                    f.push(("memory", crate::overview::inventory::format_bytes(m)));
+                }
+                if i.macs.len() == 1 {
+                    f.push(("mac", i.macs[0].clone()));
+                }
+                if let Some(ip) = i.ips.iter().find(|a| a.parse::<std::net::Ipv4Addr>().is_ok()).or(i.ips.first()) {
+                    f.push(("ip", ip.clone()));
+                }
+                Ok((f, "Proxmox"))
+            }
+            _ => {
+                let mut s = hyperv_session(&c)?;
+                let mut lines = Vec::new();
+                let mut errors = Vec::new();
+                s.run(&rj_psrp::inventory::hyperv_guest_inventory_script(&guest), |r| {
+                    if r.stream == "error" {
+                        errors.push(r.text.clone());
+                    } else {
+                        lines.push(r.text.clone());
+                    }
+                })
+                .map_err(|e| e.to_string())?;
+                let f = lines.iter().find_map(|l| crate::overview::remote::parse_windows(l, None)).ok_or_else(|| errors.first().cloned().unwrap_or_else(|| "Keine Antwort vom Hyper-V-Host".into()))?;
+                Ok((f, "Hyper-V"))
+            }
+        }))
+    }
+}
+
 fn hyperv_session(c: &Ctx) -> Result<rj_psrp::PsSession, String> {
     let transport = rj_core::PsrpTransport::effective(c.transport.clone(), None);
     let t = rj_psrp::PsTarget { host: c.host.clone(), username: c.creds.username.clone(), domain: c.creds.domain.clone(), transport };

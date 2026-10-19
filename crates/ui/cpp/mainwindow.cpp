@@ -92,6 +92,8 @@ constexpr int RoleLight = Qt::UserRole + 8;
 constexpr int RoleSessionMark = Qt::UserRole + 9;
 /// Anmeldeobjekt (keine Verbindung; öffnet die Bearbeitung).
 constexpr int RoleLogin = Qt::UserRole + 10;
+/// Zustand eines Gasts (z. B. `running`), für die Übersicht.
+constexpr int RoleGuestState = Qt::UserRole + 11;
 /// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
 constexpr int RoleMacro = Qt::UserRole + 20;
 
@@ -886,11 +888,20 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(m_tree, &QTreeView::clicked, this, [this](const QModelIndex& i) {
 		if (QGuiApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier))
 			return; // Mehrfachauswahl
-		if (i.data(RoleMacro).toInt() != 0 || i.data(RoleGuest).isValid() || i.data(RolePlaceholder).toBool() || i.data(RoleFolder).toBool() || i.data(RoleLogin).toBool())
+		if (i.data(RoleGuest).isValid())
+		{
+			openOverview(QJsonObject{ { QStringLiteral("hv"), i.data(RoleGuestTarget).toString() },
+			                          { QStringLiteral("guest"), i.data(RoleGuest).toString() },
+			                          { QStringLiteral("name"), i.data(Qt::DisplayRole).toString() },
+			                          { QStringLiteral("state"), i.data(RoleGuestState).toString() },
+			                          { QStringLiteral("address"), i.data(RoleConsoleHost).toString() } });
+			return;
+		}
+		if (i.data(RoleMacro).toInt() != 0 || i.data(RolePlaceholder).toBool() || i.data(RoleFolder).toBool() || i.data(RoleLogin).toBool())
 			return;
 		const QString id = i.data(RoleId).toString();
 		if (!id.isEmpty())
-			openOverview(id);
+			openOverview(QJsonObject{ { QStringLiteral("id"), id } });
 	});
 	connect(m_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex& i) {
 		if (i.data(RoleMacro).toInt() == 2)
@@ -2014,6 +2025,7 @@ void MainWindow::applyGuests(const QString& target, QJsonObject r)
 		item->setData(g.value(QStringLiteral("id")).toString(), RoleGuest);
 		item->setData(target, RoleGuestTarget);
 		item->setData(g.value(QStringLiteral("console_host")).toString(), RoleConsoleHost);
+		item->setData(state, RoleGuestState);
 		item->setData(true, RoleFolder);
 		item->setIcon(protocolIcon(consoleProto, state == QStringLiteral("running") ? QStringLiteral("green") : QStringLiteral("grey"), false));
 		item->setToolTip(g.value(QStringLiteral("detail")).toString() + QStringLiteral("\n") + state);
@@ -3772,7 +3784,7 @@ bool MainWindow::isLogin(const QString& id) const
 	return hit;
 }
 
-void MainWindow::openOverview(const QString& id)
+void MainWindow::openOverview(const QJsonObject& subject)
 {
 	auto* t = findChild<OverviewTab*>();
 	if (!t)
@@ -3787,7 +3799,7 @@ void MainWindow::openOverview(const QString& id)
 	}
 	else
 		m_tabs->setCurrentWidget(t);
-	t->showTarget(id);
+	t->showSubject(subject);
 }
 
 void MainWindow::openLogin(const QString& id, const QString& folder)

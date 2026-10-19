@@ -25,9 +25,9 @@ class OverviewTab : public ToolTab
 	Q_OBJECT
 public:
 	OverviewTab(RjBackend* backend, QWidget* parent = nullptr);
-	/// Ziel anzeigen (lädt die Daten und startet die Prüfung der Dienste).
-	void showTarget(const QString& id);
-	QString targetId() const { return m_id; }
+	/// Ziel (`id`) oder Gast (`hv`, `guest`, `name`, `state`, `address`) anzeigen; lädt die Daten und startet
+	/// die Prüfung der Dienste.
+	void showSubject(const QJsonObject& subject);
 	QString targetName() const { return m_name; }
 	/// Ergebnis einer Hintergrundaufgabe (`ov_probe`, `ov_query`).
 	void handleResult(const QString& kind, const QString& target, const QJsonObject& r);
@@ -48,8 +48,11 @@ private:
 	QString fieldLabel(const QString& key) const;
 
 	RjBackend* m_backend;
-	QString m_id;
+	QJsonObject m_subject;
+	/// Schlüssel des Angezeigten (Ziel-ID oder Gast), wie ihn die Ergebnisse tragen.
+	QString m_key;
 	QString m_name;
+	QLabel* m_notesHead;
 	bool m_notesEditable = false;
 	QLabel* m_title;
 	QLabel* m_sub;
