@@ -63,6 +63,50 @@ fn find_draft(ep: &Endpoints, repo: &str, tag: &str, token: &str, cancel: Option
     Ok(None)
 }
 
+/// Zusätzliche Dateien an den Entwurf hängen und `SHA256SUMS` um sie ergänzt neu hochladen.
+#[allow(clippy::too_many_arguments)]
+fn add_extras(
+    ep: &Endpoints,
+    repo: &str,
+    id: u64,
+    release: &Release,
+    mut sums: Vec<u8>,
+    extra: &[(String, Vec<u8>)],
+    token: &str,
+    cancel: Option<&AtomicBool>,
+) -> Result<Vec<u8>> {
+    for (name, data) in extra {
+        if release.assets.iter().any(|a| a.name == *name) || sign::sums_lookup(&sums, name).is_ok() {
+            return Err(UpdateError::Install(format!("{name} ist im Entwurf schon vorhanden.")));
+        }
+        if !sums.is_empty() && !sums.ends_with(b"\n") {
+            sums.push(b'\n');
+        }
+        sums.extend_from_slice(format!("{}  {name}\n", sign::sha256_hex(data)).as_bytes());
+    }
+    let upload = |name: &str, data: &[u8]| -> Result<()> {
+        let url = format!("{}/repos/{repo}/releases/{id}/assets?name={name}", ep.uploads.trim_end_matches('/'));
+        let mut h = headers(token, "application/vnd.github+json");
+        h.push(("Content-Type".into(), "application/octet-stream".into()));
+        let r = http::request("POST", &url, &h, data, &ctl(cancel, 900, 1024 * 1024))?;
+        if r.status != 201 {
+            return Err(UpdateError::Status { status: r.status, what: format!("Hochladen von {name}") });
+        }
+        Ok(())
+    };
+    for (name, data) in extra {
+        upload(name, data)?;
+    }
+    // Alte Prüfsummendatei ersetzen.
+    let old = release.assets.iter().find(|a| a.name == SUMS).ok_or_else(|| UpdateError::MissingFile(SUMS.into()))?;
+    let r = http::request("DELETE", &old.url, &headers(token, "application/vnd.github+json"), &[], &ctl(cancel, 60, 1024 * 1024))?;
+    if r.status != 204 {
+        return Err(UpdateError::Status { status: r.status, what: "Ersetzen von SHA256SUMS".into() });
+    }
+    upload(SUMS, &sums)?;
+    Ok(sums)
+}
+
 fn asset_bytes(a: &Asset, token: &str, cancel: Option<&AtomicBool>, max: u64) -> Result<Vec<u8>> {
     if a.url.is_empty() {
         return Err(UpdateError::MissingFile(a.name.clone()));
@@ -81,6 +125,24 @@ pub fn finish_release(
     public: &VerifyingKey,
     wait: Duration,
     cancel: Option<&AtomicBool>,
+) -> Result<Finished> {
+    finish_release_with(ep, repo, tag, token, key, public, wait, cancel, &[])
+}
+
+/// Wie `finish_release`; `extra` (Dateiname, Inhalt) werden vor dem Signieren an den Entwurf
+/// gehängt und in `SHA256SUMS` eingetragen (z. B. die unter Windows gebaute MSI), damit auch sie
+/// von der Signatur gedeckt sind.
+#[allow(clippy::too_many_arguments)]
+pub fn finish_release_with(
+    ep: &Endpoints,
+    repo: &str,
+    tag: &str,
+    token: &str,
+    key: &SigningKey,
+    public: &VerifyingKey,
+    wait: Duration,
+    cancel: Option<&AtomicBool>,
+    extra: &[(String, Vec<u8>)],
 ) -> Result<Finished> {
     let version = Version::parse(tag)?;
     let deadline = Instant::now() + wait;
@@ -102,7 +164,15 @@ pub fn finish_release(
         return Err(UpdateError::Install(format!("Der Entwurf {tag} enthält schon eine Signatur; bitte ohne sie neu anlegen.")));
     }
     let sums_asset = release.assets.iter().find(|a| a.name == SUMS).expect("geprüft");
-    let sums = asset_bytes(sums_asset, token, cancel, 1024 * 1024)?;
+    let mut sums = asset_bytes(sums_asset, token, cancel, 1024 * 1024)?;
+    let mut release = release;
+    if !extra.is_empty() {
+        sums = add_extras(ep, repo, id, &release, sums, extra, token, cancel)?;
+        release = match find_draft(ep, repo, tag, token, cancel)? {
+            Some((_, r)) => r,
+            None => return Err(UpdateError::Install(format!("Entwurf {tag} nach dem Hochladen nicht mehr gefunden."))),
+        };
+    }
     // Jedes Archiv, das die Paketierung angehängt hat, muss in der Prüfsummendatei stehen und stimmen.
     let mut archives = Vec::new();
     for a in release.assets.iter().filter(|a| a.name != SUMS) {

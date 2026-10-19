@@ -50,7 +50,7 @@ fn main() -> ExitCode {
         Some("hochladen") if args.len() == 5 || args.len() == 6 => upload(&args[1], &args[2], &args[3], Path::new(&args[4]), args.get(5).map(PathBuf::from)),
         Some("abschliessen") if args.len() >= 3 => finish(&args[1], &args[2], &args[3..]),
         _ => {
-            eprintln!("Aufruf: rj-update schluessel [<ordner>] | packen <programmordner> <version> <plattform> <privater-schluessel> <ausgabeordner> | packen-ohne-signatur <programmordner> <version> <plattform> <ausgabeordner> | pruefen <ausgabeordner> <oeffentlicher-schluessel> | hochladen <gitea-adresse> <besitzer/name> <version> <ausgabeordner> [<aenderungstext-datei>] | abschliessen <besitzer/name> <tag> [--minuten <n>] [--schluessel <datei>] [--oeffentlich <datei>]");
+            eprintln!("Aufruf: rj-update schluessel [<ordner>] | packen <programmordner> <version> <plattform> <privater-schluessel> <ausgabeordner> | packen-ohne-signatur <programmordner> <version> <plattform> <ausgabeordner> | pruefen <ausgabeordner> <oeffentlicher-schluessel> | hochladen <gitea-adresse> <besitzer/name> <version> <ausgabeordner> [<aenderungstext-datei>] | abschliessen <besitzer/name> <tag> [--minuten <n>] [--schluessel <datei>] [--oeffentlich <datei>] [--zusatz <datei> …]");
             return ExitCode::from(2);
         }
     };
@@ -178,6 +178,7 @@ fn github_token() -> Result<Zeroizing<String>, UpdateError> {
 
 fn finish(repo: &str, tag: &str, opts: &[String]) -> Result<(), UpdateError> {
     let (mut minutes, mut key_path, mut pub_path) = (30u64, default_key_dir().join("update-key.priv"), PathBuf::from("crates/ui/res/update-key.pub"));
+    let mut extra: Vec<(String, Vec<u8>)> = Vec::new();
     let mut it = opts.iter();
     while let Some(o) = it.next() {
         let v = it.next().ok_or_else(|| UpdateError::Url(format!("Wert für {o} fehlt")))?;
@@ -185,6 +186,15 @@ fn finish(repo: &str, tag: &str, opts: &[String]) -> Result<(), UpdateError> {
             "--minuten" => minutes = v.parse().map_err(|_| UpdateError::Url("--minuten erwartet eine Zahl".into()))?,
             "--schluessel" => key_path = PathBuf::from(v),
             "--oeffentlich" => pub_path = PathBuf::from(v),
+            // Zusätzliche Datei (z. B. die MSI): wird angehängt und in SHA256SUMS signiert.
+            "--zusatz" => {
+                let p = PathBuf::from(v);
+                let name = p.file_name().and_then(|n| n.to_str()).ok_or_else(|| UpdateError::Url(format!("Dateiname fehlt: {v}")))?.to_string();
+                if !name.starts_with("remotejoe-") {
+                    return Err(UpdateError::Url(format!("{name}: Zusatzdateien müssen mit „remotejoe-“ beginnen")));
+                }
+                extra.push((name, fs::read(&p)?));
+            }
             other => return Err(UpdateError::Url(format!("Unbekannte Option {other}"))),
         }
     }
@@ -197,7 +207,7 @@ fn finish(repo: &str, tag: &str, opts: &[String]) -> Result<(), UpdateError> {
     }
     let token = github_token()?;
     println!("Warte auf die Paketierung von {tag} (bis zu {minutes} Minuten) …");
-    let done = github::finish_release(&Endpoints::default(), repo, tag, &token, &sk, &embedded, Duration::from_secs(minutes * 60), None)?;
+    let done = github::finish_release_with(&Endpoints::default(), repo, tag, &token, &sk, &embedded, Duration::from_secs(minutes * 60), None, &extra)?;
     println!("Veröffentlicht: {} mit {}", done.tag, done.archives.join(", "));
     Ok(())
 }
