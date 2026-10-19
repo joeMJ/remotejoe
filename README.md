@@ -467,9 +467,14 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
    Allgemein, Verbindung, Zugangsdaten, Tunnel, Aufgaben und Makros, Zwischenablage,
    Organisation, Übergeordneter Ordner; **Speichern** im Tab.
    Oder **Datei → Importieren …** (exportierte Dateien anderer Verbindungsmanager oder remotejoe-Export) mit Vorschau.
-3. Zugangsdaten je Ordner oder Ziel: keine, vom übergeordneten Ordner, Benutzername und
-   Kennwort direkt (neuer Eintrag in der Gruppe `remotejoe` der Schlüsseldatenbank), vorhandener Datensatz oder
-   Datensatz nach Name. Der Tab zeigt, woher der wirksame Wert kommt.
+3. Zugangsdaten je Ordner oder Ziel: keine, vom übergeordneten Ordner, **Anmeldung**, Benutzername und
+   Kennwort direkt (neuer Eintrag in der Gruppe `remotejoe` der Schlüsseldatenbank) oder Datensatz nach Name.
+   Der Tab zeigt, woher der wirksame Wert kommt.
+   **Anmeldungen** sind wiederverwendbare Zugangsdaten: Sie stehen als eigene Objekte (Schlüsselsymbol) in einem
+   Ordner des Baums (**Hinzufügen → Anmeldung** oder „Neue Anmeldung …“ unter Zugangsdaten). Beliebig viele Ordner
+   und Ziele können dieselbe Anmeldung verwenden; ändert man Benutzername oder Kennwort an der Anmeldung, gilt das
+   sofort für alle. Das Kennwort liegt in der Schlüsseldatenbank. Frühere Verweise auf einen „vorhandenen Datensatz“
+   werden beim Entsperren automatisch in Anmeldungen übernommen.
 4. Verbinden: Eingabetaste auf einem Ziel oder Kontextmenü **Verbinden**; für einen Ordner
    **Alle im Ordner verbinden**. Fehlt ein Eintrag oder kommen mehrere in Frage, fragt das
    Programm nach. Tunnel werden im Hintergrund aufgebaut (Fortschritt und „Abbrechen“ in der
