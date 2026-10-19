@@ -347,6 +347,8 @@ private:
 	QLabel* m_state;
 	QPushButton* m_accept;
 	QPushButton* m_again;
+	/// Fortschritt „n von x geprüft“ während der Prüfung.
+	QTimer* m_progress = nullptr;
 };
 
 /// Rückfragen beim Verbinden eines Ziels, bevor eine Sitzung besteht

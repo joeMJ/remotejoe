@@ -365,7 +365,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_accept")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -531,6 +531,7 @@ impl App {
             "connect_all" => self.op_connect_all(&c),
             "cert_check_start" => self.op_cert_check_start(&c),
             "cert_check_rows" => Ok(json!({ "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() })),
+            "cert_check_progress" => Ok(json!({ "done": self.cert_done.load(std::sync::atomic::Ordering::Relaxed), "total": self.cert_total })),
             "cert_check_accept" => {
                 let (saved, errors) = crate::certcheck::accept_new(&mut self.cert_rows, &crate::certcheck::Stores::default_location());
                 Ok(json!({ "saved": saved, "errors": errors, "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() }))
@@ -1251,9 +1252,12 @@ impl App {
         }
         let n = specs.len();
         self.cert_rows.clear();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        self.cert_done = done.clone();
+        self.cert_total = n;
         let rt = self.rt_handle();
         let job = self.jobs.spawn_cancellable(format!("Schlüssel prüfen ({n} Ziele)"), move |job, cancel| {
-            let rows = crate::certcheck::run(&rt, specs, cancel, crate::certcheck::Stores::default_location());
+            let rows = crate::certcheck::run_with_progress(&rt, specs, cancel, crate::certcheck::Stores::default_location(), done);
             Box::new(move |app: &mut App, cancelled: bool| {
                 if cancelled {
                     return Vec::new();

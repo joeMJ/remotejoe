@@ -3637,11 +3637,24 @@ void CertCheckTab::start()
 		return;
 	}
 	m_again->setEnabled(false);
-	m_state->setText(m_backend->text(QStringLiteral("certcheck.busy")).arg(r.value(QStringLiteral("count")).toInt()));
+	const int total = r.value(QStringLiteral("count")).toInt();
+	m_state->setText(m_backend->text(QStringLiteral("certcheck.busy")).arg(0).arg(total));
+	if (!m_progress)
+	{
+		m_progress = new QTimer(this);
+		m_progress->setInterval(500);
+		connect(m_progress, &QTimer::timeout, this, [this] {
+			const QJsonObject p = parse(edit({ { QStringLiteral("op"), QStringLiteral("cert_check_progress") } }));
+			m_state->setText(m_backend->text(QStringLiteral("certcheck.busy")).arg(p.value(QStringLiteral("done")).toInt()).arg(p.value(QStringLiteral("total")).toInt()));
+		});
+	}
+	m_progress->start();
 }
 
 void CertCheckTab::handleResult(const QJsonObject& r)
 {
+	if (m_progress)
+		m_progress->stop();
 	m_again->setEnabled(true);
 	fill(r.value(QStringLiteral("rows")).toArray());
 }
