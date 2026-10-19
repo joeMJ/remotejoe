@@ -231,8 +231,14 @@ void FrameView::setWeb(bool web)
 	setAttribute(Qt::WA_NativeWindow);
 	setAttribute(Qt::WA_DontCreateNativeAncestors);
 	// Qt-Fokus und Windows-Fokus laufen sonst auseinander: Hatte die Seite einmal den Windows-Fokus, bekäme sie weiter
-	// alle Tasten, auch wenn danach ein Qt-Feld angeklickt wird. Darum bei jedem Fokuswechsel auf ein Qt-Feld den
-	// Windows-Fokus auf das Fenster setzen (einmal je Anwendung).
+	// alle Tasten, auch wenn danach ein Qt-Feld angeklickt wird. Darum beim Fokuswechsel auf ein Qt-Feld den
+	// Windows-Fokus auf das Fenster zurückholen (einmal je Anwendung).
+	//
+	// Nur, wenn der Windows-Fokus wirklich bei der Seite liegt: Die Seite läuft in einem fremden Prozess, dann liefert
+	// GetFocus() für den eigenen Thread kein Fenster. Liegt der Fokus schon in einem eigenen Fenster, ist nichts zu
+	// tun – ein SetFocus auf ein Popup-Fenster (Auswahlliste, Menü) würde es aktivieren, Qt würde das Hauptfenster
+	// deaktivieren und das Popup sofort schließen. Genau das ließ Auswahllisten nach dem ersten Web-Tab nicht mehr
+	// aufgehen (0.1.11–0.1.13).
 	static bool hooked = false;
 	if (!hooked)
 	{
@@ -240,6 +246,11 @@ void FrameView::setWeb(bool web)
 		connect(qApp, &QApplication::focusChanged, qApp, [](QWidget*, QWidget* now) {
 			auto* fv = qobject_cast<QWidget*>(now);
 			if (!fv || !fv->window() || !fv->window()->winId())
+				return;
+			if (::GetFocus() != nullptr)
+				return;
+			const Qt::WindowType t = fv->window()->windowType();
+			if (t == Qt::Popup || t == Qt::ToolTip || t == Qt::SplashScreen)
 				return;
 			for (QWidget* w = fv; w; w = w->parentWidget())
 				if (auto* f = dynamic_cast<FrameView*>(w); f && f->isEmbedded())
