@@ -38,6 +38,9 @@ pub struct ProbeSpec {
     pub options_json: String,
     /// Ziel wird nicht geprüft (Grund für die Liste), z. B. Verbindung über einen Tunnel.
     pub skip: Option<String>,
+    /// Zusätzliche Prüfung (SSH auf Port 22 bei RDP- und PowerShell-Zielen, für „Inventar abfragen“):
+    /// antwortet dort niemand, entfällt die Zeile.
+    pub extra: bool,
 }
 
 /// Wo gespeichert und nachgesehen wird (im Betrieb der Datenordner; in Tests eigene Orte).
@@ -173,7 +176,7 @@ pub fn run_with_progress(
             }
         }
         rows.sort_by_key(|(i, _)| *i);
-        rows.into_iter().map(|(_, r)| r).collect()
+        rows.into_iter().map(|(_, r)| r).filter(|r| !(r.spec.extra && matches!(r.state, CheckState::Unreachable(_)))).collect()
     })
 }
 
@@ -569,7 +572,7 @@ mod tests {
     use super::*;
 
     fn spec(protocol: Protocol, host: &str, port: u16) -> ProbeSpec {
-        ProbeSpec { target: Uuid::new_v4(), name: "t".into(), protocol, host: host.into(), port, legacy: false, options_json: String::new(), skip: None }
+        ProbeSpec { target: Uuid::new_v4(), name: "t".into(), protocol, host: host.into(), port, legacy: false, options_json: String::new(), skip: None, extra: false }
     }
 
     fn stores(dir: &Path) -> Stores {
@@ -624,6 +627,16 @@ mod tests {
         assert_eq!(rows[1].json()["state"], "skipped");
         assert!(matches!(rows[2].state, CheckState::Unreachable(_)), "{:?}", rows[2].state);
         assert!(matches!(&rows[3].state, CheckState::Skipped(w) if w.contains("HTTP")), "{:?}", rows[3].state);
+    }
+
+    #[test]
+    fn extra_ssh_rows_only_when_someone_answers() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let mut extra = spec(Protocol::Ssh, "127.0.0.1", closed);
+        extra.extra = true;
+        let rows = run(rt().handle(), vec![spec(Protocol::Rdp, "127.0.0.1", closed), extra], Default::default(), Stores { known_hosts: None, data_dir: None });
+        assert_eq!(rows.len(), 1, "zusätzliche SSH-Zeile ohne Antwort entfällt");
+        assert_eq!(rows[0].spec.protocol, Protocol::Rdp);
     }
 
     #[test]

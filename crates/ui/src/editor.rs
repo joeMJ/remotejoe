@@ -1349,20 +1349,34 @@ impl App {
         let mut specs = Vec::new();
         for id in targets.into_iter().filter(|i| seen.insert(*i)) {
             let Some(Node::Target(t)) = edit::node(&self.index, id) else { continue };
-            if !crate::certcheck::supported(t.protocol) {
-                continue;
-            }
             let tunnel = rj_core::inherit::resolve_tunnel(&self.index, id).ok().flatten().is_some();
-            specs.push(crate::certcheck::ProbeSpec {
-                target: id,
-                name: t.name.clone(),
-                protocol: t.protocol,
-                host: t.host.clone(),
-                port: t.effective_port(),
-                legacy: matches!(&t.options, ProtocolOptions::Ssh(o) if o.legacy_algorithms),
-                options_json: self.options_json(t),
-                skip: tunnel.then(|| "Verbindung über einen Tunnel – wird nicht direkt geprüft".to_string()),
-            });
+            if crate::certcheck::supported(t.protocol) {
+                specs.push(crate::certcheck::ProbeSpec {
+                    target: id,
+                    name: t.name.clone(),
+                    protocol: t.protocol,
+                    host: t.host.clone(),
+                    port: t.effective_port(),
+                    legacy: matches!(&t.options, ProtocolOptions::Ssh(o) if o.legacy_algorithms),
+                    options_json: self.options_json(t),
+                    skip: tunnel.then(|| "Verbindung über einen Tunnel – wird nicht direkt geprüft".to_string()),
+                    extra: false,
+                });
+            }
+            // Windows-Ziele: zusätzlich der SSH-Schlüssel auf Port 22 (über ihn fragt die Übersicht das Inventar ab).
+            if matches!(t.protocol, Protocol::Rdp | Protocol::Psrp) && !tunnel {
+                specs.push(crate::certcheck::ProbeSpec {
+                    target: id,
+                    name: t.name.clone(),
+                    protocol: Protocol::Ssh,
+                    host: t.host.clone(),
+                    port: 22,
+                    legacy: false,
+                    options_json: String::new(),
+                    skip: None,
+                    extra: true,
+                });
+            }
         }
         if specs.is_empty() {
             return Err("Keine prüfbaren Ziele in der Auswahl".into());

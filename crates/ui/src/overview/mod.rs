@@ -330,14 +330,14 @@ impl App {
                     return Vec::new();
                 }
                 let json = match res {
-                    Ok((found, src)) => {
+                    Ok((found, src, note)) => {
                         let mut inv = app.overview.store.load_key(&job_key);
                         let at = now();
                         for (k, v) in found {
                             inv.offer(k, &v, src, at);
                         }
                         let saved = app.overview.store.save_key(&job_key, &inv);
-                        json!({ "inventory": inventory_json(&inv), "error": saved.err() })
+                        json!({ "inventory": inventory_json(&inv), "error": saved.err(), "note": note })
                     }
                     // Verweise nur, wenn der Dienst fehlt oder nicht erreichbar ist – nicht bei Host-Schlüssel oder Anmeldung.
                     Err(e) => json!({ "error": e, "help": if service_missing(&e) { help } else { json!([]) } }),

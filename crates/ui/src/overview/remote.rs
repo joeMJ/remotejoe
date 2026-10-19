@@ -175,17 +175,38 @@ fn windows_command() -> String {
 
 /// SSH mit den Zugangsdaten aus der KDBX: Linux-Befehl und Windows-PowerShell (über OpenSSH), Reihenfolge nach
 /// `prefer_windows`; liefert beides nichts, `show version` in einer Shell (Aruba).
-pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHosts, prefer_windows: bool) -> Result<(Found, &'static str), String> {
+pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHosts, prefer_windows: bool) -> Result<(Found, &'static str, Option<String>), String> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    // Unbekannter Host-Schlüssel: sofort übernehmen und melden. Geänderter: nie automatisch.
     let (ask, mut q) = tokio::sync::mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>();
+    let seen: std::sync::Arc<std::sync::Mutex<Option<rj_ssh::known_hosts::HostKeyQuestion>>> = Default::default();
+    let seen2 = seen.clone();
     rt.spawn(async move {
-        while let Some((_, r)) = q.recv().await {
-            let _ = r.send(false);
+        while let Some((question, r)) = q.recv().await {
+            let accept = question.status == rj_ssh::known_hosts::HostKeyStatus::Unknown;
+            *seen2.lock().unwrap_or_else(|e| e.into_inner()) = Some(question);
+            let _ = r.send(accept);
         }
     });
-    let conn = rt.block_on(SshConnection::connect(&ssh_params(spec, port), known, ask)).map_err(|e| match e {
-        rj_ssh::client::SshError::HostKeyRejected => "Host-Schlüssel unbekannt – bitte zuerst einmal direkt verbinden".to_string(),
-        e => e.to_string(),
+    let connected = rt.block_on(SshConnection::connect(&ssh_params(spec, port), known, ask));
+    let question = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let note = question.as_ref().filter(|q| q.status == rj_ssh::known_hosts::HostKeyStatus::Unknown).map(|q| {
+        format!("Neuer SSH-Host-Schlüssel von {}:{} übernommen: {} {}", q.host, q.port, q.algorithm, q.fingerprint)
+    });
+    let conn = connected.map_err(|e| {
+        let msg = match (e, question.as_ref()) {
+            (rj_ssh::client::SshError::HostKeyRejected, Some(q)) => format!(
+                "Host-Schlüssel von {}:{} hat sich geändert ({} {}) – nicht übernommen. Bitte beim direkten Verbinden oder über „Schlüssel und Zertifikate prüfen“ klären.",
+                q.host, q.port, q.algorithm, q.fingerprint
+            ),
+            (rj_ssh::client::SshError::HostKeyRejected, None) => "Host-Schlüssel abgelehnt".to_string(),
+            (e, _) => e.to_string(),
+        };
+        // Auch beim Scheitern danach (z. B. Anmeldung) melden, dass ein Schlüssel übernommen wurde.
+        match &note {
+            Some(n) => format!("{msg}. {n}"),
+            None => msg,
+        }
     })?;
     // Windows mit OpenSSH zuerst, wenn es danach aussieht; sonst Linux zuerst.
     let order: [bool; 2] = if prefer_windows { [true, false] } else { [false, true] };
@@ -197,7 +218,7 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
             let f = if windows { text.lines().find_map(|l| parse_windows(l, ip)) } else { parse_linux(&text, ip) };
             if let Some(f) = f {
                 rt.block_on(conn.disconnect());
-                return Ok((f, if windows { "SSH (PowerShell)" } else { "SSH" }));
+                return Ok((f, if windows { "SSH (PowerShell)" } else { "SSH" }, note));
             }
         }
     }
@@ -227,11 +248,15 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
         Ok::<String, String>(String::from_utf8_lossy(&buf).into_owned())
     })?;
     rt.block_on(conn.disconnect());
-    parse_aruba(&text).map(|f| (f, "SSH (show version)")).ok_or_else(|| "Keine verwertbare Antwort über SSH (weder Linux, Windows-PowerShell noch Aruba)".into())
+    match parse_aruba(&text) {
+        Some(f) => Ok((f, "SSH (show version)", note)),
+        // Auch ohne verwertbare Antwort melden, dass ein Schlüssel übernommen wurde.
+        None => Err(format!("Keine verwertbare Antwort über SSH (weder Linux, Windows-PowerShell noch Aruba){}", note.map(|n| format!(". {n}")).unwrap_or_default())),
+    }
 }
 
 /// Windows über PowerShell-Remoting mit dem Transport des Ziels.
-pub fn ps_inventory(spec: &JobSpec, ip: Option<&str>) -> Result<(Found, &'static str), String> {
+pub fn ps_inventory(spec: &JobSpec, ip: Option<&str>) -> Result<(Found, &'static str, Option<String>), String> {
     let transport = PsrpTransport::effective(spec.transport.clone(), None);
     let t = rj_psrp::PsTarget { host: spec.host.clone(), username: spec.credentials.username.clone(), domain: spec.credentials.domain.clone(), transport };
     let mut s = rj_psrp::PsSession::start(&t, &Secret::from_bytes(spec.credentials.password.0.clone())).map_err(|e| rj_psrp::explain(e.to_string()))?;
@@ -245,7 +270,7 @@ pub fn ps_inventory(spec: &JobSpec, ip: Option<&str>) -> Result<(Found, &'static
         }
     })
     .map_err(|e| rj_psrp::explain(e.to_string()))?;
-    lines.iter().find_map(|l| parse_windows(l, ip)).map(|f| (f, "PowerShell")).ok_or_else(|| errors.first().cloned().unwrap_or_else(|| "Keine Antwort des Inventarskripts".into()))
+    lines.iter().find_map(|l| parse_windows(l, ip)).map(|f| (f, "PowerShell", None)).ok_or_else(|| errors.first().cloned().unwrap_or_else(|| "Keine Antwort des Inventarskripts".into()))
 }
 
 #[cfg(test)]

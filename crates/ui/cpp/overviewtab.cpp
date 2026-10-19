@@ -262,7 +262,10 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 		if (r.contains(QStringLiteral("inventory")))
 		{
 			renderInventory(r.value(QStringLiteral("inventory")).toArray());
-			m_queryState->setText(m_backend->text(QStringLiteral("ov.inventory.done")));
+			QString done = m_backend->text(QStringLiteral("ov.inventory.done")).toHtmlEscaped();
+			if (r.value(QStringLiteral("note")).isString())
+				done += QStringLiteral("<br><b>%1</b>").arg(r.value(QStringLiteral("note")).toString().toHtmlEscaped());
+			m_queryState->setText(done);
 			// Aruba erst nach der Abfrage bekannt.
 			const QJsonObject o = call({ { QStringLiteral("op"), QStringLiteral("overview") } });
 			const bool aruba = o.value(QStringLiteral("aruba")).toBool();
