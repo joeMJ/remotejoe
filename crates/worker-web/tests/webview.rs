@@ -651,6 +651,23 @@ fn login_like_by_hand_on_strict_and_blur_pages() {
 }
 
 #[test]
+fn field_detection_avoids_random_ids() {
+    let Some(x) = xvfb() else { return };
+    let data = tempfile::tempdir().unwrap();
+    let (port, _rx) = http_server();
+    let opts = serde_json::json!({"url": format!("http://127.0.0.1:{port}/zk"), "allow_http": true, "profile": "erkennen-zk"});
+    let mut s = Sess::start(&x.display, data.path(), opts, 800, 600, true);
+    assert!(s.wait(60, |s| s.custom.iter().any(|c| c["ev"] == "status" && c["loading"] == false)), "Seite nicht geladen");
+    s.command(serde_json::json!({"op": "detect"}));
+    assert!(s.wait(20, |s| s.custom.iter().any(|c| c["ev"] == "fields")), "keine Felder gemeldet");
+    let f = s.custom.iter().find(|c| c["ev"] == "fields").unwrap().clone();
+    let sel = |k: &str| -> Vec<String> { f[k].as_array().unwrap().iter().map(|e| e["selector"].as_str().unwrap().to_string()).collect() };
+    assert_eq!(sel("users"), [r#"input[placeholder="Benutzername"]"#], "{f}");
+    assert_eq!(sel("passwords"), [r#"input[placeholder="Kennwort"]"#], "{f}");
+    assert!(sel("submits").contains(&"button.btn-login".to_string()), "{f}");
+}
+
+#[test]
 fn login_without_submit_button_clicks_the_login_div() {
     let Some(x) = xvfb() else { return };
     let data = tempfile::tempdir().unwrap();

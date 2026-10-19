@@ -646,12 +646,22 @@ function qa(s){var out=[];roots().forEach(function(d){try{[].push.apply(out,d.qu
 function vis(e){var w=(e.ownerDocument&&e.ownerDocument.defaultView)||window,r=e.getBoundingClientRect(),c=w.getComputedStyle(e);return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none'&&!e.disabled;}
 function esc(s){return(window.CSS&&CSS.escape)?CSS.escape(s):s.replace(/[^a-zA-Z0-9_-]/g,'\\$&');}
 function uniq(el,q){try{return el.getRootNode().querySelectorAll(q).length===1;}catch(x){return false;}}
+// Zufällig erzeugte IDs (wechseln bei jedem Laden, z. B. „tHyP31-real“) taugen nicht als Selektor.
+function randomId(id){return /\d[a-zA-Z]/.test(id)||/[a-z][A-Z][a-z]*[A-Z]/.test(id)||(/^[a-z0-9]{8,}$/i.test(id)&&/\d/.test(id)&&/[a-z]/i.test(id));}
+function attr(el,k){var v=el.getAttribute(k);if(!v)return null;var q=el.tagName.toLowerCase()+'['+k+'="'+v.replace(/"/g,'\\"')+'"]';return uniq(el,q)?q:null;}
 function sel(el){
- var root=el.getRootNode();
- if(el.id){var a='#'+esc(el.id);if(uniq(el,a))return a;}
- var n=el.getAttribute('name');
- if(n){var b=el.tagName.toLowerCase()+'[name="'+n.replace(/"/g,'\\"')+'"]';if(uniq(el,b))return b;}
- if(root!==document){return el.tagName.toLowerCase()+(el.type?'[type="'+el.type+'"]':'');}
+ var root=el.getRootNode(),tag=el.tagName.toLowerCase(),q;
+ // Feste Merkmale zuerst: sprechende ID, Name, Autofill-Angabe, Platzhalter, Beschriftung, Feldtyp, Klasse.
+ if(el.id&&!randomId(el.id)){q='#'+esc(el.id);if(uniq(el,q))return q;}
+ if((q=attr(el,'name')))return q;
+ if((q=attr(el,'autocomplete'))&&!/^(on|off)$/i.test(el.getAttribute('autocomplete')))return q;
+ if((q=attr(el,'placeholder')))return q;
+ if((q=attr(el,'aria-label')))return q;
+ var cls=String(el.className||'').split(/\s+/).filter(function(c){return c&&!randomId(c);});
+ for(var ci=0;ci<cls.length;ci++){q=tag+'.'+esc(cls[ci]);if(uniq(el,q))return q;}
+ if(el.type&&(q=attr(el,'type')))return q;
+ if(el.id){q='#'+esc(el.id);if(uniq(el,q))return q;}
+ if(root!==document){return tag+(el.type?'[type="'+el.type+'"]':'');}
  var p=[],e=el;
  while(e&&e.nodeType===1&&e!==document.body){var i=1,s=e;while((s=s.previousElementSibling))if(s.tagName===e.tagName)i++;p.unshift(e.tagName.toLowerCase()+':nth-of-type('+i+')');e=e.parentElement;}
  return 'body > '+p.join(' > ');
@@ -675,7 +685,9 @@ qa('button,input[type=submit],input[type=button],a[role=button]').filter(vis).fo
 var BTNRE=/^(anmelden|anmeldung|login|log in|sign in|einloggen)$/i,have=ss.map(function(x){return x.selector;});
 qa('div,span,a,td').filter(vis).forEach(function(e){
  var t=String(e.textContent||'').replace(/\s+/g,' ').trim();
- if(BTNRE.test(t)){var k=sel(e);if(have.indexOf(k)<0){have.push(k);ss.push({selector:k,label:t});}}
+ // Nur das innerste Element mit dem Text (nicht den umgebenden Block).
+ var inner=![].some.call(e.children,function(c){return BTNRE.test(String(c.textContent||'').replace(/\s+/g,' ').trim());});
+ if(BTNRE.test(t)&&inner){var k=sel(e);if(have.indexOf(k)<0){have.push(k);ss.push({selector:k,label:t});}}
 });
 // Eigene Ausgabe statt JSON.stringify: Seiten mit prototype.js (toJSON an Array/String) verpacken sonst doppelt.
 function q2(v){return '"'+String(v).replace(/[\\"\u0000-\u001f\u2028\u2029]/g,function(c){return '\\u'+('0000'+c.charCodeAt(0).toString(16)).slice(-4);})+'"';}
