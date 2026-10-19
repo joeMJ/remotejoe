@@ -711,7 +711,8 @@ QWidget* PropertiesTab::pageConnection()
 				const QString k = QString::fromLatin1(key);
 				connect(arrow, &QAction::triggered, this, [this, e, k] {
 					QMenu menu(e);
-					menu.addAction(rjText(m_backend, "edit.web.dropdown.auto"), [e] { e->clear(); });
+					// Auswahl im Menü gilt wie eine Eingabe (sonst übernimmt „Speichern“ sie nicht).
+					menu.addAction(rjText(m_backend, "edit.web.dropdown.auto"), [this, e] { e->clear(); markDirty(QStringLiteral("options")); });
 					menu.addSeparator();
 					const auto items = m_candidates.value(k);
 					if (items.isEmpty())
@@ -719,7 +720,7 @@ QWidget* PropertiesTab::pageConnection()
 					for (const auto& c : items)
 					{
 						QString label = c.first == c.second ? c.second : QStringLiteral("%1   (%2)").arg(c.first, c.second);
-						menu.addAction(label, [e, sel = c.second] { e->setText(sel); });
+						menu.addAction(label, [this, e, sel = c.second] { e->setText(sel); markDirty(QStringLiteral("options")); });
 					}
 					menu.exec(e->mapToGlobal(QPoint(0, e->height())));
 				});

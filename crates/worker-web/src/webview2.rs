@@ -271,8 +271,12 @@ impl Worker {
             Msg::Rejected(r) => {
                 let text: String = serde_json::from_str(&r).unwrap_or(r);
                 self.trace(&format!("Prüfung nach dem Abschicken: {text}"));
-                if let FlowAction::Notice(n) = self.0.flow.borrow_mut().rejected_check(&text) {
-                    self.send(FromWorker::Notice(n));
+                let action = self.0.flow.borrow_mut().rejected_check(&text);
+                match action {
+                    FlowAction::Notice(n) => self.send(FromWorker::Notice(n)),
+                    // Hinweis steht noch: später erneut nachsehen (Anmeldung von Hand?).
+                    FlowAction::CheckRejected => self.0.queue.push_after(Duration::from_secs(2), Msg::CheckRejected),
+                    _ => {}
                 }
             }
             Msg::LoginResult { text, script, tries } => {

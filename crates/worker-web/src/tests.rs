@@ -84,7 +84,13 @@ fn flow_checks_for_rejection_after_submit_without_resubmitting() {
     assert_eq!(f.page_loaded("https://web.example.test/"), FlowAction::CheckRejected);
     assert_eq!(f.rejected_check("\"rj:kennwortfeld-weg\""), FlowAction::None);
     assert!(matches!(f.rejected_check("\"rj:kennwortfeld-da\""), FlowAction::Notice(m) if m.contains("abgelehnt")));
-    assert_eq!(f.page_loaded("https://web.example.test/"), FlowAction::None, "kein erneutes Abschicken, keine zweite Meldung");
+    // Hinweis steht: weiter nachprüfen, kein erneutes Abschicken, keine zweite Meldung.
+    assert_eq!(f.rejected_check("\"rj:kennwortfeld-da\""), FlowAction::CheckRejected);
+    assert_eq!(f.page_loaded("https://web.example.test/"), FlowAction::CheckRejected, "kein erneutes Abschicken");
+    // Von Hand angemeldet: Kennwortfeld weg → Hinweis zurücknehmen, danach Ruhe.
+    assert_eq!(f.rejected_check("\"rj:kennwortfeld-weg\""), FlowAction::Notice(String::new()));
+    assert_eq!(f.rejected_check("\"rj:kennwortfeld-weg\""), FlowAction::None);
+    assert_eq!(f.page_loaded("https://web.example.test/"), FlowAction::None);
     assert!(presence_script().contains("input[type=password]"));
 }
 

@@ -138,10 +138,15 @@ QString protocolName(const QString& p)
 // verwirft die schon gezeichneten Symbole.
 QHash<QString, QColor> g_iconColors;
 QColor g_iconRing(Qt::white);
+// Ausgewählte Zeile: Symbol in der Textfarbe der Auswahl, Ring in der Auswahlfarbe.
+QColor g_iconSelected(Qt::white);
+QColor g_iconSelectedRing(QColor("#2a6fdb"));
 int g_iconGeneration = 0;
 
-void setIconColors(const QJsonObject& colors, const QColor& ring)
+void setIconColors(const QJsonObject& colors, const QColor& ring, const QColor& selected, const QColor& selectedRing)
 {
+	g_iconSelected = selected;
+	g_iconSelectedRing = selectedRing;
 	g_iconColors.clear();
 	for (auto it = colors.begin(); it != colors.end(); ++it)
 		g_iconColors.insert(it.key(), QColor(it.value().toString()));
@@ -191,18 +196,17 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 		// Makro: Abspielzeichen
 		{ "macro", RJ_G("<path d='M10 6l16 10-16 10z' fill='COLOR' fill-opacity='0.25'/>"), "#6a1b9a" },
 	};
-	QString svg;
-	if (folder)
-	{
-		const QColor f = g_iconColors.value(QStringLiteral("folder"), QColor("#c9a227"));
-		// Ordner im selben Linienstil wie die Ziele, nur leicht getönt gefüllt.
-		svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
-		                     "<path d='M4 8.5a1.5 1.5 0 0 1 1.5-1.5h7l3 3h11a1.5 1.5 0 0 1 1.5 1.5v13a1.5 1.5 0 0 1-1.5 1.5h-21A1.5 1.5 0 0 1 4 24.5z' "
-		                     "fill='%1' fill-opacity='0.18' stroke='%1' stroke-width='2.4' stroke-linejoin='round'/></svg>")
-		        .arg(f.name());
-	}
-	else
-	{
+	// SVG des Symbols; `over` ersetzt die Farbe (ausgewählte Zeile).
+	auto makeSvg = [&](const QString& over) -> QString {
+		if (folder)
+		{
+			const QColor f = over.isEmpty() ? g_iconColors.value(QStringLiteral("folder"), QColor("#c9a227")) : QColor(over);
+			// Ordner im selben Linienstil wie die Ziele, nur leicht getönt gefüllt.
+			return QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
+			                      "<path d='M4 8.5a1.5 1.5 0 0 1 1.5-1.5h7l3 3h11a1.5 1.5 0 0 1 1.5 1.5v13a1.5 1.5 0 0 1-1.5 1.5h-21A1.5 1.5 0 0 1 4 24.5z' "
+			                      "fill='%1' fill-opacity='0.18' stroke='%1' stroke-width='2.4' stroke-linejoin='round'/></svg>")
+			    .arg(f.name());
+		}
 		QString glyph = QStringLiteral(RJ_G("<path d='M12 12a4 4 0 1 1 6 3.5c-1.5 1-2 1.5-2 3'/><path d='M16 23h.1'/>")), color = g_iconColors.value(QStringLiteral("other"), QColor("#555555")).name();
 		for (const P& p : table)
 			if (protocol == QLatin1String(p.name))
@@ -210,10 +214,13 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 				glyph = QLatin1String(p.glyph);
 				color = g_iconColors.value(protocol, QColor(QLatin1String(p.color))).name();
 			}
+		if (!over.isEmpty())
+			color = over;
 		// Ohne Kachel: das Piktogramm selbst in der Farbe des Zieltyps.
-		svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>%1</svg>").arg(glyph.replace(QLatin1String("COLOR"), color));
-	}
+		return QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>%1</svg>").arg(glyph.replace(QLatin1String("COLOR"), color));
+	};
 	#undef RJ_G
+	auto draw = [&](const QString& svg, const QColor& ring) {
 	QPixmap pm(32, 32);
 	pm.fill(Qt::transparent);
 	{
@@ -228,7 +235,7 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 			                                              : QColor("#8a8a8a");
 			p.setRenderHint(QPainter::Antialiasing);
 			p.setBrush(c);
-			p.setPen(QPen(g_iconRing, 2));
+			p.setPen(QPen(ring, 2));
 			p.drawEllipse(QRect(19, 19, 12, 12));
 		}
 		if (session > 0)
@@ -238,18 +245,21 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 			if (session == 1)
 			{
 				p.setBrush(dot);
-				p.setPen(QPen(g_iconRing, 2));
+				p.setPen(QPen(ring, 2));
 				p.drawEllipse(QRect(20, 0, 12, 12));
 			}
 			else
 			{
-				p.setBrush(g_iconRing);
+				p.setBrush(ring);
 				p.setPen(QPen(dot, 2.5));
 				p.drawEllipse(QRectF(21.25, 1.25, 9.5, 9.5));
 			}
 		}
 	}
-	QIcon icon(pm);
+	return pm;
+	};
+	QIcon icon(draw(makeSvg(QString()), g_iconRing));
+	icon.addPixmap(draw(makeSvg(g_iconSelected.name()), g_iconSelectedRing), QIcon::Selected);
 	cache.insert(key, icon);
 	return icon;
 }
@@ -1328,7 +1338,7 @@ void MainWindow::applyTheme(bool dark)
 	{
 		QJsonObject icons = p.value(QStringLiteral("icons")).toObject();
 		icons.insert(QStringLiteral("other"), c("muted").name());
-		setIconColors(icons, c("base"));
+		setIconColors(icons, c("base"), c("highlight_text"), c("highlight"));
 	}
 	// Baumgröße: Zeilenhöhe, Symbole und Schrift in drei Stufen.
 	const QString treeSize = p.value(QStringLiteral("tree_size")).toString(QStringLiteral("mittel"));

@@ -217,13 +217,17 @@ pub struct LoginFlow {
     /// Formular wurde abgeschickt; kein weiterer Versuch, nur Prüfung auf Ablehnung.
     submitted: bool,
     rejected_noted: bool,
+    /// Hinweis „abgelehnt“ wurde wieder zurückgenommen (Anmeldung später doch gelungen).
+    rejected_cleared: bool,
+    /// Nachprüfungen, solange der Hinweis steht (manche Seiten laden nach der Anmeldung nicht neu).
+    rechecks: u32,
 }
 
 impl LoginFlow {
     pub const MAX_ATTEMPTS: u32 = 3;
 
     pub fn new(login: Option<FormLogin>) -> Self {
-        LoginFlow { login, attempts: 0, done: false, submitted: false, rejected_noted: false }
+        LoginFlow { login, attempts: 0, done: false, submitted: false, rejected_noted: false, rejected_cleared: false, rechecks: 0 }
     }
 
     pub fn page_loaded(&mut self, url: &str) -> FlowAction {
@@ -233,7 +237,8 @@ impl LoginFlow {
             return FlowAction::None;
         }
         if self.done {
-            return if self.submitted && !self.rejected_noted { FlowAction::CheckRejected } else { FlowAction::None };
+            let pending = !self.rejected_noted || !self.rejected_cleared;
+            return if self.submitted && pending { FlowAction::CheckRejected } else { FlowAction::None };
         }
         if let Some(m) = l.url_contains.as_ref().filter(|m| !m.is_empty()) {
             if !url.contains(m.as_str()) {
@@ -268,9 +273,26 @@ impl LoginFlow {
         }
     }
 
-    /// Ergebnis der Prüfung nach `CheckRejected`.
+    /// Höchstzahl der Nachprüfungen (alle 2 s, also etwa 5 Minuten), solange der Hinweis steht.
+    pub const MAX_RECHECKS: u32 = 150;
+
+    /// Ergebnis der Prüfung nach `CheckRejected`. Steht der Hinweis „abgelehnt“, wird weiter
+    /// nachgeprüft (`CheckRejected`), bis kein Kennwortfeld mehr da ist; dann wird er mit einem
+    /// leeren Hinweis zurückgenommen.
     pub fn rejected_check(&mut self, result: &str) -> FlowAction {
-        if result.trim_matches('"') != RESULT_PASSWORD_VISIBLE || self.rejected_noted {
+        let visible = result.trim_matches('"') == RESULT_PASSWORD_VISIBLE;
+        if self.rejected_noted {
+            if self.rejected_cleared {
+                return FlowAction::None;
+            }
+            if !visible {
+                self.rejected_cleared = true;
+                return FlowAction::Notice(String::new());
+            }
+            self.rechecks += 1;
+            return if self.rechecks < Self::MAX_RECHECKS { FlowAction::CheckRejected } else { FlowAction::None };
+        }
+        if !visible {
             return FlowAction::None;
         }
         self.rejected_noted = true;

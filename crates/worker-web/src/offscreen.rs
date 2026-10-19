@@ -704,8 +704,12 @@ impl Worker {
             page.view.evaluate_javascript(&presence_script(), None, None, None::<&gtk::gio::Cancellable>, move |r| {
                 let text = r.map(|v| v.to_str().to_string()).unwrap_or_default();
                 me2.trace(&format!("Prüfung nach dem Abschicken: {text}"));
-                if let FlowAction::Notice(n) = me2.0.flow.borrow_mut().rejected_check(&text) {
-                    me2.send(FromWorker::Notice(n));
+                let action = me2.0.flow.borrow_mut().rejected_check(&text);
+                match action {
+                    FlowAction::Notice(n) => me2.send(FromWorker::Notice(n)),
+                    // Hinweis steht noch: später erneut nachsehen (Anmeldung von Hand?).
+                    FlowAction::CheckRejected => me2.check_rejected(),
+                    _ => {}
                 }
             });
         });
