@@ -9,7 +9,6 @@ use rj_ui::app::App;
 use rj_ui::sessions::UiEvent;
 use rj_update::release::{Source, SourceKind};
 use rj_update::install;
-#[cfg(not(windows))]
 use rj_update::sign::{self, SIG, SUMS};
 #[cfg(not(windows))]
 use rj_update::{archive, asset_name};
@@ -62,6 +61,83 @@ fn windows_shows_version_and_release_page() {
     let r = edit(&mut app, json!({"op": "update_install", "confirm": true}));
     assert_eq!(r, json!({"state": "page", "url": page}));
     assert_eq!(std::fs::read(dir.path().join(install::main_program())).unwrap(), b"alt");
+}
+
+/// Windows, als MSI installiert: Die Prüfung wählt die MSI; geladen wird nur, was die signierte `SHA256SUMS`
+/// bestätigt und was mit dem Zertifikat des Herausgebers signiert ist. Jede fehlgeschlagene Prüfung lässt keine
+/// MSI liegen und nichts bereit zur Installation. Eine Veröffentlichung ohne MSI führt zur Release-Seite.
+/// Mit `RJ_TEST_SIGNED_MSI` (eine signierte MSI, z. B. aus `scripts/build-msi.ps1`) wird auch der gute Weg geprüft.
+#[cfg(windows)]
+#[test]
+fn windows_msi_update_is_verified_before_it_is_offered() {
+    let key = sign::generate().unwrap();
+    let mock = GiteaMock::start("team/remotejoe");
+    let msi = rj_update::msi::msi_name("9.0.0");
+    let set = |data: &[u8], listed: &[u8]| {
+        let sums = sign::sums_text(&[(msi.clone(), sign::sha256_hex(listed))]);
+        let mut st = mock.state.lock().unwrap();
+        st.files.insert(msi.clone(), data.to_vec());
+        st.files.insert(SUMS.into(), sums.clone().into_bytes());
+        st.files.insert(SIG.into(), sign::sign(&key, sums.as_bytes()).into_bytes());
+    };
+    let mut app = App::new(false);
+    app.config_path = None;
+    app.update.msi_override = Some(true);
+    app.update.key_override = Some(sign::public_key_text(&key.verifying_key()));
+    app.update.source_override = Some(Source { kind: SourceKind::Gitea, base_url: mock.base.clone(), repo: "team/remotejoe".into() });
+    assert_eq!(app.update_status()["msi"], true);
+    assert!(edit(&mut app, json!({"op": "update_apply", "confirm": true}))["error"].is_string(), "ohne geprüfte MSI nichts zu installieren");
+    let path = rj_update::msi::download_dir().join(&msi);
+    let check = |app: &mut App| {
+        edit(app, json!({"op": "update_check"}));
+        wait_result(app, "update_check")
+    };
+    let download = |app: &mut App| {
+        assert_eq!(edit(app, json!({"op": "update_install"}))["state"], "downloading");
+        wait_result(app, "update_install")
+    };
+
+    // Unsigniert, aber in der Liste: Authenticode lehnt ab.
+    set(b"keine echte MSI", b"keine echte MSI");
+    mock.set_release("v9.0.0", "Neu", &[&msi, SUMS, SIG]);
+    let r = check(&mut app);
+    assert_eq!((r["state"].as_str(), r["msi"].as_bool()), (Some("newer"), Some(true)), "{r}");
+    assert_eq!(r["found"]["archive"], msi);
+    let r = download(&mut app);
+    assert_eq!(r["state"], "error", "{r}");
+    assert!(r["error"].as_str().unwrap().contains("Authenticode"), "{r}");
+    assert!(!path.exists() && app.update_status()["ready"].is_null());
+
+    // Prüfsumme passt nicht zur Liste.
+    set(b"veraendert", b"keine echte MSI");
+    let r = download(&mut app);
+    assert!(r["error"].as_str().unwrap().contains("Prüfsumme"), "{r}");
+    assert!(!path.exists());
+
+    // Veröffentlichung ohne MSI: Release-Seite.
+    mock.set_release("v9.0.0", "Neu", &[SUMS, SIG]);
+    let r = check(&mut app);
+    assert!(r["no_msi"].is_string() && r["page"].is_string(), "{r}");
+    assert_eq!(edit(&mut app, json!({"op": "update_install"}))["state"], "page");
+
+    // Guter Weg mit einer echten, signierten MSI (optional).
+    let Some(signed) = std::env::var_os("RJ_TEST_SIGNED_MSI").filter(|p| std::path::Path::new(p).is_file()) else {
+        eprintln!("ÜBERSPRUNGEN (guter Weg): RJ_TEST_SIGNED_MSI nicht gesetzt");
+        return;
+    };
+    let data = std::fs::read(signed).unwrap();
+    set(&data, &data);
+    mock.set_release("v9.0.0", "Neu", &[&msi, SUMS, SIG]);
+    check(&mut app);
+    let r = download(&mut app);
+    assert_eq!(r["state"], "ready", "{r}");
+    assert_eq!(app.update_status()["ready"], "9.0.0");
+    assert_eq!(app.update_status()["progress"].as_u64(), Some(data.len() as u64));
+    assert_eq!(std::fs::read(&path).unwrap(), data);
+    // Offene Sitzung: erst Rückfrage; installiert wird hier nicht (das beendet remotejoe).
+    app.sessions.open_demo_frame("rdp-001", 8, 8, 1);
+    assert_eq!(edit(&mut app, json!({"op": "update_apply"}))["state"], "confirm");
+    let _ = std::fs::remove_file(&path);
 }
 
 #[cfg(not(windows))]

@@ -636,6 +636,7 @@ impl App {
             "update_check" => self.update_check(),
             "update_install" => self.update_install(c.get("confirm").and_then(Value::as_bool).unwrap_or(false)),
             "update_cancel" => Ok(self.update_cancel()),
+            "update_apply" => self.update_apply(c.get("confirm").and_then(Value::as_bool).unwrap_or(false)),
             "web_command" => {
                 let s = c.get("session").and_then(Value::as_u64).unwrap_or(0);
                 match c.get("cmd") {

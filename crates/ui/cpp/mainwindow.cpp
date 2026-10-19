@@ -1068,6 +1068,14 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 			box->setWindowModality(Qt::NonModal);
 			box->show();
 		});
+	// Neustart nach einem Update über die MSI: Ergebnis von msiexec (0 bzw. 3010: erfolgreich) in der Fußzeile.
+	if (const QString code = qEnvironmentVariable("RJ_UPDATE_RESULT"); !code.isEmpty())
+	{
+		qunsetenv("RJ_UPDATE_RESULT");
+		const bool ok = code == QLatin1String("0") || code == QLatin1String("3010");
+		const QString text = ok ? T(m_backend, "update.applied.ok").arg(m_backend->appVersion()) : T(m_backend, "update.applied.failed").arg(code);
+		QTimer::singleShot(500, this, [this, text] { statusBar()->showMessage(text, 30000); });
+	}
 #endif
 }
 
