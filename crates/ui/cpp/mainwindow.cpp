@@ -2,6 +2,7 @@
 #include "kbcapture.h"
 #include "titlebar.h"
 #include "exporttab.h"
+#include "overviewtab.h"
 #include "appearance.h"
 #include <algorithm>
 
@@ -880,6 +881,16 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(m_tree, &QTreeView::collapsed, this, [this](const QModelIndex& i) {
 		if (i.data(RoleMacro).toInt() == 1)
 			m_macroShelfOpen = false;
+	});
+	// Einfachklick auf ein Ziel: Objektübersicht (Doppelklick verbindet wie bisher).
+	connect(m_tree, &QTreeView::clicked, this, [this](const QModelIndex& i) {
+		if (QGuiApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier))
+			return; // Mehrfachauswahl
+		if (i.data(RoleMacro).toInt() != 0 || i.data(RoleGuest).isValid() || i.data(RolePlaceholder).toBool() || i.data(RoleFolder).toBool() || i.data(RoleLogin).toBool())
+			return;
+		const QString id = i.data(RoleId).toString();
+		if (!id.isEmpty())
+			openOverview(id);
 	});
 	connect(m_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex& i) {
 		if (i.data(RoleMacro).toInt() == 2)
@@ -2926,6 +2937,11 @@ void MainWindow::handleEvents(const QString& json)
 						// Prüfung beim Start: nur ein Hinweis in der Fußzeile.
 						statusBar()->showMessage(T(m_backend, "update.available").arg(r.value(QStringLiteral("found")).toObject().value(QStringLiteral("version")).toString()), 15000);
 				}
+				else if (kind.startsWith(QLatin1String("ov_")))
+				{
+					if (auto* o = findChild<OverviewTab*>())
+						o->handleResult(kind, e.value(QStringLiteral("target")).toString(), r);
+				}
 				else if (kind == QLatin1String("guests"))
 					applyGuests(e.value(QStringLiteral("target")).toString(), r);
 				else if (kind == QLatin1String("cert_check"))
@@ -3754,6 +3770,24 @@ bool MainWindow::isLogin(const QString& id) const
 	};
 	walk(QModelIndex());
 	return hit;
+}
+
+void MainWindow::openOverview(const QString& id)
+{
+	auto* t = findChild<OverviewTab*>();
+	if (!t)
+	{
+		t = new OverviewTab(m_backend, m_tabs);
+		connect(t, &OverviewTab::titleChanged, this, [this, t] {
+			const int i = m_tabs->indexOf(t);
+			if (i >= 0)
+				m_tabs->setTabText(i, T(m_backend, "ov.title").arg(t->targetName()));
+		});
+		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
+	}
+	else
+		m_tabs->setCurrentWidget(t);
+	t->showTarget(id);
 }
 
 void MainWindow::openLogin(const QString& id, const QString& folder)

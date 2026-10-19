@@ -8,6 +8,7 @@
 //! Befehl (Base64). Die Antworten sind JSON-Zeilen mit getrennten Strömen.
 
 pub mod hyperv;
+pub mod inventory;
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};

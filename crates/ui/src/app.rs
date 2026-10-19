@@ -55,6 +55,8 @@ pub struct App {
     unlock_key_file: Option<Option<PathBuf>>,
     /// Ergebnis des letzten Prüflaufs „Schlüssel und Zertifikate prüfen“.
     pub(crate) cert_rows: Vec<crate::certcheck::CheckRow>,
+    /// Objektübersicht: zwischengespeicherte Prüfungen, laufender Ping/Traceroute, Inventarablage.
+    pub(crate) overview: crate::overview::OverviewState,
     /// Fortschritt der laufenden Schlüsselprüfung: fertig geprüfte Ziele und Gesamtzahl.
     pub(crate) cert_done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub(crate) cert_total: usize,
@@ -167,6 +169,7 @@ impl App {
             keyring_note: None,
             unlock_key_file: None,
             cert_rows: Vec::new(),
+            overview: Default::default(),
             cert_done: Default::default(),
             cert_total: 0,
             vault_lock: None,
@@ -814,6 +817,14 @@ impl App {
 
     pub(crate) fn target_ref(&self, id: Uuid) -> Option<&Target> {
         self.target(id)
+    }
+
+    pub(crate) fn target_legacy_of(&self, id: Uuid) -> bool {
+        self.target_legacy(id)
+    }
+
+    pub(crate) fn known_hosts_ref(&self) -> KnownHosts {
+        self.known_hosts.clone()
     }
 
     pub(crate) fn credential_payload(&self, r: &ResolvedCredential, protocol: Protocol) -> Result<CredentialPayload, String> {
