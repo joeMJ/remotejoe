@@ -165,7 +165,9 @@ private:
 	QWidget* pageParent();
 	void addPage(const QString& key, const char* label, QWidget* page);
 	void track(QWidget* w, const QString& group);
-	void markDirty(const QString& group);
+	void markDirty(const QString& group, QWidget* changed = nullptr);
+	/// Markierung „geändert“ an einem Feld setzen oder entfernen.
+	void setMarked(QWidget* w, bool on);
 	void clearDirty();
 	void updateCredentialMode();
 	void showErrors(const QJsonObject& errors);

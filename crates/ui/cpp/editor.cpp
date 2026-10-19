@@ -346,35 +346,48 @@ void PropertiesTab::track(QWidget* w, const QString& group)
 {
 	w->setProperty("rjGroup", group);
 	if (auto* l = qobject_cast<QLineEdit*>(w))
-		connect(l, &QLineEdit::textEdited, this, [this, group] { markDirty(group); });
+		connect(l, &QLineEdit::textEdited, this, [this, group, l] { markDirty(group, l); });
 	else if (auto* c = qobject_cast<QComboBox*>(w))
 	{
-		connect(c, &QComboBox::currentIndexChanged, this, [this, group] { markDirty(group); });
+		connect(c, &QComboBox::currentIndexChanged, this, [this, group, c] { markDirty(group, c); });
 		if (c->isEditable())
-			connect(c, &QComboBox::editTextChanged, this, [this, group] { markDirty(group); });
+			connect(c, &QComboBox::editTextChanged, this, [this, group, c] { markDirty(group, c); });
 	}
 	else if (auto* b = qobject_cast<QAbstractButton*>(w))
-		connect(b, &QAbstractButton::toggled, this, [this, group] { markDirty(group); });
+		connect(b, &QAbstractButton::toggled, this, [this, group, b](bool on) {
+			// Von Optionsknöpfen nur den gewählten hervorheben, der abgewählte verliert die Markierung.
+			if (b->autoExclusive() && !on)
+			{
+				setMarked(b, false);
+				markDirty(group);
+			}
+			else
+				markDirty(group, b);
+		});
 	else if (auto* p = qobject_cast<QPlainTextEdit*>(w))
-		connect(p, &QPlainTextEdit::textChanged, this, [this, group] { markDirty(group); });
+		connect(p, &QPlainTextEdit::textChanged, this, [this, group, p] { markDirty(group, p); });
 	else if (auto* t = qobject_cast<QTableWidget*>(w))
-		connect(t, &QTableWidget::itemChanged, this, [this, group] { markDirty(group); });
+		connect(t, &QTableWidget::itemChanged, this, [this, group, t] { markDirty(group, t); });
 }
 
-void PropertiesTab::markDirty(const QString& group)
+void PropertiesTab::setMarked(QWidget* w, bool on)
+{
+	if (w->property("rjDirty").toBool() == on)
+		return;
+	w->setProperty("rjDirty", on);
+	w->style()->unpolish(w);
+	w->style()->polish(w);
+}
+
+void PropertiesTab::markDirty(const QString& group, QWidget* changed)
 {
 	if (m_loading)
 		return;
 	const bool was = isDirty();
 	m_dirty.insert(group);
-	// Geänderte Felder sichtbar markieren.
-	for (QWidget* w : findChildren<QWidget*>())
-		if (w->property("rjGroup").toString() == group)
-		{
-			w->setProperty("rjDirty", true);
-			w->style()->unpolish(w);
-			w->style()->polish(w);
-		}
+	// Nur das tatsächlich geänderte Feld sichtbar markieren (gesperrte zeigt der Stil ohnehin ohne Rahmen).
+	if (changed)
+		setMarked(changed, true);
 	m_dirtyLabel->show();
 	if (!was)
 		emit titleChanged();
@@ -712,7 +725,7 @@ QWidget* PropertiesTab::pageConnection()
 				connect(arrow, &QAction::triggered, this, [this, e, k] {
 					QMenu menu(e);
 					// Auswahl im Menü gilt wie eine Eingabe (sonst übernimmt „Speichern“ sie nicht).
-					menu.addAction(rjText(m_backend, "edit.web.dropdown.auto"), [this, e] { e->clear(); markDirty(QStringLiteral("options")); });
+					menu.addAction(rjText(m_backend, "edit.web.dropdown.auto"), [this, e] { e->clear(); markDirty(QStringLiteral("options"), e); });
 					menu.addSeparator();
 					const auto items = m_candidates.value(k);
 					if (items.isEmpty())
@@ -720,7 +733,7 @@ QWidget* PropertiesTab::pageConnection()
 					for (const auto& c : items)
 					{
 						QString label = c.first == c.second ? c.second : QStringLiteral("%1   (%2)").arg(c.first, c.second);
-						menu.addAction(label, [this, e, sel = c.second] { e->setText(sel); markDirty(QStringLiteral("options")); });
+						menu.addAction(label, [this, e, sel = c.second] { e->setText(sel); markDirty(QStringLiteral("options"), e); });
 					}
 					menu.exec(e->mapToGlobal(QPoint(0, e->height())));
 				});
@@ -1057,7 +1070,7 @@ QWidget* PropertiesTab::pageTasks()
 	};
 	addItems("tasks", QStringLiteral("task"));
 	addItems("macros", QStringLiteral("macro"));
-	connect(m_taskList, &QListWidget::itemChanged, this, [this] { markDirty(QStringLiteral("tasks")); });
+	connect(m_taskList, &QListWidget::itemChanged, this, [this] { markDirty(QStringLiteral("tasks"), m_taskList); });
 	v->addWidget(m_taskList, 1);
 	auto* f = new QFormLayout;
 	m_taskName = new QLineEdit(w);
@@ -1232,13 +1245,13 @@ QWidget* PropertiesTab::pageOrganisation()
 		m_fields->setItem(r, 1, new QTableWidgetItem);
 		m_fields->setCurrentCell(r, 0);
 		m_fields->editItem(m_fields->item(r, 0));
-		markDirty(QStringLiteral("fields"));
+		markDirty(QStringLiteral("fields"), m_fields);
 	});
 	connect(rem, &QPushButton::clicked, this, [this] {
 		if (m_fields->currentRow() >= 0)
 		{
 			m_fields->removeRow(m_fields->currentRow());
-			markDirty(QStringLiteral("fields"));
+			markDirty(QStringLiteral("fields"), m_fields);
 		}
 	});
 	row->addWidget(add);

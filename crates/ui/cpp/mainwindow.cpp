@@ -1358,6 +1358,10 @@ void MainWindow::applyTheme(bool dark)
 		pal.setColor(QPalette::Link, c("link"));
 		pal.setColor(QPalette::ToolTipBase, c("base"));
 		pal.setColor(QPalette::ToolTipText, c("text"));
+		// Gesperrte Bedienelemente sichtbar abheben: gedämpfte Schrift, Feldhintergrund wie das Fenster.
+		for (const auto role : { QPalette::WindowText, QPalette::Text, QPalette::ButtonText })
+			pal.setColor(QPalette::Disabled, role, c("muted"));
+		pal.setColor(QPalette::Disabled, QPalette::Base, c("window"));
 	}
 	qApp->setPalette(pal);
 	// Trennlinie der Tabs: Mischung aus Text- und Fensterfarbe, in beiden Schemata gut sichtbar.
@@ -1415,8 +1419,10 @@ void MainWindow::applyTheme(bool dark)
 	  "QLabel#securityTitle { font-weight: bold; }"
 	  "QLabel#heading { font-weight: bold; padding: 4px 0; }"
 	  "QFrame#unlockBox { border: 2px solid %2; border-radius: 6px; padding: 12px; }"
-	  "*[rjDirty=\"true\"] { border: 2px solid %2; }"
-	  "QRadioButton[rjDirty=\"true\"], QCheckBox[rjDirty=\"true\"] { border: none; font-weight: bold; color: %2; }")
+	  // Optionsknöpfe und Kästchen immer über das Stylesheet zeichnen, damit die Markierung „geändert“ die Abstände nicht verschiebt.
+	  "QRadioButton, QCheckBox { border: none; }"
+	  "*[rjDirty=\"true\"]:enabled { border: 2px solid %2; }"
+	  "QRadioButton[rjDirty=\"true\"]:enabled, QCheckBox[rjDirty=\"true\"]:enabled { border: none; color: %2; }")
 	                      .arg(c("warning").name(), c("highlight").name())
 	                      .arg(tabLine.name(), c("button").name(), c("muted").name(), c("base").name(), c("text").name(), c("alternate").name())
 	                      .arg(rowHeight));
