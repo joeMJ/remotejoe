@@ -1,4 +1,4 @@
-erstes_zeichnen_ms=160
+erstes_zeichnen_ms=136
 baum_eintraege=525
 patchday_neuzeichnen_max_ms=1
 patchday_neuzeichnen_anzahl=31
