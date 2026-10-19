@@ -20,6 +20,9 @@
 #include <QtNetwork/QLocalServer>
 #include <QtNetwork/QLocalSocket>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QComboBox>
+#include <QtGui/QMouseEvent>
+#include <QtCore/QPointer>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QPlainTextEdit>
@@ -329,6 +332,52 @@ struct SingleInstance
 	}
 };
 
+/// Auswahllisten: Qt öffnet die Liste beim Drücken der Maustaste. Kommt das Loslassen spät (Taste etwas länger
+/// gehalten, Remotedesktop mit Verzögerung), wertet Qt es als Auswahl bzw. als Klick daneben und schließt die
+/// Liste sofort wieder – es sieht aus, als öffne sie sich nicht. Dieses erste Loslassen über dem Feld selbst wird
+/// deshalb verworfen; danach bleibt die Liste offen, bis ein Eintrag gewählt oder daneben geklickt wird.
+class ComboReleaseGuard : public QObject
+{
+public:
+	using QObject::QObject;
+
+protected:
+	bool eventFilter(QObject* o, QEvent* e) override
+	{
+		switch (e->type())
+		{
+		case QEvent::Show:
+			if (o->inherits("QComboBoxPrivateContainer"))
+			{
+				m_popup = static_cast<QWidget*>(o);
+				m_armed = true;
+			}
+			break;
+		case QEvent::Hide:
+			if (o == m_popup)
+				m_armed = false;
+			break;
+		case QEvent::MouseButtonRelease:
+			if (m_armed)
+			{
+				m_armed = false;
+				auto* combo = m_popup ? qobject_cast<QComboBox*>(m_popup->parentWidget()) : nullptr;
+				const QPoint g = static_cast<QMouseEvent*>(e)->globalPosition().toPoint();
+				if (combo && combo->rect().contains(combo->mapFromGlobal(g)))
+					return true;
+			}
+			break;
+		default:
+			break;
+		}
+		return false;
+	}
+
+private:
+	QPointer<QWidget> m_popup;
+	bool m_armed = false;
+};
+
 } // namespace
 
 std::int32_t rjRunApplication()
@@ -338,6 +387,7 @@ std::int32_t rjRunApplication()
 	static char name[] = "remotejoe";
 	static char* argv[] = { name, nullptr };
 	QApplication app(argc, argv);
+	app.installEventFilter(new ComboReleaseGuard(&app));
 	QApplication::setApplicationName(QStringLiteral("remotejoe"));
 	QGuiApplication::setDesktopFileName(QStringLiteral("remotejoe"));
 	{
