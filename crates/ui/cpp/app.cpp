@@ -1,5 +1,7 @@
 #include "app.h"
 
+#include "diag.h"
+
 #include "editor.h"
 #include "mainwindow.h"
 #include "titlebar.h"
@@ -20,6 +22,7 @@
 #include <QtNetwork/QLocalServer>
 #include <QtNetwork/QLocalSocket>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QComboBox>
 #include <QtGui/QMouseEvent>
 #include <QtCore/QPointer>
@@ -336,6 +339,11 @@ struct SingleInstance
 /// gehalten, Remotedesktop mit Verzögerung), wertet Qt es als Auswahl bzw. als Klick daneben und schließt die
 /// Liste sofort wieder – es sieht aus, als öffne sie sich nicht. Dieses erste Loslassen über dem Feld selbst wird
 /// deshalb verworfen; danach bleibt die Liste offen, bis ein Eintrag gewählt oder daneben geklickt wird.
+///
+/// Zweitens (Notbehelf, Ursache noch offen): In Remotedesktop-Sitzungen unter Windows setzt das System beim
+/// Aufklappen gelegentlich für einen Augenblick den Vordergrund auf „kein Fenster“; Qt schließt die Liste dann
+/// nach 10–20 ms, ohne dass der Nutzer etwas getan hat. Schließt sich eine Liste so früh ohne Eingabe, wird sie
+/// höchstens zweimal neu geöffnet, und eine Falldatei der Diagnose hält den Zustand fest (diag.h).
 class ComboReleaseGuard : public QObject
 {
 public:
@@ -351,11 +359,44 @@ protected:
 			{
 				m_popup = static_cast<QWidget*>(o);
 				m_armed = true;
+				m_userInput = false;
+				m_shown.start();
+				if (!m_reopening)
+					m_retries = 0;
 			}
 			break;
 		case QEvent::Hide:
 			if (o == m_popup)
+			{
 				m_armed = false;
+				const qint64 ms = m_shown.isValid() ? m_shown.elapsed() : -1;
+				rjdiag::log(QStringLiteral("[liste] versteckt nach %1 ms, Eingabe seither %2, Neuversuche %3").arg(ms).arg(m_userInput ? 1 : 0).arg(m_retries));
+				auto* combo = qobject_cast<QComboBox*>(m_popup->parentWidget());
+				if (combo && ms >= 0 && ms < 150 && !m_userInput && m_retries < 2)
+				{
+					if (m_retries == 0)
+						rjdiag::incident(QStringLiteral("Auswahlliste nach %1 ms ohne Eingabe geschlossen").arg(ms));
+					++m_retries;
+					QPointer<QComboBox> c(combo);
+					QTimer::singleShot(40, combo, [this, c] {
+						if (!c || !c->isVisible() || !c->isEnabled() || c->view()->isVisible() || !c->window()->isActiveWindow())
+						{
+							rjdiag::log(QStringLiteral("[liste] nicht neu geöffnet (Feld weg, gesperrt, Liste offen oder Fenster nicht aktiv)"));
+							return;
+						}
+						rjdiag::log(QStringLiteral("[liste] neu geöffnet"));
+						m_reopening = true;
+						c->showPopup();
+						m_reopening = false;
+					});
+				}
+			}
+			break;
+		case QEvent::MouseButtonPress:
+		case QEvent::MouseButtonDblClick:
+		case QEvent::KeyPress:
+			if (m_popup && m_popup->isVisible())
+				m_userInput = true;
 			break;
 		case QEvent::MouseButtonRelease:
 			if (m_armed)
@@ -364,7 +405,10 @@ protected:
 				auto* combo = m_popup ? qobject_cast<QComboBox*>(m_popup->parentWidget()) : nullptr;
 				const QPoint g = static_cast<QMouseEvent*>(e)->globalPosition().toPoint();
 				if (combo && combo->rect().contains(combo->mapFromGlobal(g)))
+				{
+					rjdiag::log(QStringLiteral("[liste] erstes Loslassen über dem Feld verworfen"));
 					return true;
+				}
 			}
 			break;
 		default:
@@ -376,6 +420,10 @@ protected:
 private:
 	QPointer<QWidget> m_popup;
 	bool m_armed = false;
+	bool m_userInput = false;
+	bool m_reopening = false;
+	int m_retries = 0;
+	QElapsedTimer m_shown;
 };
 
 } // namespace
@@ -387,6 +435,7 @@ std::int32_t rjRunApplication()
 	static char name[] = "remotejoe";
 	static char* argv[] = { name, nullptr };
 	QApplication app(argc, argv);
+	rjdiag::init(app);
 	app.installEventFilter(new ComboReleaseGuard(&app));
 	QApplication::setApplicationName(QStringLiteral("remotejoe"));
 	QGuiApplication::setDesktopFileName(QStringLiteral("remotejoe"));
@@ -417,6 +466,7 @@ std::int32_t rjRunApplication()
 	RjBackend backend;
 	backend.init(demo);
 	MainWindow w(&backend);
+	rjdiag::attachShortcut(&w);
 	w.applyTheme(qEnvironmentVariable("REMOTEJOE_THEME") == QLatin1String("dark"));
 	// --fenster-zuruecksetzen: gespeicherte Größe und Lage ignorieren (Standardgröße, Mitte des Bildschirms).
 	if (!demo && !qEnvironmentVariableIsSet("RJ_RESET_WINDOW"))
