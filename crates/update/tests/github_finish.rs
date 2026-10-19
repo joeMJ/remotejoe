@@ -7,7 +7,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rj_update::github::{finish_release, Endpoints};
+use rj_update::github::{finish_release, finish_release_with, Endpoints};
 use rj_update::sign::{self, SIG, SUMS};
 use rj_update::UpdateError;
 
@@ -20,6 +20,9 @@ struct State {
     uploaded: Vec<(String, Vec<u8>)>,
     patched: Option<String>,
     auth_seen: Vec<String>,
+    /// Hochgeladene Dateien wie auf GitHub danach als Anhang führen (Zusatzdateien).
+    keep_uploads: bool,
+    deleted: Vec<String>,
 }
 
 struct Mock {
@@ -72,7 +75,7 @@ fn start() -> Mock {
                     .keys()
                     .map(|n| serde_json::json!({ "name": n, "size": g.files[n].len(), "url": format!("{b}/repos/o/r/releases/assets/{n}"), "browser_download_url": "" }))
                     .collect();
-                assets.extend(g.uploaded.iter().map(|(n, d)| serde_json::json!({ "name": n, "size": d.len(), "url": format!("{b}/repos/o/r/releases/assets/{n}"), "browser_download_url": "" })));
+                assets.extend(g.uploaded.iter().filter(|(n, _)| !g.files.contains_key(n)).map(|(n, d)| serde_json::json!({ "name": n, "size": d.len(), "url": format!("{b}/repos/o/r/releases/assets/{n}"), "browser_download_url": "" })));
                 let rel = serde_json::json!([{ "id": 11, "tag_name": "v1.2.3", "draft": g.draft, "prerelease": false, "body": "Neu", "assets": assets }]);
                 (200, "application/json", rel.to_string().into_bytes())
             } else if method == "GET" && path.starts_with("/repos/o/r/releases/assets/") {
@@ -83,8 +86,18 @@ fn start() -> Mock {
                 }
             } else if method == "POST" && path.starts_with("/repos/o/r/releases/11/assets?name=") {
                 let n = path.rsplit('=').next().unwrap().to_string();
+                if g.keep_uploads {
+                    g.files.insert(n.clone(), body.clone());
+                }
                 g.uploaded.push((n, body));
                 (201, "application/json", b"{}".to_vec())
+            } else if method == "DELETE" && path.starts_with("/repos/o/r/releases/assets/") {
+                let n = path.rsplit('/').next().unwrap().to_string();
+                g.deleted.push(n.clone());
+                match g.files.remove(&n) {
+                    Some(_) => (204, "text/plain", Vec::new()),
+                    None => (404, "text/plain", Vec::new()),
+                }
             } else if method == "PATCH" && path == "/repos/o/r/releases/11" {
                 g.patched = Some(String::from_utf8_lossy(&body).to_string());
                 g.draft = false;
@@ -165,4 +178,29 @@ fn missing_assets_time_out_and_published_release_is_refused() {
     }
     let e = finish_release(&ep(&m), "o/r", "v1.2.3", TOKEN, &key, &key.verifying_key(), Duration::from_secs(5), None).unwrap_err();
     assert!(matches!(e, UpdateError::Install(_)), "{e}");
+}
+
+#[test]
+fn extra_file_is_attached_listed_in_sums_and_signed() {
+    let m = start();
+    let key = sign::generate().unwrap();
+    let archive = b"Archiv-Inhalt".to_vec();
+    let name = "remotejoe-1.2.3-linux-x86_64.tar.zst".to_string();
+    let sums = sign::sums_text(&[(name.clone(), sign::sha256_hex(&archive))]);
+    {
+        let mut g = m.state.lock().unwrap();
+        g.keep_uploads = true;
+        g.files.insert(name.clone(), archive);
+        g.files.insert(SUMS.into(), sums.clone().into_bytes());
+    }
+    let msi = ("remotejoe-1.2.3-windows-x86_64.msi".to_string(), b"MSI-Inhalt".to_vec());
+    let done = finish_release_with(&ep(&m), "o/r", "v1.2.3", TOKEN, &key, &key.verifying_key(), Duration::from_secs(5), None, &[msi.clone()]).unwrap();
+    assert!(done.archives.contains(&msi.0), "{:?}", done.archives);
+    let g = m.state.lock().unwrap();
+    assert_eq!(g.deleted, [SUMS], "alte Prüfsummen ersetzt");
+    let new_sums = g.files.get(SUMS).unwrap().clone();
+    assert_eq!(sign::sums_lookup(&new_sums, &msi.0).unwrap(), sign::sha256_hex(&msi.1));
+    assert_eq!(sign::sums_lookup(&new_sums, &name).unwrap(), sign::sha256_hex(b"Archiv-Inhalt"));
+    let sig = &g.uploaded.iter().find(|(n, _)| n == SIG).unwrap().1;
+    sign::verify(&key.verifying_key(), &new_sums, sig).unwrap();
 }

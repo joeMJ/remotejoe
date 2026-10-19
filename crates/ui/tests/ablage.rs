@@ -2,13 +2,26 @@
 //! (Eigene Testdatei, weil sie Umgebungsvariablen des Prozesses setzt.)
 
 use rj_core::config::{config_dir, data_dir, default_config_path, home_dir, Config};
+use std::path::Path;
+
+/// Persönlicher Ordner für den Test. Unter Windows gelten `USERPROFILE`, `APPDATA` und `LOCALAPPDATA`;
+/// sie zeigen auf dieselben Unterordner wie unter Linux, damit die Prüfungen für beide gelten.
+fn set_home(home: &Path) {
+    std::env::set_var("HOME", home);
+    #[cfg(windows)]
+    {
+        std::env::set_var("USERPROFILE", home);
+        std::env::set_var("APPDATA", home.join(".config"));
+        std::env::set_var("LOCALAPPDATA", home.join(".local/share"));
+    }
+}
 
 #[test]
 fn fresh_install_uses_one_folder_under_home_and_old_installations_stay() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
-    std::env::set_var("HOME", &home);
+    set_home(&home);
     for k in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "REMOTEJOE_HOME"] {
         std::env::remove_var(k);
     }
@@ -31,7 +44,7 @@ fn fresh_install_uses_one_folder_under_home_and_old_installations_stay() {
     let home2 = dir.path().join("home2");
     std::fs::create_dir_all(home2.join(".config/remotejoe")).unwrap();
     std::fs::write(home2.join(".config/remotejoe/config.toml"), "").unwrap();
-    std::env::set_var("HOME", &home2);
+    set_home(&home2);
     assert_eq!(home_dir(), None);
     assert_eq!(config_dir(), Some(home2.join(".config/remotejoe")));
     assert_eq!(data_dir(), Some(home2.join(".local/share/remotejoe")));

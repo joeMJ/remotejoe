@@ -55,6 +55,9 @@ pub struct App {
     unlock_key_file: Option<Option<PathBuf>>,
     /// Ergebnis des letzten Prüflaufs „Schlüssel und Zertifikate prüfen“.
     pub(crate) cert_rows: Vec<crate::certcheck::CheckRow>,
+    /// Fortschritt der laufenden Schlüsselprüfung: fertig geprüfte Ziele und Gesamtzahl.
+    pub(crate) cert_done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    pub(crate) cert_total: usize,
     /// Sperre der geöffneten Schlüsseldatenbank (fällt mit dem Tresor weg).
     vault_lock: Option<crate::vaultlock::VaultLock>,
     /// Laufendes „Felder erkennen“ (unsichtbare Web-Sitzung ohne Tab).
@@ -164,6 +167,8 @@ impl App {
             keyring_note: None,
             unlock_key_file: None,
             cert_rows: Vec::new(),
+            cert_done: Default::default(),
+            cert_total: 0,
             vault_lock: None,
             probe: None,
             lights: Default::default(),
@@ -1512,6 +1517,21 @@ impl App {
                                 let _ = v.set_index(self.index.clone());
                             }
                             let note = format!("{repaired} Web-Ziele aus einem älteren Import wurden repariert (Adresse in den Optionen); bitte speichern.");
+                            self.keyring_note = Some(match self.keyring_note.take() {
+                                Some(k) => format!("{k}. {note}"),
+                                None => note,
+                            });
+                        }
+                        // Bisherige „vorhandene Datensätze“ in Anmeldeobjekte übernehmen.
+                        let converted = match self.vault.as_ref() {
+                            Some(v) => rj_core::inherit::convert_entries_to_logins(&mut self.index, &|e| v.is_own_entry(e), &|e| v.credential(e).map(|c| c.data.title)),
+                            None => 0,
+                        };
+                        if converted > 0 {
+                            if let Some(v) = self.vault.as_mut() {
+                                let _ = v.set_index(self.index.clone());
+                            }
+                            let note = format!("{converted} Zugangsdaten mit „vorhandenem Datensatz“ wurden in Anmeldeobjekte übernommen; bitte speichern.");
                             self.keyring_note = Some(match self.keyring_note.take() {
                                 Some(k) => format!("{k}. {note}"),
                                 None => note,

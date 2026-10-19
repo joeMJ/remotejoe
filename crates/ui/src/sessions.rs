@@ -133,6 +133,8 @@ pub enum UiEvent {
     /// Ergebnis von „Felder erkennen“ für ein Ziel (`error`: Grund, wenn nichts erkannt wurde).
     FieldsDetected { target: String, error: Option<String>, fields: serde_json::Value },
     Bell { s: SessionId },
+    /// Mauszeiger der Gegenstelle: `kind` 0 = Standard, 1 = ausgeblendet, 2 = Bild (`bgra` Base64).
+    Pointer { s: SessionId, kind: u8, w: u32, h: u32, hx: u32, hy: u32, bgra: String },
     Unlocked { targets: usize },
     /// „Alle im Ordner verbinden“ ist abgeschlossen.
     ConnectAllDone,
@@ -1149,6 +1151,13 @@ impl Manager {
                 self.pending.push(UiEvent::Question { s, q: id, text, detail, info, timeout_secs: self.question_timeout.as_secs() });
             }
             FromWorker::Notice(text) => self.pending.push(UiEvent::Notice { s, text }),
+            FromWorker::Pointer(p) => {
+                use base64::Engine as _;
+                let bgra = base64::engine::general_purpose::STANDARD.encode(&p.bgra);
+                // Nur der letzte Zeiger zählt: ältere, noch nicht abgeholte Zeiger dieser Sitzung verwerfen.
+                self.pending.retain(|e| !matches!(e, UiEvent::Pointer { s: x, .. } if *x == s));
+                self.pending.push(UiEvent::Pointer { s, kind: p.kind, w: p.width, h: p.height, hx: p.hot_x, hy: p.hot_y, bgra });
+            }
             FromWorker::Custom(bytes) => {
                 if self.sessions.get(&s).is_some_and(|x| matches!(x.spec.protocol, Protocol::Web | Protocol::Proxmox)) {
                     if let Some(e) = web_event(s, &bytes) {

@@ -89,6 +89,8 @@ constexpr int RoleProtocol = Qt::UserRole + 7;
 constexpr int RoleLight = Qt::UserRole + 8;
 /// Zuletzt gezeichneter Sitzungspunkt (0, 1, 2).
 constexpr int RoleSessionMark = Qt::UserRole + 9;
+/// Anmeldeobjekt (keine Verbindung; öffnet die Bearbeitung).
+constexpr int RoleLogin = Qt::UserRole + 10;
 /// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
 constexpr int RoleMacro = Qt::UserRole + 20;
 
@@ -138,10 +140,15 @@ QString protocolName(const QString& p)
 // verwirft die schon gezeichneten Symbole.
 QHash<QString, QColor> g_iconColors;
 QColor g_iconRing(Qt::white);
+// Ausgewählte Zeile: Symbol in der Textfarbe der Auswahl, Ring in der Auswahlfarbe.
+QColor g_iconSelected(Qt::white);
+QColor g_iconSelectedRing(QColor("#2a6fdb"));
 int g_iconGeneration = 0;
 
-void setIconColors(const QJsonObject& colors, const QColor& ring)
+void setIconColors(const QJsonObject& colors, const QColor& ring, const QColor& selected, const QColor& selectedRing)
 {
+	g_iconSelected = selected;
+	g_iconSelectedRing = selectedRing;
 	g_iconColors.clear();
 	for (auto it = colors.begin(); it != colors.end(); ++it)
 		g_iconColors.insert(it.key(), QColor(it.value().toString()));
@@ -188,21 +195,22 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 		{ "proxmox", RJ_G("<path d='M16 4l11 6v12l-11 6-11-6V10z'/><path d='M5 10l11 6 11-6M16 16v12'/>"), "#b03a00" },
 		// Hyper-V: zwei Server übereinander
 		{ "hyperv", RJ_G("<rect x='4' y='5' width='24' height='9' rx='2'/><rect x='4' y='18' width='24' height='9' rx='2'/><path d='M8.5 9.5h.1M8.5 22.5h.1M14 9.5h10M14 22.5h10'/>"), "#3a4a8c" },
+		// Anmeldung: Schlüssel
+		{ "login", RJ_G("<circle cx='11' cy='16' r='6'/><path d='M17 16h11M24 16v5M28 16v4'/>"), "#6a1b9a" },
 		// Makro: Abspielzeichen
 		{ "macro", RJ_G("<path d='M10 6l16 10-16 10z' fill='COLOR' fill-opacity='0.25'/>"), "#6a1b9a" },
 	};
-	QString svg;
-	if (folder)
-	{
-		const QColor f = g_iconColors.value(QStringLiteral("folder"), QColor("#c9a227"));
-		// Ordner im selben Linienstil wie die Ziele, nur leicht getönt gefüllt.
-		svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
-		                     "<path d='M4 8.5a1.5 1.5 0 0 1 1.5-1.5h7l3 3h11a1.5 1.5 0 0 1 1.5 1.5v13a1.5 1.5 0 0 1-1.5 1.5h-21A1.5 1.5 0 0 1 4 24.5z' "
-		                     "fill='%1' fill-opacity='0.18' stroke='%1' stroke-width='2.4' stroke-linejoin='round'/></svg>")
-		        .arg(f.name());
-	}
-	else
-	{
+	// SVG des Symbols; `over` ersetzt die Farbe (ausgewählte Zeile).
+	auto makeSvg = [&](const QString& over) -> QString {
+		if (folder)
+		{
+			const QColor f = over.isEmpty() ? g_iconColors.value(QStringLiteral("folder"), QColor("#c9a227")) : QColor(over);
+			// Ordner im selben Linienstil wie die Ziele, nur leicht getönt gefüllt.
+			return QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
+			                      "<path d='M4 8.5a1.5 1.5 0 0 1 1.5-1.5h7l3 3h11a1.5 1.5 0 0 1 1.5 1.5v13a1.5 1.5 0 0 1-1.5 1.5h-21A1.5 1.5 0 0 1 4 24.5z' "
+			                      "fill='%1' fill-opacity='0.18' stroke='%1' stroke-width='2.4' stroke-linejoin='round'/></svg>")
+			    .arg(f.name());
+		}
 		QString glyph = QStringLiteral(RJ_G("<path d='M12 12a4 4 0 1 1 6 3.5c-1.5 1-2 1.5-2 3'/><path d='M16 23h.1'/>")), color = g_iconColors.value(QStringLiteral("other"), QColor("#555555")).name();
 		for (const P& p : table)
 			if (protocol == QLatin1String(p.name))
@@ -210,10 +218,13 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 				glyph = QLatin1String(p.glyph);
 				color = g_iconColors.value(protocol, QColor(QLatin1String(p.color))).name();
 			}
+		if (!over.isEmpty())
+			color = over;
 		// Ohne Kachel: das Piktogramm selbst in der Farbe des Zieltyps.
-		svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>%1</svg>").arg(glyph.replace(QLatin1String("COLOR"), color));
-	}
+		return QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>%1</svg>").arg(glyph.replace(QLatin1String("COLOR"), color));
+	};
 	#undef RJ_G
+	auto draw = [&](const QString& svg, const QColor& ring) {
 	QPixmap pm(32, 32);
 	pm.fill(Qt::transparent);
 	{
@@ -228,7 +239,7 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 			                                              : QColor("#8a8a8a");
 			p.setRenderHint(QPainter::Antialiasing);
 			p.setBrush(c);
-			p.setPen(QPen(g_iconRing, 2));
+			p.setPen(QPen(ring, 2));
 			p.drawEllipse(QRect(19, 19, 12, 12));
 		}
 		if (session > 0)
@@ -238,18 +249,21 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 			if (session == 1)
 			{
 				p.setBrush(dot);
-				p.setPen(QPen(g_iconRing, 2));
+				p.setPen(QPen(ring, 2));
 				p.drawEllipse(QRect(20, 0, 12, 12));
 			}
 			else
 			{
-				p.setBrush(g_iconRing);
+				p.setBrush(ring);
 				p.setPen(QPen(dot, 2.5));
 				p.drawEllipse(QRectF(21.25, 1.25, 9.5, 9.5));
 			}
 		}
 	}
-	QIcon icon(pm);
+	return pm;
+	};
+	QIcon icon(draw(makeSvg(QString()), g_iconRing));
+	icon.addPixmap(draw(makeSvg(g_iconSelected.name()), g_iconSelectedRing), QIcon::Selected);
 	cache.insert(key, icon);
 	return icon;
 }
@@ -266,6 +280,13 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		item->setData(folder, RoleFolder);
 		item->setIcon(protocolIcon(n.value(QStringLiteral("protocol")).toString(), n.value(QStringLiteral("light")).toString(), folder));
 		item->setData(n.value(QStringLiteral("light")).toString(), RoleLight);
+		if (n.value(QStringLiteral("login")).toBool())
+		{
+			item->setData(true, RoleLogin);
+			item->setIcon(protocolIcon(QStringLiteral("login"), QString(), false));
+			item->setDragEnabled(false);
+			item->setDropEnabled(false);
+		}
 		QString tip = n.value(QStringLiteral("host")).toString();
 		if (n.value(QStringLiteral("suspicious")).toBool())
 			tip += QStringLiteral("\nName enthält unsichtbare oder richtungsändernde Zeichen.");
@@ -581,6 +602,10 @@ bool webView2Installed()
 	}
 	return false;
 }
+
+/// Ergebnis eines Updates über die MSI (Neustart): erscheint nach dem Entsperren als Hinweis; vorher verdeckt
+/// die Entsperr-Abfrage sie.
+QString g_updateNotice;
 #endif
 } // namespace
 
@@ -762,6 +787,14 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		m_logo->setPixmap(pm);
 		m_logo->setFixedSize(200, 200);
 		m_logo->setAttribute(Qt::WA_TransparentForMouseEvents);
+		// Darunter ein Link auf die Projektseite (öffnet im Standardbrowser).
+		auto* link = new QLabel(m_tabs);
+		link->setObjectName(QStringLiteral("emptyLogoLink"));
+		link->setTextFormat(Qt::RichText);
+		link->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);
+		link->setOpenExternalLinks(true);
+		link->setText(QStringLiteral("<a href=\"https://github.com/joeMJ/remotejoe\">%1</a>").arg(T(m_backend, "logo.link").toHtmlEscaped()));
+		link->adjustSize();
 		connect(m_tabs, &QTabWidget::currentChanged, this, [this] { updateLogo(); });
 		QTimer::singleShot(0, this, [this] { updateLogo(); });
 	}
@@ -1068,6 +1101,13 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 			box->setWindowModality(Qt::NonModal);
 			box->show();
 		});
+	// Neustart nach einem Update über die MSI: Ergebnis von msiexec (0 bzw. 3010: erfolgreich) in der Fußzeile.
+	if (const QString code = qEnvironmentVariable("RJ_UPDATE_RESULT"); !code.isEmpty())
+	{
+		qunsetenv("RJ_UPDATE_RESULT");
+		const bool ok = code == QLatin1String("0") || code == QLatin1String("3010");
+		g_updateNotice = ok ? T(m_backend, "update.applied.ok").arg(m_backend->appVersion()) : T(m_backend, "update.applied.failed").arg(code);
+	}
 #endif
 }
 
@@ -1080,7 +1120,7 @@ void MainWindow::buildMenus()
 	file->addAction(T(m_backend, "menu.file.open"), QKeySequence::Open, this, [this] { showUnlock(false); });
 	file->addAction(T(m_backend, "menu.file.import"), this, [this] {
 		const QString path = QFileDialog::getOpenFileName(this, T(m_backend, "menu.file.import"), QString(),
-		                                                  QStringLiteral("Remote Desktop Manager / Royal TS / remotejoe (*.rdm *.json *.csv *.zip *.rtsz *.rtsx);;Alle Dateien (*)"));
+		                                                  QStringLiteral("Exportierte Verbindungslisten und remotejoe-Exporte (*.rdm *.json *.csv *.zip *.rtsz *.rtsx);;Alle Dateien (*)"));
 		if (path.isEmpty())
 			return;
 		QString zipPassword;
@@ -1328,7 +1368,7 @@ void MainWindow::applyTheme(bool dark)
 	{
 		QJsonObject icons = p.value(QStringLiteral("icons")).toObject();
 		icons.insert(QStringLiteral("other"), c("muted").name());
-		setIconColors(icons, c("base"));
+		setIconColors(icons, c("base"), c("highlight_text"), c("highlight"));
 	}
 	// Baumgröße: Zeilenhöhe, Symbole und Schrift in drei Stufen.
 	const QString treeSize = p.value(QStringLiteral("tree_size")).toString(QStringLiteral("mittel"));
@@ -1649,10 +1689,16 @@ QSize MainWindow::contentSize(bool terminal) const
 
 void MainWindow::connectSelected(const QString& credential, bool remember)
 {
+	// Anmeldeobjekt: Bearbeitung statt Verbindung.
+	if (m_tree->currentIndex().data(RoleLogin).toBool() && m_tree->selectionModel()->selectedIndexes().size() <= 1)
+	{
+		openLogin(m_tree->currentIndex().data(RoleId).toString(), QString());
+		return;
+	}
 	// Mehrere markierte Ziele: alle gestaffelt öffnen (Ordner in der Markierung zählen nicht).
 	QStringList ids;
 	for (const QModelIndex& i : m_tree->selectionModel()->selectedIndexes())
-		if (!i.data(RoleFolder).toBool() && !i.data(RoleGuest).isValid() && !i.data(RolePlaceholder).toBool() && !i.data(RoleMacro).toInt())
+		if (!i.data(RoleFolder).toBool() && !i.data(RoleGuest).isValid() && !i.data(RolePlaceholder).toBool() && !i.data(RoleMacro).toInt() && !i.data(RoleLogin).toBool())
 			ids << i.data(RoleId).toString();
 	ids.removeDuplicates();
 	if (ids.size() > 1 && credential.isEmpty())
@@ -2070,6 +2116,25 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 	{
 		m_tree->setCurrentIndex(i);
 		macroContextMenu(i, m_tree->viewport()->mapToGlobal(pos));
+		return;
+	}
+	if (i.data(RoleLogin).toBool())
+	{
+		m_tree->setCurrentIndex(i);
+		const QString id = i.data(RoleId).toString();
+		QMenu lm(this);
+		lm.addAction(T(m_backend, "login.edit"), this, [this, id] { openLogin(id, QString()); });
+		lm.addAction(T(m_backend, "login.delete"), this, [this, id] {
+			const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("login_delete") }, { QStringLiteral("id"), id } }));
+			if (r.contains(QStringLiteral("error")))
+				return showEditResult(r);
+			edit({ { QStringLiteral("op"), QStringLiteral("save") } });
+			for (auto* t : findChildren<LoginTab*>())
+				if (t->loginId() == id)
+					closeToolTab(t);
+			reloadTree();
+		});
+		lm.exec(m_tree->viewport()->mapToGlobal(pos));
 		return;
 	}
 	if (!m_tree->selectionModel()->isSelected(i))
@@ -2724,6 +2789,13 @@ void MainWindow::handleEvents(const QString& json)
 			}
 			else if (t == QLatin1String("macro_done") && p)
 				p->setMacroResult(e.value(QStringLiteral("message")).toString(), e.value(QStringLiteral("ok")).toBool());
+			else if (t == QLatin1String("pointer") && p)
+			{
+				if (auto* fv = dynamic_cast<FrameView*>(p->view()))
+					fv->setRemotePointer(e.value(QStringLiteral("kind")).toInt(), QByteArray::fromBase64(e.value(QStringLiteral("bgra")).toString().toLatin1()),
+					                     e.value(QStringLiteral("w")).toInt(), e.value(QStringLiteral("h")).toInt(), e.value(QStringLiteral("hx")).toInt(),
+					                     e.value(QStringLiteral("hy")).toInt());
+			}
 			else if (t == QLatin1String("title") && p)
 				p->setToolTip(e.value(QStringLiteral("title")).toString());
 			else if (t == QLatin1String("web_status") && p)
@@ -2801,6 +2873,17 @@ void MainWindow::handleEvents(const QString& json)
 				statusBar()->showMessage(T(m_backend, "status.unlocked"), 5000);
 				if (const QString note = m_backend->keyringNote(); !note.isEmpty())
 					statusBar()->showMessage(note, 12000);
+#ifdef Q_OS_WIN
+				if (!g_updateNotice.isEmpty())
+				{
+					// Eigenes Hinweisfenster: Meldungen der Fußzeile werden beim Entsperren gleich wieder überschrieben.
+					auto* box = new QMessageBox(QMessageBox::Information, QStringLiteral("remotejoe"), g_updateNotice, QMessageBox::Ok, this);
+					box->setAttribute(Qt::WA_DeleteOnClose);
+					box->setWindowModality(Qt::NonModal);
+					QTimer::singleShot(300, box, &QWidget::show);
+					g_updateNotice.clear();
+				}
+#endif
 			}
 			else if (t == QLatin1String("unlock_failed"))
 			{
@@ -2902,6 +2985,13 @@ void MainWindow::updateLogo()
 	m_logo->setVisible(show);
 	if (show)
 		m_logo->raise();
+	if (auto* link = m_tabs->findChild<QLabel*>(QStringLiteral("emptyLogoLink")))
+	{
+		link->move(m_logo->x() + (m_logo->width() - link->width()) / 2, m_logo->y() + m_logo->height() + 4);
+		link->setVisible(show);
+		if (show)
+			link->raise();
+	}
 }
 
 bool MainWindow::focusInSession() const
@@ -3602,6 +3692,12 @@ void MainWindow::buildAddMenu(QMenu* menu, const QString& parentId)
 		else if ((r.contains(QStringLiteral("task")) || r.contains(QStringLiteral("macro"))))
 			openProperties(parentId.isEmpty() ? QString() : parentId, QStringLiteral("tasks"));
 	};
+	{
+		// Anmeldeobjekt im gewählten Ordner (bzw. im Ordner des gewählten Ziels).
+		QAction* a = menu->addAction(T(m_backend, "add.login"), this, [this, parentId] { openLogin(QString(), parentId); });
+		a->setObjectName(QStringLiteral("add_login"));
+		a->setIcon(protocolIcon(QStringLiteral("login"), QString(), false));
+	}
 	for (auto& k : kinds)
 	{
 		const QString kind = QString::fromLatin1(k[0]);
@@ -3643,8 +3739,62 @@ QMenu* MainWindow::popupAddMenu()
 	return menu;
 }
 
+bool MainWindow::isLogin(const QString& id) const
+{
+	bool hit = false;
+	std::function<void(const QModelIndex&)> walk = [&](const QModelIndex& parent) {
+		for (int r = 0; r < m_model->rowCount(parent) && !hit; ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			if (i.data(RoleId).toString() == id && i.data(RoleLogin).toBool())
+				hit = true;
+			else
+				walk(i);
+		}
+	};
+	walk(QModelIndex());
+	return hit;
+}
+
+void MainWindow::openLogin(const QString& id, const QString& folder)
+{
+	if (!id.isEmpty())
+		for (auto* t : findChildren<LoginTab*>())
+			if (t->loginId() == id)
+			{
+				m_tabs->setCurrentWidget(t);
+				return;
+			}
+	// Neues Objekt: Ordner bestimmen (gewähltes Ziel → sein Ordner).
+	QString f = folder;
+	if (id.isEmpty() && !f.isEmpty())
+	{
+		std::function<QModelIndex(const QModelIndex&)> find = [&](const QModelIndex& parent) -> QModelIndex {
+			for (int r = 0; r < m_model->rowCount(parent); ++r)
+			{
+				const QModelIndex i = m_model->index(r, 0, parent);
+				if (i.data(RoleId).toString() == f)
+					return i;
+				if (const QModelIndex x = find(i); x.isValid())
+					return x;
+			}
+			return QModelIndex();
+		};
+		const QModelIndex i = find(QModelIndex());
+		if (i.isValid() && !i.data(RoleFolder).toBool())
+			f = i.parent().isValid() ? i.parent().data(RoleId).toString() : QString();
+	}
+	auto* t = new LoginTab(m_backend, id, f, m_tabs);
+	addToolTab(t, T(m_backend, "login.title"));
+}
+
 PropertiesTab* MainWindow::openProperties(const QString& id, const QString& category)
 {
+	if (!id.isEmpty() && isLogin(id))
+	{
+		openLogin(id, QString());
+		return nullptr;
+	}
 	QString target = id;
 	if (target.isEmpty())
 	{
@@ -3662,6 +3812,7 @@ PropertiesTab* MainWindow::openProperties(const QString& id, const QString& cate
 			return ed;
 		}
 	auto* ed = new PropertiesTab(m_backend, target, m_tabs);
+	connect(ed, &PropertiesTab::openLogin, this, [this](const QString& lid, const QString& folder) { openLogin(lid, folder); });
 	const int idx = m_tabs->addTab(ed, ed->title());
 	m_tabs->setTabToolTip(idx, T(m_backend, "edit.cat.general"));
 	connect(ed, &PropertiesTab::titleChanged, this, [this, ed] {

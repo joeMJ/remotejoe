@@ -129,6 +129,8 @@ void FrameView::attach(std::int64_t fd, int w, int h)
 
 void FrameView::resizeEvent(QResizeEvent*)
 {
+	if (!m_pointer.isNull())
+		applyPointer();
 	m_autoFits = 0;
 	m_fitTimer->start();
 	sendBounds();
@@ -354,6 +356,35 @@ void FrameView::requestFit()
 		return;
 	m_requested = QSize(w, h);
 	m_backend->resizeSession(m_session, std::uint32_t(w), std::uint32_t(h));
+}
+
+void FrameView::setRemotePointer(int kind, const QByteArray& bgra, int w, int h, int hx, int hy)
+{
+	m_pointerHidden = kind == 1;
+	m_pointer = QImage();
+	if (kind == 2 && w > 0 && h > 0 && bgra.size() >= w * h * 4)
+	{
+		// BGRA im Speicher = ARGB32 (Little Endian); Kopie, weil die Daten nicht bleiben.
+		m_pointer = QImage(reinterpret_cast<const uchar*>(bgra.constData()), w, h, w * 4, QImage::Format_ARGB32).copy();
+		m_pointerHot = QPoint(hx, hy);
+	}
+	applyPointer();
+}
+
+void FrameView::applyPointer()
+{
+	if (m_pointerHidden)
+		return setCursor(Qt::BlankCursor);
+	if (m_pointer.isNull())
+		return setCursor(Qt::ArrowCursor);
+	// Wie das Bild skalieren, damit der Zeiger zur Darstellung passt.
+	qreal f = 1.0;
+	if (!m_image.isNull() && m_image.width() > 0)
+		f = qreal(target().width()) / m_image.width();
+	if (qAbs(f - 1.0) < 0.05)
+		return setCursor(QCursor(QPixmap::fromImage(m_pointer), m_pointerHot.x(), m_pointerHot.y()));
+	const QImage s = m_pointer.scaled(qMax(1, qRound(m_pointer.width() * f)), qMax(1, qRound(m_pointer.height() * f)), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+	setCursor(QCursor(QPixmap::fromImage(s), qRound(m_pointerHot.x() * f), qRound(m_pointerHot.y() * f)));
 }
 
 QRect FrameView::target() const

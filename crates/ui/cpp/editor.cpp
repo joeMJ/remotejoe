@@ -711,7 +711,8 @@ QWidget* PropertiesTab::pageConnection()
 				const QString k = QString::fromLatin1(key);
 				connect(arrow, &QAction::triggered, this, [this, e, k] {
 					QMenu menu(e);
-					menu.addAction(rjText(m_backend, "edit.web.dropdown.auto"), [e] { e->clear(); });
+					// Auswahl im Menü gilt wie eine Eingabe (sonst übernimmt „Speichern“ sie nicht).
+					menu.addAction(rjText(m_backend, "edit.web.dropdown.auto"), [this, e] { e->clear(); markDirty(QStringLiteral("options")); });
 					menu.addSeparator();
 					const auto items = m_candidates.value(k);
 					if (items.isEmpty())
@@ -719,7 +720,7 @@ QWidget* PropertiesTab::pageConnection()
 					for (const auto& c : items)
 					{
 						QString label = c.first == c.second ? c.second : QStringLiteral("%1   (%2)").arg(c.first, c.second);
-						menu.addAction(label, [e, sel = c.second] { e->setText(sel); });
+						menu.addAction(label, [this, e, sel = c.second] { e->setText(sel); markDirty(QStringLiteral("options")); });
 					}
 					menu.exec(e->mapToGlobal(QPoint(0, e->height())));
 				});
@@ -821,11 +822,15 @@ QWidget* PropertiesTab::pageCredentials()
 	const QJsonObject c = m_data.value(QStringLiteral("credential")).toObject();
 	const bool unlocked = m_data.value(QStringLiteral("unlocked")).toBool();
 	m_credMode = new QButtonGroup(w);
-	const char* modes[][2] = { { "inherit", "edit.cred.inherit" }, { "none", "edit.cred.none" }, { "direct", "edit.cred.direct" },
-		                       { "entry", "edit.cred.entry" },     { "named", "edit.cred.named" } };
+	// „Vorhandener Datensatz“ nur noch für Objekte, die ihn schon nutzen; neu gibt es dafür Anmeldeobjekte.
+	const bool legacyEntry = c.value(QStringLiteral("mode")).toString() == QLatin1String("entry");
+	const char* modes[][2] = { { "inherit", "edit.cred.inherit" }, { "none", "edit.cred.none" }, { "login", "edit.cred.login" },
+		                       { "direct", "edit.cred.direct" },   { "entry", "edit.cred.entry" }, { "named", "edit.cred.named" } };
 	int id = 0;
 	for (auto& m : modes)
 	{
+		if (!legacyEntry && QLatin1String(m[0]) == QLatin1String("entry"))
+			continue;
 		auto* r = new QRadioButton(rjText(m_backend, m[1]), w);
 		r->setProperty("mode", QString::fromLatin1(m[0]));
 		r->setObjectName(QStringLiteral("cred_") + QString::fromLatin1(m[0]));
@@ -833,7 +838,42 @@ QWidget* PropertiesTab::pageCredentials()
 		v->addWidget(r);
 		track(r, QStringLiteral("credential"));
 		const QString mode = QString::fromLatin1(m[0]);
-		if (mode == QLatin1String("direct"))
+		if (mode == QLatin1String("login"))
+		{
+			m_loginBox = new QWidget(w);
+			auto* f = new QFormLayout(m_loginBox);
+			f->setContentsMargins(24, 0, 0, 0);
+			auto* row = new QHBoxLayout;
+			m_login = new QComboBox(m_loginBox);
+			m_login->setObjectName(QStringLiteral("loginCombo"));
+			for (const QJsonValue& e : c.value(QStringLiteral("logins")).toArray())
+			{
+				const QJsonObject o = e.toObject();
+				const QString path = o.value(QStringLiteral("path")).toString();
+				const QString user = o.value(QStringLiteral("username")).toString();
+				m_login->addItem(o.value(QStringLiteral("name")).toString() + (user.isEmpty() ? QString() : QStringLiteral(" – ") + user) +
+				                     (path.isEmpty() ? QString() : QStringLiteral("  (") + path + QLatin1Char(')')),
+				                 o.value(QStringLiteral("id")).toString());
+			}
+			if (c.contains(QStringLiteral("login")))
+				m_login->setCurrentIndex(qMax(0, m_login->findData(c.value(QStringLiteral("login")).toString())));
+			track(m_login, QStringLiteral("credential"));
+			row->addWidget(m_login, 1);
+			auto* create = new QPushButton(rjText(m_backend, "login.new"), m_loginBox);
+			connect(create, &QPushButton::clicked, this, [this] { emit openLogin(QString(), m_data.value(QStringLiteral("folder_for_new")).toString()); });
+			row->addWidget(create);
+			auto* ll = new QLabel(rjText(m_backend, "edit.cred.login.label"), m_loginBox);
+			ll->setBuddy(m_login);
+			f->addRow(ll, row);
+			if (m_login->count() == 0)
+			{
+				auto* hint = new QLabel(rjText(m_backend, "edit.cred.login.none"), m_loginBox);
+				hint->setWordWrap(true);
+				f->addRow(QString(), hint);
+			}
+			v->addWidget(m_loginBox);
+		}
+		else if (mode == QLatin1String("direct"))
 		{
 			m_directBox = new QWidget(w);
 			auto* f = new QFormLayout(m_directBox);
@@ -912,8 +952,9 @@ QWidget* PropertiesTab::pageCredentials()
 		auto* l = new QLabel(rjText(m_backend, "edit.cred.locked"), w);
 		l->setWordWrap(true);
 		v->addWidget(l);
-		m_credMode->button(2)->setEnabled(false);
-		m_credMode->button(3)->setEnabled(false);
+		for (auto* b : m_credMode->buttons())
+			if (b->property("mode") == QStringLiteral("direct") || b->property("mode") == QStringLiteral("entry") || b->property("mode") == QStringLiteral("login"))
+				b->setEnabled(false);
 	}
 	// Woher der wirksame Wert kommt.
 	const QJsonObject e = c.value(QStringLiteral("effective")).toObject();
@@ -963,7 +1004,10 @@ void PropertiesTab::updateCredentialMode()
 	m_directBox->setEnabled(mode == QLatin1String("direct"));
 	m_user->setEnabled(mode == QLatin1String("direct"));
 	m_password->setEnabled(mode == QLatin1String("direct"));
-	m_entryBox->setEnabled(mode == QLatin1String("entry"));
+	if (m_entryBox)
+		m_entryBox->setEnabled(mode == QLatin1String("entry"));
+	if (m_loginBox)
+		m_loginBox->setEnabled(mode == QLatin1String("login"));
 	m_namedBox->setEnabled(mode == QLatin1String("named"));
 }
 
@@ -1347,8 +1391,10 @@ QJsonObject PropertiesTab::collect() const
 			if (!m_password->text().isEmpty())
 				c.insert(QStringLiteral("password"), m_password->text());
 		}
-		else if (mode == QLatin1String("entry"))
+		else if (mode == QLatin1String("entry") && m_entry)
 			c.insert(QStringLiteral("entry"), m_entry->currentData().toString());
+		else if (mode == QLatin1String("login") && m_login)
+			c.insert(QStringLiteral("login"), m_login->currentData().toString());
 		else if (mode == QLatin1String("named"))
 			c.insert(QStringLiteral("name"), m_named->currentText());
 		cmd.insert(QStringLiteral("credential"), c);
@@ -3574,6 +3620,142 @@ void PatchdayTab::refresh()
 
 // ---------- CertCheckTab ----------
 
+LoginTab::LoginTab(RjBackend* backend, const QString& id, const QString& folder, QWidget* parent)
+  : ToolTab(parent)
+  , m_backend(backend)
+  , m_id(id)
+{
+	auto T = [backend](const char* k) { return backend->text(QString::fromLatin1(k)); };
+	setObjectName(QStringLiteral("loginTab"));
+	auto* lay = new QVBoxLayout(this);
+	auto* head = new QLabel(T("login.title"), this);
+	head->setObjectName(QStringLiteral("heading"));
+	lay->addWidget(head);
+	auto* info = new QLabel(T("login.info"), this);
+	info->setWordWrap(true);
+	lay->addWidget(info);
+	auto* form = new QFormLayout;
+	m_name = new QLineEdit(this);
+	m_folder = new QComboBox(this);
+	m_user = new QLineEdit(this);
+	m_user->setPlaceholderText(T("login.user.hint"));
+	m_password = new QLineEdit(this);
+	m_password->setEchoMode(QLineEdit::Password);
+	m_password->setObjectName(QStringLiteral("passwordField"));
+	form->addRow(T("login.name"), m_name);
+	form->addRow(T("login.folder"), m_folder);
+	form->addRow(T("edit.cred.username"), m_user);
+	form->addRow(T("edit.cred.password"), m_password);
+	lay->addLayout(form);
+	m_used = new QLabel(this);
+	m_used->setWordWrap(true);
+	lay->addWidget(m_used);
+	m_error = new QLabel(this);
+	m_error->setObjectName(QStringLiteral("fieldError"));
+	m_error->setWordWrap(true);
+	lay->addWidget(m_error);
+	auto* row = new QHBoxLayout;
+	m_delete = new QPushButton(T("login.delete"), this);
+	auto* save = new QPushButton(T("edit.save"), this);
+	auto* close = new QPushButton(T("login.close"), this);
+	row->addWidget(m_delete);
+	row->addStretch(1);
+	row->addWidget(close);
+	row->addWidget(save);
+	lay->addLayout(row);
+	lay->addStretch(1);
+	connect(save, &QPushButton::clicked, this, [this] { this->save(); });
+	connect(close, &QPushButton::clicked, this, [this] { emit closeRequested(); });
+	connect(m_delete, &QPushButton::clicked, this, [this] { remove(); });
+	connect(m_name, &QLineEdit::returnPressed, this, [this] { this->save(); });
+	load(folder);
+}
+
+QString LoginTab::edit(const QJsonObject& cmd) const
+{
+	return m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact)));
+}
+
+void LoginTab::load(const QString& folder)
+{
+	auto T = [this](const char* k) { return m_backend->text(QString::fromLatin1(k)); };
+	const QJsonObject r = parse(edit({ { QStringLiteral("op"), QStringLiteral("logins") } }));
+	m_folder->clear();
+	m_folder->addItem(T("login.folder.root"), r.value(QStringLiteral("root")).toString());
+	for (const QJsonValue& f : r.value(QStringLiteral("folders")).toArray())
+	{
+		const QJsonObject o = f.toObject();
+		if (o.value(QStringLiteral("id")).toString() != r.value(QStringLiteral("root")).toString())
+			m_folder->addItem(o.value(QStringLiteral("path")).toString(), o.value(QStringLiteral("id")).toString());
+	}
+	QJsonObject me;
+	for (const QJsonValue& l : r.value(QStringLiteral("logins")).toArray())
+		if (l.toObject().value(QStringLiteral("id")).toString() == m_id)
+			me = l.toObject();
+	const bool existing = !me.isEmpty();
+	if (!existing)
+		m_id.clear();
+	m_name->setText(me.value(QStringLiteral("name")).toString());
+	m_user->setText(me.value(QStringLiteral("username")).toString());
+	const QString f = existing ? me.value(QStringLiteral("folder")).toString() : folder;
+	m_folder->setCurrentIndex(qMax(0, m_folder->findData(f)));
+	m_password->clear();
+	m_password->setPlaceholderText(existing ? T("edit.cred.password.keep") : QString());
+	m_delete->setVisible(existing);
+	const int used = me.value(QStringLiteral("used")).toInt();
+	m_used->setText(existing ? T("login.used").arg(used) : T("login.new.info"));
+	const bool unlocked = r.value(QStringLiteral("unlocked")).toBool();
+	m_error->setText(unlocked ? QString() : T("edit.cred.locked"));
+	for (QWidget* w : { static_cast<QWidget*>(m_user), static_cast<QWidget*>(m_password) })
+		w->setEnabled(unlocked);
+	if (m_name->text().isEmpty())
+		m_name->setFocus();
+}
+
+void LoginTab::save()
+{
+	QJsonObject cmd{ { QStringLiteral("op"), QStringLiteral("login_save") }, { QStringLiteral("name"), m_name->text() },
+		             { QStringLiteral("folder"), m_folder->currentData().toString() }, { QStringLiteral("username"), m_user->text() } };
+	if (!m_id.isEmpty())
+		cmd.insert(QStringLiteral("id"), m_id);
+	// Kennwort unverändert (kein Trimmen); leer heißt „unverändert lassen“.
+	if (!m_password->text().isEmpty())
+		cmd.insert(QStringLiteral("password"), m_password->text());
+	const QJsonObject r = parse(edit(cmd));
+	if (r.contains(QStringLiteral("error")))
+	{
+		m_error->setText(r.value(QStringLiteral("error")).toString());
+		return;
+	}
+	m_id = r.value(QStringLiteral("id")).toString();
+	// Gespeichert: in die Schlüsseldatenbank schreiben wie beim Speichern eines Ziels.
+	edit({ { QStringLiteral("op"), QStringLiteral("save") } });
+	emit indexChanged();
+	emit status(m_backend->text(QStringLiteral("login.saved")).arg(m_name->text()));
+	load(QString());
+}
+
+void LoginTab::remove()
+{
+	if (m_id.isEmpty())
+		return;
+	const QJsonObject r = parse(edit({ { QStringLiteral("op"), QStringLiteral("login_delete") }, { QStringLiteral("id"), m_id } }));
+	if (r.contains(QStringLiteral("error")))
+	{
+		m_error->setText(r.value(QStringLiteral("error")).toString());
+		return;
+	}
+	edit({ { QStringLiteral("op"), QStringLiteral("save") } });
+	emit indexChanged();
+	emit status(m_backend->text(QStringLiteral("login.deleted")).arg(m_name->text()));
+	emit closeRequested();
+}
+
+void LoginTab::wipeSecrets()
+{
+	m_password->clear();
+}
+
 CertCheckTab::CertCheckTab(RjBackend* backend, const QStringList& ids, QWidget* parent)
   : ToolTab(parent)
   , m_backend(backend)
@@ -3636,11 +3818,24 @@ void CertCheckTab::start()
 		return;
 	}
 	m_again->setEnabled(false);
-	m_state->setText(m_backend->text(QStringLiteral("certcheck.busy")).arg(r.value(QStringLiteral("count")).toInt()));
+	const int total = r.value(QStringLiteral("count")).toInt();
+	m_state->setText(m_backend->text(QStringLiteral("certcheck.busy")).arg(0).arg(total));
+	if (!m_progress)
+	{
+		m_progress = new QTimer(this);
+		m_progress->setInterval(500);
+		connect(m_progress, &QTimer::timeout, this, [this] {
+			const QJsonObject p = parse(edit({ { QStringLiteral("op"), QStringLiteral("cert_check_progress") } }));
+			m_state->setText(m_backend->text(QStringLiteral("certcheck.busy")).arg(p.value(QStringLiteral("done")).toInt()).arg(p.value(QStringLiteral("total")).toInt()));
+		});
+	}
+	m_progress->start();
 }
 
 void CertCheckTab::handleResult(const QJsonObject& r)
 {
+	if (m_progress)
+		m_progress->stop();
 	m_again->setEnabled(true);
 	fill(r.value(QStringLiteral("rows")).toArray());
 }
@@ -3758,7 +3953,15 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 		m_backend->edit(QStringLiteral("{\"op\":\"update_cancel\"}"));
 		setBusy(false, m_backend->text(QStringLiteral("update.cancelled")));
 	});
+	m_progressTimer = new QTimer(this);
+	m_progressTimer->setInterval(300);
+	connect(m_progressTimer, &QTimer::timeout, this, [this] { showProgress(); });
 	connect(m_restart, &QPushButton::clicked, this, [this] {
+		if (m_applyReady)
+		{
+			apply();
+			return;
+		}
 		// Erst schließen (fragt bei ungespeicherten Änderungen nach); bei „Abbrechen“ bleibt alles, wie es ist.
 		if (QWidget* w = window(); w && !w->close())
 			return;
@@ -3783,8 +3986,17 @@ void UpdateTab::refresh()
 	m_onStart->setChecked(s.value(QStringLiteral("check_on_start")).toBool());
 	m_current->setText(m_backend->text(QStringLiteral("update.current")).arg(s.value(QStringLiteral("current")).toString(), s.value(QStringLiteral("platform")).toString()));
 	m_pageOnly = s.value(QStringLiteral("page_only")).toBool();
+	m_msi = s.value(QStringLiteral("msi")).toBool();
 	if (m_pageOnly)
 		m_install->setText(m_backend->text(QStringLiteral("update.open_page")));
+	else if (m_msi)
+		m_install->setText(m_backend->text(QStringLiteral("update.msi.download")));
+	if (m_msi && !s.value(QStringLiteral("ready")).toString().isEmpty())
+	{
+		m_applyReady = true;
+		m_restart->setText(m_backend->text(QStringLiteral("update.apply")));
+		m_restart->show();
+	}
 	const QJsonObject f = s.value(QStringLiteral("found")).toObject();
 	if (!f.isEmpty())
 	{
@@ -3853,13 +4065,60 @@ void UpdateTab::install(bool confirm)
 		const bool opened = QDesktopServices::openUrl(QUrl(url));
 		m_state->setText(m_backend->text(opened ? QStringLiteral("update.page.opened") : QStringLiteral("update.page.failed")).arg(url));
 	}
+	else if (state == QLatin1String("downloading"))
+	{
+		// Windows: MSI wird geladen und geprüft; Fortschritt aus dem Zustand.
+		setBusy(true);
+		showProgress();
+		m_progressTimer->start();
+	}
 	else
 		setBusy(true, m_backend->text(QStringLiteral("update.installing")));
+}
+
+void UpdateTab::showProgress()
+{
+	const QJsonObject s = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_status\"}")).toUtf8()).object();
+	const double mb = 1024.0 * 1024.0;
+	const double got = s.value(QStringLiteral("progress")).toDouble() / mb, total = s.value(QStringLiteral("total")).toDouble() / mb;
+	m_state->setText(m_backend->text(QStringLiteral("update.downloading")).arg(QString::number(got, 'f', 1), QString::number(total, 'f', 1)));
+}
+
+void UpdateTab::apply()
+{
+	// Offene Sitzungen werden mit dem Beenden getrennt: vorher fragen.
+	const QJsonObject s = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_status\"}")).toUtf8()).object();
+	const int open = s.value(QStringLiteral("sessions")).toInt();
+	auto go = [this] {
+		// Erst schließen (fragt bei ungespeicherten Änderungen nach), dann den Hilfsprozess starten: Er installiert,
+		// sobald remotejoe beendet ist. Bei „Abbrechen“ bleibt alles, wie es ist.
+		QWidget* w = window();
+		if (w && !w->close())
+			return;
+		const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_apply\",\"confirm\":true}")).toUtf8()).object();
+		if (r.value(QStringLiteral("state")).toString() == QLatin1String("applying"))
+		{
+			qApp->quit();
+			return;
+		}
+		// Nicht startbar: Fenster wieder zeigen, Grund nennen.
+		if (w)
+			w->show();
+		m_state->setText(m_backend->text(QStringLiteral("update.error")).arg(r.value(QStringLiteral("error")).toString()));
+	};
+	if (open > 0)
+		m_bar->ask(m_backend->text(QStringLiteral("update.apply.confirm")).arg(open), { m_backend->text(QStringLiteral("update.apply")) }, [go](int b) {
+			if (b == 0)
+				go();
+		});
+	else
+		go();
 }
 
 void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 {
 	setBusy(false);
+	m_progressTimer->stop();
 	const QString state = r.value(QStringLiteral("state")).toString();
 	if (state == QLatin1String("error"))
 	{
@@ -3874,6 +4133,12 @@ void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 			m_found->setText(m_backend->text(QStringLiteral("update.found")).arg(f.value(QStringLiteral("version")).toString()));
 			m_notes->setPlainText(f.value(QStringLiteral("notes")).toString());
 			m_install->setEnabled(true);
+			// Windows: Veröffentlichung ohne MSI → Release-Seite wie ohne MSI-Installation.
+			if (r.contains(QStringLiteral("no_msi")))
+			{
+				m_pageOnly = true;
+				m_install->setText(m_backend->text(QStringLiteral("update.open_page")));
+			}
 			m_state->setText(m_backend->text(QStringLiteral("update.newer"))
 			                 + (m_pageOnly ? QLatin1Char(' ') + m_backend->text(QStringLiteral("update.windows.hint")) : QString()));
 			m_install->setFocus();
@@ -3885,6 +4150,16 @@ void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 			m_install->setEnabled(false);
 			m_state->setText(m_backend->text(QStringLiteral("update.uptodate")).arg(r.value(QStringLiteral("latest")).toString()));
 		}
+	}
+	else if (state == QLatin1String("ready"))
+	{
+		// Windows: MSI geladen, Prüfsumme und Signaturen geprüft.
+		m_applyReady = true;
+		m_install->setEnabled(false);
+		m_state->setText(m_backend->text(QStringLiteral("update.ready")).arg(r.value(QStringLiteral("version")).toString()));
+		m_restart->setText(m_backend->text(QStringLiteral("update.apply")));
+		m_restart->show();
+		m_restart->setFocus();
 	}
 	else if (state == QLatin1String("installed"))
 	{

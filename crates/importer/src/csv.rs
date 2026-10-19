@@ -119,7 +119,7 @@ pub fn read_csv(text: &str) -> Result<SourceDocument, ImportError> {
     if !cols.contains_key("connectiontype") || !cols.contains_key("name") {
         return Err(ImportError::Format("Keine RDM-CSV: die Spalten „ConnectionType“ und „Name“ fehlen".into()));
     }
-    let mut doc = SourceDocument { format: "Remote Desktop Manager (CSV)".into(), ..Default::default() };
+    let mut doc = SourceDocument { format: "Verbindungsliste (CSV)".into(), ..Default::default() };
     let mut seen: HashSet<String> = HashSet::new();
     let mut order = 0i64;
     let mut passwords = 0usize;
@@ -210,7 +210,7 @@ Website,,0,seite-2,,,,,,host4.example.test,,,,,Nein,,rdm://open?Session=dddd-444
 Befehlszeile (Externe Anwendung),,0,programm-1,Nord,,,,,,,,,,Nein,,rdm://open?Session=eeee-5555\n"
         );
         let doc = read_csv(&text).unwrap();
-        assert_eq!(doc.format, "Remote Desktop Manager (CSV)");
+        assert_eq!(doc.format, "Verbindungsliste (CSV)");
         let conns: Vec<_> = doc.items.iter().filter_map(|i| match i { SourceItem::Connection { name, protocol, host, port, parent, id, credential, .. } => Some((name.as_str(), *protocol, host.as_str(), *port, parent.clone(), id.as_str(), credential.clone())), _ => None }).collect();
         assert_eq!(conns.len(), 4);
         assert_eq!(conns[0].0, "rechner-1");

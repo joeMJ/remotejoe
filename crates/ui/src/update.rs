@@ -31,10 +31,18 @@ pub struct UpdateState {
     auto_done: bool,
     /// Windows: zuletzt gefundene neuere Version (Angaben für den Tab).
     found_page: Option<Value>,
+    /// Windows: geladene und geprüfte MSI (Pfad, Version), bereit zur Installation.
+    ready: Option<(PathBuf, String)>,
+    /// Windows: bisher geladene Bytes der MSI (Fortschrittsanzeige) und erwartete Größe.
+    progress: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    total: u64,
+    /// Windows, nur Tests: Installation über die MSI annehmen bzw. ausschließen (sonst nach dem Programmordner).
+    pub msi_override: Option<bool>,
 }
 
-/// Windows: Das Programm ersetzt sich nicht selbst; „Nach Updates suchen“ nennt die neue Version
-/// und öffnet die Release-Seite, installiert wird die MSI von dort.
+/// Windows: Das Programm ersetzt sich nicht selbst. Als MSI installiert lädt „Nach Updates suchen“ die MSI,
+/// prüft sie und installiert sie nach dem Beenden; sonst (Entwicklungsstand) nennt es die neue Version und
+/// öffnet die Release-Seite.
 const PAGE_ONLY: bool = cfg!(windows);
 
 /// Die einzige Quelle: die öffentlichen Veröffentlichungen von remotejoe auf GitHub.
@@ -71,6 +79,15 @@ impl App {
             status["found"] = self.update.found_page.clone().unwrap_or(Value::Null);
             status["package_managed"] = json!(false);
             status["development"] = json!(false);
+            #[cfg(windows)]
+            if self.msi_mode() {
+                status["page_only"] = json!(false);
+                status["msi"] = json!(true);
+                status["found"] = self.update.found.as_ref().map(|f| found_json(f)).unwrap_or(Value::Null);
+                status["ready"] = json!(self.update.ready.as_ref().map(|(_, v)| v));
+                status["progress"] = json!(self.update.progress.load(std::sync::atomic::Ordering::Relaxed));
+                status["total"] = json!(self.update.total);
+            }
         }
         status
     }
@@ -139,6 +156,10 @@ impl App {
         let src = self.update_source();
         let current = Version::parse(rj_update::CURRENT_VERSION).map_err(|e| e.to_string())?;
         if PAGE_ONLY {
+            #[cfg(windows)]
+            if self.msi_mode() {
+                return self.update_check_msi(src, current);
+            }
             return self.update_check_page(src, current);
         }
         let platform = rj_update::platform();
@@ -170,8 +191,14 @@ impl App {
     /// Lädt, prüft und installiert die gefundene Version. Bei offenen Sitzungen
     /// nur mit `confirm`; unter `/usr` nur ein Hinweis.
     pub fn update_install(&mut self, confirm: bool) -> Result<Value, String> {
-        // Windows: kein Ersetzen im laufenden Betrieb; die Oberfläche öffnet die Release-Seite.
+        // Windows: kein Ersetzen im laufenden Betrieb. Als MSI installiert: MSI laden und prüfen, installiert wird
+        // nach dem Beenden (`update_apply`); sonst öffnet die Oberfläche die Release-Seite.
         if PAGE_ONLY {
+            #[cfg(windows)]
+            if self.msi_mode() && self.update.found.is_some() {
+                return self.update_download_msi();
+            }
+            let _ = confirm;
             return Ok(json!({ "state": "page", "url": self.update_source().releases_page().map_err(|e| e.to_string())? }));
         }
         let found = self.update.found.clone().ok_or("Keine neuere Version gefunden; bitte zuerst prüfen.")?;
@@ -211,6 +238,31 @@ impl App {
         Ok(json!({ "job": job }))
     }
 
+    /// Windows: geprüfte MSI installieren. remotejoe muss sich danach beenden (die Oberfläche schließt das Fenster
+    /// vorher); ein Hilfsprozess wartet darauf, installiert und startet remotejoe neu.
+    pub fn update_apply(&mut self, confirm: bool) -> Result<Value, String> {
+        #[cfg(windows)]
+        {
+            let (path, version) = self.update.ready.clone().ok_or("Kein geprüftes Update bereit; bitte zuerst herunterladen.")?;
+            let open = self.sessions.ids().len();
+            if open > 0 && !confirm {
+                return Ok(json!({ "state": "confirm", "sessions": open }));
+            }
+            if !path.is_file() {
+                self.update.ready = None;
+                return Err("Die geladene MSI ist nicht mehr vorhanden; bitte erneut herunterladen.".into());
+            }
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            rj_update::msi::install_after_exit(&path, &exe, std::process::id()).map_err(|e| e.to_string())?;
+            Ok(json!({ "state": "applying", "version": version }))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = confirm;
+            Err("Nur unter Windows".into())
+        }
+    }
+
     pub fn update_cancel(&mut self) -> Value {
         let cancelled = self.update.job.take().is_some_and(|j| self.jobs.cancel(j));
         json!({ "cancelled": cancelled })
@@ -223,6 +275,101 @@ impl App {
         }
         self.update.auto_done = true;
         let _ = self.update_check();
+    }
+}
+
+/// Windows: Update über die MSI der Veröffentlichung.
+#[cfg(windows)]
+impl App {
+    /// Ist remotejoe über die MSI installiert (Programmordner `…\Programs\remotejoe`)?
+    fn msi_mode(&self) -> bool {
+        self.update.msi_override.unwrap_or_else(|| self.program_dir().is_some_and(|d| rj_update::msi::is_msi_dir(&d)))
+    }
+
+    /// Wie `update_check`, wählt aber die MSI aus. Enthält die Veröffentlichung keine MSI, gilt wie bisher die
+    /// Release-Seite (`page`, `no_msi`).
+    fn update_check_msi(&mut self, src: Source, current: Version) -> Result<Value, String> {
+        let page = src.releases_page().ok();
+        let job = self.jobs.spawn_cancellable("Nach Updates suchen", move |job, cancel| {
+            let r = release::latest(&src, None, Some(&*cancel)).and_then(|rel| Version::parse(&rel.tag_name).map(|v| (v, rel)));
+            Box::new(move |app: &mut App, cancelled| {
+                if cancelled {
+                    return Vec::new();
+                }
+                let json = match r {
+                    Ok((v, rel)) if !rel.draft && v > current => match rj_update::msi::select_msi(&rel) {
+                        Ok(f) => {
+                            let j = json!({ "state": "newer", "current": current.to_string(), "found": found_json(&f), "msi": true });
+                            app.update.found = Some(f);
+                            app.update.ready = None;
+                            j
+                        }
+                        Err(e) => {
+                            let found = json!({ "version": v.to_string(), "notes": rel.notes(), "prerelease": v.is_prerelease() });
+                            app.update.found = None;
+                            app.update.found_page = Some(found.clone());
+                            json!({ "state": "newer", "current": current.to_string(), "found": found, "page": page, "no_msi": e.to_string() })
+                        }
+                    },
+                    Ok((v, _)) => {
+                        app.update.found = None;
+                        app.update.ready = None;
+                        json!({ "state": "uptodate", "current": current.to_string(), "latest": v.to_string() })
+                    }
+                    Err(e) => json!({ "state": "error", "error": e.to_string() }),
+                };
+                vec![UiEvent::JobResult { job, kind: "update_check".into(), target: String::new(), json: json.to_string() }]
+            })
+        });
+        self.update.job = Some(job);
+        Ok(json!({ "job": job }))
+    }
+
+    /// Lädt die MSI mit Fortschritt, prüft Signatur der `SHA256SUMS`, Prüfsumme und Authenticode-Signatur und legt
+    /// sie ab. Ergebnis „update_install“ mit `ready`; bei einem Fehler bleibt keine MSI liegen.
+    fn update_download_msi(&mut self) -> Result<Value, String> {
+        if self.update.job.is_some_and(|j| self.jobs.is_pending(j)) {
+            return Err("Es läuft bereits eine Update-Prüfung oder -Installation.".into());
+        }
+        let found = self.update.found.clone().ok_or("Keine neuere Version gefunden; bitte zuerst prüfen.")?;
+        let src = self.update_source();
+        let key_text = self.update.key_override.clone().unwrap_or_else(|| UPDATE_KEY.to_string());
+        let key = rj_update::sign::public_key_from_text(&key_text).map_err(|e| e.to_string())?;
+        let progress = self.update.progress.clone();
+        progress.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.update.total = found.archive.size;
+        self.update.ready = None;
+        let job = self.jobs.spawn_cancellable("Update herunterladen und prüfen", move |job, cancel| {
+            let limits = Limits { max_bytes: 400 * 1024 * 1024, timeout: std::time::Duration::from_secs(30 * 60) };
+            let dir = rj_update::msi::download_dir();
+            let path = dir.join(&found.archive.name);
+            let r = release::download_verified_progress(&src, None, &found, &key, limits, Some(&*cancel), Some(&progress))
+                .and_then(|data| {
+                    std::fs::create_dir_all(&dir)?;
+                    std::fs::write(&path, &data)?;
+                    rj_update::authenticode::verify_file(&path, rj_update::authenticode::PUBLISHER_THUMBPRINT)
+                })
+                .inspect_err(|_| {
+                    let _ = std::fs::remove_file(&path);
+                });
+            let version = found.version.to_string();
+            Box::new(move |app: &mut App, cancelled| {
+                if cancelled {
+                    let _ = std::fs::remove_file(&path);
+                    return Vec::new();
+                }
+                let json = match r {
+                    Ok(()) => {
+                        app.update.ready = Some((path.clone(), version.clone()));
+                        json!({ "state": "ready", "version": version, "path": path })
+                    }
+                    Err(e) => json!({ "state": "error", "error": e.to_string() }),
+                };
+                vec![UiEvent::JobResult { job, kind: "update_install".into(), target: String::new(), json: json.to_string() }]
+            })
+        });
+        self.update.job = Some(job);
+        Ok(json!({ "job": job, "state": "downloading" }))
     }
 }
 

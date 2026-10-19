@@ -280,6 +280,11 @@ impl App {
             v["clipboard_effective"] = json!(clip_str(edit::folder_clipboard(&self.index, id)));
         }
         v["credential"] = self.credential_section(id, node.is_some_and(|n| matches!(n, Node::Target(_))));
+        // Ordner für eine neue Anmeldung aus diesem Tab: der Ordner selbst bzw. der Ordner des Ziels.
+        v["folder_for_new"] = json!(match node {
+            Some(Node::Target(_)) => edit::parent_of(&self.index, id).unwrap_or(self.index.root.id),
+            _ => id,
+        });
         // Zweiter Zugangsdatensatz „Sitzung“ (nur Benutzername; das Kennwort verlässt die Schlüsseldatenbank nie).
         let aux = settings.credentials.get(rj_core::autokeys::SESSION_CREDENTIAL).map(|r| {
             let username = self.vault.as_ref().and_then(|v| v.credential(r.entry)).map(|c| c.data.username).unwrap_or_default();
@@ -289,12 +294,71 @@ impl App {
         v.to_string()
     }
 
+    /// Anmeldeobjekte mit Ordnerpfad, Benutzername und Zahl der Verwender (ohne Kennwörter).
+    fn logins_list(&self) -> Vec<Value> {
+        let mut list: Vec<Value> = self
+            .index
+            .logins
+            .iter()
+            .map(|l| {
+                let username = self.vault.as_ref().and_then(|v| v.credential(l.entry.entry)).map(|c| c.data.username).unwrap_or_default();
+                let path = if l.folder == self.index.root.id {
+                    String::new()
+                } else {
+                    self.index.path_to(l.folder).map(|p| p.iter().map(|n| n.name().to_string()).collect::<Vec<_>>().join(" / ")).unwrap_or_default()
+                };
+                json!({ "id": l.id, "name": l.name, "folder": l.folder, "path": path, "username": username, "used": rj_core::inherit::login_users(&self.index, l.id).len() })
+            })
+            .collect();
+        list.sort_by(|a, b| a["name"].as_str().unwrap_or_default().to_lowercase().cmp(&b["name"].as_str().unwrap_or_default().to_lowercase()));
+        list
+    }
+
+    /// Anmeldeobjekt anlegen (ohne `id`) oder ändern: Name, Ordner, Benutzername, Kennwort (leer = unverändert).
+    fn login_save(&mut self, c: &Value) -> Result<Value, String> {
+        let name = str_of(c, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or("Name der Anmeldung fehlt")?.to_string();
+        let folder = id_of(c, "folder").unwrap_or(self.index.root.id);
+        if folder != self.index.root.id && edit::folder(&self.index, folder).is_none() {
+            return Err("Ordner nicht gefunden".into());
+        }
+        let username = str_of(c, "username").map(str::to_string);
+        // Kennwort byte-genau: kein Trimmen, keine Normalisierung.
+        let password = str_of(c, "password").filter(|p| !p.is_empty()).map(Secret::from_str_exact);
+        let title = format!("Anmeldung: {name}");
+        let existing = id_of(c, "id").and_then(|id| self.index.login(id).cloned());
+        let before = self.index.clone();
+        let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
+        let (id, entry) = match existing {
+            Some(l) => {
+                let old = vault.credential(l.entry.entry).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
+                let data = CredentialData { title: title.clone(), username: username.unwrap_or(old.data.username.clone()), password: password.unwrap_or(old.data.password.clone()), ..old.data };
+                vault.update_credential(l.entry.entry, data).map_err(|e| e.to_string())?;
+                (l.id, l.entry.entry)
+            }
+            None => {
+                let e = vault
+                    .add_credential(CredentialData { title: title.clone(), username: username.unwrap_or_default(), password: password.unwrap_or_default(), ..Default::default() })
+                    .map_err(|e| e.to_string())?;
+                (Uuid::new_v4(), e)
+            }
+        };
+        let login = rj_core::Login { id, name, folder, entry: CredentialRef { entry, last_title: Some(title) } };
+        match self.index.logins.iter_mut().find(|l| l.id == id) {
+            Some(l) => *l = login,
+            None => self.index.logins.push(login),
+        }
+        rj_core::inherit::sync_logins(&mut self.index);
+        self.commit("Anmeldung speichern", before);
+        Ok(json!({ "id": id }))
+    }
+
     fn credential_section(&self, id: Uuid, is_target: bool) -> Value {
         let mode = credential_mode(&self.index, id).unwrap_or(CredentialMode::Inherit);
         let mut c = match &mode {
             CredentialMode::Inherit => json!({ "mode": "inherit" }),
             CredentialMode::None => json!({ "mode": "none" }),
             CredentialMode::Named(n) => json!({ "mode": "named", "name": n }),
+            CredentialMode::Login(l) => json!({ "mode": "login", "login": l, "login_name": self.index.login(*l).map(|l| l.name.clone()) }),
             CredentialMode::Entry { name, reference } => {
                 let own = self.vault.as_ref().is_some_and(|v| v.is_own_entry(reference.entry));
                 let username = self.vault.as_ref().and_then(|v| v.credential(reference.entry)).map(|c| c.data.username);
@@ -313,6 +377,7 @@ impl App {
         };
         c["effective"] = eff;
         c["names"] = json!(reachable_credential_names(&self.index, id));
+        c["logins"] = json!(self.logins_list());
         c["entries"] = json!(self
             .vault
             .as_ref()
@@ -365,7 +430,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_accept")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -399,13 +464,35 @@ impl App {
                 let active = doomed.iter().filter(|s| self.sessions.state(**s).is_some_and(|st| !matches!(st, "failed" | "disconnected" | "crashed"))).count();
                 return ok(json!({ "sessions": doomed.len(), "active": active }));
             }
+            "logins" => Ok(json!({
+                "logins": self.logins_list(),
+                "root": self.index.root.id,
+                "folders": edit::folder_list(&self.index).into_iter()
+                    .map(|(f, p)| json!({ "id": f, "path": if p.is_empty() { "(Wurzel)".to_string() } else { p } })).collect::<Vec<_>>(),
+                "unlocked": self.vault.is_some(),
+            })),
+            "login_save" => self.login_save(&c),
+            "login_delete" => match id_of(&c, "id") {
+                Some(id) => self.simple("Anmeldung löschen", |idx| if rj_core::inherit::delete_login(idx, id) { Ok(json!({ "ok": true })) } else { Err(EditError::NotFound) }),
+                None => Err("Anmeldung fehlt".into()),
+            },
             "delete" => {
                 let ids = delete_ids(&c);
                 // Sitzungen der betroffenen Ziele (auch in Unterordnern) merken, bevor sie verschwinden.
                 let doomed = self.sessions_under(&ids);
                 let r = self.simple("Löschen", |idx| {
                     for id in &ids {
+                        // Anmeldeobjekte direkt löschen (sie sind keine Knoten des Baums).
+                        if idx.login(*id).is_some() {
+                            rj_core::inherit::delete_login(idx, *id);
+                            continue;
+                        }
                         edit::delete(idx, *id)?;
+                    }
+                    // Anmeldeobjekte in gelöschten Ordnern entfallen mit (Verwender behalten den Eintrag).
+                    let gone: Vec<Uuid> = idx.logins.iter().filter(|l| l.folder != idx.root.id && edit::folder(idx, l.folder).is_none()).map(|l| l.id).collect();
+                    for l in gone {
+                        rj_core::inherit::delete_login(idx, l);
                     }
                     Ok(json!({ "deleted": ids.len() }))
                 });
@@ -531,6 +618,7 @@ impl App {
             "connect_all" => self.op_connect_all(&c),
             "cert_check_start" => self.op_cert_check_start(&c),
             "cert_check_rows" => Ok(json!({ "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() })),
+            "cert_check_progress" => Ok(json!({ "done": self.cert_done.load(std::sync::atomic::Ordering::Relaxed), "total": self.cert_total })),
             "cert_check_accept" => {
                 let (saved, errors) = crate::certcheck::accept_new(&mut self.cert_rows, &crate::certcheck::Stores::default_location());
                 Ok(json!({ "saved": saved, "errors": errors, "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() }))
@@ -636,6 +724,7 @@ impl App {
             "update_check" => self.update_check(),
             "update_install" => self.update_install(c.get("confirm").and_then(Value::as_bool).unwrap_or(false)),
             "update_cancel" => Ok(self.update_cancel()),
+            "update_apply" => self.update_apply(c.get("confirm").and_then(Value::as_bool).unwrap_or(false)),
             "web_command" => {
                 let s = c.get("session").and_then(Value::as_u64).unwrap_or(0);
                 match c.get("cmd") {
@@ -1062,6 +1151,7 @@ impl App {
             "inherit" => CredentialMode::Inherit,
             "none" => CredentialMode::None,
             "named" => CredentialMode::Named(str_of(cred, "name").filter(|n| !n.is_empty()).ok_or("Name des Datensatzes fehlt")?.to_string()),
+            "login" => CredentialMode::Login(id_of(cred, "login").filter(|l| self.index.login(*l).is_some()).ok_or("Keine Anmeldung gewählt")?),
             "entry" => {
                 let entry = id_of(cred, "entry").ok_or("Kein Eintrag gewählt")?;
                 let vault = self.vault.as_ref().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
@@ -1251,9 +1341,12 @@ impl App {
         }
         let n = specs.len();
         self.cert_rows.clear();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        self.cert_done = done.clone();
+        self.cert_total = n;
         let rt = self.rt_handle();
         let job = self.jobs.spawn_cancellable(format!("Schlüssel prüfen ({n} Ziele)"), move |job, cancel| {
-            let rows = crate::certcheck::run(&rt, specs, cancel, crate::certcheck::Stores::default_location());
+            let rows = crate::certcheck::run_with_progress(&rt, specs, cancel, crate::certcheck::Stores::default_location(), done);
             Box::new(move |app: &mut App, cancelled: bool| {
                 if cancelled {
                     return Vec::new();
@@ -1555,6 +1648,48 @@ mod tests {
         cmd(&mut app, json!({ "op": "update", "id": t, "fields": {}, "aux_credential": { "name": "Sitzung", "username": "anna3" } }));
         let named = app.auto_key_credentials(&app.target(tid).cloned().unwrap());
         assert_eq!((named["Sitzung"].username.as_str(), named["Sitzung"].password.0.as_slice()), ("anna3", b"zweites Kennwort".as_slice()));
+    }
+
+    #[test]
+    fn login_object_create_assign_change_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let f = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "Netz" }))["id"].as_str().unwrap().to_string();
+        let t = cmd(&mut app, json!({ "op": "add", "parent": f, "kind": "ssh", "name": "sw01" }))["id"].as_str().unwrap().to_string();
+        let tid = Uuid::parse_str(&t).unwrap();
+        // Anlegen im Ordner.
+        let l = cmd(&mut app, json!({ "op": "login_save", "name": "Switch-Admin", "folder": f, "username": "admin", "password": "geheim-1" }));
+        let lid = l["id"].as_str().unwrap_or_else(|| panic!("{l}")).to_string();
+        let list = cmd(&mut app, json!({ "op": "logins" }));
+        assert_eq!(list["logins"][0]["name"], "Switch-Admin");
+        assert_eq!(list["logins"][0]["username"], "admin");
+        assert!(!list.to_string().contains("geheim-1"), "Kennwort nie in der Liste");
+        // Im Baum steht die Anmeldung im Ordner.
+        let tree = crate::tree::tree(&app.index, "", &|_| None);
+        assert!(tree[0].children.iter().any(|n| n.login && n.id.to_string() == lid));
+        // Am Ordner wählen: das Ziel erbt sie.
+        let r = cmd(&mut app, json!({ "op": "update", "id": f, "credential": { "mode": "login", "login": lid } }));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(j(app.editor_json(Uuid::parse_str(&f).unwrap()))["credential"]["mode"], "login");
+        let creds = |app: &App| {
+            let CredentialResolution::Found(r) = rj_core::inherit::resolve_credential(&app.index, tid).unwrap() else { panic!() };
+            app.vault.as_ref().unwrap().credential(r.reference.entry).unwrap().data
+        };
+        assert_eq!((creds(&app).username.as_str(), creds(&app).password.as_str()), ("admin", Some("geheim-1")));
+        // Kennwort an der Anmeldung ändern: gilt beim Ziel sofort.
+        cmd(&mut app, json!({ "op": "login_save", "id": lid, "name": "Switch-Admin", "folder": f, "username": "admin2", "password": "geheim-2" }));
+        assert_eq!((creds(&app).username.as_str(), creds(&app).password.as_str()), ("admin2", Some("geheim-2")));
+        assert_eq!(cmd(&mut app, json!({ "op": "logins" }))["logins"][0]["used"], 1);
+        // Löschen: das Ziel behält die Zugangsdaten.
+        assert_eq!(cmd(&mut app, json!({ "op": "login_delete", "id": lid }))["ok"], true);
+        assert!(app.index.logins.is_empty());
+        assert_eq!(creds(&app).username, "admin2");
+        // Ordner mit Anmeldung löschen nimmt sie mit.
+        let l2 = cmd(&mut app, json!({ "op": "login_save", "name": "x", "folder": f, "username": "u" }))["id"].as_str().unwrap().to_string();
+        assert!(app.index.login(Uuid::parse_str(&l2).unwrap()).is_some());
+        cmd(&mut app, json!({ "op": "delete", "ids": [f] }));
+        assert!(app.index.logins.is_empty());
     }
 
     #[test]

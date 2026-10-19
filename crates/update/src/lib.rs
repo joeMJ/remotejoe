@@ -7,6 +7,10 @@
 //! Archivs aus dieser Datei. Schlägt eine Prüfung fehl, wird nichts entpackt.
 
 pub mod archive;
+#[cfg(windows)]
+pub mod authenticode;
+#[cfg(windows)]
+pub mod msi;
 pub mod github;
 pub mod http;
 pub mod install;
@@ -56,6 +60,8 @@ pub enum UpdateError {
     Archive(String),
     #[error("Installation: {0}")]
     Install(String),
+    #[error("Authenticode-Signatur: {0}")]
+    Authenticode(String),
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }

@@ -33,6 +33,8 @@ public:
 	/// Schließt eine nicht verwendete Kennung.
 	static void closeHandle(std::int64_t fd);
 	void damage(int x, int y, int w, int h);
+	/// Mauszeiger der Gegenstelle (RDP/VNC): kind 0 = Standard, 1 = ausgeblendet, 2 = Bild (BGRA).
+	void setRemotePointer(int kind, const QByteArray& bgra, int w, int h, int hx, int hy);
 	/// Blauen Rahmen beim Tastaturfokus zeigen (Einstellung unter Extras → Darstellung).
 	static void setFocusFrame(bool on) { s_focusFrame = on; }
 	/// Web-Sitzung: Fokuswechsel an den Worker melden. Unter Windows läuft die Seite als Kindfenster dieses
@@ -96,6 +98,11 @@ private:
 	uchar* m_map = nullptr;
 	std::size_t m_mapLen = 0;
 	QImage m_image;
+	/// Letzter Zeiger der Gegenstelle als Bild (unskaliert) und Klickpunkt; leer = Standardzeiger.
+	QImage m_pointer;
+	QPoint m_pointerHot;
+	bool m_pointerHidden = false;
+	void applyPointer();
 	QTimer* m_fitTimer = nullptr;
 	QSize m_requested;
 	QSize m_attached;

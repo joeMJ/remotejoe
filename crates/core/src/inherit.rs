@@ -168,6 +168,118 @@ pub enum CredentialMode {
     Entry { name: String, reference: CredentialRef },
     /// Benannter Datensatz, gesucht nach oben.
     Named(String),
+    /// Anmeldeobjekt (Verweis auf `Index::logins`).
+    Login(Uuid),
+}
+
+/// Alle Einstellungen im Baum (Wurzel, Ordner, Ziele) mit der Kennung ihres Knotens.
+fn for_each_settings_mut(f: &mut Folder, visit: &mut dyn FnMut(Uuid, &mut Settings)) {
+    visit(f.id, &mut f.settings);
+    for c in &mut f.children {
+        match c {
+            Node::Folder(sub) => for_each_settings_mut(sub, visit),
+            Node::Target(t) => visit(t.id, &mut t.settings),
+        }
+    }
+}
+
+fn for_each_settings(f: &Folder, visit: &mut dyn FnMut(Uuid, &Settings)) {
+    visit(f.id, &f.settings);
+    for c in &f.children {
+        match c {
+            Node::Folder(sub) => for_each_settings(sub, visit),
+            Node::Target(t) => visit(t.id, &t.settings),
+        }
+    }
+}
+
+/// Knoten (Ordner, Ziele), die das Anmeldeobjekt `login` verwenden.
+pub fn login_users(index: &Index, login: Uuid) -> Vec<Uuid> {
+    let mut out = Vec::new();
+    for_each_settings(&index.root, &mut |id, s| {
+        if s.login == Some(login) {
+            out.push(id);
+        }
+    });
+    out
+}
+
+/// Den KDBX-Eintrag jedes Anmeldeobjekts bei allen Verwendern nachtragen (nach Änderungen am Objekt
+/// oder nach dem Laden). Verweise auf nicht mehr vorhandene Objekte werden gelöst; der bisherige
+/// Eintrag bleibt dann als eigener Verweis stehen.
+pub fn sync_logins(index: &mut Index) {
+    let logins: std::collections::HashMap<Uuid, CredentialRef> = index.logins.iter().map(|l| (l.id, l.entry.clone())).collect();
+    for_each_settings_mut(&mut index.root, &mut |_, s| {
+        if let Some(l) = s.login {
+            match logins.get(&l) {
+                Some(entry) => {
+                    s.credentials.insert(DEFAULT_CREDENTIAL.to_string(), entry.clone());
+                }
+                None => s.login = None,
+            }
+        }
+    });
+}
+
+/// Bisherige Verweise auf fremde KDBX-Einträge („vorhandener Datensatz“, nur unter dem
+/// Standardnamen) in Anmeldeobjekte umwandeln: je Eintrag ein Objekt, abgelegt im Ordner des ersten
+/// Verwenders. Eigene Einträge („Benutzername und Kennwort direkt“) bleiben, wie sie sind.
+/// Liefert die Zahl der umgestellten Ordner und Ziele.
+pub fn convert_entries_to_logins(index: &mut Index, is_own: &dyn Fn(Uuid) -> bool, title_of: &dyn Fn(Uuid) -> Option<String>) -> usize {
+    // (Knoten, Ablageordner, Eintrag)
+    let mut found: Vec<(Uuid, Uuid, CredentialRef)> = Vec::new();
+    fn walk(f: &Folder, out: &mut Vec<(Uuid, Uuid, CredentialRef)>, is_own: &dyn Fn(Uuid) -> bool) {
+        let take = |s: &Settings, own_name: Option<&str>| -> Option<CredentialRef> {
+            if s.login.is_some() || s.credentials_off || own_name.is_some_and(|n| n != DEFAULT_CREDENTIAL) {
+                return None;
+            }
+            s.credentials.get(DEFAULT_CREDENTIAL).filter(|r| !is_own(r.entry)).cloned()
+        };
+        if let Some(r) = take(&f.settings, f.settings.credential_name.as_deref()) {
+            out.push((f.id, f.id, r));
+        }
+        for c in &f.children {
+            match c {
+                Node::Folder(sub) => walk(sub, out, is_own),
+                Node::Target(t) => {
+                    if let Some(r) = take(&t.settings, t.credential.as_deref()) {
+                        out.push((t.id, f.id, r));
+                    }
+                }
+            }
+        }
+    }
+    walk(&index.root, &mut found, is_own);
+    let mut map: std::collections::HashMap<Uuid, Uuid> = index.logins.iter().map(|l| (l.entry.entry, l.id)).collect();
+    let mut assign: std::collections::HashMap<Uuid, Uuid> = std::collections::HashMap::new();
+    for (node, folder, r) in &found {
+        let lid = *map.entry(r.entry).or_insert_with(|| {
+            let name = title_of(r.entry).or_else(|| r.last_title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| "Anmeldung".into());
+            let l = Login { id: Uuid::new_v4(), name, folder: *folder, entry: r.clone() };
+            let id = l.id;
+            index.logins.push(l);
+            id
+        });
+        assign.insert(*node, lid);
+    }
+    for_each_settings_mut(&mut index.root, &mut |id, s| {
+        if let Some(l) = assign.get(&id) {
+            s.login = Some(*l);
+        }
+    });
+    found.len()
+}
+
+/// Anmeldeobjekt entfernen. Verwender behalten den Eintrag als eigenen Verweis (sie funktionieren
+/// weiter); im Baum verschwindet nur das Objekt.
+pub fn delete_login(index: &mut Index, login: Uuid) -> bool {
+    let before = index.logins.len();
+    index.logins.retain(|l| l.id != login);
+    if index.logins.len() == before {
+        return false;
+    }
+    sync_logins(index);
+    true
 }
 
 /// Liest die am Knoten festgelegte Art der Zugangsdaten.
@@ -177,6 +289,9 @@ pub fn credential_mode(index: &Index, node_id: Uuid) -> Option<CredentialMode> {
         return Some(CredentialMode::None);
     }
     let name = own_name.clone().unwrap_or_else(|| DEFAULT_CREDENTIAL.to_string());
+    if let Some(l) = settings.login.filter(|l| index.login(*l).is_some()) {
+        return Some(CredentialMode::Login(l));
+    }
     if let Some(r) = settings.credentials.get(&name) {
         return Some(CredentialMode::Entry { name, reference: r.clone() });
     }
@@ -204,9 +319,17 @@ pub fn set_credential_mode(index: &mut Index, node_id: Uuid, mode: CredentialMod
         None => return false,
     };
     let is_target = matches!(index.path_to(node_id).and_then(|p| p.last().copied()), Some(Node::Target(_)));
+    let login_entry = match &mode {
+        CredentialMode::Login(l) => match index.login(*l) {
+            Some(l) => Some(l.entry.clone()),
+            None => return false,
+        },
+        _ => None,
+    };
     let Some(s) = settings_mut(index, node_id) else { return false };
     s.credentials.remove(&old_name);
     s.credentials_off = false;
+    s.login = None;
     let new_name: Option<String> = match mode {
         CredentialMode::Inherit => None,
         CredentialMode::None => {
@@ -218,6 +341,12 @@ pub fn set_credential_mode(index: &mut Index, node_id: Uuid, mode: CredentialMod
             (name != DEFAULT_CREDENTIAL).then_some(name)
         }
         CredentialMode::Named(n) => Some(n),
+        CredentialMode::Login(l) => {
+            // Unter dem Standardnamen eintragen: so finden Auflösung und ältere Fassungen den Eintrag.
+            s.login = Some(l);
+            s.credentials.insert(DEFAULT_CREDENTIAL.to_string(), login_entry.expect("geprüft"));
+            None
+        }
     };
     if is_target {
         s.credential_name = None;
@@ -376,6 +505,58 @@ mod tests {
         let _ = e_folder;
         let _ = e_target;
         Fixture { index, folder: fid, sub: sid, target: tid, e_root, e_folder, e_target, tunnel }
+    }
+
+    #[test]
+    fn login_object_is_used_by_folder_and_survives_deletion_as_entry() {
+        let mut f = fixture();
+        let entry = Uuid::new_v4();
+        let login = Login { id: Uuid::new_v4(), name: "Domänenadmin".into(), folder: f.folder, entry: cref(entry, "Domänenadmin") };
+        let lid = login.id;
+        f.index.logins.push(login);
+        assert!(set_credential_mode(&mut f.index, f.folder, CredentialMode::Login(lid)));
+        assert_eq!(credential_mode(&f.index, f.folder), Some(CredentialMode::Login(lid)));
+        // Das Ziel darunter erbt die Anmeldung.
+        assert_eq!(found(resolve_credential(&f.index, f.target).unwrap()).reference.entry, entry);
+        assert_eq!(login_users(&f.index, lid), [f.folder]);
+        // Eintrag des Objekts geändert: Verwender folgen.
+        let entry2 = Uuid::new_v4();
+        f.index.logins[0].entry = cref(entry2, "neu");
+        sync_logins(&mut f.index);
+        assert_eq!(found(resolve_credential(&f.index, f.target).unwrap()).reference.entry, entry2);
+        // Anderer Modus löst den Verweis.
+        assert!(set_credential_mode(&mut f.index, f.folder, CredentialMode::Inherit));
+        assert!(login_users(&f.index, lid).is_empty());
+        // Gelöscht: Verwender behalten den Eintrag.
+        assert!(set_credential_mode(&mut f.index, f.folder, CredentialMode::Login(lid)));
+        assert!(delete_login(&mut f.index, lid));
+        assert!(matches!(credential_mode(&f.index, f.folder), Some(CredentialMode::Entry { .. })));
+        assert_eq!(found(resolve_credential(&f.index, f.target).unwrap()).reference.entry, entry2);
+        // Unbekanntes Objekt wird abgelehnt.
+        assert!(!set_credential_mode(&mut f.index, f.folder, CredentialMode::Login(Uuid::new_v4())));
+    }
+
+    #[test]
+    fn foreign_entries_become_login_objects_once() {
+        let mut f = fixture();
+        let shared = Uuid::new_v4();
+        let own = Uuid::new_v4();
+        // Ordner und ein Ziel nutzen denselben fremden Eintrag, die Wurzel einen eigenen.
+        settings_mut(&mut f.index, f.folder).unwrap().credentials.insert("default".into(), cref(shared, "Domäne"));
+        settings_mut(&mut f.index, f.target).unwrap().credentials.insert("default".into(), cref(shared, "Domäne"));
+        f.index.root.settings.credentials.insert("default".into(), cref(own, "eigen"));
+        let n = convert_entries_to_logins(&mut f.index, &|e| e == own, &|_| Some("Domänenkonto".into()));
+        assert_eq!(n, 2);
+        assert_eq!(f.index.logins.len(), 1, "ein Objekt je Eintrag");
+        assert_eq!(f.index.logins[0].name, "Domänenkonto");
+        assert_eq!(f.index.logins[0].folder, f.folder);
+        let lid = f.index.logins[0].id;
+        assert_eq!(credential_mode(&f.index, f.target), Some(CredentialMode::Login(lid)));
+        assert!(matches!(credential_mode(&f.index, f.index.root.id), Some(CredentialMode::Entry { .. })), "eigene Einträge bleiben");
+        assert_eq!(found(resolve_credential(&f.index, f.target).unwrap()).reference.entry, shared);
+        // Zweiter Lauf ändert nichts.
+        assert_eq!(convert_entries_to_logins(&mut f.index, &|e| e == own, &|_| None), 0);
+        assert_eq!(f.index.logins.len(), 1);
     }
 
     fn found(r: CredentialResolution) -> ResolvedCredential {

@@ -220,6 +220,36 @@ fn frame_keys_and_clipboard_matrix() {
 
 /// Zwei Worker-Prozesse, einer wird hart beendet; der andere läuft weiter.
 #[test]
+fn pointer_shape_of_the_remote_side_arrives() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(x) = start() else { return };
+    let mut s = RdpSession::new(|_| CertDecision::AcceptOnce).unwrap();
+    s.connect(&params(x.port, USER)).expect("Verbindung");
+    // Der Zeiger kommt beim Aufbau und bei Bewegungen über Fenster mit eigener Zeigerform.
+    let mut shape = None;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut step = 0u16;
+    while shape.is_none() && Instant::now() < deadline {
+        step = (step + 37) % 700;
+        s.send_mouse(rj_rdp::keymap::mouse::MOVE, 50 + step, 50 + step / 2);
+        pump(&mut s, 300, |e| {
+            if let RdpEvent::Pointer(p) = e {
+                if p.kind == 2 {
+                    shape = Some(p.clone());
+                    return true;
+                }
+            }
+            false
+        });
+    }
+    let p = shape.expect("kein Mauszeiger der Gegenstelle empfangen");
+    assert!(p.width > 0 && p.height > 0 && p.width <= 384, "{}×{}", p.width, p.height);
+    assert_eq!(p.bgra.len(), (p.width * p.height * 4) as usize);
+    assert!(p.hot_x < p.width && p.hot_y < p.height);
+    assert!(p.bgra.chunks(4).any(|px| px[3] != 0), "Zeiger ist nicht völlig durchsichtig");
+}
+
+#[test]
 fn worker_crash_isolation() {
     use rj_ipc::*;
     use rj_supervisor::*;

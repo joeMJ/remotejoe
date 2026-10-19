@@ -70,13 +70,24 @@ impl KnownCerts {
 
     /// Fingerabdruck für `host:port` speichern (ersetzt einen alten).
     pub fn remember(&self, id: &str, fp: &str) -> io::Result<()> {
+        self.remember_many(&[(id.to_string(), fp.to_string())])
+    }
+
+    /// Viele Einträge auf einmal: einmal lesen, einmal schreiben.
+    pub fn remember_many(&self, entries: &[(String, String)]) -> io::Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
         if let Some(d) = self.path.parent() {
             std::fs::create_dir_all(d)?;
         }
         let _lock = rj_core::fsutil::WriteLock::acquire_wait(&self.path, Duration::from_secs(5))?;
         let text = std::fs::read_to_string(&self.path).unwrap_or_default();
-        let mut out: String = text.lines().filter(|l| !l.starts_with(&format!("{id} "))).map(|l| format!("{l}\n")).collect();
-        out.push_str(&format!("{id} {fp}\n"));
+        let mut out: String =
+            text.lines().filter(|l| !entries.iter().any(|(id, _)| l.starts_with(&format!("{id} ")))).map(|l| format!("{l}\n")).collect();
+        for (id, fp) in entries {
+            out.push_str(&format!("{id} {fp}\n"));
+        }
         rj_core::fsutil::atomic_write_locked(&self.path, out.as_bytes())
     }
 }

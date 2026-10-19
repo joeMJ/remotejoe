@@ -68,6 +68,8 @@ pub enum RdpEvent {
     /// Teilbild geändert (Bereich im Bildpuffer).
     Frame { x: u32, y: u32, w: u32, h: u32 },
     Resized { width: u32, height: u32 },
+    /// Mauszeiger der Gegenstelle hat sich geändert.
+    Pointer(rj_ipc::msg::PointerShape),
     ClipReady,
     ClipText(String),
     ClipFiles(Vec<(FileDesc, Vec<u8>)>),
@@ -97,6 +99,7 @@ enum Raw {
     FileRequest { stream: u32, index: u32, flags: u32, position: u64, len: u32 },
     FileResponse { stream: u32, data: Option<Vec<u8>> },
     Resized(u32, u32),
+    Pointer(rj_ipc::msg::PointerShape),
 }
 
 #[derive(Default)]
@@ -168,6 +171,17 @@ unsafe extern "C" fn cb_frame(user: *mut c_void, data: *const u8, width: u32, he
 
 unsafe extern "C" fn cb_resize(user: *mut c_void, w: u32, h: u32) {
     push(unsafe { shared(user) }, Raw::Resized(w, h));
+}
+
+unsafe extern "C" fn cb_pointer(user: *mut c_void, kind: i32, bgra: *const u8, w: u32, h: u32, hx: u32, hy: u32) {
+    let data = if kind == 2 && !bgra.is_null() && w > 0 && h > 0 {
+        // SAFETY: die C-Seite übergibt einen Puffer mit w × h × 4 Bytes.
+        unsafe { std::slice::from_raw_parts(bgra, (w as usize) * (h as usize) * 4) }.to_vec()
+    } else {
+        Vec::new()
+    };
+    let kind = if data.is_empty() && kind == 2 { 0 } else { kind.clamp(0, 2) as u8 };
+    push(unsafe { shared(user) }, Raw::Pointer(rj_ipc::msg::PointerShape { kind, width: w, height: h, hot_x: hx, hot_y: hy, bgra: data }));
 }
 
 unsafe extern "C" fn cb_clip_ready(user: *mut c_void, _flags: u32) {
@@ -294,6 +308,7 @@ impl RdpSession {
             on_clip_file_request: Some(cb_file_request),
             on_clip_file_response: Some(cb_file_response),
             verify_certificate: Some(cb_cert),
+            on_pointer: Some(cb_pointer),
         };
         // SAFETY: `cb` wird kopiert; `shared` lebt so lange wie die Sitzung.
         let raw = unsafe { ffi::rj_rdp_new(&cb) };
@@ -509,6 +524,7 @@ impl RdpSession {
                     events.push(RdpEvent::ClipReady);
                 }
                 Raw::Resized(w, h) => events.push(RdpEvent::Resized { width: w, height: h }),
+                Raw::Pointer(p) => events.push(RdpEvent::Pointer(p)),
                 Raw::FormatList(list) => {
                     let ids: Vec<String> = list.iter().map(|(id, n)| if n.is_empty() { id.to_string() } else { format!("{id}:{n}") }).collect();
                     events.push(RdpEvent::Log(format!("Formate der Gegenstelle: {}", ids.join(", "))));

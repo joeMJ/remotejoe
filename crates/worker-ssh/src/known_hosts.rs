@@ -225,6 +225,16 @@ impl KnownHosts {
     }
 
     /// Speichert einen Schlüssel im OpenSSH-Format (nach Zustimmung des Benutzers).
+    /// Viele Schlüssel in OpenSSH-Schreibweise auf einmal (Host, Port, Schlüssel).
+    pub fn remember_openssh_many(&self, keys: &[(String, u16, String)]) -> std::io::Result<()> {
+        let mut parsed = Vec::with_capacity(keys.len());
+        for (h, p, k) in keys {
+            let k = PublicKey::from_openssh(k).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+            parsed.push((h.clone(), *p, k));
+        }
+        self.remember_many(&parsed)
+    }
+
     pub fn remember_openssh(&self, host: &str, port: u16, key: &str) -> std::io::Result<()> {
         let k = PublicKey::from_openssh(key).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
         self.remember(host, port, &k)
@@ -235,10 +245,21 @@ impl KnownHosts {
     /// ersetzt. Alle übrigen Zeilen bleiben erhalten, Zeilen im früheren
     /// Format werden in die OpenSSH-Schreibweise umgestellt.
     pub fn remember(&self, host: &str, port: u16, key: &PublicKey) -> std::io::Result<()> {
-        let id = host_id(host, port);
-        let alg = key.algorithm().to_string();
-        let openssh = key.to_openssh().map_err(|e| std::io::Error::other(e.to_string()))?;
-        let b64 = openssh.split_whitespace().nth(1).unwrap_or_default();
+        self.remember_many(&[(host.to_string(), port, key.clone())])
+    }
+
+    /// Wie `remember`, für viele Schlüssel auf einmal: die Datei wird nur einmal gelesen und
+    /// einmal geschrieben (Schlüsselprüfung mit Hunderten neuer Einträge).
+    pub fn remember_many(&self, keys: &[(String, u16, PublicKey)]) -> std::io::Result<()> {
+        let mut new = Vec::new();
+        for (host, port, key) in keys {
+            let openssh = key.to_openssh().map_err(|e| std::io::Error::other(e.to_string()))?;
+            let b64 = openssh.split_whitespace().nth(1).unwrap_or_default().to_string();
+            new.push((host_id(host, *port), key.algorithm().to_string(), b64));
+        }
+        if new.is_empty() {
+            return Ok(());
+        }
         if let Some(d) = self.path.parent() {
             std::fs::create_dir_all(d)?;
         }
@@ -248,7 +269,7 @@ impl KnownHosts {
         let mut out = String::new();
         for line in self.lines() {
             match line {
-                Line::Entry { hosts, alg: a, .. } if hosts == id && a == alg => {}
+                Line::Entry { hosts, alg: a, .. } if new.iter().any(|(id, alg, _)| *id == hosts && *alg == a) => {}
                 Line::Entry { hosts, alg, key, .. } => out.push_str(&format!("{hosts} {alg} {key}\n")),
                 Line::Other(l) => {
                     out.push_str(&l);
@@ -256,7 +277,9 @@ impl KnownHosts {
                 }
             }
         }
-        out.push_str(&format!("{id} {alg} {b64}\n"));
+        for (id, alg, b64) in &new {
+            out.push_str(&format!("{id} {alg} {b64}\n"));
+        }
         rj_core::fsutil::atomic_write_locked(&self.path, out.as_bytes())
     }
 }

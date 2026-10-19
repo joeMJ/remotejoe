@@ -138,6 +138,17 @@ fn kind_of(p: Protocol) -> &'static str {
 
 /// Prüft alle Ziele (läuft im Hintergrundfaden, blockiert bis zum Ende oder Abbruch).
 pub fn run(rt: &tokio::runtime::Handle, specs: Vec<ProbeSpec>, cancel: Arc<std::sync::atomic::AtomicBool>, stores: Stores) -> Vec<CheckRow> {
+    run_with_progress(rt, specs, cancel, stores, Arc::new(std::sync::atomic::AtomicUsize::new(0)))
+}
+
+/// Wie `run`; `done` zählt die fertig geprüften Ziele (Fortschritt „n von x“).
+pub fn run_with_progress(
+    rt: &tokio::runtime::Handle,
+    specs: Vec<ProbeSpec>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    stores: Stores,
+    done: Arc<std::sync::atomic::AtomicUsize>,
+) -> Vec<CheckRow> {
     // Zertifizierungsstellen des Systems nur laden, wenn ein Web-Ziel dabei ist.
     let roots = specs.iter().any(|s| s.protocol == Protocol::Web && s.skip.is_none()).then(system_roots).flatten();
     rt.block_on(async move {
@@ -156,6 +167,7 @@ pub fn run(rt: &tokio::runtime::Handle, specs: Vec<ProbeSpec>, cancel: Arc<std::
         }
         let mut rows: Vec<(usize, CheckRow)> = Vec::new();
         while let Some(r) = set.join_next().await {
+            done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if let Ok(r) = r {
                 rows.push(r);
             }
@@ -478,40 +490,68 @@ fn probe_proxmox(spec: &ProbeSpec, stores: &Stores) -> Probed {
 /// Speichert alle neuen Zeilen. Gibt (gespeichert, Fehlermeldungen) zurück; gespeicherte Zeilen
 /// stehen danach auf `Saved`. Geänderte, bekannte, gültige und nicht erreichbare bleiben unberührt.
 pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>) {
+    // Je Speicherdatei sammeln und einmal schreiben: Hunderte Einträge einzeln zu schreiben (lesen,
+    // sichern, auf die Platte erzwingen) dauert unter Windows Minuten und blockiert die Oberfläche.
+    let mut ssh: Vec<(usize, (String, u16, String))> = Vec::new();
+    let mut vnc: Vec<(usize, (String, String))> = Vec::new();
+    let mut web: BTreeMap<PathBuf, Vec<(usize, String, Vec<u8>)>> = BTreeMap::new();
+    let mut prox: Vec<(usize, String, String)> = Vec::new();
+    let mut done: Vec<(usize, Result<(), String>)> = Vec::new();
+    for (i, r) in rows.iter().enumerate().filter(|(_, r)| r.state == CheckState::New) {
+        match &r.save {
+            SaveData::None => {}
+            SaveData::Ssh(line) => ssh.push((i, (r.spec.host.clone(), r.spec.port, line.clone()))),
+            SaveData::Rdp { path, pem } => done.push((i, save_file(path, pem.as_bytes()))),
+            SaveData::Vnc { id, fp } => vnc.push((i, (id.clone(), fp.clone()))),
+            SaveData::Web { profile, host, der } => web.entry(profile.clone()).or_default().push((i, host.clone(), der.clone())),
+            SaveData::Proxmox { key, fp } => prox.push((i, key.clone(), fp.clone())),
+        }
+    }
+    if !ssh.is_empty() {
+        let res = match &stores.known_hosts {
+            Some(k) => k.remember_openssh_many(&ssh.iter().map(|(_, e)| e.clone()).collect::<Vec<_>>()).map_err(|e| e.to_string()),
+            None => Err("kein Datenordner".into()),
+        };
+        done.extend(ssh.iter().map(|(i, _)| (*i, res.clone())));
+    }
+    if !vnc.is_empty() {
+        let res = match stores.file("vnc_certs") {
+            Some(p) => rj_vnc::client::KnownCerts::new(p).remember_many(&vnc.iter().map(|(_, e)| e.clone()).collect::<Vec<_>>()).map_err(|e| e.to_string()),
+            None => Err("kein Datenordner".into()),
+        };
+        done.extend(vnc.iter().map(|(i, _)| (*i, res.clone())));
+    }
+    for (profile, list) in web {
+        let mut a = rj_web::AcceptedCerts::load(&profile);
+        for (_, host, der) in &list {
+            a.accept(host, der);
+        }
+        let res = a.save(&profile).map_err(|e| e.to_string());
+        done.extend(list.iter().map(|(i, ..)| (*i, res.clone())));
+    }
+    if !prox.is_empty() {
+        let res = match stores.file("proxmox-zertifikate.json") {
+            Some(p) => {
+                let mut k = proxmox_known(stores);
+                for (_, key, fp) in &prox {
+                    k.insert(key.clone(), fp.clone());
+                }
+                save_file(&p, &serde_json::to_vec_pretty(&k).unwrap_or_default())
+            }
+            None => Err("kein Datenordner".into()),
+        };
+        done.extend(prox.iter().map(|(i, ..)| (*i, res.clone())));
+    }
     let mut saved = 0;
     let mut errors = Vec::new();
-    for r in rows.iter_mut().filter(|r| r.state == CheckState::New) {
-        let res: Result<(), String> = match &r.save {
-            SaveData::None => continue,
-            SaveData::Ssh(line) => match &stores.known_hosts {
-                Some(k) => k.remember_openssh(&r.spec.host, r.spec.port, line).map_err(|e| e.to_string()),
-                None => Err("kein Datenordner".into()),
-            },
-            SaveData::Rdp { path, pem } => save_file(path, pem.as_bytes()),
-            SaveData::Vnc { id, fp } => match stores.file("vnc_certs") {
-                Some(p) => rj_vnc::client::KnownCerts::new(p).remember(id, fp).map_err(|e| e.to_string()),
-                None => Err("kein Datenordner".into()),
-            },
-            SaveData::Web { profile, host, der } => {
-                let mut a = rj_web::AcceptedCerts::load(profile);
-                a.accept(host, der);
-                a.save(profile).map_err(|e| e.to_string())
-            }
-            SaveData::Proxmox { key, fp } => match stores.file("proxmox-zertifikate.json") {
-                Some(p) => {
-                    let mut k = proxmox_known(stores);
-                    k.insert(key.clone(), fp.clone());
-                    save_file(&p, &serde_json::to_vec_pretty(&k).unwrap_or_default())
-                }
-                None => Err("kein Datenordner".into()),
-            },
-        };
+    done.sort_by_key(|(i, _)| *i);
+    for (i, res) in done {
         match res {
             Ok(()) => {
-                r.state = CheckState::Saved;
+                rows[i].state = CheckState::Saved;
                 saved += 1;
             }
-            Err(e) => errors.push(format!("{}: {e}", r.spec.name)),
+            Err(e) => errors.push(format!("{}: {e}", rows[i].spec.name)),
         }
     }
     (saved, errors)
@@ -534,6 +574,36 @@ mod tests {
 
     fn stores(dir: &Path) -> Stores {
         Stores { known_hosts: Some(KnownHosts::new(dir.join("known_hosts"))), data_dir: Some(dir.to_path_buf()) }
+    }
+
+    #[test]
+    fn accepting_hundreds_of_new_keys_writes_each_file_once_and_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = stores(dir.path());
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKyAnCq2Gk7BPfqYFQiNcGYgWfm4W8KibIapJ/jZJJGt";
+        let mut rows: Vec<CheckRow> = (0..600)
+            .map(|i| row(spec(Protocol::Ssh, &format!("10.0.{}.{}", i / 250, i % 250), 22), "SSH-Host-Schlüssel", "fp".into(), CheckState::New, SaveData::Ssh(key.into())))
+            .collect();
+        rows.extend((0..300).map(|i| {
+            row(spec(Protocol::Vnc, &format!("10.1.0.{i}"), 5900), "VNC", "fp".into(), CheckState::New, SaveData::Vnc { id: format!("10.1.0.{i}:5900"), fp: format!("aa:{i:02x}") })
+        }));
+        let profile = dir.path().join("web-profile/x");
+        rows.extend((0..300).map(|i| {
+            row(spec(Protocol::Web, &format!("10.2.0.{i}"), 443), "Web", "fp".into(), CheckState::New, SaveData::Web { profile: profile.clone(), host: format!("10.2.0.{i}:443"), der: vec![i as u8; 8] })
+        }));
+        let t = std::time::Instant::now();
+        let (saved, errors) = accept_new(&mut rows, &s);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(saved, 1200);
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "zu langsam: {:?}", t.elapsed());
+        assert!(rows.iter().all(|r| r.state == CheckState::Saved));
+        let kh = std::fs::read_to_string(dir.path().join("known_hosts")).unwrap();
+        assert_eq!(kh.lines().count(), 600);
+        assert_eq!(std::fs::read_to_string(dir.path().join("vnc_certs")).unwrap().lines().count(), 300);
+        // Erneut übernehmen ändert nichts doppelt.
+        let mut again: Vec<CheckRow> = (0..3).map(|i| row(spec(Protocol::Ssh, &format!("10.0.0.{i}"), 22), "SSH", "fp".into(), CheckState::New, SaveData::Ssh(key.into()))).collect();
+        accept_new(&mut again, &s);
+        assert_eq!(std::fs::read_to_string(dir.path().join("known_hosts")).unwrap().lines().count(), 600);
     }
 
     fn rt() -> tokio::runtime::Runtime {

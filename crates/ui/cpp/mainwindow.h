@@ -74,6 +74,10 @@ public:
 	int treeRowCount() const;
 	/// Eigenschaften-Tab öffnen (oder vorhandenen zeigen).
 	PropertiesTab* openProperties(const QString& id, const QString& category = QString());
+	/// Anmeldeobjekt öffnen (`id` leer: neu im Ordner `folder` bzw. im Ordner des Ziels `folder`).
+	void openLogin(const QString& id, const QString& folder);
+	/// Ist `id` ein Anmeldeobjekt im Baum?
+	bool isLogin(const QString& id) const;
 	/// Für Bildschirmfotos: Eigenschaften des ersten Ziels, Hinzufügen-Menü, Entsperren.
 	PropertiesTab* openFirstTargetProperties(const QString& protocol = QStringLiteral("rdp"));
 	QMenu* popupAddMenu();

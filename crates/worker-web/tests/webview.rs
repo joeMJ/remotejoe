@@ -32,6 +32,22 @@ body{margin:0;background:#00aa00;height:4000px}\
 window.onresize=function(){fetch('/ev?w='+window.innerWidth)};fetch('/ev?w='+window.innerWidth);</script>\
 </body></html>";
 
+/// Seite mit Material-Design: Der Knopf wird erst nach echter (vertrauenswürdiger)
+/// Eingabe in beide Felder freigegeben; per Skript gesetzte Werte zählen nicht.
+const STRICT: &str = "<html><body><div><input id='u1' placeholder='Kennung'><input id='p1' type='password' placeholder='Passwort'>\
+<button id='b1' disabled>Login</button></div><script>var tu=0,tp=0,u=document.getElementById('u1'),p=document.getElementById('p1'),b=document.getElementById('b1');\
+u.addEventListener('input',function(e){if(e.isTrusted)tu=1;b.disabled=!(tu&&tp&&u.value&&p.value);});\
+p.addEventListener('input',function(e){if(e.isTrusted)tp=1;b.disabled=!(tu&&tp&&u.value&&p.value);});\
+b.onclick=function(){fetch('/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'user='+encodeURIComponent(u.value)+'&pw='+encodeURIComponent(p.value)});};</script></body></html>";
+
+/// Seite ohne Formular: zufällige IDs bei jedem Laden; die Werte übernimmt die Seite erst
+/// beim Verlassen des Feldes (blur), der Knopf schickt nur übernommene Werte.
+const ZK_LIKE: &str = "<html><body><div id='box'></div><script>var r=Math.random().toString(36).slice(2,6),cu='',cp='';\
+document.getElementById('box').innerHTML=\"<input id='\"+r+\"P31-real' placeholder='Benutzername'><input id='\"+r+\"P41-real' type='password' placeholder='Kennwort'>\
+<button type='button' id='\"+r+\"Pg1' class='btn-login'>Anmelden</button>\";var u=document.getElementById(r+'P31-real'),p=document.getElementById(r+'P41-real');\
+u.addEventListener('blur',function(){cu=u.value;});p.addEventListener('blur',function(){cp=p.value;});\
+document.getElementById(r+'Pg1').onclick=function(){fetch('/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'user='+encodeURIComponent(cu)+'&pw='+encodeURIComponent(cp)});};</script></body></html>";
+
 fn page_for(path: &str) -> String {
     match path {
         "/login" => "<html><body>angemeldet</body></html>".into(),
@@ -49,6 +65,8 @@ var sr=h.attachShadow({mode:'open'});sr.innerHTML=\"<form method='post' action='
 <script>function FormSubmit(){document.getElementById('UserName').value=document.getElementById('UserNameShow').value;document.getElementById('f').submit();}</script>\
 </body></html>"
             .into(),
+"/streng" => STRICT.into(),
+        "/zk" => ZK_LIKE.into(),
         "/rot" => "<html><body style='margin:0;background:#ff0000' onclick=\"fetch('/ev?rot')\"></body></html>".into(),
         // Läuft ständig weiter (Farbwechsel), damit Bilder auch ohne Fokus kommen.
         "/blau" => "<html><body style='margin:0;background:#0000ff'><script>var n=0;setInterval(function(){n++;\
@@ -614,6 +632,39 @@ fn auto_login_and_field_detection_offscreen() {
     assert!(sel("submits").contains(&"#go".to_string()), "{f}");
     // Werte der Felder werden nie gelesen.
     assert!(!f.to_string().contains(PASSWORD), "{f}");
+}
+
+#[test]
+fn login_like_by_hand_on_strict_and_blur_pages() {
+    let Some(x) = xvfb() else { return };
+    let data = tempfile::tempdir().unwrap();
+    let (port, rx) = http_server();
+    let auto = serde_json::json!({"username_selector": null, "password_selector": null, "submit_selector": null});
+    // Knopf erst nach echter Eingabe frei.
+    let (posted, s) = login_run_with(&x.display, data.path(), &format!("http://127.0.0.1:{port}/streng"), true, false, auto.clone(), &rx);
+    expect_login(&posted, &s);
+    drop(s);
+    // Werte erst beim Verlassen des Feldes übernommen, zufällige IDs, kein Formular.
+    let (posted, s) = login_run_with(&x.display, data.path(), &format!("http://127.0.0.1:{port}/zk"), true, false, auto, &rx);
+    expect_login(&posted, &s);
+    drop(s);
+}
+
+#[test]
+fn field_detection_avoids_random_ids() {
+    let Some(x) = xvfb() else { return };
+    let data = tempfile::tempdir().unwrap();
+    let (port, _rx) = http_server();
+    let opts = serde_json::json!({"url": format!("http://127.0.0.1:{port}/zk"), "allow_http": true, "profile": "erkennen-zk"});
+    let mut s = Sess::start(&x.display, data.path(), opts, 800, 600, true);
+    assert!(s.wait(60, |s| s.custom.iter().any(|c| c["ev"] == "status" && c["loading"] == false)), "Seite nicht geladen");
+    s.command(serde_json::json!({"op": "detect"}));
+    assert!(s.wait(20, |s| s.custom.iter().any(|c| c["ev"] == "fields")), "keine Felder gemeldet");
+    let f = s.custom.iter().find(|c| c["ev"] == "fields").unwrap().clone();
+    let sel = |k: &str| -> Vec<String> { f[k].as_array().unwrap().iter().map(|e| e["selector"].as_str().unwrap().to_string()).collect() };
+    assert_eq!(sel("users"), [r#"input[placeholder="Benutzername"]"#], "{f}");
+    assert_eq!(sel("passwords"), [r#"input[placeholder="Kennwort"]"#], "{f}");
+    assert!(sel("submits").contains(&"button.btn-login".to_string()), "{f}");
 }
 
 #[test]
