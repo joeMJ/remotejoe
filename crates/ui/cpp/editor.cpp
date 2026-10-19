@@ -3919,6 +3919,7 @@ LoginTab::LoginTab(RjBackend* backend, const QString& id, const QString& folder,
 	connect(m_delete, &QPushButton::clicked, this, [this] { remove(); });
 	connect(m_name, &QLineEdit::textChanged, this, [this](const QString& t) {
 		m_headTitle->setText(t.trimmed().isEmpty() ? m_backend->text(QStringLiteral("login.title.new")) : t);
+		emit titleChanged();
 	});
 	connect(m_name, &QLineEdit::returnPressed, this, [this] { this->save(); });
 	load(folder);
@@ -4012,6 +4013,12 @@ void LoginTab::remove()
 	emit indexChanged();
 	emit status(m_backend->text(QStringLiteral("login.deleted")).arg(m_name->text()));
 	emit closeRequested();
+}
+
+QString LoginTab::tabTitle() const
+{
+	const QString n = m_name ? m_name->text().trimmed() : QString();
+	return n.isEmpty() ? m_backend->text(QStringLiteral("login.title")) : m_backend->text(QStringLiteral("login.tab")).arg(n);
 }
 
 void LoginTab::setIcon(const QIcon& icon)

@@ -898,7 +898,12 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 			             i.data(Qt::DecorationRole).value<QIcon>());
 			return;
 		}
-		if (i.data(RoleMacro).toInt() != 0 || i.data(RolePlaceholder).toBool() || i.data(RoleFolder).toBool() || i.data(RoleLogin).toBool())
+		if (i.data(RoleLogin).toBool())
+		{
+			openLogin(i.data(RoleId).toString(), QString()); // der Anmeldungs-Tab ist ihre Übersicht
+			return;
+		}
+		if (i.data(RoleMacro).toInt() != 0 || i.data(RolePlaceholder).toBool() || i.data(RoleFolder).toBool())
 			return;
 		const QString id = i.data(RoleId).toString();
 		if (!id.isEmpty())
@@ -1340,6 +1345,8 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	const QColor warnText = dark ? QColor("#f2c174") : QColor("#9a5b08"), warnBg = mix(QColor("#d98a13"), base, dark ? 30 : 18);
 	const QColor accentBg = mix(accent, base, dark ? 30 : 16);
 	const QColor rowSel = mix(accent, base, dark ? 22 : 12);
+	const QColor fieldBg = dark ? mix(text, base, 9) : base.lighter(104);
+	const QColor fieldBorder = mix(text, base, dark ? 32 : 28);
 	Q_UNUSED(alternate);
 	return QStringLiteral("QFrame#rjCard { background: %1; border: 1px solid %2; border-radius: 10px; }"
 	                      "QFrame#rjTile { background: %3; border-radius: 6px; }"
@@ -1350,9 +1357,18 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	                      "QLabel[rjPill=\"accent\"] { background: %9; color: %10; border-radius: 9px; padding: 1px 9px; }"
 	                      "QFrame#rjRow { border-radius: 6px; }"
 	                      "QFrame#rjRow:hover { background: %3; }"
-	                      "QFrame#rjRow[selected=\"true\"] { background: %11; }")
+	                      "QFrame#rjRow[selected=\"true\"] { background: %11; }"
+	                      // Eingabefelder in Karten: eigener Rand und leicht abgesetzter Hintergrund (bei dunklen
+	                      // Schemata hätten Feld und Karte sonst dieselbe Farbe). Klappfelder bleiben beim Stil.
+	                      "QFrame#rjCard QLineEdit, QFrame#rjCard QPlainTextEdit, QFrame#rjCard QTextEdit, QFrame#rjCard QSpinBox"
+	                      " { background: %12; border: 1px solid %13; border-radius: 4px; padding: 2px 4px; }"
+	                      "QFrame#rjCard QLineEdit:focus, QFrame#rjCard QPlainTextEdit:focus, QFrame#rjCard QTextEdit:focus, QFrame#rjCard QSpinBox:focus"
+	                      " { border-color: %14; }"
+	                      "QFrame#rjCard QLineEdit:disabled, QFrame#rjCard QPlainTextEdit:disabled, QFrame#rjCard QSpinBox:disabled"
+	                      " { background: %3; color: %4; }"
+	                      "QFrame#rjCard *[rjDirty=\"true\"]:enabled { border: 2px solid %14; }")
 	  .arg(base.name(), border.name(), tileBg.name(), muted.name(), okBg.name(), okText.name(), warnBg.name(), warnText.name(), accentBg.name())
-	  .arg(dark ? accent.lighter(140).name() : accent.darker(120).name(), rowSel.name());
+	  .arg(dark ? accent.lighter(140).name() : accent.darker(120).name(), rowSel.name(), fieldBg.name(), fieldBorder.name(), accent.name());
 }
 
 void MainWindow::applyTheme(bool dark)
@@ -3892,7 +3908,12 @@ void MainWindow::openLogin(const QString& id, const QString& folder)
 	}
 	auto* t = new LoginTab(m_backend, id, f, m_tabs);
 	t->setIcon(protocolIcon(QStringLiteral("login"), QString(), false));
-	addToolTab(t, T(m_backend, "login.title"));
+	addToolTab(t, t->tabTitle());
+	connect(t, &LoginTab::titleChanged, this, [this, t] {
+		const int i = m_tabs->indexOf(t);
+		if (i >= 0)
+			m_tabs->setTabText(i, t->tabTitle());
+	});
 }
 
 PropertiesTab* MainWindow::openProperties(const QString& id, const QString& category)

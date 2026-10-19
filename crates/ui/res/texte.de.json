@@ -770,5 +770,6 @@
   "area.pill.target": "am Ziel",
   "area.pill.folder": "am Ordner",
   "login.title.new": "Neue Anmeldung",
-  "login.used.short": "von %1 Ordnern bzw. Zielen verwendet"
+  "login.used.short": "von %1 Ordnern bzw. Zielen verwendet",
+  "login.tab": "Anmeldung: %1"
 }

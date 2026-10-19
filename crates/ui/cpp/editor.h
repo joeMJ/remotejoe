@@ -379,6 +379,13 @@ public:
 	QString loginId() const { return m_id; }
 	/// Symbol der Kopfkarte (wie im Baum).
 	void setIcon(const QIcon& icon);
+	/// Titel des Tabs: „Anmeldung: <Name>“ (ohne Namen nur „Anmeldung“).
+	QString tabTitle() const;
+
+signals:
+	void titleChanged();
+
+public:
 	void wipeSecrets() override;
 
 private:
