@@ -9,4 +9,8 @@
     <file alias="remotejoe-256.png">../../../assets/logo/remotejoe-256.png</file>
     <file alias="remotejoe-512.png">../../../assets/logo/remotejoe-512.png</file>
   </qresource>
+  <qresource prefix="/ui">
+    <file alias="spin-up.png">../../../assets/ui/spin-up.png</file>
+    <file alias="spin-down.png">../../../assets/ui/spin-down.png</file>
+  </qresource>
 </RCC>

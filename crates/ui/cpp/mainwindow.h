@@ -42,7 +42,6 @@ public:
 
 	void applyTheme(bool dark);
 	void copyCredential(const QString& id, const QString& kind);
-	void clipboardClearSettings();
 	/// Fensterlage aus der Konfiguration herstellen (vor dem Zeigen) bzw. beim Beenden merken.
 	void restoreWindowState();
 	void tryKeyringUnlock();
@@ -96,6 +95,8 @@ public:
 	bool showWebTabForScreenshot();
 	/// Nur für Bildschirmfotos: Darstellungs-Tab öffnen; Über-Dialog erzeugen (nicht modal gezeigt).
 	void appearanceForScreenshot() { openAppearance(); }
+	/// Extras → Einstellungen beim Bereich `section` (lock, keys, terminal, appearance, snmp).
+	void settingsForScreenshot(const QString& section) { openSettings(section); }
 	QWidget* aboutForScreenshot();
 	/// Update-Tab mit einer Prüfung gegen `base` (lokale Attrappe).
 	void updateForScreenshot(const QString& base);
@@ -152,7 +153,6 @@ private:
 	void loadGuests(const QModelIndex& index);
 	void applyGuests(const QString& target, QJsonObject r);
 	void updateJobs();
-	void idleSettings();
 	void handleEvents(const QString& json);
 	void applyPageTitle(SessionPane* p);
 	void openUpdateTab();
@@ -198,6 +198,7 @@ private:
 	void updateConnInfo();
 	void openTerminalSettings();
 	void openAppearance();
+	void openSettings(const QString& section);
 	void openExport();
 	/// Schema und Fokusrahmen aus den Einstellungen anwenden.
 	void applyAppearance();

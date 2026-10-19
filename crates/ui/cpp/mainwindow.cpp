@@ -4,6 +4,7 @@
 #include "exporttab.h"
 #include "overviewtab.h"
 #include "appearance.h"
+#include "settingstab.h"
 #include <algorithm>
 
 #include "editor.h"
@@ -1213,21 +1214,14 @@ void MainWindow::buildMenus()
 	editMenu->addAction(T(m_backend, "menu.edit.view.rename"), this, [this] { viewCommand(QStringLiteral("rename")); });
 	editMenu->addAction(T(m_backend, "menu.edit.view.delete"), this, [this] { viewCommand(QStringLiteral("delete")); });
 	QMenu* extras = m_menuBar->addMenu(T(m_backend, "menu.extras"));
-	extras->addAction(T(m_backend, "menu.extras.idle"), this, [this] { idleSettings(); });
-	extras->addAction(T(m_backend, "menu.extras.clipclear"), this, [this] { clipboardClearSettings(); });
-	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] {
-		for (int i = 0; i < m_tabs->count(); ++i)
-			if (qobject_cast<SnmpTab*>(m_tabs->widget(i)))
-			{
-				m_tabs->setCurrentIndex(i);
-				return;
-			}
-		auto* t = new SnmpTab(m_backend, m_tabs);
-		connect(t, &SnmpTab::status, this, [this](const QString& m) { statusBar()->showMessage(m, 5000); });
-		m_tabs->setCurrentIndex(m_tabs->addTab(t, T(m_backend, "snmp.title")));
-	});
+	extras->addAction(T(m_backend, "menu.extras.settings"), this, [this] { openSettings(QString()); });
+	extras->addSeparator();
+	extras->addAction(T(m_backend, "menu.extras.idle"), this, [this] { openSettings(QStringLiteral("lock")); });
+	extras->addAction(T(m_backend, "menu.extras.clipclear"), this, [this] { openSettings(QStringLiteral("lock")); });
+	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] { openSettings(QStringLiteral("snmp")); });
 	extras->addAction(T(m_backend, "menu.extras.terminal"), this, [this] { openTerminalSettings(); });
 	extras->addAction(T(m_backend, "menu.extras.appearance"), this, [this] { openAppearance(); });
+	extras->addSeparator();
 	{
 		QAction* kc = extras->addAction(T(m_backend, "menu.extras.keycapture"));
 		kc->setCheckable(true);
@@ -1238,6 +1232,8 @@ void MainWindow::buildMenus()
 				KeyCapture::release();
 			edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("keyboard_capture"), on } });
 			statusBar()->showMessage(T(m_backend, on ? "keys.on" : "keys.off"), 6000);
+			for (auto* st : findChildren<SettingsTab*>())
+				st->reload();
 		});
 		connect(extras, &QMenu::aboutToShow, kc, [kc] { kc->setChecked(FrameView::s_keyCapture); });
 	}
@@ -1254,6 +1250,8 @@ void MainWindow::buildMenus()
 			connect(a, &QAction::triggered, this, [this, a] {
 				m_closeTabKey = a->data().toString();
 				edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("close_tab_key"), m_closeTabKey } });
+				for (auto* st : findChildren<SettingsTab*>())
+					st->reload();
 			});
 		}
 		connect(cw, &QMenu::aboutToShow, cw, [this, group] {
@@ -1366,6 +1364,13 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	                      " { border-color: %14; }"
 	                      "QFrame#rjCard QLineEdit:disabled, QFrame#rjCard QPlainTextEdit:disabled, QFrame#rjCard QSpinBox:disabled"
 	                      " { background: %3; color: %4; }"
+	                      // Zahlenfelder: Mit eigenem Rand zeichnet Qt die Pfeilknöpfe nicht mehr; darum eigene Knöpfe.
+	                      "QFrame#rjCard QSpinBox { padding-right: 18px; }"
+	                      "QFrame#rjCard QSpinBox::up-button { subcontrol-origin: border; subcontrol-position: top right; width: 18px; border: none; }"
+	                      "QFrame#rjCard QSpinBox::down-button { subcontrol-origin: border; subcontrol-position: bottom right; width: 18px; border: none; }"
+	                      "QFrame#rjCard QSpinBox::up-arrow { image: url(:/ui/spin-up.png); width: 9px; height: 5px; }"
+	                      "QFrame#rjCard QSpinBox::down-arrow { image: url(:/ui/spin-down.png); width: 9px; height: 5px; }"
+	                      "QFrame#rjCard QSpinBox::up-button:hover, QFrame#rjCard QSpinBox::down-button:hover { background: %3; }"
 	                      "QFrame#rjCard *[rjDirty=\"true\"]:enabled { border: 2px solid %14; }")
 	  .arg(base.name(), border.name(), tileBg.name(), muted.name(), okBg.name(), okText.name(), warnBg.name(), warnText.name(), accentBg.name())
 	  .arg(dark ? accent.lighter(140).name() : accent.darker(120).name(), rowSel.name(), fieldBg.name(), fieldBorder.name(), accent.name());
@@ -2179,15 +2184,6 @@ void MainWindow::copyCredential(const QString& id, const QString& kind)
 	statusBar()->showMessage(T(m_backend, "ctx.copy.password.done").arg(secs), 8000);
 }
 
-void MainWindow::clipboardClearSettings()
-{
-	bool ok = false;
-	const int v = QInputDialog::getInt(this, T(m_backend, "clip.clear.title"), T(m_backend, "clip.clear.text"),
-	                                   m_backend->clipboardClearSecs(), 0, 3600, 5, &ok);
-	if (ok)
-		m_backend->setClipboardClearSecs(v);
-}
-
 void MainWindow::treeContextMenu(const QPoint& pos)
 {
 	const QModelIndex i = m_tree->indexAt(pos);
@@ -2463,10 +2459,8 @@ void MainWindow::macrosForScreenshot()
 void MainWindow::terminalSettingsForScreenshot(const QString& scheme)
 {
 	m_backend->setTerminalSettings(QStringLiteral("{\"scheme\":\"%1\"}").arg(scheme));
-	openTerminalSettings();
-	for (int i = 0; i < m_tabs->count(); ++i)
-		if (auto* t = qobject_cast<TerminalSettingsTab*>(m_tabs->widget(i)))
-			t->deleteLater(), m_tabs->removeTab(i);
+	for (auto* t : findChildren<SettingsTab*>())
+		closeToolTab(t);
 	openTerminalSettings();
 }
 
@@ -2702,27 +2696,32 @@ void MainWindow::openExport()
 
 void MainWindow::openAppearance()
 {
-	for (int i = 0; i < m_tabs->count(); ++i)
-		if (qobject_cast<AppearanceTab*>(m_tabs->widget(i)))
-		{
-			m_tabs->setCurrentIndex(i);
-			return;
-		}
-	auto* t = new AppearanceTab(m_backend, m_tabs);
-	connect(t, &AppearanceTab::appearanceChanged, this, [this] { applyAppearance(); });
-	connect(t, &ToolTab::status, this, [this](const QString& text) { statusBar()->showMessage(text, 6000); });
-	m_tabs->setCurrentIndex(m_tabs->addTab(t, T(m_backend, "appearance.title")));
+	openSettings(QStringLiteral("appearance"));
 }
 
 void MainWindow::openTerminalSettings()
 {
-	for (int i = 0; i < m_tabs->count(); ++i)
-		if (qobject_cast<TerminalSettingsTab*>(m_tabs->widget(i)))
-		{
-			m_tabs->setCurrentIndex(i);
-			return;
-		}
-	m_tabs->setCurrentIndex(m_tabs->addTab(new TerminalSettingsTab(m_backend, m_tabs), T(m_backend, "term.title")));
+	openSettings(QStringLiteral("terminal"));
+}
+
+void MainWindow::openSettings(const QString& section)
+{
+	SettingsTab* t = nullptr;
+	for (int i = 0; i < m_tabs->count() && !t; ++i)
+		t = qobject_cast<SettingsTab*>(m_tabs->widget(i));
+	if (t)
+		t->reload();
+	else
+	{
+		t = new SettingsTab(m_backend, m_tabs);
+		connect(t, &SettingsTab::appearanceChanged, this, [this] { applyAppearance(); });
+		connect(t, &SettingsTab::closeTabKeyChanged, this, [this](const QString& mode) { m_closeTabKey = mode; });
+		connect(t, &ToolTab::status, this, [this](const QString& text) { statusBar()->showMessage(text, 6000); });
+		m_tabs->addTab(t, T(m_backend, "settings.title"));
+	}
+	if (!section.isEmpty())
+		t->showSection(section);
+	m_tabs->setCurrentWidget(t);
 }
 
 void MainWindow::updateConnInfo()
@@ -3209,25 +3208,6 @@ void MainWindow::lockNow(bool alreadyLocked)
 	reloadTree();
 	statusBar()->showMessage(T(m_backend, "status.locked"));
 	showUnlock(true);
-}
-
-void MainWindow::idleSettings()
-{
-	const QJsonObject cur = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("settings") } }));
-	QList<QPair<QString, QString>> items{ { T(m_backend, "idle.off"), QStringLiteral("0") } };
-	for (int m : { 5, 10, 15, 30, 60 })
-		items.append({ T(m_backend, "idle.minutes").arg(m), QString::number(m) });
-	m_bar->choose(T(m_backend, "bar.idle"), items, nullptr, T(m_backend, "bar.idle.disconnect"), [this](const QString& v, bool disconnect) {
-		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") },
-		       { QStringLiteral("lock_after_idle_mins"), v.toInt() },
-		       { QStringLiteral("disconnect_on_lock"), disconnect } });
-		statusBar()->showMessage(T(m_backend, "status.idle").arg(v == QLatin1String("0") ? T(m_backend, "idle.off") : T(m_backend, "idle.minutes").arg(v)), 5000);
-	});
-	const int i = m_bar->combo()->findData(QString::number(cur.value(QStringLiteral("lock_after_idle_mins")).toInt()));
-	if (i >= 0)
-		m_bar->combo()->setCurrentIndex(i);
-	if (auto* c = m_bar->findChild<QCheckBox*>())
-		c->setChecked(cur.value(QStringLiteral("disconnect_on_lock")).toBool());
 }
 
 void MainWindow::showCredentialChoiceForScreenshot()

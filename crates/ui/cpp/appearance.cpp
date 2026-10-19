@@ -375,8 +375,6 @@ void AppearanceTab::reload()
 	for (PaletteTile* t : m_tileList)
 		t->deleteLater();
 	m_tileList.clear();
-	const int columns = 4;
-	int n = 0;
 	for (const QJsonValue& v : palettes)
 	{
 		const QJsonObject o = v.toObject();
@@ -393,10 +391,10 @@ void AppearanceTab::reload()
 		tile->set(o.value(QStringLiteral("name")).toString() + (o.value(QStringLiteral("own")).toBool() ? T("appearance.suffix.own") : QString()),
 		          o.value(QStringLiteral("colors")).toObject(), badge);
 		tile->clicked = [this, id, d] { tileClicked(id, d); };
-		m_tiles->addWidget(tile, n / columns, n % columns);
 		m_tileList << tile;
-		++n;
 	}
+	m_columns = 0;
+	placeTiles();
 	QStringList notes;
 	for (const QJsonValue& v : m_state.value(QStringLiteral("notes")).toArray())
 		notes << v.toString();
@@ -508,4 +506,23 @@ void AppearanceTab::saveEditor()
 	// Die neue Palette gleich verwenden (im automatischen Modus für hell bzw. dunkel).
 	tileClicked(r.value(QStringLiteral("saved")).toString(), m_editDark->isChecked());
 	emit status(m_backend->text(QStringLiteral("appearance.editor.saved")).arg(m_editName->text()));
+}
+
+void AppearanceTab::placeTiles()
+{
+	// Kachel 200 px breit, 10 px Abstand; Rand und Bildlaufleiste abziehen.
+	const int columns = qMax(1, (width() - 40) / 210);
+	if (columns == m_columns)
+		return;
+	m_columns = columns;
+	for (PaletteTile* t : m_tileList)
+		m_tiles->removeWidget(t);
+	for (int n = 0; n < m_tileList.size(); ++n)
+		m_tiles->addWidget(m_tileList[n], n / columns, n % columns);
+}
+
+void AppearanceTab::resizeEvent(QResizeEvent* e)
+{
+	ToolTab::resizeEvent(e);
+	placeTiles();
 }
