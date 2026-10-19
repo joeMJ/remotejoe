@@ -1,6 +1,6 @@
 //! Quellen (Gitea, GitHub), Veröffentlichungen abrufen und Paket laden.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
@@ -199,8 +199,22 @@ fn fetch(source: &Source, token: Option<&str>, a: &Asset, ctl: &Control) -> Resu
 /// Lädt Signatur, Prüfsummen und Archiv; prüft erst die Signatur, dann die
 /// Prüfsumme. Liefert die geprüften Bytes des Archivs.
 pub fn download_verified(source: &Source, token: Option<&str>, found: &Found, key: &VerifyingKey, limits: Limits, cancel: Option<&AtomicBool>) -> Result<Vec<u8>> {
-    let ctl = Control::new(limits, cancel);
-    let small = Control { limits: Limits { max_bytes: 1024 * 1024, ..limits }, cancel, deadline: ctl.deadline };
+    download_verified_progress(source, token, found, key, limits, cancel, None)
+}
+
+/// Wie `download_verified`; `progress` zählt die gelesenen Bytes des Pakets mit (Fortschrittsanzeige).
+pub fn download_verified_progress(
+    source: &Source,
+    token: Option<&str>,
+    found: &Found,
+    key: &VerifyingKey,
+    limits: Limits,
+    cancel: Option<&AtomicBool>,
+    progress: Option<&AtomicU64>,
+) -> Result<Vec<u8>> {
+    let mut ctl = Control::new(limits, cancel);
+    ctl.progress = progress;
+    let small = Control { limits: Limits { max_bytes: 1024 * 1024, ..limits }, cancel, deadline: ctl.deadline, progress: None };
     let sig = fetch(source, token, &found.sig, &small)?;
     let sums = fetch(source, token, &found.sums, &small)?;
     sign::verify(key, &sums, &sig)?;

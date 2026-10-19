@@ -29,3 +29,7 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 [dev-dependencies]
 tempfile.workspace = true
 remotejoe-testkit = { path = "../testkit" }
+
+# Windows: Authenticode-Signatur der MSI prüfen (WinVerifyTrust).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_Security_WinTrust"] }
