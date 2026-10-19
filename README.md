@@ -342,8 +342,11 @@ Er ist mehrfach ausführbar.
 
 ### Anmeldung per Schlüssel
 
-Beim Transport SSH meldet sich PowerShell mit dem SSH-Schlüssel des eigenen Benutzerkontos an (`~/.ssh`,
-bzw. ssh-agent); das Kennwort aus der Schlüsseldatenbank wird dabei **nicht** verwendet. Einmalig:
+Beim Transport SSH nimmt remotejoe **unter Linux** das Kennwort aus der Schlüsseldatenbank: ssh fragt über das
+mitgelieferte Hilfsprogramm `rj-askpass`, das es nur auf eine echte Kennwortfrage herausgibt (nie auf eine
+Host-Schlüssel-Bestätigung). Voraussetzung ist, dass der Host Kennwortanmeldung erlaubt und sein Host-Schlüssel in
+`~/.ssh/known_hosts` steht (Schritt 3 unten). **Unter Windows** und für Hosts ohne Kennwortanmeldung meldet sich
+PowerShell mit dem SSH-Schlüssel des eigenen Benutzerkontos an (`~/.ssh` bzw. ssh-agent). Einmalig:
 
 1. Auf dem eigenen Rechner einen Schlüssel erzeugen, falls noch keiner da ist: `ssh-keygen -t ed25519`
 2. Den Inhalt von `~/.ssh/id_ed25519.pub` auf dem Host eintragen. Für ein Konto **mit Administratorrechten**
@@ -373,6 +376,14 @@ neu aufklappen.
 
 - **Baum links, Sitzungen rechts:** Ordner und Ziele in fester Reihenfolge, Suche über Namen
   und Hosts (Strg+F). Sitzungen in Tabs, gekachelt (1×2, 2×2, frei) oder als eigenes Fenster.
+- **Objektübersicht beim Einfachklick:** Name, Kurzzeile und „Verbinden“; angebotene Dienste als Plaketten
+  (TCP 22, 23, 53, 80, 443, 3389, 4343, 5900, 5985, 5986, 8006 und der Port des Ziels); Kennzahlen (vCPU, Speicher,
+  IP, MAC, Rechnername, System) mit Quelle und Zeitpunkt, von Hand korrigierbar, neue abweichende Werte zum Übernehmen;
+  Notizen des Ziels; Ping und Traceroute. Ohne Anmeldung kommen Adresse, MAC (im selben Netz) und – bei RDP mit NLA –
+  der Rechnername; **Inventar abfragen** liest den Rest mit den Zugangsdaten des Ziels (Linux und Aruba über SSH,
+  Windows über PowerShell per OpenSSH bzw. WinRM). Ein noch unbekannter SSH-Host-Schlüssel wird dabei übernommen und
+  gemeldet, ein geänderter nie. Gäste von Proxmox und Hyper-V zeigen ihr Inventar vom Hypervisor. Das Inventar liegt
+  als Datei im Datenordner (`inventar/`), nicht in der Schlüsseldatenbank.
 - **RDP** mit Zwischenablage (Text in beide Richtungen, Dateien Ziel → Host), NLA und Grafikkanal
   (GFX; `Automatisch` wiederholt einen abgebrochenen Aufbau einmal mit GFX, GNOME-Remote-Desktop verlangt ihn).
 - **SSH** mit Terminal, Zwischenablage (geschütztes Einfügen; OSC 52: Schreiben erlaubt, Lesen nur nach Nachfrage),
@@ -400,7 +411,9 @@ neu aufklappen.
   Schlüsseldatenbank übernommen, der Import weist darauf hin, die Datei danach sicher zu löschen.
 - **Bearbeiten im Hauptfenster:** Ordner und Ziele anlegen, ändern, verschieben, duplizieren
   und löschen im Eigenschaften-Tab, Vorlagen je Zieltyp, Favoriten, Ansichten (z. B.
-  „Patchday“), „Auf Unterobjekte anwenden“, Rückgängig.
+  „Patchday“), „Auf Unterobjekte anwenden“, Rückgängig. Die Einstellungen zeigen links die Bereiche mit Kurzfassung
+  und Plakette (geerbt, am Ziel bzw. Ordner, geändert), rechts den gewählten Bereich; Speichern und Verwerfen
+  schließen den Tab.
 - **Mehrere Ziele auf einmal anlegen:** ein Host pro Zeile (bis 500), Namensmuster mit
   `{host}` und `{nr}`, Vorlage und Zugangsdaten, Vorschau mit Hinweisen je Zeile; alles als eine
   rückgängig machbare Aktion.
@@ -629,6 +642,9 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
 - Die Prüfung läuft nur, wenn du sie auslöst. Beim Start prüft remotejoe nur, wenn du „Beim Start prüfen“
   einschaltest (Vorgabe: aus).
 - **Hilfe → Fehler melden / Wünsche** und **Hilfe → Hilfe** öffnen nur Seiten auf GitHub im Standardbrowser.
+- **Objektübersicht:** Beim Einfachklick auf ein Ziel prüft remotejoe die gängigen Ports **dieses Ziels** (TCP-Verbindungsaufbau
+  ohne Anmeldung) und fragt bei offenem RDP mit NLA den Rechnernamen ab (ohne Zugangsdaten). Ping und Traceroute laufen
+  nur auf Knopfdruck, ebenso „Inventar abfragen“ mit den Zugangsdaten des Ziels. Es geht nichts an Dritte.
 - Es gibt keine Telemetrie und keine Nutzungsstatistik.
 
 ## Fehler melden und Wünsche
