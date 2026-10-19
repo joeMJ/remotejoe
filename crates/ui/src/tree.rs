@@ -3,7 +3,7 @@
 //! die Suche behält die Elternordner der Treffer.
 
 use rj_core::charset::mark_visible;
-use rj_core::{Folder, Index, Node, Protocol};
+use rj_core::{Folder, Index, Login, Node, Protocol};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -34,6 +34,9 @@ pub struct UiNode {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<UiNode>,
     pub folder: bool,
+    /// Anmeldeobjekt (keine Verbindung, öffnet die Bearbeitung).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub login: bool,
 }
 
 fn matches(name: &str, host: Option<&str>, q: &[String]) -> bool {
@@ -41,16 +44,16 @@ fn matches(name: &str, host: Option<&str>, q: &[String]) -> bool {
     q.iter().all(|w| hay.contains(w.as_str()))
 }
 
-fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>) -> Vec<UiNode> {
+fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, logins: &[Login]) -> Vec<UiNode> {
     let mut out = Vec::new();
     for n in &f.children {
         match n {
             Node::Folder(sub) => {
-                let children = build(sub, q, lights);
+                let children = build(sub, q, lights, logins);
                 let hit = matches(&sub.name, None, q);
                 if q.is_empty() || hit || !children.is_empty() {
                     // Bei einem Ordnertreffer alle Kinder zeigen.
-                    let children = if hit && !q.is_empty() { build(sub, &[], lights) } else { children };
+                    let children = if hit && !q.is_empty() { build(sub, &[], lights, logins) } else { children };
                     out.push(UiNode {
                         id: sub.id,
                         name: mark_visible(&sub.name, false).into_owned(),
@@ -60,6 +63,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>) -> Ve
                         light: lights(sub.id),
                         children,
                         folder: true,
+                        login: false,
                     });
                 }
             }
@@ -75,9 +79,27 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>) -> Ve
                         light: lights(t.id),
                         children: Vec::new(),
                         folder: false,
+                        login: false,
                     });
                 }
             }
+        }
+    }
+    // Anmeldeobjekte dieses Ordners nach seinen Einträgen.
+    for l in logins.iter().filter(|l| l.folder == f.id) {
+        if q.is_empty() || matches(&l.name, None, q) {
+            let display = mark_visible(&l.name, false);
+            out.push(UiNode {
+                id: l.id,
+                suspicious: display != l.name,
+                name: display.into_owned(),
+                protocol: None,
+                host: None,
+                light: None,
+                children: Vec::new(),
+                folder: false,
+                login: true,
+            });
         }
     }
     out
@@ -86,7 +108,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>) -> Ve
 /// Baum mit Filter (Leerzeichen-getrennte Begriffe, alle müssen passen).
 pub fn tree(index: &Index, filter: &str, lights: &dyn Fn(Uuid) -> Option<Light>) -> Vec<UiNode> {
     let q: Vec<String> = filter.split_whitespace().map(|w| w.to_lowercase()).collect();
-    build(&index.root, &q, lights)
+    build(&index.root, &q, lights, &index.logins)
 }
 
 /// Flache Liste für eine Ansicht oder die Favoriten (Reihenfolge der Liste;
@@ -98,7 +120,7 @@ pub fn listed(index: &Index, ids: &[Uuid], filter: &str, lights: &dyn Fn(Uuid) -
         let Some(node) = index.path_to(*id).and_then(|p| p.last().copied()) else { continue };
         let mut tmp = Folder::new("");
         tmp.children.push(node.clone());
-        out.extend(build(&tmp, &q, lights));
+        out.extend(build(&tmp, &q, lights, &index.logins));
     }
     out
 }

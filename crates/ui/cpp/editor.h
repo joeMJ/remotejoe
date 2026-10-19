@@ -145,6 +145,8 @@ public:
 signals:
 	/// Der Index hat sich geändert (Baum neu laden).
 	void indexChanged();
+	/// Anmeldeobjekt öffnen (`id` leer: neu anlegen im Ordner `folder`).
+	void openLogin(const QString& id, const QString& folder);
 	/// Gespeichert über die Schaltfläche „Speichern“: der Tab kann geschlossen werden.
 	void saveClosed();
 	void titleChanged();
@@ -223,6 +225,9 @@ private:
 	QLabel* m_credEffective = nullptr;
 	QWidget* m_directBox = nullptr;
 	QWidget* m_entryBox = nullptr;
+	/// Anmeldeobjekt als Zugangsdaten.
+	QWidget* m_loginBox = nullptr;
+	QComboBox* m_login = nullptr;
 	QWidget* m_namedBox = nullptr;
 	// Tunnel
 	QComboBox* m_tunnel = nullptr;
@@ -336,6 +341,32 @@ private:
 
 /// „Schlüssel und Zertifikate prüfen“: holt die Server-Schlüssel der gewählten Ziele ohne Anmeldung,
 /// zeigt sie mit Fingerabdruck und Zustand und übernimmt auf Wunsch nur die neuen.
+/// Anmeldeobjekt anlegen oder bearbeiten: Name, Ablageordner, Benutzername, Kennwort. Ordner und
+/// Ziele wählen es unter „Zugangsdaten“; eine Änderung gilt für alle Verwender.
+class LoginTab : public ToolTab
+{
+	Q_OBJECT
+public:
+	LoginTab(RjBackend* backend, const QString& id, const QString& folder, QWidget* parent = nullptr);
+	QString loginId() const { return m_id; }
+	void wipeSecrets() override;
+
+private:
+	void load(const QString& folder);
+	void save();
+	void remove();
+	QString edit(const QJsonObject& cmd) const;
+	RjBackend* m_backend;
+	QString m_id;
+	class QLineEdit* m_name;
+	QComboBox* m_folder;
+	class QLineEdit* m_user;
+	class QLineEdit* m_password;
+	QLabel* m_used;
+	QLabel* m_error;
+	QPushButton* m_delete;
+};
+
 class CertCheckTab : public ToolTab
 {
 	Q_OBJECT

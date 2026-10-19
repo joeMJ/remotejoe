@@ -1522,6 +1522,21 @@ impl App {
                                 None => note,
                             });
                         }
+                        // Bisherige „vorhandene Datensätze“ in Anmeldeobjekte übernehmen.
+                        let converted = match self.vault.as_ref() {
+                            Some(v) => rj_core::inherit::convert_entries_to_logins(&mut self.index, &|e| v.is_own_entry(e), &|e| v.credential(e).map(|c| c.data.title)),
+                            None => 0,
+                        };
+                        if converted > 0 {
+                            if let Some(v) = self.vault.as_mut() {
+                                let _ = v.set_index(self.index.clone());
+                            }
+                            let note = format!("{converted} Zugangsdaten mit „vorhandenem Datensatz“ wurden in Anmeldeobjekte übernommen; bitte speichern.");
+                            self.keyring_note = Some(match self.keyring_note.take() {
+                                Some(k) => format!("{k}. {note}"),
+                                None => note,
+                            });
+                        }
                         let key_file = self.unlock_key_file.take();
                         self.remember_kdbx_path(&kdbx, key_file);
                         self.restore_session_credentials();

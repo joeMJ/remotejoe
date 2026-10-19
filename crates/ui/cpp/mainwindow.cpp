@@ -89,6 +89,8 @@ constexpr int RoleProtocol = Qt::UserRole + 7;
 constexpr int RoleLight = Qt::UserRole + 8;
 /// Zuletzt gezeichneter Sitzungspunkt (0, 1, 2).
 constexpr int RoleSessionMark = Qt::UserRole + 9;
+/// Anmeldeobjekt (keine Verbindung; öffnet die Bearbeitung).
+constexpr int RoleLogin = Qt::UserRole + 10;
 /// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
 constexpr int RoleMacro = Qt::UserRole + 20;
 
@@ -193,6 +195,8 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 		{ "proxmox", RJ_G("<path d='M16 4l11 6v12l-11 6-11-6V10z'/><path d='M5 10l11 6 11-6M16 16v12'/>"), "#b03a00" },
 		// Hyper-V: zwei Server übereinander
 		{ "hyperv", RJ_G("<rect x='4' y='5' width='24' height='9' rx='2'/><rect x='4' y='18' width='24' height='9' rx='2'/><path d='M8.5 9.5h.1M8.5 22.5h.1M14 9.5h10M14 22.5h10'/>"), "#3a4a8c" },
+		// Anmeldung: Schlüssel
+		{ "login", RJ_G("<circle cx='11' cy='16' r='6'/><path d='M17 16h11M24 16v5M28 16v4'/>"), "#6a1b9a" },
 		// Makro: Abspielzeichen
 		{ "macro", RJ_G("<path d='M10 6l16 10-16 10z' fill='COLOR' fill-opacity='0.25'/>"), "#6a1b9a" },
 	};
@@ -276,6 +280,13 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		item->setData(folder, RoleFolder);
 		item->setIcon(protocolIcon(n.value(QStringLiteral("protocol")).toString(), n.value(QStringLiteral("light")).toString(), folder));
 		item->setData(n.value(QStringLiteral("light")).toString(), RoleLight);
+		if (n.value(QStringLiteral("login")).toBool())
+		{
+			item->setData(true, RoleLogin);
+			item->setIcon(protocolIcon(QStringLiteral("login"), QString(), false));
+			item->setDragEnabled(false);
+			item->setDropEnabled(false);
+		}
 		QString tip = n.value(QStringLiteral("host")).toString();
 		if (n.value(QStringLiteral("suspicious")).toBool())
 			tip += QStringLiteral("\nName enthält unsichtbare oder richtungsändernde Zeichen.");
@@ -1678,10 +1689,16 @@ QSize MainWindow::contentSize(bool terminal) const
 
 void MainWindow::connectSelected(const QString& credential, bool remember)
 {
+	// Anmeldeobjekt: Bearbeitung statt Verbindung.
+	if (m_tree->currentIndex().data(RoleLogin).toBool() && m_tree->selectionModel()->selectedIndexes().size() <= 1)
+	{
+		openLogin(m_tree->currentIndex().data(RoleId).toString(), QString());
+		return;
+	}
 	// Mehrere markierte Ziele: alle gestaffelt öffnen (Ordner in der Markierung zählen nicht).
 	QStringList ids;
 	for (const QModelIndex& i : m_tree->selectionModel()->selectedIndexes())
-		if (!i.data(RoleFolder).toBool() && !i.data(RoleGuest).isValid() && !i.data(RolePlaceholder).toBool() && !i.data(RoleMacro).toInt())
+		if (!i.data(RoleFolder).toBool() && !i.data(RoleGuest).isValid() && !i.data(RolePlaceholder).toBool() && !i.data(RoleMacro).toInt() && !i.data(RoleLogin).toBool())
 			ids << i.data(RoleId).toString();
 	ids.removeDuplicates();
 	if (ids.size() > 1 && credential.isEmpty())
@@ -2099,6 +2116,25 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 	{
 		m_tree->setCurrentIndex(i);
 		macroContextMenu(i, m_tree->viewport()->mapToGlobal(pos));
+		return;
+	}
+	if (i.data(RoleLogin).toBool())
+	{
+		m_tree->setCurrentIndex(i);
+		const QString id = i.data(RoleId).toString();
+		QMenu lm(this);
+		lm.addAction(T(m_backend, "login.edit"), this, [this, id] { openLogin(id, QString()); });
+		lm.addAction(T(m_backend, "login.delete"), this, [this, id] {
+			const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("login_delete") }, { QStringLiteral("id"), id } }));
+			if (r.contains(QStringLiteral("error")))
+				return showEditResult(r);
+			edit({ { QStringLiteral("op"), QStringLiteral("save") } });
+			for (auto* t : findChildren<LoginTab*>())
+				if (t->loginId() == id)
+					closeToolTab(t);
+			reloadTree();
+		});
+		lm.exec(m_tree->viewport()->mapToGlobal(pos));
 		return;
 	}
 	if (!m_tree->selectionModel()->isSelected(i))
@@ -3656,6 +3692,12 @@ void MainWindow::buildAddMenu(QMenu* menu, const QString& parentId)
 		else if ((r.contains(QStringLiteral("task")) || r.contains(QStringLiteral("macro"))))
 			openProperties(parentId.isEmpty() ? QString() : parentId, QStringLiteral("tasks"));
 	};
+	{
+		// Anmeldeobjekt im gewählten Ordner (bzw. im Ordner des gewählten Ziels).
+		QAction* a = menu->addAction(T(m_backend, "add.login"), this, [this, parentId] { openLogin(QString(), parentId); });
+		a->setObjectName(QStringLiteral("add_login"));
+		a->setIcon(protocolIcon(QStringLiteral("login"), QString(), false));
+	}
 	for (auto& k : kinds)
 	{
 		const QString kind = QString::fromLatin1(k[0]);
@@ -3697,8 +3739,62 @@ QMenu* MainWindow::popupAddMenu()
 	return menu;
 }
 
+bool MainWindow::isLogin(const QString& id) const
+{
+	bool hit = false;
+	std::function<void(const QModelIndex&)> walk = [&](const QModelIndex& parent) {
+		for (int r = 0; r < m_model->rowCount(parent) && !hit; ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			if (i.data(RoleId).toString() == id && i.data(RoleLogin).toBool())
+				hit = true;
+			else
+				walk(i);
+		}
+	};
+	walk(QModelIndex());
+	return hit;
+}
+
+void MainWindow::openLogin(const QString& id, const QString& folder)
+{
+	if (!id.isEmpty())
+		for (auto* t : findChildren<LoginTab*>())
+			if (t->loginId() == id)
+			{
+				m_tabs->setCurrentWidget(t);
+				return;
+			}
+	// Neues Objekt: Ordner bestimmen (gewähltes Ziel → sein Ordner).
+	QString f = folder;
+	if (id.isEmpty() && !f.isEmpty())
+	{
+		std::function<QModelIndex(const QModelIndex&)> find = [&](const QModelIndex& parent) -> QModelIndex {
+			for (int r = 0; r < m_model->rowCount(parent); ++r)
+			{
+				const QModelIndex i = m_model->index(r, 0, parent);
+				if (i.data(RoleId).toString() == f)
+					return i;
+				if (const QModelIndex x = find(i); x.isValid())
+					return x;
+			}
+			return QModelIndex();
+		};
+		const QModelIndex i = find(QModelIndex());
+		if (i.isValid() && !i.data(RoleFolder).toBool())
+			f = i.parent().isValid() ? i.parent().data(RoleId).toString() : QString();
+	}
+	auto* t = new LoginTab(m_backend, id, f, m_tabs);
+	addToolTab(t, T(m_backend, "login.title"));
+}
+
 PropertiesTab* MainWindow::openProperties(const QString& id, const QString& category)
 {
+	if (!id.isEmpty() && isLogin(id))
+	{
+		openLogin(id, QString());
+		return nullptr;
+	}
 	QString target = id;
 	if (target.isEmpty())
 	{
@@ -3716,6 +3812,7 @@ PropertiesTab* MainWindow::openProperties(const QString& id, const QString& cate
 			return ed;
 		}
 	auto* ed = new PropertiesTab(m_backend, target, m_tabs);
+	connect(ed, &PropertiesTab::openLogin, this, [this](const QString& lid, const QString& folder) { openLogin(lid, folder); });
 	const int idx = m_tabs->addTab(ed, ed->title());
 	m_tabs->setTabToolTip(idx, T(m_backend, "edit.cat.general"));
 	connect(ed, &PropertiesTab::titleChanged, this, [this, ed] {

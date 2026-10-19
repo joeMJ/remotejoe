@@ -45,6 +45,10 @@ pub fn colors(id: &str, dark: bool, style: &str, accent: &str, muted: &str, own:
         let folder = if valid(muted) { muted } else { set[8] };
         KINDS.iter().map(|k| (k.to_string(), if *k == "folder" { folder } else { accent }.to_string())).collect()
     };
+    // Anmeldeobjekte wie Makros (Hilfsobjekte, keine Verbindung).
+    if let Some(c) = m.get("macro").cloned() {
+        m.insert("login".into(), c);
+    }
     // Punkt für offene Sitzungen: das Grün des Themes, in beiden Stilen gut sichtbar.
     m.insert("session".into(), set[1].to_string());
     for (k, c) in own {

@@ -40,6 +40,26 @@ pub struct Index {
     /// Favoriten (Ziele oder Ordner) in Anzeigereihenfolge.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub favorites: Vec<Uuid>,
+    /// Anmeldeobjekte: wiederverwendbare Zugangsdaten, im Baum in einem Ordner abgelegt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logins: Vec<Login>,
+}
+
+/// Anmeldeobjekt: Name, Ablageordner und der KDBX-Eintrag mit Benutzername und Kennwort.
+/// Ordner und Ziele verweisen darauf (`Settings::login`); eine Änderung gilt überall.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Login {
+    pub id: Uuid,
+    pub name: String,
+    /// Ordner im Baum, in dem das Objekt steht.
+    pub folder: Uuid,
+    pub entry: CredentialRef,
+}
+
+impl Index {
+    pub fn login(&self, id: Uuid) -> Option<&Login> {
+        self.logins.iter().find(|l| l.id == id)
+    }
 }
 
 impl Default for Index {
@@ -55,6 +75,7 @@ impl Default for Index {
             views: Vec::new(),
             templates: Vec::new(),
             favorites: Vec::new(),
+            logins: Vec::new(),
         }
     }
 }
@@ -458,6 +479,10 @@ pub struct Settings {
     /// Vorgabe der Zwischenablage-Richtung für neue Ziele in diesem Ordner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clipboard: Option<ClipboardDirection>,
+    /// Zugangsdaten aus einem Anmeldeobjekt. Der KDBX-Eintrag steht zusätzlich unter dem Namen des
+    /// Zugangsdatensatzes in `credentials`, damit die Auflösung (und ältere Fassungen) ihn finden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<Uuid>,
 }
 
 impl Settings {
@@ -470,6 +495,7 @@ impl Settings {
             && !self.credentials_off
             && self.credential_name.is_none()
             && self.clipboard.is_none()
+            && self.login.is_none()
     }
 }
 
