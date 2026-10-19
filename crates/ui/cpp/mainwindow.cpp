@@ -1090,7 +1090,7 @@ void MainWindow::buildMenus()
 	file->addAction(T(m_backend, "menu.file.open"), QKeySequence::Open, this, [this] { showUnlock(false); });
 	file->addAction(T(m_backend, "menu.file.import"), this, [this] {
 		const QString path = QFileDialog::getOpenFileName(this, T(m_backend, "menu.file.import"), QString(),
-		                                                  QStringLiteral("Remote Desktop Manager / Royal TS / remotejoe (*.rdm *.json *.csv *.zip *.rtsz *.rtsx);;Alle Dateien (*)"));
+		                                                  QStringLiteral("Exportierte Verbindungslisten und remotejoe-Exporte (*.rdm *.json *.csv *.zip *.rtsz *.rtsx);;Alle Dateien (*)"));
 		if (path.isEmpty())
 			return;
 		QString zipPassword;

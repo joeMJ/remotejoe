@@ -11,7 +11,7 @@ class QLineEdit;
 class QPushButton;
 class RjBackend;
 
-/// Datei → Exportieren: Struktur und Ziele als JSON (remotejoe) oder CSV (im Stil von RDM), auf Wunsch mit
+/// Datei → Exportieren: Struktur und Ziele als JSON (remotejoe) oder CSV (gängiges Spaltenformat), auf Wunsch mit
 /// Kennwörtern und als verschlüsseltes ZIP (AES-256). Mit Kennwörtern ist beim JSON das ZIP Pflicht.
 class ExportTab : public ToolTab
 {

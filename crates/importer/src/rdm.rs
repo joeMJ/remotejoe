@@ -137,7 +137,7 @@ fn connection(doc: &mut SourceDocument, seen: &mut HashSet<String>, f: &Fields, 
 /// XML-Export (`ArrayOfConnection`, auch `RDMExport`/`Connections` als Hülle).
 pub fn read_xml(text: &str) -> Result<SourceDocument, ImportError> {
     let root = xml::parse(text)?;
-    let mut doc = SourceDocument { format: "Remote Desktop Manager (XML)".into(), ..Default::default() };
+    let mut doc = SourceDocument { format: "Verbindungsliste (.rdm, XML)".into(), ..Default::default() };
     let mut conns: Vec<&XmlNode> = Vec::new();
     fn collect<'a>(n: &'a XmlNode, out: &mut Vec<&'a XmlNode>) {
         for c in &n.children {
@@ -181,7 +181,7 @@ fn json_str(v: &Value) -> Option<String> {
 pub fn read_json(text: &str) -> Result<SourceDocument, ImportError> {
     let v: Value = serde_json::from_str(text).map_err(|e| ImportError::Format(format!("JSON: {e}")))?;
     let list = v.get("Connections").or_else(|| v.get("connections")).and_then(Value::as_array).or_else(|| v.as_array()).ok_or_else(|| ImportError::Format("kein Feld „Connections“".into()))?;
-    let mut doc = SourceDocument { format: "Remote Desktop Manager (JSON)".into(), ..Default::default() };
+    let mut doc = SourceDocument { format: "Verbindungsliste (JSON)".into(), ..Default::default() };
     let mut seen = HashSet::new();
     let mut order = 0;
     for c in list {

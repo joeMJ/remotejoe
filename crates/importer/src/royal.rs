@@ -92,7 +92,7 @@ fn str_of(v: &Value) -> Option<String> {
 pub fn read_json(text: &str) -> Result<SourceDocument, ImportError> {
     let v: Value = serde_json::from_str(text).map_err(|e| ImportError::Format(format!("JSON: {e}")))?;
     let list = v.get("Objects").and_then(Value::as_array).ok_or_else(|| ImportError::Format("kein Feld „Objects“".into()))?;
-    let mut doc = SourceDocument { format: "Royal TS (rtsz)".into(), ..Default::default() };
+    let mut doc = SourceDocument { format: "Verbindungsliste (.rtsz)".into(), ..Default::default() };
     for (i, o) in list.iter().enumerate() {
         let Some(obj) = o.as_object() else { continue };
         for k in obj.keys() {
@@ -132,7 +132,7 @@ pub fn read_rtsz(bytes: &[u8]) -> Result<SourceDocument, ImportError> {
 /// `.rtsx`: XML mit Elementen `RoyalFolder`, `Royal…Connection`, `RoyalCredential`.
 pub fn read_rtsx(text: &str) -> Result<SourceDocument, ImportError> {
     let root = xml::parse(text)?;
-    let mut doc = SourceDocument { format: "Royal TS (rtsx)".into(), ..Default::default() };
+    let mut doc = SourceDocument { format: "Verbindungsliste (.rtsx)".into(), ..Default::default() };
     let mut n = 0i64;
     fn walk(node: &XmlNode, doc: &mut SourceDocument, n: &mut i64) {
         for c in &node.children {
