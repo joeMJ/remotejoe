@@ -120,7 +120,7 @@ mod tests {
         assert_ne!(m["rdp"], m["ssh"]);
         let own: BTreeMap<String, String> = [("ssh".to_string(), "#123456".to_string()), ("ssh2".into(), "#000000".into()), ("rdp".into(), "rot".into())].into();
         let m = colors("eingebaut:nord", true, "einheitlich", "#88c0d0", "#d8dee9", &own);
-        assert_eq!((m["ssh"].as_str(), m["rdp"].as_str(), m.len()), ("#123456", "#88c0d0", KINDS.len()));
+        assert_eq!((m["ssh"].as_str(), m["rdp"].as_str(), m.len()), ("#123456", "#88c0d0", KINDS.len() + 1), "Arten plus Anmeldung");
         assert_eq!(from_hsl(0.0, 1.0, 0.5), "#ff0000");
     }
 }
