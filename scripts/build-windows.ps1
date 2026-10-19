@@ -175,5 +175,13 @@ foreach ($exe in @('remotejoe', 'rj-worker-ssh', 'rj-worker-rdp', 'rj-worker-vnc
     Copy-Item $src $paket -Force
 }
 Copy-Item (Join-Path $inst 'bin\*.dll') $paket -Force
+# Lizenztexte der mitgelieferten vcpkg-Bibliotheken (FreeRDP, OpenSSL, cJSON, zlib, pkgconf …); build-msi.ps1
+# hängt sie an THIRD_PARTY_LICENSES.txt an.
+$teile = foreach ($c in Get-ChildItem (Join-Path $inst 'share\*\copyright') -ErrorAction SilentlyContinue |
+        Where-Object { $_.Directory.Name -notlike 'vcpkg-*' } | Sort-Object { $_.Directory.Name }) {
+    ('=' * 78); "$($c.Directory.Name) (vcpkg, $($c.Directory.Name)\copyright)"; ('=' * 78); (Get-Content -Raw $c.FullName).Trim(); ''
+}
+if (-not $teile) { Fehler 'Keine Lizenztexte unter vcpkg\installed\x64-windows\share gefunden.' 'vcpkg install wiederholen.' }
+Set-Content -Path (Join-Path $paket 'THIRD_PARTY_LICENSES-vcpkg.txt') -Value $teile -Encoding utf8
 Ausfuehren 'windeployqt' { & (Join-Path $qtBins 'windeployqt.exe') --no-translations (Join-Path $paket 'remotejoe.exe') }
 Write-Host "Fertig: $paket" -ForegroundColor Green

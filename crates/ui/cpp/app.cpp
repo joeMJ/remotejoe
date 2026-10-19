@@ -1,5 +1,7 @@
 #include "app.h"
 
+#include "diag.h"
+
 #include "editor.h"
 #include "mainwindow.h"
 #include "titlebar.h"
@@ -20,6 +22,7 @@
 #include <QtNetwork/QLocalServer>
 #include <QtNetwork/QLocalSocket>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QComboBox>
 #include <QtGui/QMouseEvent>
 #include <QtCore/QPointer>
@@ -253,7 +256,10 @@ void screenshots(MainWindow& w, const QString& dir)
 		pump(2500);
 		save(&w, dir, QStringLiteral("update-tab.png"));
 	}
-	// Darstellung und Über-Dialog.
+	// Extras → Einstellungen (Kartenstil): Sperre und Zwischenablage, Darstellung; dann der Über-Dialog.
+	w.settingsForScreenshot(QStringLiteral("lock"));
+	pump(300);
+	save(w.tabs()->currentWidget(), dir, QStringLiteral("einstellungen.png"));
 	w.appearanceForScreenshot();
 	pump(300);
 	save(w.tabs()->currentWidget(), dir, QStringLiteral("darstellung.png"));
@@ -336,6 +342,10 @@ struct SingleInstance
 /// gehalten, Remotedesktop mit Verzögerung), wertet Qt es als Auswahl bzw. als Klick daneben und schließt die
 /// Liste sofort wieder – es sieht aus, als öffne sie sich nicht. Dieses erste Loslassen über dem Feld selbst wird
 /// deshalb verworfen; danach bleibt die Liste offen, bis ein Eintrag gewählt oder daneben geklickt wird.
+///
+/// Schließt sich eine Liste innerhalb von 150 ms ohne jede Eingabe, stimmt etwas nicht (so war es, als der
+/// Fokus-Haken für Web-Tabs das Listenfenster aktivierte, FrameView::setWeb); dann hält eine Falldatei der
+/// Diagnose den Zustand fest (diag.h).
 class ComboReleaseGuard : public QObject
 {
 public:
@@ -351,11 +361,25 @@ protected:
 			{
 				m_popup = static_cast<QWidget*>(o);
 				m_armed = true;
+				m_userInput = false;
+				m_shown.start();
 			}
 			break;
 		case QEvent::Hide:
 			if (o == m_popup)
+			{
 				m_armed = false;
+				const qint64 ms = m_shown.isValid() ? m_shown.elapsed() : -1;
+				rjdiag::log(QStringLiteral("[liste] versteckt nach %1 ms, Eingabe seither %2").arg(ms).arg(m_userInput ? 1 : 0));
+				if (ms >= 0 && ms < 150 && !m_userInput)
+					rjdiag::incident(QStringLiteral("Auswahlliste nach %1 ms ohne Eingabe geschlossen").arg(ms));
+			}
+			break;
+		case QEvent::MouseButtonPress:
+		case QEvent::MouseButtonDblClick:
+		case QEvent::KeyPress:
+			if (m_popup && m_popup->isVisible())
+				m_userInput = true;
 			break;
 		case QEvent::MouseButtonRelease:
 			if (m_armed)
@@ -364,7 +388,10 @@ protected:
 				auto* combo = m_popup ? qobject_cast<QComboBox*>(m_popup->parentWidget()) : nullptr;
 				const QPoint g = static_cast<QMouseEvent*>(e)->globalPosition().toPoint();
 				if (combo && combo->rect().contains(combo->mapFromGlobal(g)))
+				{
+					rjdiag::log(QStringLiteral("[liste] erstes Loslassen über dem Feld verworfen"));
 					return true;
+				}
 			}
 			break;
 		default:
@@ -376,6 +403,8 @@ protected:
 private:
 	QPointer<QWidget> m_popup;
 	bool m_armed = false;
+	bool m_userInput = false;
+	QElapsedTimer m_shown;
 };
 
 } // namespace
@@ -387,6 +416,7 @@ std::int32_t rjRunApplication()
 	static char name[] = "remotejoe";
 	static char* argv[] = { name, nullptr };
 	QApplication app(argc, argv);
+	rjdiag::init(app);
 	app.installEventFilter(new ComboReleaseGuard(&app));
 	QApplication::setApplicationName(QStringLiteral("remotejoe"));
 	QGuiApplication::setDesktopFileName(QStringLiteral("remotejoe"));
@@ -417,6 +447,7 @@ std::int32_t rjRunApplication()
 	RjBackend backend;
 	backend.init(demo);
 	MainWindow w(&backend);
+	rjdiag::attachShortcut(&w);
 	w.applyTheme(qEnvironmentVariable("REMOTEJOE_THEME") == QLatin1String("dark"));
 	// --fenster-zuruecksetzen: gespeicherte Größe und Lage ignorieren (Standardgröße, Mitte des Bildschirms).
 	if (!demo && !qEnvironmentVariableIsSet("RJ_RESET_WINDOW"))

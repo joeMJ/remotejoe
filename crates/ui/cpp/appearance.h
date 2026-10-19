@@ -31,7 +31,13 @@ signals:
 	/// Schema oder Fokusrahmen wurden geändert (Oberfläche neu einfärben).
 	void appearanceChanged();
 
+protected:
+	void resizeEvent(QResizeEvent* e) override;
+
 private:
+	/// Kacheln im Raster anordnen; Spaltenzahl nach verfügbarer Breite (auch in der schmaleren Karte).
+	void placeTiles();
+	int m_columns = 0;
 	void apply(const QJsonObject& change);
 	void applyFromControls();
 	void tileClicked(const QString& id, bool dark);

@@ -29,7 +29,7 @@ for f in assets/logo/remotejoe-*.png; do
     install -m 0644 "$f" "$STAGE/share/icons/$(basename "$f")"
 done
 install -m 0644 packaging/linux/remotejoe.desktop "$STAGE/share/remotejoe.desktop.in"
-install -m 0644 LICENSE NOTICE THIRD_PARTY.md "$STAGE/"
+install -m 0644 LICENSE NOTICE THIRD_PARTY.md THIRD_PARTY_LICENSES.txt "$STAGE/"
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 
 # Plattformkennung aus dem Bauumfeld (Ubuntu 24.04 bekommt „-ubuntu2404“).

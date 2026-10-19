@@ -104,12 +104,21 @@ Copy-Item (Join-Path $crt.FullName '*.dll') $Stage
 Write-Host "Laufzeit: $($crt.FullName)"
 # Lizenzen in den Installationsordner: eigene (LICENSE, NOTICE), Fremdkomponenten (THIRD_PARTY.md) und für Qt
 # (LGPL-3.0) die Lizenztexte; die LGPL 3.0 ergänzt die GPL 3.0, darum liegen beide Texte bei.
-$lizenzen = @('LICENSE', 'NOTICE', 'THIRD_PARTY.md') | ForEach-Object { Join-Path $Root $_ }
+$lizenzen = @('LICENSE', 'NOTICE', 'THIRD_PARTY.md', 'THIRD_PARTY_LICENSES.txt') | ForEach-Object { Join-Path $Root $_ }
 $lizenzen += @('LGPL-3.0.txt', 'GPL-3.0.txt') | ForEach-Object { Join-Path $Root "packaging\windows\licenses\$_" }
 foreach ($l in $lizenzen) {
     if (-not (Test-Path $l)) { Fehler "Lizenzdatei fehlt: $l" }
     Copy-Item $l $Stage
 }
+# Lizenztexte der unter Windows mitgelieferten C-Bibliotheken anhängen: vcpkg (aus build-windows.ps1) und Mesa.
+$texte = Join-Path $Stage 'THIRD_PARTY_LICENSES.txt'
+$vcpkgTexte = Join-Path $Stage 'THIRD_PARTY_LICENSES-vcpkg.txt'
+if (-not (Test-Path $vcpkgTexte)) { Fehler 'THIRD_PARTY_LICENSES-vcpkg.txt fehlt im Paketordner.' 'build-windows.ps1 mit dem aktuellen Stand erneut ausführen.' }
+$linie = '=' * 78
+Add-Content -Path $texte -Encoding utf8 -Value @('', $linie, 'Windows: mitgelieferte C-Bibliotheken', $linie, '')
+Add-Content -Path $texte -Encoding utf8 -Value (Get-Content -Raw $vcpkgTexte)
+Add-Content -Path $texte -Encoding utf8 -Value @($linie, 'Mesa llvmpipe (opengl32sw.dll)', $linie, (Get-Content -Raw (Join-Path $Root 'packaging\windows\licenses\mesa-llvmpipe.txt')))
+Remove-Item $vcpkgTexte
 
 if (-not $NoSign) {
     Schritt 'Eigene Programme signieren'
