@@ -487,7 +487,8 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
    Ordner des Baums (**Hinzufügen → Anmeldung** oder „Neue Anmeldung …“ unter Zugangsdaten). Beliebig viele Ordner
    und Ziele können dieselbe Anmeldung verwenden; ändert man Benutzername oder Kennwort an der Anmeldung, gilt das
    sofort für alle. Das Kennwort liegt in der Schlüsseldatenbank. Frühere Verweise auf einen „vorhandenen Datensatz“
-   werden beim Entsperren automatisch in Anmeldungen übernommen.
+   werden beim Entsperren automatisch in Anmeldungen übernommen. Anmeldungen lassen sich wie Ziele in einen anderen
+   Ordner oder an eine andere Stelle verschieben: Ziehen und Ablegen, Alt+↑/↓ oder Strg+Umschalt+M.
 4. Verbinden: Eingabetaste auf einem Ziel oder Kontextmenü **Verbinden**; für einen Ordner
    **Alle im Ordner verbinden**. Fehlt ein Eintrag oder kommen mehrere in Frage, fragt das
    Programm nach. Tunnel werden im Hintergrund aufgebaut (Fortschritt und „Abbrechen“ in der
@@ -508,13 +509,14 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
 8. **Datei → Speichern** schreibt Schlüsseldatenbank und Index (atomar, mit Sicherungskopie `.bak`); hat
    jemand die Schlüsseldatenbank inzwischen geändert, fragt eine Leiste: eigene, fremde oder beide behalten.
    **Datei → Sperren** (Strg+L) verwirft Schlüssel und Kennwörter im Speicher; laufende
-   Sitzungen bleiben bestehen, ihre Bilder sind verdeckt. **Extras → Sperre nach Leerlauf**
-   schaltet das automatische Sperren ein; **Extras → SNMP-Geräte** verwaltet SNMP-Zugänge (v3
-   mit getrennten Kennwörtern für Authentisierung und Verschlüsselung).
+   Sitzungen bleiben bestehen, ihre Bilder sind verdeckt. **Extras → Einstellungen**, Bereich „Sperre und
+   Zwischenablage“, schaltet das automatische Sperren ein und legt fest, wann ein kopiertes Kennwort aus der
+   Zwischenablage verschwindet; der Bereich **SNMP-Geräte** verwaltet SNMP-Zugänge (v3 mit getrennten
+   Kennwörtern für Authentisierung und Verschlüsselung).
 
 9. **Fußzeile:** zeigt für die vordere Sitzung den Verbindungstyp, das Ziel, seit wann und als wer
    Sie verbunden sind.
-10. **Terminal:** **Extras → Terminal …** (Schrift, Größe, Farbschema mit Catppuccin und weiteren
+10. **Terminal:** **Extras → Einstellungen → Terminal** (auch direkt über Extras → Terminal …; Schrift, Größe, Farbschema mit Catppuccin und weiteren
     Schemata, eigene Farben, Größe des Rücklaufs); das Mausrad blättert im Rücklauf (3 Zeilen je
     Raste, Umschalt + Bild↑/↓ seitenweise; bei `less`/`top` senden sie Pfeiltasten), Strg + Mausrad
     ändert die Schriftgröße direkt im Terminal. Kopieren und Einfügen: Rechtsklick-Menü, Strg+Einfg und
@@ -534,11 +536,29 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
     protokolliert, **Esc** bricht sie ab.
 
 12. **Hilfe** enthält „Nach Updates suchen …“, „Hilfe“ (diese Anleitung auf GitHub) und „Über
-    remotejoe …“; die **Darstellung** (Farbschema, Fokusrahmen) steht im Menü Extras.
+    remotejoe …“.
+13. **Einstellungen:** Alle Programmeinstellungen stehen gesammelt unter **Extras → Einstellungen**, aufgebaut
+    wie die Einstellungen eines Ziels: links die Bereiche mit Kurzfassung (Sperre und Zwischenablage, Tastatur,
+    Terminal, Darstellung, SNMP-Geräte), rechts der gewählte Bereich. Änderungen gelten sofort und werden
+    gespeichert. Die einzelnen Einträge im Menü Extras öffnen den Reiter gleich beim passenden Bereich.
 
 <p align="center">
-  <img src="docs/screenshots/darstellung.png" alt="Darstellung: Farbschema und Fokusrahmen" width="520">
-  &nbsp;
+  <img src="docs/screenshots/eigenschaften.png" alt="Einstellungen eines Ziels: links die Bereiche, rechts der gewählte Bereich" width="760">
+  <br>
+  <em>Einstellungen eines Ziels (F4)</em>
+  <br><br>
+  <img src="docs/screenshots/einstellungen.png" alt="Extras → Einstellungen: Sperre und Zwischenablage" width="760">
+  <br>
+  <em>Extras → Einstellungen: Sperre und Zwischenablage</em>
+  <br><br>
+  <img src="docs/screenshots/terminal-einstellungen.png" alt="Einstellungen → Terminal im Farbschema Catppuccin Mocha" width="760">
+  <br>
+  <em>Einstellungen → Terminal (Catppuccin Mocha, Demo-Daten)</em>
+  <br><br>
+  <img src="docs/screenshots/darstellung.png" alt="Einstellungen → Darstellung: Farbschema, Baumgröße und Symbolfarben" width="760">
+  <br>
+  <em>Einstellungen → Darstellung</em>
+  <br><br>
   <img src="docs/screenshots/ueber.png" alt="Über remotejoe" width="360">
 </p>
 

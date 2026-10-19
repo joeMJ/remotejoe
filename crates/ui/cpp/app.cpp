@@ -256,7 +256,10 @@ void screenshots(MainWindow& w, const QString& dir)
 		pump(2500);
 		save(&w, dir, QStringLiteral("update-tab.png"));
 	}
-	// Darstellung und Über-Dialog.
+	// Extras → Einstellungen (Kartenstil): Sperre und Zwischenablage, Darstellung; dann der Über-Dialog.
+	w.settingsForScreenshot(QStringLiteral("lock"));
+	pump(300);
+	save(w.tabs()->currentWidget(), dir, QStringLiteral("einstellungen.png"));
 	w.appearanceForScreenshot();
 	pump(300);
 	save(w.tabs()->currentWidget(), dir, QStringLiteral("darstellung.png"));
