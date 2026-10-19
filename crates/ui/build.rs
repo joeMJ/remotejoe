@@ -23,4 +23,12 @@ fn main() {
         .file("src/bridge.rs")
         .cpp_files(["cpp/mainwindow.h", "cpp/mainwindow.cpp", "cpp/editor.h", "cpp/editor.cpp", "cpp/views.cpp", "cpp/titlebar.h", "cpp/titlebar.cpp", "cpp/appearance.h", "cpp/appearance.cpp", "cpp/exporttab.h", "cpp/exporttab.cpp", "cpp/kbcapture.h", "cpp/kbcapture.cpp", "cpp/app.cpp"])
         .build();
+    // Windows: Programmsymbol in remotejoe.exe. Explorer, Startmenü und Taskleiste nehmen es aus der exe; ohne
+    // eingebettetes Symbol zeigte die Taskleiste nach einem Update ein leeres Symbol.
+    #[cfg(windows)]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=res/windows/remotejoe.rc");
+        println!("cargo:rerun-if-changed=../../packaging/windows/remotejoe.ico");
+        embed_resource::compile("res/windows/remotejoe.rc", embed_resource::NONE).manifest_optional().unwrap();
+    }
 }

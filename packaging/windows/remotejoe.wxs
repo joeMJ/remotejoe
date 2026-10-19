@@ -38,8 +38,10 @@
 
     <DirectoryRef Id="ProgramMenuFolder">
       <Component Id="StartMenuShortcut" Guid="6C1E2B8A-3F57-4C1D-9E2A-7B0D5F4A1C93">
+        <!-- Symbol aus remotejoe.exe (fester Ort), nicht aus dem Symbol-Zwischenspeicher der MSI: der gehört zur
+             Produktkennung, die jedes Update wechselt; angeheftete Taskleisten-Einträge zeigten danach ein leeres Symbol. -->
         <Shortcut Id="AppShortcut" Name="remotejoe" Description="Verbindungsmanager für SSH, RDP, VNC, Web und PowerShell"
-                  Target="[INSTALLDIR]remotejoe.exe" WorkingDirectory="INSTALLDIR" Icon="RemotejoeIcon" />
+                  Target="[INSTALLDIR]remotejoe.exe" WorkingDirectory="INSTALLDIR" />
         <!-- Ordner „Programs“ nur entfernen, wenn er danach leer ist (Windows Installer prüft das). -->
         <RemoveFolder Id="RemoveProgramsDir" Directory="ProgramsDir" On="uninstall" />
         <RegistryValue Root="HKCU" Key="Software\remotejoe\Installer" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
