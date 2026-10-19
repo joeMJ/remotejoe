@@ -214,12 +214,14 @@ QWidget* SettingsTab::pageKeys()
 	auto* w = new QWidget;
 	auto* v = new QVBoxLayout(w);
 	auto* f = new QFormLayout;
-	m_keyCapture = new QCheckBox(T("menu.extras.keycapture"), w);
+	m_keyCapture = new QCheckBox(T("settings.keycapture"), w);
 	f->addRow(QString(), m_keyCapture);
+	f->addRow(QString(), hint(T("settings.keycapture.hint"), w));
 	m_closeTab = new QComboBox(w);
 	for (const char* mode : { "outside", "always", "never" })
-		m_closeTab->addItem(rjText(m_backend, (QByteArray("menu.extras.closetab.") + mode).constData()), QString::fromLatin1(mode));
+		m_closeTab->addItem(rjText(m_backend, (QByteArray("settings.closetab.") + mode).constData()), QString::fromLatin1(mode));
 	f->addRow(T("settings.closetab"), m_closeTab);
+	f->addRow(QString(), hint(T("settings.closetab.hint"), w));
 	v->addLayout(f);
 	v->addStretch(1);
 
