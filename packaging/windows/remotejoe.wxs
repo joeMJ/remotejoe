@@ -9,7 +9,7 @@
   - Der UpgradeCode ist fest und darf sich nie ändern: Jede neue MSI ersetzt die alte (MajorUpgrade).
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="remotejoe" Language="1031" Codepage="1252" Version="$(var.Version)" Manufacturer="joeMJ"
+  <Product Id="*" Name="remotejoe" Language="1031" Codepage="1252" Version="$(var.Version)" Manufacturer="John Lose (joeMJ)"
            UpgradeCode="DB4709D5-54F6-4A98-AB02-E96A60D16CE1">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited" Platform="x64"
              Languages="1031" SummaryCodepage="1252" Description="remotejoe $(var.Version)"

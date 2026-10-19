@@ -766,6 +766,14 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		m_logo->setPixmap(pm);
 		m_logo->setFixedSize(200, 200);
 		m_logo->setAttribute(Qt::WA_TransparentForMouseEvents);
+		// Darunter ein Link auf die Projektseite (öffnet im Standardbrowser).
+		auto* link = new QLabel(m_tabs);
+		link->setObjectName(QStringLiteral("emptyLogoLink"));
+		link->setTextFormat(Qt::RichText);
+		link->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);
+		link->setOpenExternalLinks(true);
+		link->setText(QStringLiteral("<a href=\"https://github.com/joeMJ/remotejoe\">%1</a>").arg(T(m_backend, "logo.link").toHtmlEscaped()));
+		link->adjustSize();
 		connect(m_tabs, &QTabWidget::currentChanged, this, [this] { updateLogo(); });
 		QTimer::singleShot(0, this, [this] { updateLogo(); });
 	}
@@ -2924,6 +2932,13 @@ void MainWindow::updateLogo()
 	m_logo->setVisible(show);
 	if (show)
 		m_logo->raise();
+	if (auto* link = m_tabs->findChild<QLabel*>(QStringLiteral("emptyLogoLink")))
+	{
+		link->move(m_logo->x() + (m_logo->width() - link->width()) / 2, m_logo->y() + m_logo->height() + 4);
+		link->setVisible(show);
+		if (show)
+			link->raise();
+	}
 }
 
 bool MainWindow::focusInSession() const

@@ -632,5 +632,5 @@ Interne Adressen, Host- und Benutzernamen in Bildschirmfotos und Meldungen bitte
 
 ## Lizenz
 
-Apache License 2.0, siehe [`LICENSE`](LICENSE) und [`NOTICE`](NOTICE). Copyright 2026 joeMJ.
+Apache License 2.0, siehe [`LICENSE`](LICENSE) und [`NOTICE`](NOTICE). Copyright 2026 John Lose (joeMJ).
 Verwendete Bibliotheken mit ihren Lizenzen: [`THIRD_PARTY.md`](THIRD_PARTY.md).
