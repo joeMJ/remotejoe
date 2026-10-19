@@ -43,6 +43,7 @@ private:
 	void startCheck(const QString& kind);
 	void pollRun();
 	void saveNotes();
+	void showQueryError(const QJsonObject& r);
 	void renderServices(const QJsonValue& s);
 	void renderInventory(const QJsonArray& fields);
 	QString fieldLabel(const QString& key) const;

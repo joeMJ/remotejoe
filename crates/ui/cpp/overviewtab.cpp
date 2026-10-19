@@ -238,7 +238,7 @@ void OverviewTab::query()
 	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_query") } });
 	if (r.contains(QStringLiteral("error")))
 	{
-		m_queryState->setText(r.value(QStringLiteral("error")).toString().toHtmlEscaped());
+		showQueryError(r);
 		return;
 	}
 	m_query->setEnabled(false);
@@ -270,13 +270,7 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 			m_aruba->setVisible(aruba);
 		}
 		if (r.value(QStringLiteral("error")).isString())
-		{
-			// Fehlermeldung mit Verweisen auf die passende Anleitung (WinRM bzw. OpenSSH unter Windows).
-			QString html = r.value(QStringLiteral("error")).toString().toHtmlEscaped();
-			for (const QJsonValue& h : r.value(QStringLiteral("help")).toArray())
-				html += QStringLiteral("<br><a href=\"%1\">%2</a>").arg(h.toObject().value(QStringLiteral("url")).toString().toHtmlEscaped(), h.toObject().value(QStringLiteral("text")).toString().toHtmlEscaped());
-			m_queryState->setText(html);
-		}
+			showQueryError(r);
 	}
 }
 
@@ -416,4 +410,13 @@ void OverviewTab::saveNotes()
 	m_notesSave->setEnabled(false);
 	m_notesState->setText(m_backend->text(QStringLiteral("ov.notes.saved")));
 	emit indexChanged();
+}
+
+void OverviewTab::showQueryError(const QJsonObject& r)
+{
+	// Fehlermeldung mit Verweisen auf die passende Anleitung (WinRM bzw. OpenSSH unter Windows).
+	QString html = r.value(QStringLiteral("error")).toString().toHtmlEscaped();
+	for (const QJsonValue& h : r.value(QStringLiteral("help")).toArray())
+		html += QStringLiteral("<br><a href=\"%1\">%2</a>").arg(h.toObject().value(QStringLiteral("url")).toString().toHtmlEscaped(), h.toObject().value(QStringLiteral("text")).toString().toHtmlEscaped());
+	m_queryState->setText(html);
 }

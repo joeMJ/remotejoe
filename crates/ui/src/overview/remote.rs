@@ -168,8 +168,14 @@ fn ssh_params(spec: &JobSpec, port: u16) -> SshParams {
     SshParams { host: spec.host.clone(), port, user: spec.credentials.username.clone(), auth, connect_timeout: Duration::from_secs(10), keepalive: Duration::from_secs(30), legacy: spec.legacy }
 }
 
-/// SSH: erst der Linux-Befehl; liefert er nichts Brauchbares, `show version` in einer Shell (Aruba).
-pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHosts) -> Result<(Found, &'static str), String> {
+/// Inventarskript der Windows-Ziele als Befehl für OpenSSH unter Windows (Standard-Shell cmd oder PowerShell).
+fn windows_command() -> String {
+    format!("powershell -NoProfile -NonInteractive -EncodedCommand {}", rj_psrp::encoded(rj_psrp::inventory::windows_inventory_script()))
+}
+
+/// SSH mit den Zugangsdaten aus der KDBX: Linux-Befehl und Windows-PowerShell (über OpenSSH), Reihenfolge nach
+/// `prefer_windows`; liefert beides nichts, `show version` in einer Shell (Aruba).
+pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHosts, prefer_windows: bool) -> Result<(Found, &'static str), String> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     let (ask, mut q) = tokio::sync::mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>();
     rt.spawn(async move {
@@ -181,11 +187,18 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
         rj_ssh::client::SshError::HostKeyRejected => "Host-Schlüssel unbekannt – bitte zuerst einmal direkt verbinden".to_string(),
         e => e.to_string(),
     })?;
-    let linux = rt.block_on(async { tokio::time::timeout(Duration::from_secs(15), conn.exec(LINUX_SCRIPT)).await });
-    if let Ok(Ok((out, _, _))) = &linux {
-        if let Some(f) = parse_linux(&String::from_utf8_lossy(out), ip) {
-            rt.block_on(conn.disconnect());
-            return Ok((f, "SSH"));
+    // Windows mit OpenSSH zuerst, wenn es danach aussieht; sonst Linux zuerst.
+    let order: [bool; 2] = if prefer_windows { [true, false] } else { [false, true] };
+    for windows in order {
+        let cmd = if windows { windows_command() } else { LINUX_SCRIPT.to_string() };
+        let r = rt.block_on(async { tokio::time::timeout(Duration::from_secs(20), conn.exec(&cmd)).await });
+        if let Ok(Ok((out, _, _))) = &r {
+            let text = String::from_utf8_lossy(out);
+            let f = if windows { text.lines().find_map(|l| parse_windows(l, ip)) } else { parse_linux(&text, ip) };
+            if let Some(f) = f {
+                rt.block_on(conn.disconnect());
+                return Ok((f, if windows { "SSH (PowerShell)" } else { "SSH" }));
+            }
         }
     }
     // Geräte-CLI (z. B. Aruba Instant): Shell öffnen, `show version` senden, bis zur nächsten Eingabeaufforderung lesen.
@@ -214,7 +227,7 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
         Ok::<String, String>(String::from_utf8_lossy(&buf).into_owned())
     })?;
     rt.block_on(conn.disconnect());
-    parse_aruba(&text).map(|f| (f, "SSH (show version)")).ok_or_else(|| "Keine verwertbare Antwort über SSH (weder Linux noch Aruba)".into())
+    parse_aruba(&text).map(|f| (f, "SSH (show version)")).ok_or_else(|| "Keine verwertbare Antwort über SSH (weder Linux, Windows-PowerShell noch Aruba)".into())
 }
 
 /// Windows über PowerShell-Remoting mit dem Transport des Ziels.
@@ -257,6 +270,12 @@ mod tests {
         let f = parse_linux(out, None).unwrap();
         assert_eq!(f.iter().find(|(n, _)| *n == "mac").map(|(_, v)| v.as_str()), Some("52:54:00:aa:00:01"));
         assert!(parse_linux("Invalid command\n", None).is_none(), "keine Linux-Shell");
+    }
+
+    #[test]
+    fn windows_command_fits_on_a_command_line() {
+        let c = windows_command();
+        assert!(c.starts_with("powershell -NoProfile -NonInteractive -EncodedCommand ") && c.len() < 8000, "{}", c.len());
     }
 
     #[test]

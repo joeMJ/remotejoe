@@ -298,13 +298,14 @@ impl App {
         let open = |p: u16| {
             self.overview.services.get(&key).and_then(|(_, v)| v["list"].as_array().map(|l| l.iter().any(|s| s["port"] == p && s["open"] == true)))
         };
-        // PowerShell bei PowerShell-Zielen und bei RDP, wenn WinRM offen ist (oder noch nicht geprüft und SSH nicht offen);
-        // sonst SSH (auch Web-Ziele wie Aruba-VC auf Port 22).
-        let windows = match t.protocol {
-            Protocol::Psrp => true,
-            Protocol::Rdp => open(5985) == Some(true) || open(5986) == Some(true) || open(22) != Some(true),
-            _ => false,
-        };
+        // Ist SSH offen, immer der eigene SSH-Client (Kennwort aus der KDBX; Windows über OpenSSH und PowerShell).
+        // PowerShell-Remoting nur ohne SSH: unter Windows über WinRM; unter Linux kann pwsh kein WinRM.
+        let ssh_open = open(22) == Some(true) || t.protocol == Protocol::Ssh;
+        let windows_target = matches!(t.protocol, Protocol::Rdp | Protocol::Psrp) || open(3389) == Some(true) || open(5985) == Some(true) || open(5986) == Some(true);
+        let windows = !ssh_open && matches!(t.protocol, Protocol::Rdp | Protocol::Psrp);
+        if windows && !cfg!(windows) {
+            return Ok(json!({ "error": "WinRM ist von Linux aus nicht nutzbar (PowerShell unter Linux hat keinen WinRM-Client). Bitte OpenSSH auf dem Windows-Ziel einrichten.", "help": help_links(false, true) }));
+        }
         let cred_protocol = if windows { t.protocol } else { Protocol::Ssh };
         let creds = self.credential_payload(&r, cred_protocol)?;
         let spec = crate::patch::JobSpec {
@@ -316,14 +317,12 @@ impl App {
             legacy: self.target_legacy_of(t.id),
         };
         let ssh_port = if t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
-        // Windows-Ziel: Protokoll RDP/PowerShell oder RDP bzw. WinRM offen.
-        let windows_target = matches!(t.protocol, Protocol::Rdp | Protocol::Psrp) || open(3389) == Some(true) || open(5985) == Some(true);
         let help = help_links(windows, windows_target);
         let known = self.known_hosts_ref();
         let ip = self.overview.services.get(&key).and_then(|(_, v)| v["ip"].as_str().map(str::to_string));
         let job_key = key.clone();
         let job = self.jobs.spawn("Inventar abfragen", move |job| {
-            let res = if windows { remote::ps_inventory(&spec, ip.as_deref()) } else { remote::ssh_inventory(&spec, ssh_port, ip.as_deref(), known) };
+            let res = if windows { remote::ps_inventory(&spec, ip.as_deref()) } else { remote::ssh_inventory(&spec, ssh_port, ip.as_deref(), known, windows_target) };
             drop(spec);
             Box::new(move |app: &mut App, cancelled| {
                 app.overview.busy.remove(&job_key);
