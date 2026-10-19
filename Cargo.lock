@@ -4079,6 +4079,7 @@ name = "remotejoe-worker-psrp"
 version = "0.1.11"
 dependencies = [
  "base64 0.22.1",
+ "libc",
  "remotejoe-core",
  "remotejoe-ipc",
  "remotejoe-supervisor",

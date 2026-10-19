@@ -51,6 +51,14 @@ pub fn explain(error: String) -> String {
              Abschnitt „Hyper-V und PowerShell-Remoting“. ({error})"
         );
     }
+    // SSH-Transport ohne Schlüssel: pwsh übergibt das Kennwort aus der KDBX nicht an ssh.
+    if error.contains("Permission denied") || error.contains("SSH client session has ended") || error.contains("SSH transport process") {
+        return format!(
+            "PowerShell über SSH: Anmeldung derzeit nur mit Schlüssel möglich (das Kennwort aus der Schlüsseldatenbank \
+             wird von PowerShell nicht an ssh übergeben). Einrichtung siehe README, Abschnitt „Host für PowerShell über SSH \
+             einrichten“: https://github.com/joeMJ/remotejoe#host-f%C3%BCr-powershell-%C3%BCber-ssh-einrichten ({error})"
+        );
+    }
     error
 }
 
@@ -173,13 +181,27 @@ impl PsSession {
     /// wartet auf die Meldung „bereit“.
     pub fn start(t: &PsTarget, password: &Secret) -> Result<PsSession, PsError> {
         let prog = pwsh_program();
-        let mut child = Command::new(&prog)
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded(&driver_script(t))])
+        let mut cmd = Command::new(&prog);
+        cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded(&driver_script(t))])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| PsError::NoPwsh(format!("{prog}: {e}")))?;
+            // ssh (SSH-Transport von pwsh) darf weder ein Fenster für das Kennwort öffnen …
+            .env("SSH_ASKPASS_REQUIRE", "never");
+        // … noch im Terminal fragen, aus dem remotejoe gestartet wurde: eigene Sitzung ohne steuerndes Terminal.
+        // Ohne Schlüssel scheitert die Anmeldung dann sofort mit einer Meldung, statt zu hängen.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: Zwischen fork und exec nur der async-signal-sichere Systemaufruf setsid.
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+        }
+        let mut child = cmd.spawn().map_err(|e| PsError::NoPwsh(format!("{prog}: {e}")))?;
         let mut stdin = child.stdin.take().expect("stdin");
         let stdout = BufReader::new(child.stdout.take().expect("stdout"));
         let mut line = base64::engine::general_purpose::STANDARD.encode(password.as_bytes());
@@ -274,5 +296,12 @@ mod tests {
         assert_eq!(r.stream, "warning");
         assert!(parse_record("kein JSON").is_none());
         assert_eq!(parse_record(r#"{"ready":false,"error":"Zugriff verweigert"}"#).unwrap().ready, Some(false));
+    }
+
+    #[test]
+    fn ssh_transport_without_key_is_explained() {
+        let e = explain("The SSH client session has ended with error message: The SSH transport process has abruptly terminated".into());
+        assert!(e.contains("nur mit Schlüssel") && e.contains("host-f%C3%BCr-powershell"), "{e}");
+        assert_eq!(explain("anderer Fehler".into()), "anderer Fehler");
     }
 }

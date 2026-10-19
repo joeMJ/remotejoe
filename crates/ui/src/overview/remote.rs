@@ -188,11 +188,26 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
             let _ = r.send(accept);
         }
     });
-    let connected = rt.block_on(SshConnection::connect(&ssh_params(spec, port), known, ask));
+    let mut params = ssh_params(spec, port);
+    let mut connected = rt.block_on(SshConnection::connect(&params, known.clone(), ask.clone()));
+    // Ältere Geräte (z. B. KVM-Konsolen) bieten nur alte Verfahren an: für diese lesende Abfrage einmal mit ihnen versuchen.
+    let mut legacy_used = false;
+    if !params.legacy && connected.as_ref().err().is_some_and(|e| e.to_string().contains("No common")) {
+        params.legacy = true;
+        legacy_used = true;
+        connected = rt.block_on(SshConnection::connect(&params, known, ask));
+    }
     let question = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let note = question.as_ref().filter(|q| q.status == rj_ssh::known_hosts::HostKeyStatus::Unknown).map(|q| {
-        format!("Neuer SSH-Host-Schlüssel von {}:{} übernommen: {} {}", q.host, q.port, q.algorithm, q.fingerprint)
-    });
+    let notes: Vec<String> = [
+        question.as_ref().filter(|q| q.status == rj_ssh::known_hosts::HostKeyStatus::Unknown).map(|q| {
+            format!("Neuer SSH-Host-Schlüssel von {}:{} übernommen: {} {}", q.host, q.port, q.algorithm, q.fingerprint)
+        }),
+        legacy_used.then(|| "Ältere SSH-Verfahren verwendet – das Gerät bietet nur diese an".to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let note = (!notes.is_empty()).then(|| notes.join(". "));
     let conn = connected.map_err(|e| {
         let msg = match (e, question.as_ref()) {
             (rj_ssh::client::SshError::HostKeyRejected, Some(q)) => format!(
