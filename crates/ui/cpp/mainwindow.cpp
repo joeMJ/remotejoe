@@ -287,7 +287,7 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		{
 			item->setData(true, RoleLogin);
 			item->setIcon(protocolIcon(QStringLiteral("login"), QString(), false));
-			item->setDragEnabled(false);
+			// Ziehen erlaubt (Reihenfolge, anderer Ordner); auf ein Anmeldeobjekt ablegen nicht.
 			item->setDropEnabled(false);
 		}
 		QString tip = n.value(QStringLiteral("host")).toString();
@@ -2211,6 +2211,11 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		const QString id = i.data(RoleId).toString();
 		QMenu lm(this);
 		lm.addAction(T(m_backend, "login.edit"), this, [this, id] { openLogin(id, QString()); });
+		lm.addSeparator();
+		lm.addAction(T(m_backend, "ctx.up") + QStringLiteral("\tAlt+Up"), this, [this] { reorderSelected(-1); });
+		lm.addAction(T(m_backend, "ctx.down") + QStringLiteral("\tAlt+Down"), this, [this] { reorderSelected(1); });
+		lm.addAction(T(m_backend, "ctx.move") + QStringLiteral("\tCtrl+Shift+M"), this, [this] { moveSelected(); });
+		lm.addSeparator();
 		lm.addAction(T(m_backend, "login.delete"), this, [this, id] {
 			const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("login_delete") }, { QStringLiteral("id"), id } }));
 			if (r.contains(QStringLiteral("error")))
@@ -4015,7 +4020,18 @@ void MainWindow::moveSelected()
 	const QString id = currentId();
 	if (id.isEmpty())
 		return;
-	const QJsonObject e = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), id } }));
+	QJsonObject e;
+	if (m_tree->currentIndex().data(RoleLogin).toBool())
+	{
+		// Anmeldeobjekt: Ordnerliste und bisheriger Ordner aus der Anmeldeliste.
+		const QJsonObject l = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("logins") } }));
+		e.insert(QStringLiteral("folders"), l.value(QStringLiteral("folders")));
+		for (const QJsonValue& v : l.value(QStringLiteral("logins")).toArray())
+			if (v.toObject().value(QStringLiteral("id")).toString() == id)
+				e.insert(QStringLiteral("parent"), v.toObject().value(QStringLiteral("folder")));
+	}
+	else
+		e = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), id } }));
 	QList<QPair<QString, QString>> items;
 	for (const QJsonValue& f : e.value(QStringLiteral("folders")).toArray())
 		items.append({ f.toObject().value(QStringLiteral("path")).toString(), f.toObject().value(QStringLiteral("id")).toString() });

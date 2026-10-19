@@ -113,6 +113,8 @@
   "add.template.none": "(keine Vorlagen)",
   "ctx.add": "&Hinzufügen",
   "ctx.move": "&Verschieben nach …",
+  "ctx.up": "Nach &oben",
+  "ctx.down": "Nach &unten",
   "ctx.duplicate": "&Duplizieren",
   "ctx.rename": "&Umbenennen …",
   "ctx.delete": "&Löschen …",

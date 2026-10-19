@@ -151,6 +151,9 @@ pub fn delete(index: &mut Index, id: Uuid) -> Result<Node, EditError> {
 
 /// Verschiebt einen Knoten in einen anderen Ordner (`pos` im neuen Ordner).
 pub fn move_node(index: &mut Index, id: Uuid, new_parent: Uuid, pos: Option<usize>) -> Result<(), EditError> {
+    if index.logins.iter().any(|l| l.id == id) {
+        return move_login(index, id, new_parent, pos);
+    }
     if id == index.root.id {
         return Err(EditError::Root);
     }
@@ -174,8 +177,51 @@ pub fn move_node(index: &mut Index, id: Uuid, new_parent: Uuid, pos: Option<usiz
     Ok(())
 }
 
+/// Stellen der Anmeldeobjekte eines Ordners in `Index::logins`, in Baumreihenfolge.
+fn login_slots(index: &Index, folder: Uuid) -> Vec<usize> {
+    index.logins.iter().enumerate().filter(|(_, l)| l.folder == folder).map(|(i, _)| i).collect()
+}
+
+/// Verschiebt ein Anmeldeobjekt in einen Ordner. Im Baum stehen Anmeldeobjekte nach den Unterordnern und Zielen
+/// eines Ordners; `pos` zählt wie dort, also über alle Zeilen des Ordners (fehlt sie, ans Ende).
+fn move_login(index: &mut Index, id: Uuid, new_parent: Uuid, pos: Option<usize>) -> Result<(), EditError> {
+    let children = folder(index, new_parent).ok_or(EditError::NotAFolder)?.children.len();
+    let from = index.logins.iter().position(|l| l.id == id).ok_or(EditError::NotFound)?;
+    // Bisheriger Rang im selben Ordner: Beim Ziehen nach hinten zählt die eigene Zeile noch mit.
+    let old_rank = (index.logins[from].folder == new_parent).then(|| login_slots(index, new_parent).iter().position(|&i| i == from)).flatten();
+    let mut rank = pos.map(|p| p.saturating_sub(children));
+    if let (Some(r), Some(o)) = (rank, old_rank) {
+        if r > o {
+            rank = Some(r - 1);
+        }
+    }
+    let mut login = index.logins.remove(from);
+    login.folder = new_parent;
+    let slots = login_slots(index, new_parent);
+    let at = match rank {
+        Some(r) if r < slots.len() => slots[r],
+        _ => slots.last().map(|&i| i + 1).unwrap_or(index.logins.len()),
+    };
+    index.logins.insert(at, login);
+    Ok(())
+}
+
+/// Verschiebt ein Anmeldeobjekt unter den Anmeldeobjekten seines Ordners um `delta` Plätze.
+fn reorder_login(index: &mut Index, id: Uuid, delta: i32) -> Result<(), EditError> {
+    let from = index.logins.iter().position(|l| l.id == id).ok_or(EditError::NotFound)?;
+    let slots = login_slots(index, index.logins[from].folder);
+    let k = slots.iter().position(|&i| i == from).ok_or(EditError::NotFound)?;
+    let j = (k as i64 + delta as i64).clamp(0, slots.len() as i64 - 1) as usize;
+    let login = index.logins.remove(from);
+    index.logins.insert(slots[j], login);
+    Ok(())
+}
+
 /// Verschiebt einen Knoten innerhalb seines Ordners um `delta` Plätze.
 pub fn reorder(index: &mut Index, id: Uuid, delta: i32) -> Result<(), EditError> {
+    if index.logins.iter().any(|l| l.id == id) {
+        return reorder_login(index, id, delta);
+    }
     let parent = parent_of(index, id).ok_or(EditError::NotFound)?;
     let f = folder_mut(index, parent).ok_or(EditError::NotFound)?;
     let i = f.children.iter().position(|n| n.id() == id).ok_or(EditError::NotFound)?;
@@ -550,6 +596,54 @@ mod tests {
         idx.root.children.push(Node::Folder(a));
         idx.root.children.push(Node::Folder(c));
         (idx, ids.0, ids.1, ids.2, ids.3, ids.4)
+    }
+
+    fn add_login(idx: &mut Index, name: &str, folder: Uuid) -> Uuid {
+        let l = crate::model::Login { id: Uuid::new_v4(), name: name.into(), folder, entry: cref() };
+        let id = l.id;
+        idx.logins.push(l);
+        id
+    }
+
+    fn login_names(idx: &Index, folder: Uuid) -> Vec<String> {
+        idx.logins.iter().filter(|l| l.folder == folder).map(|l| l.name.clone()).collect()
+    }
+
+    #[test]
+    fn logins_move_and_reorder_like_tree_rows() {
+        // A hat zwei Zeilen (a1, B), danach die Anmeldeobjekte x, y, z; dazwischen eines in C.
+        let (mut idx, a, _b, a1, _b1, c) = sample();
+        let x = add_login(&mut idx, "x", a);
+        let w = add_login(&mut idx, "w", c);
+        let y = add_login(&mut idx, "y", a);
+        let z = add_login(&mut idx, "z", a);
+        // Nach oben und unten innerhalb des Ordners, Ränder bleiben stehen.
+        reorder(&mut idx, z, -1).unwrap();
+        assert_eq!(login_names(&idx, a), ["x", "z", "y"]);
+        reorder(&mut idx, x, -1).unwrap();
+        assert_eq!(login_names(&idx, a), ["x", "z", "y"]);
+        reorder(&mut idx, x, 2).unwrap();
+        assert_eq!(login_names(&idx, a), ["z", "y", "x"]);
+        // Ziehen im selben Ordner: über der ersten Anmeldezeile (Zeile 2) und unter der letzten (Zeile 5).
+        move_node(&mut idx, x, a, Some(2)).unwrap();
+        assert_eq!(login_names(&idx, a), ["x", "z", "y"]);
+        move_node(&mut idx, x, a, Some(5)).unwrap();
+        assert_eq!(login_names(&idx, a), ["z", "y", "x"]);
+        // Zwischen Ziele gezogen: landet als erstes Anmeldeobjekt.
+        move_node(&mut idx, y, a, Some(0)).unwrap();
+        assert_eq!(login_names(&idx, a), ["y", "z", "x"]);
+        // In einen anderen Ordner, an eine Stelle und ans Ende.
+        move_node(&mut idx, z, c, Some(0)).unwrap();
+        assert_eq!(login_names(&idx, c), ["z", "w"]);
+        move_node(&mut idx, y, c, None).unwrap();
+        assert_eq!(login_names(&idx, c), ["z", "w", "y"]);
+        assert_eq!(login_names(&idx, a), ["x"]);
+        // In die Wurzel; Ziel kein Ordner.
+        let root = idx.root.id;
+        move_node(&mut idx, w, root, None).unwrap();
+        assert_eq!(idx.login(w).unwrap().folder, root);
+        assert_eq!(move_node(&mut idx, x, a1, None), Err(EditError::NotAFolder));
+        assert_eq!(idx.logins.len(), 4, "nichts verloren, nichts doppelt");
     }
 
     #[test]
