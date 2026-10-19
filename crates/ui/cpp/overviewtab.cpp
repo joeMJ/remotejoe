@@ -325,6 +325,10 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 			src += QStringLiteral(", ") + w;
 		auto* source = new QLabel(src, m_inventoryBox);
 		source->setEnabled(false); // gedämpft
+		// Feste Breite: Die Eingabefelder springen beim Zielwechsel nicht mit der Länge der Quellenangabe.
+		const int w = source->fontMetrics().horizontalAdvance(QStringLiteral("SSH (show version), 00.00.0000 00:00")) + 8;
+		source->setFixedWidth(w);
+		source->setToolTip(src);
 		m_inventory->addWidget(label, row, 0);
 		m_inventory->addWidget(edit, row, 1);
 		m_inventory->addWidget(source, row, 2);
