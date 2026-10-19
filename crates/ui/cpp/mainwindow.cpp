@@ -3891,6 +3891,7 @@ void MainWindow::openLogin(const QString& id, const QString& folder)
 			f = i.parent().isValid() ? i.parent().data(RoleId).toString() : QString();
 	}
 	auto* t = new LoginTab(m_backend, id, f, m_tabs);
+	t->setIcon(protocolIcon(QStringLiteral("login"), QString(), false));
 	addToolTab(t, T(m_backend, "login.title"));
 }
 

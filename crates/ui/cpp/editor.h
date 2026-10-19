@@ -5,6 +5,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QHash>
+#include <QtGui/QIcon>
 #include <QtCore/QMap>
 #include <QtCore/QPair>
 #include <QtCore/QSet>
@@ -376,6 +377,8 @@ class LoginTab : public ToolTab
 public:
 	LoginTab(RjBackend* backend, const QString& id, const QString& folder, QWidget* parent = nullptr);
 	QString loginId() const { return m_id; }
+	/// Symbol der Kopfkarte (wie im Baum).
+	void setIcon(const QIcon& icon);
 	void wipeSecrets() override;
 
 private:
@@ -392,6 +395,8 @@ private:
 	QLabel* m_used;
 	QLabel* m_error;
 	QPushButton* m_delete;
+	QLabel* m_headTitle = nullptr;
+	QLabel* m_icon = nullptr;
 };
 
 class CertCheckTab : public ToolTab

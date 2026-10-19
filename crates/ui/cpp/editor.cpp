@@ -606,9 +606,11 @@ void PropertiesTab::build()
 	auto* discardB = new QPushButton(rjText(m_backend, "edit.discard"), head);
 	saveB->setDefault(true);
 	connect(saveB, &QPushButton::clicked, this, &PropertiesTab::saveAndClose);
+	// Verwerfen: Änderungen verwerfen und den Tab schließen (wie Speichern ihn nach dem Speichern schließt).
 	connect(discardB, &QPushButton::clicked, this, [this] {
-		reload();
+		clearDirty();
 		emit status(rjText(m_backend, "bar.discard"));
+		emit saveClosed();
 	});
 	if (target)
 	{
@@ -3854,45 +3856,70 @@ LoginTab::LoginTab(RjBackend* backend, const QString& id, const QString& folder,
 	auto T = [backend](const char* k) { return backend->text(QString::fromLatin1(k)); };
 	setObjectName(QStringLiteral("loginTab"));
 	auto* lay = new QVBoxLayout(this);
-	auto* head = new QLabel(T("login.title"), this);
-	head->setObjectName(QStringLiteral("heading"));
-	lay->addWidget(head);
-	auto* info = new QLabel(T("login.info"), this);
+	lay->setContentsMargins(12, 8, 12, 12);
+	lay->setSpacing(10);
+	// Kopfkarte: Name der Anmeldung, Kurzzeile, Knöpfe.
+	QVBoxLayout* in = nullptr;
+	auto* head = rjui::card(this, &in);
+	auto* hh = new QHBoxLayout;
+	hh->setSpacing(12);
+	m_icon = new QLabel(head);
+	m_icon->setFixedSize(36, 36);
+	hh->addWidget(m_icon, 0, Qt::AlignTop);
+	auto* hv = new QVBoxLayout;
+	hv->setSpacing(2);
+	m_headTitle = new QLabel(head);
+	QFont tf = m_headTitle->font();
+	tf.setPointSizeF(tf.pointSizeF() * 1.3);
+	tf.setBold(true);
+	m_headTitle->setFont(tf);
+	m_used = new QLabel(head);
+	m_used->setObjectName(QStringLiteral("rjMuted"));
+	m_used->setWordWrap(true);
+	hv->addWidget(m_headTitle);
+	hv->addWidget(m_used);
+	hh->addLayout(hv, 1);
+	m_delete = new QPushButton(T("login.delete"), head);
+	auto* close = new QPushButton(T("edit.discard"), head);
+	auto* save = new QPushButton(T("edit.save"), head);
+	save->setDefault(true);
+	hh->addWidget(m_delete, 0, Qt::AlignTop);
+	hh->addWidget(close, 0, Qt::AlignTop);
+	hh->addWidget(save, 0, Qt::AlignTop);
+	in->addLayout(hh);
+	auto* info = new QLabel(T("login.info"), head);
+	info->setObjectName(QStringLiteral("rjMuted"));
 	info->setWordWrap(true);
-	lay->addWidget(info);
+	in->addWidget(info);
+	lay->addWidget(head);
+	// Karte mit den Feldern.
+	auto* body = rjui::card(this, &in);
+	in->addWidget(rjui::section(T("edit.cat.credentials"), body));
 	auto* form = new QFormLayout;
-	m_name = new QLineEdit(this);
-	m_folder = new QComboBox(this);
-	m_user = new QLineEdit(this);
+	m_name = new QLineEdit(body);
+	m_folder = new QComboBox(body);
+	m_user = new QLineEdit(body);
 	m_user->setPlaceholderText(T("login.user.hint"));
-	m_password = new QLineEdit(this);
+	m_password = new QLineEdit(body);
 	m_password->setEchoMode(QLineEdit::Password);
 	m_password->setObjectName(QStringLiteral("passwordField"));
 	form->addRow(T("login.name"), m_name);
 	form->addRow(T("login.folder"), m_folder);
 	form->addRow(T("edit.cred.username"), m_user);
 	form->addRow(T("edit.cred.password"), m_password);
-	lay->addLayout(form);
-	m_used = new QLabel(this);
-	m_used->setWordWrap(true);
-	lay->addWidget(m_used);
-	m_error = new QLabel(this);
+	in->addLayout(form);
+	m_error = new QLabel(body);
 	m_error->setObjectName(QStringLiteral("fieldError"));
 	m_error->setWordWrap(true);
-	lay->addWidget(m_error);
-	auto* row = new QHBoxLayout;
-	m_delete = new QPushButton(T("login.delete"), this);
-	auto* save = new QPushButton(T("edit.save"), this);
-	auto* close = new QPushButton(T("login.close"), this);
-	row->addWidget(m_delete);
-	row->addStretch(1);
-	row->addWidget(close);
-	row->addWidget(save);
-	lay->addLayout(row);
+	in->addWidget(m_error);
+	lay->addWidget(body);
 	lay->addStretch(1);
 	connect(save, &QPushButton::clicked, this, [this] { this->save(); });
 	connect(close, &QPushButton::clicked, this, [this] { emit closeRequested(); });
 	connect(m_delete, &QPushButton::clicked, this, [this] { remove(); });
+	connect(m_name, &QLineEdit::textChanged, this, [this](const QString& t) {
+		m_headTitle->setText(t.trimmed().isEmpty() ? m_backend->text(QStringLiteral("login.title.new")) : t);
+	});
 	connect(m_name, &QLineEdit::returnPressed, this, [this] { this->save(); });
 	load(folder);
 }
@@ -3929,7 +3956,16 @@ void LoginTab::load(const QString& folder)
 	m_password->setPlaceholderText(existing ? T("edit.cred.password.keep") : QString());
 	m_delete->setVisible(existing);
 	const int used = me.value(QStringLiteral("used")).toInt();
-	m_used->setText(existing ? T("login.used").arg(used) : T("login.new.info"));
+	{
+		QStringList parts;
+		if (!m_user->text().isEmpty())
+			parts << m_user->text();
+		parts << m_folder->currentText();
+		parts << (existing ? T("login.used.short").arg(used) : T("login.new.info"));
+		m_delete->setToolTip(T("login.used").arg(used));
+		m_used->setText(parts.join(QStringLiteral(" · ")));
+	}
+	m_headTitle->setText(m_name->text().trimmed().isEmpty() ? T("login.title.new") : m_name->text());
 	const bool unlocked = r.value(QStringLiteral("unlocked")).toBool();
 	m_error->setText(unlocked ? QString() : T("edit.cred.locked"));
 	for (QWidget* w : { static_cast<QWidget*>(m_user), static_cast<QWidget*>(m_password) })
@@ -3958,7 +3994,8 @@ void LoginTab::save()
 	edit({ { QStringLiteral("op"), QStringLiteral("save") } });
 	emit indexChanged();
 	emit status(m_backend->text(QStringLiteral("login.saved")).arg(m_name->text()));
-	load(QString());
+	// Gespeichert: Tab schließen (wie die Einstellungen).
+	emit closeRequested();
 }
 
 void LoginTab::remove()
@@ -3975,6 +4012,11 @@ void LoginTab::remove()
 	emit indexChanged();
 	emit status(m_backend->text(QStringLiteral("login.deleted")).arg(m_name->text()));
 	emit closeRequested();
+}
+
+void LoginTab::setIcon(const QIcon& icon)
+{
+	m_icon->setPixmap(icon.pixmap(32, 32));
 }
 
 void LoginTab::wipeSecrets()
