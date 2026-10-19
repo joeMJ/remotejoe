@@ -4,7 +4,17 @@
 
 # remotejoe
 
-> **Verbindungsmanager für Ubuntu und Windows – RDP, SSH, VNC, Web, PowerShell, Proxmox VE und Hyper-V in einem Fenster, mit KeePass-Schlüsseldatenbank**
+> **Schlanker, sehr schneller und robuster Verbindungsmanager für Hunderte von Zielen – unter Ubuntu und Windows.**
+> RDP, SSH, VNC, Web, PowerShell, Proxmox VE und Hyper-V in einem Fenster, Zugangsdaten in einer KeePass-Schlüsseldatenbank.
+
+<p align="center">
+  <a href="https://www.johnlose.de/unterstutzung-fur-john-joe-lose/"><img src="docs/knoepfe/danke.svg" alt="Danke sagen an John" width="300"></a>
+</p>
+<p align="center">
+  <a href="#installation-windows"><img src="docs/knoepfe/windows.svg" alt="Auf Windows installieren" width="260"></a>
+  &nbsp;
+  <a href="#installation-linux-ubuntu"><img src="docs/knoepfe/ubuntu.svg" alt="Auf Ubuntu installieren" width="260"></a>
+</p>
 
 remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 
