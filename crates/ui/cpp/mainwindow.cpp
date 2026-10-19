@@ -581,6 +581,10 @@ bool webView2Installed()
 	}
 	return false;
 }
+
+/// Ergebnis eines Updates über die MSI (Neustart): erscheint nach dem Entsperren als Hinweis; vorher verdeckt
+/// die Entsperr-Abfrage sie.
+QString g_updateNotice;
 #endif
 } // namespace
 
@@ -1073,8 +1077,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	{
 		qunsetenv("RJ_UPDATE_RESULT");
 		const bool ok = code == QLatin1String("0") || code == QLatin1String("3010");
-		const QString text = ok ? T(m_backend, "update.applied.ok").arg(m_backend->appVersion()) : T(m_backend, "update.applied.failed").arg(code);
-		QTimer::singleShot(500, this, [this, text] { statusBar()->showMessage(text, 30000); });
+		g_updateNotice = ok ? T(m_backend, "update.applied.ok").arg(m_backend->appVersion()) : T(m_backend, "update.applied.failed").arg(code);
 	}
 #endif
 }
@@ -2809,6 +2812,17 @@ void MainWindow::handleEvents(const QString& json)
 				statusBar()->showMessage(T(m_backend, "status.unlocked"), 5000);
 				if (const QString note = m_backend->keyringNote(); !note.isEmpty())
 					statusBar()->showMessage(note, 12000);
+#ifdef Q_OS_WIN
+				if (!g_updateNotice.isEmpty())
+				{
+					// Eigenes Hinweisfenster: Meldungen der Fußzeile werden beim Entsperren gleich wieder überschrieben.
+					auto* box = new QMessageBox(QMessageBox::Information, QStringLiteral("remotejoe"), g_updateNotice, QMessageBox::Ok, this);
+					box->setAttribute(Qt::WA_DeleteOnClose);
+					box->setWindowModality(Qt::NonModal);
+					QTimer::singleShot(300, box, &QWidget::show);
+					g_updateNotice.clear();
+				}
+#endif
 			}
 			else if (t == QLatin1String("unlock_failed"))
 			{
