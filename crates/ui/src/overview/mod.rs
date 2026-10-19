@@ -175,6 +175,16 @@ impl App {
             "busy": self.overview.busy.contains_key(&key),
             "run": self.overview_output_key(&key),
         });
+        // Brotkrumen: Ordner bis zum Ziel bzw. bis zum Hypervisor des Gasts (`path_to` beginnt unter der Wurzel).
+        let crumb_of = |id: Uuid, with_self: bool| -> String {
+            let names: Vec<String> = self.index.path_to(id).unwrap_or_default().iter().map(|n| rj_core::charset::mark_visible(n.name(), false).into_owned()).collect();
+            let n = if with_self { names.len() } else { names.len().saturating_sub(1) };
+            names[..n].join(" › ")
+        };
+        v["path"] = json!(match &s {
+            Subject::Target(t) => crumb_of(t.id, false),
+            Subject::Guest { hv, .. } => crumb_of(*hv, true),
+        });
         match &s {
             Subject::Target(t) => {
                 v["name"] = json!(rj_core::charset::mark_visible(&t.name, false));
@@ -495,6 +505,7 @@ mod tests {
         assert!(app.overview_run(&json!({ "id": id.to_string(), "kind": "x" })).is_err());
         let v = app.overview_json(&json!({ "id": id.to_string() })).unwrap();
         assert_eq!((v["name"].as_str(), v["sub"].as_str(), v["inventory"].as_array().map(Vec::len)), (Some("lokal"), Some("SSH · 127.0.0.1:22"), Some(inventory::FIELDS.len())));
+        assert_eq!(v["path"], "", "Ziel direkt unter der Wurzel");
         // Gast eines Ziels, das kein Hypervisor ist: Übersicht ja, Abfrage beim Hypervisor scheitert verständlich.
         let g = json!({ "hv": id.to_string(), "guest": "pve1/qemu/100", "name": "web-01", "address": "127.0.0.1" });
         let v = app.overview_json(&g).unwrap();

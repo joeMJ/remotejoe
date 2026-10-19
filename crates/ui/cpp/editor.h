@@ -4,12 +4,18 @@
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QHash>
 #include <QtCore/QMap>
 #include <QtCore/QPair>
 #include <QtCore/QSet>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QWidget>
 #include <functional>
+
+namespace rjui
+{
+class ClickRow;
+}
 
 class RjBackend;
 class QButtonGroup;
@@ -190,6 +196,22 @@ private:
 	QSet<QString> m_dirty;
 	bool m_loading = false;
 	QTreeWidget* m_cats = nullptr;
+	/// Bereichsliste (Kartenstil): Zeile, Kurzfassung und Plakette je Bereich.
+	struct Area
+	{
+		rjui::ClickRow* row;
+		QLabel* summary;
+		QLabel* pill;
+	};
+	QHash<QString, Area> m_areas;
+	/// Gruppe der Änderungsverfolgung → Bereich (für die Plakette „geändert“).
+	QHash<QString, QString> m_groupPage;
+	/// Bereich, dessen Seite gerade aufgebaut wird.
+	QString m_buildingPage;
+	class QVBoxLayout* m_areaList = nullptr;
+	QLabel* m_pageTitle = nullptr;
+	QString areaSummary(const QString& key) const;
+	void refreshAreas();
 	QStackedWidget* m_pages = nullptr;
 	ActionBar* m_bar = nullptr;
 	QLabel* m_dirtyLabel = nullptr;

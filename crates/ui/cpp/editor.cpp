@@ -1,4 +1,5 @@
 #include "editor.h"
+#include "cards.h"
 #include "views.h"
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
@@ -330,9 +331,142 @@ void PropertiesTab::addPage(const QString& key, const char* label, QWidget* page
 	scroll->setWidgetResizable(true);
 	scroll->setFrameShape(QFrame::NoFrame);
 	scroll->setWidget(page);
+	// In der Karte: Hintergrund der Karte statt des Fensters.
+	scroll->viewport()->setAutoFillBackground(false);
+	page->setAutoFillBackground(false);
 	m_pages->addWidget(scroll);
 	auto* item = new QTreeWidgetItem(m_cats, QStringList(rjText(m_backend, label)));
 	item->setData(0, Qt::UserRole, key);
+	// Zeile in der Bereichsliste: Titel, Kurzfassung, Plakette.
+	if (!m_areaList)
+		return;
+	auto* row = new rjui::ClickRow;
+	auto* h = new QHBoxLayout(row);
+	h->setContentsMargins(8, 6, 8, 6);
+	auto* v = new QVBoxLayout;
+	v->setSpacing(1);
+	auto* t = new QLabel(rjText(m_backend, label), row);
+	QFont bf = t->font();
+	bf.setBold(true);
+	t->setFont(bf);
+	auto* sum = new QLabel(row);
+	sum->setObjectName(QStringLiteral("rjMuted"));
+	sum->setWordWrap(true);
+	v->addWidget(t);
+	v->addWidget(sum);
+	h->addLayout(v, 1);
+	auto* pill = rjui::pill(QString(), QStringLiteral("off"), row);
+	h->addWidget(pill, 0, Qt::AlignTop);
+	m_areaList->addWidget(row);
+	m_areas.insert(key, Area{ row, sum, pill });
+	connect(row, &rjui::ClickRow::clicked, this, [this, key] { selectCategory(key); });
+}
+
+QString PropertiesTab::areaSummary(const QString& key) const
+{
+	const QJsonObject& d = m_data;
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	const QString kind = d.value(QStringLiteral("kind")).toString();
+	if (key == QLatin1String("general"))
+	{
+		const QString desc = d.value(QStringLiteral("description")).toString();
+		return desc.isEmpty() ? T("area.general") : desc;
+	}
+	if (key == QLatin1String("connection"))
+	{
+		if (kind != QLatin1String("target"))
+			return T("area.connection.folder");
+		const QString port = d.value(QStringLiteral("port")).isNull() ? QString::number(d.value(QStringLiteral("default_port")).toInt()) : QString::number(d.value(QStringLiteral("port")).toInt());
+		return QStringLiteral("%1 · %2:%3").arg(d.value(QStringLiteral("protocol")).toString().toUpper(), d.value(QStringLiteral("host")).toString(), port);
+	}
+	if (key == QLatin1String("credentials"))
+	{
+		const QJsonObject e = d.value(QStringLiteral("credential")).toObject().value(QStringLiteral("effective")).toObject();
+		const QString state = e.value(QStringLiteral("state")).toString();
+		if (state == QLatin1String("found"))
+			return QStringLiteral("„%1“ · %2").arg(e.value(QStringLiteral("title")).toString(), e.value(QStringLiteral("origin")).toString());
+		if (state == QLatin1String("none"))
+			return T("area.cred.none");
+		if (state == QLatin1String("ambiguous"))
+			return T("area.cred.ambiguous");
+		return T("area.cred.missing");
+	}
+	if (key == QLatin1String("tunnel"))
+	{
+		const QString t = d.value(QStringLiteral("tunnel")).toString();
+		if (t == QLatin1String("none"))
+			return T("area.tunnel.off");
+		if (t == QLatin1String("inherit"))
+			return d.contains(QStringLiteral("tunnel_effective")) ? d.value(QStringLiteral("tunnel_effective")).toString() : T("area.tunnel.none");
+		for (const QJsonValue& v : d.value(QStringLiteral("tunnels")).toArray())
+			if (v.toObject().value(QStringLiteral("id")).toString() == t)
+				return v.toObject().value(QStringLiteral("name")).toString();
+		return T("area.tunnel.none");
+	}
+	if (key == QLatin1String("tasks"))
+	{
+		int tasks = 0, macros = 0;
+		for (const QJsonValue& v : d.value(QStringLiteral("tasks")).toArray())
+			tasks += v.toObject().value(QStringLiteral("linked")).toBool() ? 1 : 0;
+		for (const QJsonValue& v : d.value(QStringLiteral("macros")).toArray())
+			macros += v.toObject().value(QStringLiteral("linked")).toBool() ? 1 : 0;
+		return T("area.tasks").arg(tasks).arg(macros);
+	}
+	if (key == QLatin1String("clipboard"))
+	{
+		if (kind == QLatin1String("target"))
+			return T("area.clipboard.target");
+		return m_backend->text(QStringLiteral("edit.clip.") + d.value(QStringLiteral("clipboard_effective")).toString());
+	}
+	if (key == QLatin1String("organisation"))
+	{
+		const QString notes = d.value(QStringLiteral("notes")).toString().section(QLatin1Char('\n'), 0, 0).trimmed();
+		if (!notes.isEmpty())
+			return notes;
+		return T("area.organisation").arg(d.value(QStringLiteral("fields")).toObject().size());
+	}
+	if (key == QLatin1String("parent"))
+	{
+		const QString parent = d.value(QStringLiteral("parent")).toString();
+		for (const QJsonValue& v : d.value(QStringLiteral("folders")).toArray())
+			if (v.toObject().value(QStringLiteral("id")).toString() == parent)
+				return v.toObject().value(QStringLiteral("path")).toString();
+		return T("area.parent.root");
+	}
+	return QString();
+}
+
+void PropertiesTab::refreshAreas()
+{
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	const QString kind = m_data.value(QStringLiteral("kind")).toString();
+	for (auto it = m_areas.begin(); it != m_areas.end(); ++it)
+	{
+		const QString& key = it.key();
+		it->summary->setText(areaSummary(key));
+		bool changed = false;
+		for (const QString& g : std::as_const(m_dirty))
+			changed = changed || m_groupPage.value(g) == key;
+		if (changed)
+		{
+			rjui::setPill(it->pill, T("area.pill.changed"), QStringLiteral("warn"));
+			continue;
+		}
+		// Woher der Wert kommt: geerbt oder hier gesetzt (nur wo es Vererbung gibt).
+		QString setting;
+		if (key == QLatin1String("credentials"))
+			setting = m_data.value(QStringLiteral("credential")).toObject().value(QStringLiteral("mode")).toString();
+		else if (key == QLatin1String("tunnel"))
+			setting = m_data.value(QStringLiteral("tunnel")).toString();
+		else if (key == QLatin1String("clipboard") && kind != QLatin1String("target"))
+			setting = m_data.value(QStringLiteral("clipboard")).toString();
+		if (setting.isEmpty())
+			rjui::setPill(it->pill, QString(), QStringLiteral("off"));
+		else if (setting == QLatin1String("inherit"))
+			rjui::setPill(it->pill, T("area.pill.inherited"), QStringLiteral("off"));
+		else
+			rjui::setPill(it->pill, T(kind == QLatin1String("target") ? "area.pill.target" : "area.pill.folder"), QStringLiteral("ok"));
+	}
 }
 
 void PropertiesTab::selectCategory(const QString& key)
@@ -345,6 +479,8 @@ void PropertiesTab::selectCategory(const QString& key)
 void PropertiesTab::track(QWidget* w, const QString& group)
 {
 	w->setProperty("rjGroup", group);
+	if (!m_buildingPage.isEmpty() && !m_groupPage.contains(group))
+		m_groupPage.insert(group, m_buildingPage);
 	if (auto* l = qobject_cast<QLineEdit*>(w))
 		connect(l, &QLineEdit::textEdited, this, [this, group, l] { markDirty(group, l); });
 	else if (auto* c = qobject_cast<QComboBox*>(w))
@@ -401,6 +537,7 @@ void PropertiesTab::markDirty(const QString& group, QWidget* changed)
 	if (changed)
 		setMarked(changed, true);
 	m_dirtyLabel->show();
+	refreshAreas();
 	if (!was)
 		emit titleChanged();
 }
@@ -437,57 +574,99 @@ void PropertiesTab::build()
 		m_loading = false;
 		return;
 	}
-	auto* split = new QSplitter(Qt::Horizontal, this);
-	m_cats = new QTreeWidget(split);
-	m_cats->setHeaderHidden(true);
-	m_cats->setRootIsDecorated(false);
-	m_cats->setAccessibleName(QStringLiteral("Kategorien"));
-	m_cats->setMaximumWidth(260);
-	m_pages = new QStackedWidget(split);
-	split->setStretchFactor(1, 1);
-	lay->addWidget(split, 1);
 	const QString kind = m_data.value(QStringLiteral("kind")).toString();
 	const bool target = kind == QLatin1String("target");
-	addPage(QStringLiteral("general"), "edit.cat.general", pageGeneral());
-	addPage(QStringLiteral("connection"), "edit.cat.connection", pageConnection());
-	addPage(QStringLiteral("credentials"), "edit.cat.credentials", pageCredentials());
-	addPage(QStringLiteral("tunnel"), "edit.cat.tunnel", pageTunnel());
-	addPage(QStringLiteral("tasks"), "edit.cat.tasks", pageTasks());
-	addPage(QStringLiteral("clipboard"), "edit.cat.clipboard", pageClipboard());
-	addPage(QStringLiteral("organisation"), "edit.cat.organisation", pageOrganisation());
-	if (kind != QLatin1String("root"))
-		addPage(QStringLiteral("parent"), "edit.cat.parent", pageParent());
-	connect(m_cats, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* cur) {
-		if (cur)
-			m_pages->setCurrentIndex(m_cats->indexOfTopLevelItem(cur));
-	});
-	m_cats->setCurrentItem(m_cats->topLevelItem(0));
+	m_areas.clear();
+	m_groupPage.clear();
 
-	auto* bottom = new QHBoxLayout;
-	m_dirtyLabel = new QLabel(rjText(m_backend, "edit.dirty"), this);
+	// Kopfkarte: was bearbeitet wird, Änderungsstand, Knöpfe.
+	QVBoxLayout* hin = nullptr;
+	auto* head = rjui::card(this, &hin);
+	auto* hh = new QHBoxLayout;
+	auto* hv = new QVBoxLayout;
+	hv->setSpacing(2);
+	auto* title = new QLabel(rjText(m_backend, "edit.head").arg(m_data.value(QStringLiteral("name")).toString()), head);
+	QFont tf = title->font();
+	tf.setPointSizeF(tf.pointSizeF() * 1.3);
+	tf.setBold(true);
+	title->setFont(tf);
+	hv->addWidget(title);
+	auto* sub = new QHBoxLayout;
+	m_dirtyLabel = new QLabel(rjText(m_backend, "edit.dirty"), head);
 	m_dirtyLabel->setObjectName(QStringLiteral("dirtyLabel"));
 	m_dirtyLabel->hide();
-	m_status = new QLabel(this);
+	m_status = new QLabel(head);
+	m_status->setObjectName(QStringLiteral("rjMuted"));
 	m_status->setWordWrap(true);
-	auto* saveB = new QPushButton(rjText(m_backend, "edit.save"), this);
-	auto* discardB = new QPushButton(rjText(m_backend, "edit.discard"), this);
+	sub->addWidget(m_dirtyLabel);
+	sub->addWidget(m_status, 1);
+	hv->addLayout(sub);
+	hh->addLayout(hv, 1);
+	auto* saveB = new QPushButton(rjText(m_backend, "edit.save"), head);
+	auto* discardB = new QPushButton(rjText(m_backend, "edit.discard"), head);
 	saveB->setDefault(true);
 	connect(saveB, &QPushButton::clicked, this, &PropertiesTab::saveAndClose);
 	connect(discardB, &QPushButton::clicked, this, [this] {
 		reload();
 		emit status(rjText(m_backend, "bar.discard"));
 	});
-	bottom->addWidget(m_dirtyLabel);
-	bottom->addWidget(m_status, 1);
 	if (target)
 	{
-		auto* tplB = new QPushButton(rjText(m_backend, "edit.template"), this);
+		auto* tplB = new QPushButton(rjText(m_backend, "edit.template"), head);
 		connect(tplB, &QPushButton::clicked, this, &PropertiesTab::saveTemplate);
-		bottom->addWidget(tplB);
+		hh->addWidget(tplB, 0, Qt::AlignTop);
 	}
-	bottom->addWidget(discardB);
-	bottom->addWidget(saveB);
-	lay->addLayout(bottom);
+	hh->addWidget(discardB, 0, Qt::AlignTop);
+	hh->addWidget(saveB, 0, Qt::AlignTop);
+	hin->addLayout(hh);
+	lay->addWidget(head);
+
+	// Links die Bereiche, rechts die Karte des gewählten Bereichs.
+	auto* body = new QHBoxLayout;
+	body->setSpacing(10);
+	QVBoxLayout* ain = nullptr;
+	auto* areas = rjui::card(this, &ain);
+	areas->setFixedWidth(300);
+	ain->addWidget(rjui::section(rjText(m_backend, "edit.areas"), areas));
+	m_areaList = ain;
+	QVBoxLayout* pin = nullptr;
+	auto* pageCard = rjui::card(this, &pin);
+	m_pageTitle = rjui::section(QString(), pageCard);
+	pin->addWidget(m_pageTitle);
+	m_cats = new QTreeWidget(this); // unsichtbar: hält die Auswahl (selectCategory, Neuaufbau)
+	m_cats->hide();
+	m_pages = new QStackedWidget(pageCard);
+	pin->addWidget(m_pages, 1);
+	body->addWidget(areas, 0);
+	body->addWidget(pageCard, 1);
+	lay->addLayout(body, 1);
+
+	auto page = [this](const QString& key, const char* label, QWidget* (PropertiesTab::*make)()) {
+		m_buildingPage = key;
+		addPage(key, label, (this->*make)());
+	};
+	page(QStringLiteral("general"), "edit.cat.general", &PropertiesTab::pageGeneral);
+	page(QStringLiteral("connection"), "edit.cat.connection", &PropertiesTab::pageConnection);
+	page(QStringLiteral("credentials"), "edit.cat.credentials", &PropertiesTab::pageCredentials);
+	page(QStringLiteral("tunnel"), "edit.cat.tunnel", &PropertiesTab::pageTunnel);
+	page(QStringLiteral("tasks"), "edit.cat.tasks", &PropertiesTab::pageTasks);
+	page(QStringLiteral("clipboard"), "edit.cat.clipboard", &PropertiesTab::pageClipboard);
+	page(QStringLiteral("organisation"), "edit.cat.organisation", &PropertiesTab::pageOrganisation);
+	if (kind != QLatin1String("root"))
+		page(QStringLiteral("parent"), "edit.cat.parent", &PropertiesTab::pageParent);
+	m_buildingPage.clear();
+	ain->addStretch(1);
+	connect(m_cats, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* cur) {
+		if (!cur)
+			return;
+		m_pages->setCurrentIndex(m_cats->indexOfTopLevelItem(cur));
+		const QString key = cur->data(0, Qt::UserRole).toString();
+		m_pageTitle->setText(cur->text(0).toUpper());
+		for (auto it = m_areas.begin(); it != m_areas.end(); ++it)
+			it->row->setSelected(it.key() == key);
+	});
+	m_cats->setCurrentItem(m_cats->topLevelItem(0));
+	refreshAreas();
 	updateCredentialMode();
 	m_loading = false;
 }

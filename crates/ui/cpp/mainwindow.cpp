@@ -894,14 +894,15 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 			                          { QStringLiteral("guest"), i.data(RoleGuest).toString() },
 			                          { QStringLiteral("name"), i.data(Qt::DisplayRole).toString() },
 			                          { QStringLiteral("state"), i.data(RoleGuestState).toString() },
-			                          { QStringLiteral("address"), i.data(RoleConsoleHost).toString() } });
+			                          { QStringLiteral("address"), i.data(RoleConsoleHost).toString() } },
+			             i.data(Qt::DecorationRole).value<QIcon>());
 			return;
 		}
 		if (i.data(RoleMacro).toInt() != 0 || i.data(RolePlaceholder).toBool() || i.data(RoleFolder).toBool() || i.data(RoleLogin).toBool())
 			return;
 		const QString id = i.data(RoleId).toString();
 		if (!id.isEmpty())
-			openOverview(QJsonObject{ { QStringLiteral("id"), id } });
+			openOverview(QJsonObject{ { QStringLiteral("id"), id } }, i.data(Qt::DecorationRole).value<QIcon>());
 	});
 	connect(m_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex& i) {
 		if (i.data(RoleMacro).toInt() == 2)
@@ -1326,6 +1327,34 @@ void MainWindow::openUpdateTab()
 	addToolTab(new UpdateTab(m_backend, m_tabs), T(m_backend, "update.title"));
 }
 
+/// Stylesheet der Kartenbausteine (cards.h) aus den Farben des Schemas; Plaketten hell und dunkel lesbar.
+static QString cardStyle(const QColor& base, const QColor& window, const QColor& alternate, const QColor& muted, const QColor& text, const QColor& accent)
+{
+	const bool dark = base.lightness() < 128;
+	auto mix = [](const QColor& a, const QColor& b, int pctA) {
+		return QColor((a.red() * pctA + b.red() * (100 - pctA)) / 100, (a.green() * pctA + b.green() * (100 - pctA)) / 100, (a.blue() * pctA + b.blue() * (100 - pctA)) / 100);
+	};
+	const QColor border = mix(text, base, 18);
+	const QColor tileBg = dark ? mix(text, base, 7) : mix(window, base, 60);
+	const QColor okText = dark ? QColor("#7fd69a") : QColor("#23793a"), okBg = mix(QColor("#2e9e44"), base, dark ? 30 : 16);
+	const QColor warnText = dark ? QColor("#f2c174") : QColor("#9a5b08"), warnBg = mix(QColor("#d98a13"), base, dark ? 30 : 18);
+	const QColor accentBg = mix(accent, base, dark ? 30 : 16);
+	const QColor rowSel = mix(accent, base, dark ? 22 : 12);
+	Q_UNUSED(alternate);
+	return QStringLiteral("QFrame#rjCard { background: %1; border: 1px solid %2; border-radius: 10px; }"
+	                      "QFrame#rjTile { background: %3; border-radius: 6px; }"
+	                      "QLabel#rjSection, QLabel#rjTileLabel, QLabel#rjMuted { color: %4; }"
+	                      "QLabel[rjPill=\"ok\"] { background: %5; color: %6; border-radius: 9px; padding: 1px 9px; }"
+	                      "QLabel[rjPill=\"warn\"] { background: %7; color: %8; border-radius: 9px; padding: 1px 9px; }"
+	                      "QLabel[rjPill=\"off\"] { background: %3; color: %4; border-radius: 9px; padding: 1px 9px; }"
+	                      "QLabel[rjPill=\"accent\"] { background: %9; color: %10; border-radius: 9px; padding: 1px 9px; }"
+	                      "QFrame#rjRow { border-radius: 6px; }"
+	                      "QFrame#rjRow:hover { background: %3; }"
+	                      "QFrame#rjRow[selected=\"true\"] { background: %11; }")
+	  .arg(base.name(), border.name(), tileBg.name(), muted.name(), okBg.name(), okText.name(), warnBg.name(), warnText.name(), accentBg.name())
+	  .arg(dark ? accent.lighter(140).name() : accent.darker(120).name(), rowSel.name());
+}
+
 void MainWindow::applyTheme(bool dark)
 {
 	qApp->setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
@@ -1455,7 +1484,9 @@ void MainWindow::applyTheme(bool dark)
 	                                             "QRadioButton::indicator:checked { background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 %3, stop:0.5 %3, stop:0.6 %2, stop:1 %2); border-color: %3; }"
 	                                             "QCheckBox::indicator:checked { background: %3; border-color: %3; }"
 	                                             "QRadioButton::indicator:disabled, QCheckBox::indicator:disabled { border-color: %4; background: %5; }")
-	                                  .arg(c("muted").name(), c("base").name(), c("highlight").name(), c("alternate").name(), c("window").name())));
+	                                  .arg(c("muted").name(), c("base").name(), c("highlight").name(), c("alternate").name(), c("window").name()))
+	                  // Kartenstil (Übersicht, Einstellungen): Karten, Kacheln, Abschnitte, Plaketten, Zeilen der Bereichsliste.
+	                  + cardStyle(c("base"), c("window"), c("alternate"), c("muted"), c("text"), c("highlight")));
 	if (m_model)
 		reloadTree();
 	if (m_tabs)
@@ -3801,7 +3832,7 @@ bool MainWindow::isLogin(const QString& id) const
 	return hit;
 }
 
-void MainWindow::openOverview(const QJsonObject& subject)
+void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 {
 	auto* t = findChild<OverviewTab*>();
 	if (!t)
@@ -3812,11 +3843,23 @@ void MainWindow::openOverview(const QJsonObject& subject)
 			if (i >= 0)
 				m_tabs->setTabText(i, T(m_backend, "ov.title").arg(t->targetName()));
 		});
+		// „Verbinden“ in der Kopfkarte: wie ein Doppelklick auf den Eintrag im Baum.
+		connect(t, &OverviewTab::connectRequested, this, [this](const QJsonObject& s) {
+			const QModelIndex cur = m_tree->currentIndex();
+			if (s.contains(QStringLiteral("guest")))
+			{
+				if (cur.isValid() && cur.data(RoleGuest).toString() == s.value(QStringLiteral("guest")).toString())
+					openGuestConsole(cur);
+				return;
+			}
+			selectId(s.value(QStringLiteral("id")).toString());
+			connectSelected();
+		});
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
 	}
 	else
 		m_tabs->setCurrentWidget(t);
-	t->showSubject(subject);
+	t->showSubject(subject, icon);
 }
 
 void MainWindow::openLogin(const QString& id, const QString& folder)
