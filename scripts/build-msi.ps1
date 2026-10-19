@@ -102,6 +102,14 @@ $crt = if ($vs) {
 if (-not $crt) { Fehler 'Visual-C++-Laufzeit (Microsoft.VC143.CRT) nicht gefunden.' 'Visual Studio Build Tools mit „Desktopentwicklung mit C++“ installieren.' }
 Copy-Item (Join-Path $crt.FullName '*.dll') $Stage
 Write-Host "Laufzeit: $($crt.FullName)"
+# Lizenzen in den Installationsordner: eigene (LICENSE, NOTICE), Fremdkomponenten (THIRD_PARTY.md) und für Qt
+# (LGPL-3.0) die Lizenztexte; die LGPL 3.0 ergänzt die GPL 3.0, darum liegen beide Texte bei.
+$lizenzen = @('LICENSE', 'NOTICE', 'THIRD_PARTY.md') | ForEach-Object { Join-Path $Root $_ }
+$lizenzen += @('LGPL-3.0.txt', 'GPL-3.0.txt') | ForEach-Object { Join-Path $Root "packaging\windows\licenses\$_" }
+foreach ($l in $lizenzen) {
+    if (-not (Test-Path $l)) { Fehler "Lizenzdatei fehlt: $l" }
+    Copy-Item $l $Stage
+}
 
 if (-not $NoSign) {
     Schritt 'Eigene Programme signieren'
