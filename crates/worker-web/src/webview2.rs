@@ -50,6 +50,10 @@ enum Msg {
     Detected(String),
     Rejected(String),
     LoginResult { text: String, script: zeroize::Zeroizing<String>, tries: u32 },
+    /// Anmeldung in Schritten: Schritt-Skript (erneut) ausführen, sein Ergebnis, Eingabe getippt.
+    RunStep(Step, u32),
+    StepResult { step: Step, text: String, tries: u32 },
+    Typed(FlowAction),
     /// Ein „Verbindung abgebrochen“ nach dem Laden zeigen, falls kein Download gestartet ist.
     PendingError,
     /// Diagnose: gerenderte Seite als Bild speichern (nur mit `RJ_WEB_SHOTDIR`).
@@ -279,6 +283,24 @@ impl Worker {
                     _ => {}
                 }
             }
+            Msg::RunStep(step, tries) => self.run_step(step, tries),
+            Msg::StepResult { step, text, tries } => {
+                let text: String = serde_json::from_str(&text).unwrap_or(text);
+                if let Some((every, max)) = step_retry(&text) {
+                    if tries < max {
+                        self.0.queue.push_after(every, Msg::RunStep(step, tries + 1));
+                        return true;
+                    }
+                }
+                // Ergebnisse sind feste Kennungen (rj:…) ohne Eingabewerte.
+                self.trace(&format!("Schritt {step:?} nach {tries} Wiederholungen: {}", text.chars().take(80).collect::<String>()));
+                let next = self.0.flow.borrow_mut().step_result(step, &text);
+                self.drive(next);
+            }
+            Msg::Typed(action) => {
+                let next = self.0.flow.borrow_mut().typed(&action);
+                self.drive(next);
+            }
             Msg::LoginResult { text, script, tries } => {
                 let text: String = serde_json::from_str(&text).unwrap_or(text);
                 if text == RESULT_NO_PASSWORD_FIELD && tries < LOGIN_RETRIES {
@@ -489,7 +511,8 @@ impl Worker {
                     FlowAction::InjectLogin => me.inject(),
                     FlowAction::Notice(n) => me.send(FromWorker::Notice(n)),
                     FlowAction::CheckRejected => me.0.queue.push_after(Duration::from_secs(2), Msg::CheckRejected),
-                    FlowAction::None => {}
+                    // Schritte und Eingaben beginnen erst über `inject` (`LoginFlow::begin`).
+                    FlowAction::None | FlowAction::Script(_) | FlowAction::Type(..) | FlowAction::PressEnter => {}
                 }
             }
             Ok(())
@@ -918,12 +941,157 @@ impl Worker {
             self.trace("Anmeldeskript läuft bereits: zweiter Lauf übersprungen");
             return;
         }
+        // Anmeldung wie von Hand (Schritte mit echter Eingabe); eigenes Skript: bisheriger Weg.
+        let first = self.0.flow.borrow_mut().begin();
+        match first {
+            FlowAction::InjectLogin => self.legacy_login(&login),
+            other => {
+                self.trace("Anmeldung in Schritten gestartet");
+                self.drive(other);
+            }
+        }
+    }
+
+    /// Benutzername (mit Domäne) und Kennwort der Sitzung.
+    fn login_strings(&self) -> Option<(String, zeroize::Zeroizing<String>)> {
+        let c = self.0.creds.borrow().clone()?;
         let user = match &c.domain {
             Some(d) if !d.is_empty() && !c.username.contains('@') && !c.username.contains('\\') => format!("{d}\\{}", c.username),
             _ => c.username.clone(),
         };
-        let pw = Secret::from_bytes(c.password.0.clone());
-        match login_script(&login, &user, &pw) {
+        let pw = zeroize::Zeroizing::new(String::from_utf8_lossy(&c.password.0).to_string());
+        Some((user, pw))
+    }
+
+    /// Nächste Aktion der Anmeldung ausführen.
+    fn drive(&self, action: FlowAction) {
+        match action {
+            FlowAction::InjectLogin => {
+                let Some(login) = self.0.flow.borrow().login().cloned() else { return self.0.login_busy.set(false) };
+                self.send(FromWorker::Notice("Eingabe wie von Hand kam auf dieser Seite nicht an; es wird der bisherige Weg versucht.".into()));
+                self.legacy_login(&login);
+            }
+            FlowAction::Script(step) => self.run_step(step, 0),
+            FlowAction::Type(field, mode) => {
+                let Some((user, pw)) = self.login_strings() else { return self.0.login_busy.set(false) };
+                let text = match field {
+                    Field::User => zeroize::Zeroizing::new(user),
+                    Field::Password => pw,
+                };
+                // Kurz warten, damit die Seite die Eingabe verarbeitet hat; schlägt das Tippen fehl,
+                // fällt die Längenprüfung danach auf (zweiter Durchgang Taste für Taste, dann alter Weg).
+                self.type_text(&text, mode, Msg::Typed(action));
+            }
+            FlowAction::PressEnter => {
+                let enter = |kind: &str, text: &str| {
+                    zeroize::Zeroizing::new(format!(
+                        "{{\"type\":\"{kind}\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13,\"nativeVirtualKeyCode\":13{text}}}"
+                    ))
+                };
+                self.cdp("Input.dispatchKeyEvent", &enter("keyDown", ",\"text\":\"\\r\",\"unmodifiedText\":\"\\r\""), None);
+                self.cdp("Input.dispatchKeyEvent", &enter("keyUp", ""), Some(Msg::Typed(action)));
+            }
+            FlowAction::Notice(n) => {
+                self.0.login_busy.set(false);
+                self.send(FromWorker::Notice(n));
+            }
+            FlowAction::CheckRejected => {
+                self.0.login_busy.set(false);
+                self.0.queue.push_after(Duration::from_secs(2), Msg::CheckRejected);
+            }
+            FlowAction::None => self.0.login_busy.set(false),
+        }
+    }
+
+    /// Text als echte Eingabe in das fokussierte Feld (DevTools-Protokoll von WebView2): eingefügt wie von einer
+    /// Eingabehilfe (`Input.insertText`) oder Taste für Taste (`Input.dispatchKeyEvent`). `then` folgt 150 ms nach
+    /// der letzten Antwort. Der Text steht nur in überschriebenem Speicher, nie im Skript der Seite.
+    fn type_text(&self, text: &str, mode: TypeMode, then: Msg) {
+        let then = Some(then);
+        match mode {
+            TypeMode::Insert => {
+                let mut p = zeroize::Zeroizing::new(String::from("{\"text\":"));
+                json_quote(&mut p, text);
+                p.push('}');
+                self.cdp("Input.insertText", &p, then);
+            }
+            TypeMode::Keys => {
+                let chars: Vec<char> = text.chars().collect();
+                if chars.is_empty() {
+                    if let Some(m) = then {
+                        self.0.queue.push(m);
+                    }
+                    return;
+                }
+                let mut then = then;
+                for (i, c) in chars.iter().enumerate() {
+                    let mut ch = zeroize::Zeroizing::new(String::new());
+                    json_quote(&mut ch, c.encode_utf8(&mut [0u8; 4]));
+                    let mut down = zeroize::Zeroizing::new(String::from("{\"type\":\"keyDown\",\"text\":"));
+                    down.push_str(&ch);
+                    down.push_str(",\"unmodifiedText\":");
+                    down.push_str(&ch);
+                    down.push_str(",\"key\":");
+                    down.push_str(&ch);
+                    down.push('}');
+                    self.cdp("Input.dispatchKeyEvent", &down, None);
+                    let mut up = zeroize::Zeroizing::new(String::from("{\"type\":\"keyUp\",\"key\":"));
+                    up.push_str(&ch);
+                    up.push('}');
+                    let last = i + 1 == chars.len();
+                    self.cdp("Input.dispatchKeyEvent", &up, if last { then.take() } else { None });
+                }
+            }
+        }
+    }
+
+    /// Ruft eine Methode des DevTools-Protokolls auf; `done` kommt 150 ms nach der Antwort in die Warteschlange
+    /// (auch bei einem Fehler: die Längenprüfung danach zeigt, ob die Eingabe ankam).
+    fn cdp(&self, method: &str, params: &zeroize::Zeroizing<String>, done: Option<Msg>) {
+        let q = self.0.queue.clone();
+        let Some(v) = self.view() else {
+            if let Some(m) = done {
+                q.push(m);
+            }
+            return;
+        };
+        let core = v.webview();
+        let m: Vec<u16> = method.encode_utf16().chain(Some(0)).collect();
+        let p = zeroize::Zeroizing::new(params.encode_utf16().chain(Some(0)).collect::<Vec<u16>>());
+        let pending = std::rc::Rc::new(RefCell::new(done));
+        let in_handler = pending.clone();
+        let h = webview2_com::CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |_, _| {
+            if let Some(m) = in_handler.borrow_mut().take() {
+                q.push_after(Duration::from_millis(150), m);
+            }
+            Ok(())
+        }));
+        // SAFETY: nullterminierte Zeichenketten leben über den Aufruf; WebView2 kopiert die Parameter.
+        let ok = unsafe { core.CallDevToolsProtocolMethod(windows::core::PCWSTR(m.as_ptr()), windows::core::PCWSTR(p.as_ptr()), &h) }.is_ok();
+        if !ok {
+            if let Some(m) = pending.borrow_mut().take() {
+                self.0.queue.push(m);
+            }
+        }
+    }
+
+    /// Schritt-Skript ausführen; „noch nicht so weit“ wiederholt `Msg::StepResult` (`step_retry`).
+    fn run_step(&self, step: Step, tries: u32) {
+        let Some(v) = self.view() else { return self.0.login_busy.set(false) };
+        let Some(login) = self.0.flow.borrow().login().cloned() else { return self.0.login_busy.set(false) };
+        let (ulen, plen) = self.login_strings().map(|(u, p)| (u.chars().count(), p.chars().count())).unwrap_or((0, 0));
+        let script = step_script(&login, step, ulen, plen);
+        let q = self.0.queue.clone();
+        if v.evaluate_script_with_callback(&script, move |text| q.push(Msg::StepResult { step, text, tries })).is_err() {
+            self.0.login_busy.set(false);
+        }
+    }
+
+    /// Bisheriger Weg: Werte per Skript eintragen (eigene Skripte, Rückfall).
+    fn legacy_login(&self, login: &FormLogin) {
+        let Some((user, pw)) = self.login_strings() else { return self.0.login_busy.set(false) };
+        let pw = Secret::from_bytes(pw.as_bytes().to_vec());
+        match login_script(login, &user, &pw) {
             Ok(script) => {
                 self.trace("Anmeldeskript gestartet");
                 self.run_login(script, 0)
@@ -1050,6 +1218,26 @@ fn is_reserved(keys: &[ReservedKey], key: &ReservedKey) -> bool {
     ALWAYS_RESERVED.contains(key) || keys.contains(key)
 }
 
+/// Hängt `s` als JSON-Zeichenkette (mit Anführungszeichen) an `out` an, ohne Zwischenkopie (Kennwörter).
+fn json_quote(out: &mut String, s: &str) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c == '\u{2028}' || c == '\u{2029}' => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
 fn is_auto_open(name: &str) -> bool {
     Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(AUTO_OPEN_EXT))
 }
@@ -1112,6 +1300,15 @@ mod tests {
         let ctrl_pgdn = ReservedKey { vk: 0x22, ctrl: true, ..Default::default() };
         assert!(!is_reserved(&[], &ctrl_pgdn));
         assert!(is_reserved(&[ctrl_pgdn], &ctrl_pgdn));
+    }
+
+    #[test]
+    fn json_quote_round_trips_special_characters() {
+        for s in ["einfach", "mit \"Anführung\" und \\ Schrägstrich", "Zeile\nneu\tTab\r", "Steuer\u{1}zeichen", "Ünïcödé €😀", "\u{2028}"] {
+            let mut out = String::new();
+            json_quote(&mut out, s);
+            assert_eq!(serde_json::from_str::<String>(&out).unwrap(), s, "{out}");
+        }
     }
 
     #[test]

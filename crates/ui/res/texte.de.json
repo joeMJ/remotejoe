@@ -653,7 +653,8 @@
   "about.title": "Über remotejoe",
   "about.version": "Version %1",
   "about.description": "Verbindungsmanager für RDP, SSH, VNC, Web, PowerShell, Proxmox VE und Hyper-V mit KeePass-Schlüsseldatenbank.",
-  "about.copyright": "Copyright © 2026 joeMJ",
+  "about.copyright": "Copyright © 2026 John Lose (joeMJ)",
+  "logo.link": "github.com/joeMJ/remotejoe",
   "about.license": "Lizenz: Apache License 2.0",
   "about.source": "Quelltext und Anleitung auf GitHub",
   "about.third_party": "Verwendete Bibliotheken und ihre Lizenzen",
@@ -688,5 +689,12 @@
   "update.open_page": "Release-Seite öffnen",
   "update.windows.hint": "Unter Windows bitte die neue MSI von der Release-Seite installieren.",
   "update.page.opened": "Die Release-Seite ist im Browser geöffnet: %1. Unter Windows bitte die neue MSI von der Release-Seite installieren.",
-  "update.page.failed": "Der Browser ließ sich nicht öffnen. Release-Seite: %1. Unter Windows bitte die neue MSI von dort installieren."
+  "update.page.failed": "Der Browser ließ sich nicht öffnen. Release-Seite: %1. Unter Windows bitte die neue MSI von dort installieren.",
+  "update.msi.download": "Herunterladen und prüfen",
+  "update.downloading": "Lade die MSI herunter: %1 von %2 MB … danach werden Signatur, Prüfsumme und Herausgeber geprüft.",
+  "update.ready": "Version %1 ist heruntergeladen; Signatur, Prüfsumme und Herausgeber sind geprüft. „Jetzt installieren“ beendet remotejoe, installiert das Update und startet remotejoe neu.",
+  "update.apply": "Jetzt installieren",
+  "update.apply.confirm": "Es sind %1 Sitzungen offen. Für die Installation beendet sich remotejoe; die Sitzungen werden getrennt. Trotzdem installieren?",
+  "update.applied.ok": "remotejoe wurde auf Version %1 aktualisiert.",
+  "update.applied.failed": "Das Update wurde nicht installiert (msiexec meldet %1). Die bisherige Fassung läuft weiter."
 }

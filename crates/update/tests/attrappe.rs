@@ -25,7 +25,8 @@ fn fixture(version: &str) -> Fixture {
     let prog = tempfile::tempdir().unwrap();
     fs::write(prog.path().join(install::main_program()), format!("remotejoe {version}")).unwrap();
     fs::write(prog.path().join("rj-worker-web"), b"worker").unwrap();
-    let archive = archive::pack_tar_zst(prog.path()).unwrap();
+    // Paketformat wie `asset_name` für die Plattform (Windows: zip).
+    let archive = if cfg!(windows) { archive::pack_zip(prog.path()) } else { archive::pack_tar_zst(prog.path()) }.unwrap();
     let name = asset_name(version, &rj_update::platform());
     let sums = sign::sums_text(&[(name.clone(), sign::sha256_hex(&archive))]);
     {

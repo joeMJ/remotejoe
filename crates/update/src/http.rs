@@ -6,7 +6,7 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -101,11 +101,25 @@ pub struct Control<'a> {
     pub limits: Limits,
     pub cancel: Option<&'a AtomicBool>,
     pub deadline: Instant,
+    /// Bisher gelesene Bytes des Inhalts (Fortschrittsanzeige); `None`: nicht gezählt.
+    pub progress: Option<&'a AtomicU64>,
 }
 
 impl<'a> Control<'a> {
     pub fn new(limits: Limits, cancel: Option<&'a AtomicBool>) -> Self {
-        Control { limits, cancel, deadline: Instant::now() + limits.timeout }
+        Control { limits, cancel, deadline: Instant::now() + limits.timeout, progress: None }
+    }
+
+    /// Zählt die gelesenen Bytes des Inhalts mit (für eine Fortschrittsanzeige).
+    pub fn with_progress(mut self, progress: &'a AtomicU64) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    fn note(&self, bytes: usize) {
+        if let Some(p) = self.progress {
+            p.store(bytes as u64, Ordering::Relaxed);
+        }
     }
 
     fn check(&self) -> Result<()> {
@@ -226,6 +240,7 @@ fn read_exact(r: &mut BufReader<Stream>, mut n: u64, out: &mut Vec<u8>, ctl: &Co
             return Err(UpdateError::Net("Verbindung vorzeitig beendet".into()));
         }
         out.extend_from_slice(&buf[..got]);
+        ctl.note(out.len());
         if out.len() as u64 > ctl.limits.max_bytes {
             return Err(UpdateError::TooLarge(ctl.limits.max_bytes));
         }
@@ -297,6 +312,7 @@ fn once(method: &str, u: &Url, headers: &[(String, String)], body: &[u8], ctl: &
                 break;
             }
             out.extend_from_slice(&buf[..got]);
+            ctl.note(out.len());
             if out.len() as u64 > ctl.limits.max_bytes {
                 return Err(UpdateError::TooLarge(ctl.limits.max_bytes));
             }

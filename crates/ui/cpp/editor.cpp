@@ -3772,7 +3772,15 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 		m_backend->edit(QStringLiteral("{\"op\":\"update_cancel\"}"));
 		setBusy(false, m_backend->text(QStringLiteral("update.cancelled")));
 	});
+	m_progressTimer = new QTimer(this);
+	m_progressTimer->setInterval(300);
+	connect(m_progressTimer, &QTimer::timeout, this, [this] { showProgress(); });
 	connect(m_restart, &QPushButton::clicked, this, [this] {
+		if (m_applyReady)
+		{
+			apply();
+			return;
+		}
 		// Erst schließen (fragt bei ungespeicherten Änderungen nach); bei „Abbrechen“ bleibt alles, wie es ist.
 		if (QWidget* w = window(); w && !w->close())
 			return;
@@ -3797,8 +3805,17 @@ void UpdateTab::refresh()
 	m_onStart->setChecked(s.value(QStringLiteral("check_on_start")).toBool());
 	m_current->setText(m_backend->text(QStringLiteral("update.current")).arg(s.value(QStringLiteral("current")).toString(), s.value(QStringLiteral("platform")).toString()));
 	m_pageOnly = s.value(QStringLiteral("page_only")).toBool();
+	m_msi = s.value(QStringLiteral("msi")).toBool();
 	if (m_pageOnly)
 		m_install->setText(m_backend->text(QStringLiteral("update.open_page")));
+	else if (m_msi)
+		m_install->setText(m_backend->text(QStringLiteral("update.msi.download")));
+	if (m_msi && !s.value(QStringLiteral("ready")).toString().isEmpty())
+	{
+		m_applyReady = true;
+		m_restart->setText(m_backend->text(QStringLiteral("update.apply")));
+		m_restart->show();
+	}
 	const QJsonObject f = s.value(QStringLiteral("found")).toObject();
 	if (!f.isEmpty())
 	{
@@ -3867,13 +3884,60 @@ void UpdateTab::install(bool confirm)
 		const bool opened = QDesktopServices::openUrl(QUrl(url));
 		m_state->setText(m_backend->text(opened ? QStringLiteral("update.page.opened") : QStringLiteral("update.page.failed")).arg(url));
 	}
+	else if (state == QLatin1String("downloading"))
+	{
+		// Windows: MSI wird geladen und geprüft; Fortschritt aus dem Zustand.
+		setBusy(true);
+		showProgress();
+		m_progressTimer->start();
+	}
 	else
 		setBusy(true, m_backend->text(QStringLiteral("update.installing")));
+}
+
+void UpdateTab::showProgress()
+{
+	const QJsonObject s = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_status\"}")).toUtf8()).object();
+	const double mb = 1024.0 * 1024.0;
+	const double got = s.value(QStringLiteral("progress")).toDouble() / mb, total = s.value(QStringLiteral("total")).toDouble() / mb;
+	m_state->setText(m_backend->text(QStringLiteral("update.downloading")).arg(QString::number(got, 'f', 1), QString::number(total, 'f', 1)));
+}
+
+void UpdateTab::apply()
+{
+	// Offene Sitzungen werden mit dem Beenden getrennt: vorher fragen.
+	const QJsonObject s = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_status\"}")).toUtf8()).object();
+	const int open = s.value(QStringLiteral("sessions")).toInt();
+	auto go = [this] {
+		// Erst schließen (fragt bei ungespeicherten Änderungen nach), dann den Hilfsprozess starten: Er installiert,
+		// sobald remotejoe beendet ist. Bei „Abbrechen“ bleibt alles, wie es ist.
+		QWidget* w = window();
+		if (w && !w->close())
+			return;
+		const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_apply\",\"confirm\":true}")).toUtf8()).object();
+		if (r.value(QStringLiteral("state")).toString() == QLatin1String("applying"))
+		{
+			qApp->quit();
+			return;
+		}
+		// Nicht startbar: Fenster wieder zeigen, Grund nennen.
+		if (w)
+			w->show();
+		m_state->setText(m_backend->text(QStringLiteral("update.error")).arg(r.value(QStringLiteral("error")).toString()));
+	};
+	if (open > 0)
+		m_bar->ask(m_backend->text(QStringLiteral("update.apply.confirm")).arg(open), { m_backend->text(QStringLiteral("update.apply")) }, [go](int b) {
+			if (b == 0)
+				go();
+		});
+	else
+		go();
 }
 
 void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 {
 	setBusy(false);
+	m_progressTimer->stop();
 	const QString state = r.value(QStringLiteral("state")).toString();
 	if (state == QLatin1String("error"))
 	{
@@ -3888,6 +3952,12 @@ void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 			m_found->setText(m_backend->text(QStringLiteral("update.found")).arg(f.value(QStringLiteral("version")).toString()));
 			m_notes->setPlainText(f.value(QStringLiteral("notes")).toString());
 			m_install->setEnabled(true);
+			// Windows: Veröffentlichung ohne MSI → Release-Seite wie ohne MSI-Installation.
+			if (r.contains(QStringLiteral("no_msi")))
+			{
+				m_pageOnly = true;
+				m_install->setText(m_backend->text(QStringLiteral("update.open_page")));
+			}
 			m_state->setText(m_backend->text(QStringLiteral("update.newer"))
 			                 + (m_pageOnly ? QLatin1Char(' ') + m_backend->text(QStringLiteral("update.windows.hint")) : QString()));
 			m_install->setFocus();
@@ -3899,6 +3969,16 @@ void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 			m_install->setEnabled(false);
 			m_state->setText(m_backend->text(QStringLiteral("update.uptodate")).arg(r.value(QStringLiteral("latest")).toString()));
 		}
+	}
+	else if (state == QLatin1String("ready"))
+	{
+		// Windows: MSI geladen, Prüfsumme und Signaturen geprüft.
+		m_applyReady = true;
+		m_install->setEnabled(false);
+		m_state->setText(m_backend->text(QStringLiteral("update.ready")).arg(r.value(QStringLiteral("version")).toString()));
+		m_restart->setText(m_backend->text(QStringLiteral("update.apply")));
+		m_restart->show();
+		m_restart->setFocus();
 	}
 	else if (state == QLatin1String("installed"))
 	{

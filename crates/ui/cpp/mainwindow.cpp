@@ -591,6 +591,10 @@ bool webView2Installed()
 	}
 	return false;
 }
+
+/// Ergebnis eines Updates über die MSI (Neustart): erscheint nach dem Entsperren als Hinweis; vorher verdeckt
+/// die Entsperr-Abfrage sie.
+QString g_updateNotice;
 #endif
 } // namespace
 
@@ -772,6 +776,14 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		m_logo->setPixmap(pm);
 		m_logo->setFixedSize(200, 200);
 		m_logo->setAttribute(Qt::WA_TransparentForMouseEvents);
+		// Darunter ein Link auf die Projektseite (öffnet im Standardbrowser).
+		auto* link = new QLabel(m_tabs);
+		link->setObjectName(QStringLiteral("emptyLogoLink"));
+		link->setTextFormat(Qt::RichText);
+		link->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);
+		link->setOpenExternalLinks(true);
+		link->setText(QStringLiteral("<a href=\"https://github.com/joeMJ/remotejoe\">%1</a>").arg(T(m_backend, "logo.link").toHtmlEscaped()));
+		link->adjustSize();
 		connect(m_tabs, &QTabWidget::currentChanged, this, [this] { updateLogo(); });
 		QTimer::singleShot(0, this, [this] { updateLogo(); });
 	}
@@ -1078,6 +1090,13 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 			box->setWindowModality(Qt::NonModal);
 			box->show();
 		});
+	// Neustart nach einem Update über die MSI: Ergebnis von msiexec (0 bzw. 3010: erfolgreich) in der Fußzeile.
+	if (const QString code = qEnvironmentVariable("RJ_UPDATE_RESULT"); !code.isEmpty())
+	{
+		qunsetenv("RJ_UPDATE_RESULT");
+		const bool ok = code == QLatin1String("0") || code == QLatin1String("3010");
+		g_updateNotice = ok ? T(m_backend, "update.applied.ok").arg(m_backend->appVersion()) : T(m_backend, "update.applied.failed").arg(code);
+	}
 #endif
 }
 
@@ -2818,6 +2837,17 @@ void MainWindow::handleEvents(const QString& json)
 				statusBar()->showMessage(T(m_backend, "status.unlocked"), 5000);
 				if (const QString note = m_backend->keyringNote(); !note.isEmpty())
 					statusBar()->showMessage(note, 12000);
+#ifdef Q_OS_WIN
+				if (!g_updateNotice.isEmpty())
+				{
+					// Eigenes Hinweisfenster: Meldungen der Fußzeile werden beim Entsperren gleich wieder überschrieben.
+					auto* box = new QMessageBox(QMessageBox::Information, QStringLiteral("remotejoe"), g_updateNotice, QMessageBox::Ok, this);
+					box->setAttribute(Qt::WA_DeleteOnClose);
+					box->setWindowModality(Qt::NonModal);
+					QTimer::singleShot(300, box, &QWidget::show);
+					g_updateNotice.clear();
+				}
+#endif
 			}
 			else if (t == QLatin1String("unlock_failed"))
 			{
@@ -2919,6 +2949,13 @@ void MainWindow::updateLogo()
 	m_logo->setVisible(show);
 	if (show)
 		m_logo->raise();
+	if (auto* link = m_tabs->findChild<QLabel*>(QStringLiteral("emptyLogoLink")))
+	{
+		link->move(m_logo->x() + (m_logo->width() - link->width()) / 2, m_logo->y() + m_logo->height() + 4);
+		link->setVisible(show);
+		if (show)
+			link->raise();
+	}
 }
 
 bool MainWindow::focusInSession() const

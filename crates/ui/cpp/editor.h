@@ -307,6 +307,10 @@ public:
 private:
 	void saveSettings();
 	void install(bool confirm);
+	/// Windows: geprüfte MSI installieren (remotejoe beendet sich, startet nach der Installation neu).
+	void apply();
+	/// Windows: Fortschritt des Downloads aus `update_status`.
+	void showProgress();
 	void setBusy(bool busy, const QString& text = QString());
 	RjBackend* m_backend;
 	QCheckBox* m_onStart;
@@ -323,6 +327,11 @@ private:
 	QString m_program;
 	/// Windows: Das Programm ersetzt sich nicht selbst; der Knopf öffnet die Release-Seite.
 	bool m_pageOnly = false;
+	/// Windows, als MSI installiert: Update über die MSI (laden, prüfen, nach dem Beenden installieren).
+	bool m_msi = false;
+	/// Windows: geprüfte MSI liegt bereit; der Neustart-Knopf installiert sie.
+	bool m_applyReady = false;
+	QTimer* m_progressTimer = nullptr;
 };
 
 /// „Schlüssel und Zertifikate prüfen“: holt die Server-Schlüssel der gewählten Ziele ohne Anmeldung,

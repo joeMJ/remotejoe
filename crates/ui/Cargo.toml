@@ -45,6 +45,9 @@ cxx-qt-lib = { version = "0.10", default-features = false }
 
 [build-dependencies]
 cxx-qt-build = "0.10"
+# Windows: Programmsymbol in remotejoe.exe (Ressourcen über rc.exe).
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
 
 [dev-dependencies]
 tempfile.workspace = true
