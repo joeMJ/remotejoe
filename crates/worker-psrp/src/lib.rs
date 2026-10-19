@@ -7,6 +7,8 @@
 //! (Base64 der UTF-8-Bytes, damit es byte-genau bleibt); danach je Zeile ein
 //! Befehl (Base64). Die Antworten sind JSON-Zeilen mit getrennten Strömen.
 
+#[cfg(unix)]
+pub mod askpass;
 pub mod hyperv;
 pub mod inventory;
 
@@ -54,9 +56,10 @@ pub fn explain(error: String) -> String {
     // SSH-Transport ohne Schlüssel: pwsh übergibt das Kennwort aus der KDBX nicht an ssh.
     if error.contains("Permission denied") || error.contains("SSH client session has ended") || error.contains("SSH transport process") {
         return format!(
-            "PowerShell über SSH: Anmeldung derzeit nur mit Schlüssel möglich (das Kennwort aus der Schlüsseldatenbank \
-             wird von PowerShell nicht an ssh übergeben). Einrichtung siehe README, Abschnitt „Host für PowerShell über SSH \
-             einrichten“: https://github.com/joeMJ/remotejoe#host-f%C3%BCr-powershell-%C3%BCber-ssh-einrichten ({error})"
+            "PowerShell über SSH: Anmeldung fehlgeschlagen. Bitte Benutzer und Kennwort prüfen; ist am Ziel die \
+             Kennwortanmeldung abgeschaltet oder der Host-Schlüssel in ~/.ssh/known_hosts unbekannt, siehe README, \
+             Abschnitt „Host für PowerShell über SSH einrichten“: \
+             https://github.com/joeMJ/remotejoe#host-f%C3%BCr-powershell-%C3%BCber-ssh-einrichten ({error})"
         );
     }
     error
@@ -186,10 +189,22 @@ impl PsSession {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            // ssh (SSH-Transport von pwsh) darf weder ein Fenster für das Kennwort öffnen …
+            // ssh (SSH-Transport von pwsh) darf kein eigenes Fenster für das Kennwort öffnen …
             .env("SSH_ASKPASS_REQUIRE", "never");
-        // … noch im Terminal fragen, aus dem remotejoe gestartet wurde: eigene Sitzung ohne steuerndes Terminal.
-        // Ohne Schlüssel scheitert die Anmeldung dann sofort mit einer Meldung, statt zu hängen.
+        // … sondern bekommt das Kennwort aus der KDBX über `rj-askpass` (nur Unix, siehe `askpass`).
+        #[cfg(unix)]
+        let _askpass = match (askpass::helper(), matches!(t.transport, PsrpTransport::Ssh { .. } | PsrpTransport::Auto)) {
+            (Some(helper), true) => match askpass::Server::start(password.as_bytes()) {
+                Ok(server) => {
+                    cmd.env("SSH_ASKPASS", helper).env("SSH_ASKPASS_REQUIRE", "force").env(askpass::SOCKET_ENV, server.socket());
+                    Some(server)
+                }
+                Err(_) => None,
+            },
+            _ => None,
+        };
+        // Nie im Terminal fragen, aus dem remotejoe gestartet wurde: eigene Sitzung ohne steuerndes Terminal.
+        // Scheitert die Anmeldung, kommt sofort eine Meldung, statt dass ssh wartet.
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -301,7 +316,7 @@ mod tests {
     #[test]
     fn ssh_transport_without_key_is_explained() {
         let e = explain("The SSH client session has ended with error message: The SSH transport process has abruptly terminated".into());
-        assert!(e.contains("nur mit Schlüssel") && e.contains("host-f%C3%BCr-powershell"), "{e}");
+        assert!(e.contains("Anmeldung fehlgeschlagen") && e.contains("host-f%C3%BCr-powershell"), "{e}");
         assert_eq!(explain("anderer Fehler".into()), "anderer Fehler");
     }
 }
