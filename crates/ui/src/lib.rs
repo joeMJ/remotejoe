@@ -16,6 +16,7 @@ pub mod idle;
 pub mod jobs;
 pub mod keys;
 pub mod macro_run;
+pub mod overview;
 pub mod patch;
 pub mod sessions;
 pub mod texts;

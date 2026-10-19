@@ -7,7 +7,10 @@
 //! (Base64 der UTF-8-Bytes, damit es byte-genau bleibt); danach je Zeile ein
 //! Befehl (Base64). Die Antworten sind JSON-Zeilen mit getrennten Strömen.
 
+#[cfg(unix)]
+pub mod askpass;
 pub mod hyperv;
+pub mod inventory;
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -48,6 +51,15 @@ pub fn explain(error: String) -> String {
             "WinRM ist auf diesem Rechner nicht verfügbar (PowerShell 7 hat unter Linux keinen WinRM-Client). \
              Bitte beim Ziel den PowerShell-Transport auf „Automatisch“ oder „SSH“ stellen; Einrichtung siehe README, \
              Abschnitt „Hyper-V und PowerShell-Remoting“. ({error})"
+        );
+    }
+    // SSH-Transport ohne Schlüssel: pwsh übergibt das Kennwort aus der KDBX nicht an ssh.
+    if error.contains("Permission denied") || error.contains("SSH client session has ended") || error.contains("SSH transport process") {
+        return format!(
+            "PowerShell über SSH: Anmeldung fehlgeschlagen. Bitte Benutzer und Kennwort prüfen; ist am Ziel die \
+             Kennwortanmeldung abgeschaltet oder der Host-Schlüssel in ~/.ssh/known_hosts unbekannt, siehe README, \
+             Abschnitt „Host für PowerShell über SSH einrichten“: \
+             https://github.com/joeMJ/remotejoe#host-f%C3%BCr-powershell-%C3%BCber-ssh-einrichten ({error})"
         );
     }
     error
@@ -172,13 +184,39 @@ impl PsSession {
     /// wartet auf die Meldung „bereit“.
     pub fn start(t: &PsTarget, password: &Secret) -> Result<PsSession, PsError> {
         let prog = pwsh_program();
-        let mut child = Command::new(&prog)
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded(&driver_script(t))])
+        let mut cmd = Command::new(&prog);
+        cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded(&driver_script(t))])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| PsError::NoPwsh(format!("{prog}: {e}")))?;
+            // ssh (SSH-Transport von pwsh) darf kein eigenes Fenster für das Kennwort öffnen …
+            .env("SSH_ASKPASS_REQUIRE", "never");
+        // … sondern bekommt das Kennwort aus der KDBX über `rj-askpass` (nur Unix, siehe `askpass`).
+        #[cfg(unix)]
+        let _askpass = match (askpass::helper(), matches!(t.transport, PsrpTransport::Ssh { .. } | PsrpTransport::Auto)) {
+            (Some(helper), true) => match askpass::Server::start(password.as_bytes()) {
+                Ok(server) => {
+                    cmd.env("SSH_ASKPASS", helper).env("SSH_ASKPASS_REQUIRE", "force").env(askpass::SOCKET_ENV, server.socket());
+                    Some(server)
+                }
+                Err(_) => None,
+            },
+            _ => None,
+        };
+        // Nie im Terminal fragen, aus dem remotejoe gestartet wurde: eigene Sitzung ohne steuerndes Terminal.
+        // Scheitert die Anmeldung, kommt sofort eine Meldung, statt dass ssh wartet.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: Zwischen fork und exec nur der async-signal-sichere Systemaufruf setsid.
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+        }
+        let mut child = cmd.spawn().map_err(|e| PsError::NoPwsh(format!("{prog}: {e}")))?;
         let mut stdin = child.stdin.take().expect("stdin");
         let stdout = BufReader::new(child.stdout.take().expect("stdout"));
         let mut line = base64::engine::general_purpose::STANDARD.encode(password.as_bytes());
@@ -273,5 +311,12 @@ mod tests {
         assert_eq!(r.stream, "warning");
         assert!(parse_record("kein JSON").is_none());
         assert_eq!(parse_record(r#"{"ready":false,"error":"Zugriff verweigert"}"#).unwrap().ready, Some(false));
+    }
+
+    #[test]
+    fn ssh_transport_without_key_is_explained() {
+        let e = explain("The SSH client session has ended with error message: The SSH transport process has abruptly terminated".into());
+        assert!(e.contains("Anmeldung fehlgeschlagen") && e.contains("host-f%C3%BCr-powershell"), "{e}");
+        assert_eq!(explain("anderer Fehler".into()), "anderer Fehler");
     }
 }

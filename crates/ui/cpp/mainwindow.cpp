@@ -2,6 +2,7 @@
 #include "kbcapture.h"
 #include "titlebar.h"
 #include "exporttab.h"
+#include "overviewtab.h"
 #include "appearance.h"
 #include <algorithm>
 
@@ -91,6 +92,8 @@ constexpr int RoleLight = Qt::UserRole + 8;
 constexpr int RoleSessionMark = Qt::UserRole + 9;
 /// Anmeldeobjekt (keine Verbindung; öffnet die Bearbeitung).
 constexpr int RoleLogin = Qt::UserRole + 10;
+/// Zustand eines Gasts (z. B. `running`), für die Übersicht.
+constexpr int RoleGuestState = Qt::UserRole + 11;
 /// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
 constexpr int RoleMacro = Qt::UserRole + 20;
 
@@ -881,6 +884,31 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		if (i.data(RoleMacro).toInt() == 1)
 			m_macroShelfOpen = false;
 	});
+	// Einfachklick auf ein Ziel: Objektübersicht (Doppelklick verbindet wie bisher).
+	connect(m_tree, &QTreeView::clicked, this, [this](const QModelIndex& i) {
+		if (QGuiApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier))
+			return; // Mehrfachauswahl
+		if (i.data(RoleGuest).isValid())
+		{
+			openOverview(QJsonObject{ { QStringLiteral("hv"), i.data(RoleGuestTarget).toString() },
+			                          { QStringLiteral("guest"), i.data(RoleGuest).toString() },
+			                          { QStringLiteral("name"), i.data(Qt::DisplayRole).toString() },
+			                          { QStringLiteral("state"), i.data(RoleGuestState).toString() },
+			                          { QStringLiteral("address"), i.data(RoleConsoleHost).toString() } },
+			             i.data(Qt::DecorationRole).value<QIcon>());
+			return;
+		}
+		if (i.data(RoleLogin).toBool())
+		{
+			openLogin(i.data(RoleId).toString(), QString()); // der Anmeldungs-Tab ist ihre Übersicht
+			return;
+		}
+		if (i.data(RoleMacro).toInt() != 0 || i.data(RolePlaceholder).toBool() || i.data(RoleFolder).toBool())
+			return;
+		const QString id = i.data(RoleId).toString();
+		if (!id.isEmpty())
+			openOverview(QJsonObject{ { QStringLiteral("id"), id } }, i.data(Qt::DecorationRole).value<QIcon>());
+	});
 	connect(m_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex& i) {
 		if (i.data(RoleMacro).toInt() == 2)
 		{
@@ -1304,6 +1332,45 @@ void MainWindow::openUpdateTab()
 	addToolTab(new UpdateTab(m_backend, m_tabs), T(m_backend, "update.title"));
 }
 
+/// Stylesheet der Kartenbausteine (cards.h) aus den Farben des Schemas; Plaketten hell und dunkel lesbar.
+static QString cardStyle(const QColor& base, const QColor& window, const QColor& alternate, const QColor& muted, const QColor& text, const QColor& accent)
+{
+	const bool dark = base.lightness() < 128;
+	auto mix = [](const QColor& a, const QColor& b, int pctA) {
+		return QColor((a.red() * pctA + b.red() * (100 - pctA)) / 100, (a.green() * pctA + b.green() * (100 - pctA)) / 100, (a.blue() * pctA + b.blue() * (100 - pctA)) / 100);
+	};
+	const QColor border = mix(text, base, 18);
+	const QColor tileBg = dark ? mix(text, base, 7) : mix(window, base, 60);
+	const QColor okText = dark ? QColor("#7fd69a") : QColor("#23793a"), okBg = mix(QColor("#2e9e44"), base, dark ? 30 : 16);
+	const QColor warnText = dark ? QColor("#f2c174") : QColor("#9a5b08"), warnBg = mix(QColor("#d98a13"), base, dark ? 30 : 18);
+	const QColor accentBg = mix(accent, base, dark ? 30 : 16);
+	const QColor rowSel = mix(accent, base, dark ? 22 : 12);
+	const QColor fieldBg = dark ? mix(text, base, 9) : base.lighter(104);
+	const QColor fieldBorder = mix(text, base, dark ? 32 : 28);
+	Q_UNUSED(alternate);
+	return QStringLiteral("QFrame#rjCard { background: %1; border: 1px solid %2; border-radius: 10px; }"
+	                      "QFrame#rjTile { background: %3; border-radius: 6px; }"
+	                      "QLabel#rjSection, QLabel#rjTileLabel, QLabel#rjMuted { color: %4; }"
+	                      "QLabel[rjPill=\"ok\"] { background: %5; color: %6; border-radius: 9px; padding: 1px 9px; }"
+	                      "QLabel[rjPill=\"warn\"] { background: %7; color: %8; border-radius: 9px; padding: 1px 9px; }"
+	                      "QLabel[rjPill=\"off\"] { background: %3; color: %4; border-radius: 9px; padding: 1px 9px; }"
+	                      "QLabel[rjPill=\"accent\"] { background: %9; color: %10; border-radius: 9px; padding: 1px 9px; }"
+	                      "QFrame#rjRow { border-radius: 6px; }"
+	                      "QFrame#rjRow:hover { background: %3; }"
+	                      "QFrame#rjRow[selected=\"true\"] { background: %11; }"
+	                      // Eingabefelder in Karten: eigener Rand und leicht abgesetzter Hintergrund (bei dunklen
+	                      // Schemata hätten Feld und Karte sonst dieselbe Farbe). Klappfelder bleiben beim Stil.
+	                      "QFrame#rjCard QLineEdit, QFrame#rjCard QPlainTextEdit, QFrame#rjCard QTextEdit, QFrame#rjCard QSpinBox"
+	                      " { background: %12; border: 1px solid %13; border-radius: 4px; padding: 2px 4px; }"
+	                      "QFrame#rjCard QLineEdit:focus, QFrame#rjCard QPlainTextEdit:focus, QFrame#rjCard QTextEdit:focus, QFrame#rjCard QSpinBox:focus"
+	                      " { border-color: %14; }"
+	                      "QFrame#rjCard QLineEdit:disabled, QFrame#rjCard QPlainTextEdit:disabled, QFrame#rjCard QSpinBox:disabled"
+	                      " { background: %3; color: %4; }"
+	                      "QFrame#rjCard *[rjDirty=\"true\"]:enabled { border: 2px solid %14; }")
+	  .arg(base.name(), border.name(), tileBg.name(), muted.name(), okBg.name(), okText.name(), warnBg.name(), warnText.name(), accentBg.name())
+	  .arg(dark ? accent.lighter(140).name() : accent.darker(120).name(), rowSel.name(), fieldBg.name(), fieldBorder.name(), accent.name());
+}
+
 void MainWindow::applyTheme(bool dark)
 {
 	qApp->setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
@@ -1358,6 +1425,10 @@ void MainWindow::applyTheme(bool dark)
 		pal.setColor(QPalette::Link, c("link"));
 		pal.setColor(QPalette::ToolTipBase, c("base"));
 		pal.setColor(QPalette::ToolTipText, c("text"));
+		// Gesperrte Bedienelemente sichtbar abheben: gedämpfte Schrift, Feldhintergrund wie das Fenster.
+		for (const auto role : { QPalette::WindowText, QPalette::Text, QPalette::ButtonText })
+			pal.setColor(QPalette::Disabled, role, c("muted"));
+		pal.setColor(QPalette::Disabled, QPalette::Base, c("window"));
 	}
 	qApp->setPalette(pal);
 	// Trennlinie der Tabs: Mischung aus Text- und Fensterfarbe, in beiden Schemata gut sichtbar.
@@ -1415,11 +1486,23 @@ void MainWindow::applyTheme(bool dark)
 	  "QLabel#securityTitle { font-weight: bold; }"
 	  "QLabel#heading { font-weight: bold; padding: 4px 0; }"
 	  "QFrame#unlockBox { border: 2px solid %2; border-radius: 6px; padding: 12px; }"
-	  "*[rjDirty=\"true\"] { border: 2px solid %2; }"
-	  "QRadioButton[rjDirty=\"true\"], QCheckBox[rjDirty=\"true\"] { border: none; font-weight: bold; color: %2; }")
+	  // Optionsknöpfe und Kästchen markiert der Eigenschaften-Tab über die Palette (Textfarbe), nicht hier.
+	  "*[rjDirty=\"true\"]:enabled { border: 2px solid %2; }")
 	                      .arg(c("warning").name(), c("highlight").name())
 	                      .arg(tabLine.name(), c("button").name(), c("muted").name(), c("base").name(), c("text").name(), c("alternate").name())
-	                      .arg(rowHeight));
+	                      .arg(rowHeight)
+	                  // Feste Farbschemata: Der Stil leitet den Rand der Optionsknöpfe und Kästchen aus der Fensterfarbe ab;
+	                  // bei dunklen Schemata wäre er unsichtbar. Darum eigener Rand und Füllung in der Akzentfarbe.
+	                  + (system ? QString()
+	                            : QStringLiteral("QRadioButton::indicator, QCheckBox::indicator { width: 13px; height: 13px; border: 1px solid %1; background: %2; }"
+	                                             "QRadioButton::indicator { border-radius: 7px; }"
+	                                             "QCheckBox::indicator { border-radius: 2px; }"
+	                                             "QRadioButton::indicator:checked { background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 %3, stop:0.5 %3, stop:0.6 %2, stop:1 %2); border-color: %3; }"
+	                                             "QCheckBox::indicator:checked { background: %3; border-color: %3; }"
+	                                             "QRadioButton::indicator:disabled, QCheckBox::indicator:disabled { border-color: %4; background: %5; }")
+	                                  .arg(c("muted").name(), c("base").name(), c("highlight").name(), c("alternate").name(), c("window").name()))
+	                  // Kartenstil (Übersicht, Einstellungen): Karten, Kacheln, Abschnitte, Plaketten, Zeilen der Bereichsliste.
+	                  + cardStyle(c("base"), c("window"), c("alternate"), c("muted"), c("text"), c("highlight")));
 	if (m_model)
 		reloadTree();
 	if (m_tabs)
@@ -1878,6 +1961,9 @@ void MainWindow::addToolTab(ToolTab* t, const QString& title)
 	connect(t, &ToolTab::indexChanged, this, [this] {
 		reloadTree();
 		reloadViews();
+		// Offene Eigenschaften-Tabs: neue oder geänderte Anmeldungen in der Auswahlliste zeigen.
+		for (auto* p : findChildren<PropertiesTab*>())
+			p->refreshLogins();
 	});
 	connect(t, &ToolTab::status, this, [this](const QString& m) { statusBar()->showMessage(m, 8000); });
 	connect(t, &ToolTab::closeRequested, this, [this, t] { closeToolTab(t); });
@@ -2003,6 +2089,7 @@ void MainWindow::applyGuests(const QString& target, QJsonObject r)
 		item->setData(g.value(QStringLiteral("id")).toString(), RoleGuest);
 		item->setData(target, RoleGuestTarget);
 		item->setData(g.value(QStringLiteral("console_host")).toString(), RoleConsoleHost);
+		item->setData(state, RoleGuestState);
 		item->setData(true, RoleFolder);
 		item->setIcon(protocolIcon(consoleProto, state == QStringLiteral("running") ? QStringLiteral("green") : QStringLiteral("grey"), false));
 		item->setToolTip(g.value(QStringLiteral("detail")).toString() + QStringLiteral("\n") + state);
@@ -2926,6 +3013,11 @@ void MainWindow::handleEvents(const QString& json)
 						// Prüfung beim Start: nur ein Hinweis in der Fußzeile.
 						statusBar()->showMessage(T(m_backend, "update.available").arg(r.value(QStringLiteral("found")).toObject().value(QStringLiteral("version")).toString()), 15000);
 				}
+				else if (kind.startsWith(QLatin1String("ov_")))
+				{
+					if (auto* o = findChild<OverviewTab*>())
+						o->handleResult(kind, e.value(QStringLiteral("target")).toString(), r);
+				}
 				else if (kind == QLatin1String("guests"))
 					applyGuests(e.value(QStringLiteral("target")).toString(), r);
 				else if (kind == QLatin1String("cert_check"))
@@ -3756,6 +3848,36 @@ bool MainWindow::isLogin(const QString& id) const
 	return hit;
 }
 
+void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
+{
+	auto* t = findChild<OverviewTab*>();
+	if (!t)
+	{
+		t = new OverviewTab(m_backend, m_tabs);
+		connect(t, &OverviewTab::titleChanged, this, [this, t] {
+			const int i = m_tabs->indexOf(t);
+			if (i >= 0)
+				m_tabs->setTabText(i, T(m_backend, "ov.title").arg(t->targetName()));
+		});
+		// „Verbinden“ in der Kopfkarte: wie ein Doppelklick auf den Eintrag im Baum.
+		connect(t, &OverviewTab::connectRequested, this, [this](const QJsonObject& s) {
+			const QModelIndex cur = m_tree->currentIndex();
+			if (s.contains(QStringLiteral("guest")))
+			{
+				if (cur.isValid() && cur.data(RoleGuest).toString() == s.value(QStringLiteral("guest")).toString())
+					openGuestConsole(cur);
+				return;
+			}
+			selectId(s.value(QStringLiteral("id")).toString());
+			connectSelected();
+		});
+		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
+	}
+	else
+		m_tabs->setCurrentWidget(t);
+	t->showSubject(subject, icon);
+}
+
 void MainWindow::openLogin(const QString& id, const QString& folder)
 {
 	if (!id.isEmpty())
@@ -3785,7 +3907,13 @@ void MainWindow::openLogin(const QString& id, const QString& folder)
 			f = i.parent().isValid() ? i.parent().data(RoleId).toString() : QString();
 	}
 	auto* t = new LoginTab(m_backend, id, f, m_tabs);
-	addToolTab(t, T(m_backend, "login.title"));
+	t->setIcon(protocolIcon(QStringLiteral("login"), QString(), false));
+	addToolTab(t, t->tabTitle());
+	connect(t, &LoginTab::titleChanged, this, [this, t] {
+		const int i = m_tabs->indexOf(t);
+		if (i >= 0)
+			m_tabs->setTabText(i, t->tabTitle());
+	});
 }
 
 PropertiesTab* MainWindow::openProperties(const QString& id, const QString& category)

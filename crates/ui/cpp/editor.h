@@ -4,12 +4,19 @@
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QHash>
+#include <QtGui/QIcon>
 #include <QtCore/QMap>
 #include <QtCore/QPair>
 #include <QtCore/QSet>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QWidget>
 #include <functional>
+
+namespace rjui
+{
+class ClickRow;
+}
 
 class RjBackend;
 class QButtonGroup;
@@ -133,6 +140,8 @@ public:
 	/// Schließen; bei ungespeicherten Änderungen wird in der Leiste gefragt.
 	void requestClose(std::function<void()> close);
 	void selectCategory(const QString& key);
+	/// Auswahlliste der Anmeldungen neu laden (nach dem Anlegen oder Ändern einer Anmeldung).
+	void refreshLogins();
 	void reload();
 	ActionBar* bar() const { return m_bar; }
 	/// Beim Sperren: eingegebene Kennwörter verwerfen.
@@ -165,7 +174,9 @@ private:
 	QWidget* pageParent();
 	void addPage(const QString& key, const char* label, QWidget* page);
 	void track(QWidget* w, const QString& group);
-	void markDirty(const QString& group);
+	void markDirty(const QString& group, QWidget* changed = nullptr);
+	/// Markierung „geändert“ an einem Feld setzen oder entfernen.
+	void setMarked(QWidget* w, bool on);
 	void clearDirty();
 	void updateCredentialMode();
 	void showErrors(const QJsonObject& errors);
@@ -186,6 +197,22 @@ private:
 	QSet<QString> m_dirty;
 	bool m_loading = false;
 	QTreeWidget* m_cats = nullptr;
+	/// Bereichsliste (Kartenstil): Zeile, Kurzfassung und Plakette je Bereich.
+	struct Area
+	{
+		rjui::ClickRow* row;
+		QLabel* summary;
+		QLabel* pill;
+	};
+	QHash<QString, Area> m_areas;
+	/// Gruppe der Änderungsverfolgung → Bereich (für die Plakette „geändert“).
+	QHash<QString, QString> m_groupPage;
+	/// Bereich, dessen Seite gerade aufgebaut wird.
+	QString m_buildingPage;
+	class QVBoxLayout* m_areaList = nullptr;
+	QLabel* m_pageTitle = nullptr;
+	QString areaSummary(const QString& key) const;
+	void refreshAreas();
 	QStackedWidget* m_pages = nullptr;
 	ActionBar* m_bar = nullptr;
 	QLabel* m_dirtyLabel = nullptr;
@@ -228,6 +255,7 @@ private:
 	/// Anmeldeobjekt als Zugangsdaten.
 	QWidget* m_loginBox = nullptr;
 	QComboBox* m_login = nullptr;
+	QLabel* m_loginHint = nullptr;
 	QWidget* m_namedBox = nullptr;
 	// Tunnel
 	QComboBox* m_tunnel = nullptr;
@@ -349,6 +377,15 @@ class LoginTab : public ToolTab
 public:
 	LoginTab(RjBackend* backend, const QString& id, const QString& folder, QWidget* parent = nullptr);
 	QString loginId() const { return m_id; }
+	/// Symbol der Kopfkarte (wie im Baum).
+	void setIcon(const QIcon& icon);
+	/// Titel des Tabs: „Anmeldung: <Name>“ (ohne Namen nur „Anmeldung“).
+	QString tabTitle() const;
+
+signals:
+	void titleChanged();
+
+public:
 	void wipeSecrets() override;
 
 private:
@@ -365,6 +402,8 @@ private:
 	QLabel* m_used;
 	QLabel* m_error;
 	QPushButton* m_delete;
+	QLabel* m_headTitle = nullptr;
+	QLabel* m_icon = nullptr;
 };
 
 class CertCheckTab : public ToolTab

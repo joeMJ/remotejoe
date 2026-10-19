@@ -430,7 +430,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -615,6 +615,17 @@ impl App {
                 }
             }
             "save" => return self.save_with(str_of(&c, "choice")),
+            "overview" => self.overview_json(&c),
+            "ov_probe" => self.overview_probe(&c),
+            "ov_query" => self.overview_query(&c),
+            "ov_field" => self.overview_field(&c),
+            "ov_run" => self.overview_run(&c),
+            "ov_stop" => {
+                self.overview_stop();
+                Ok(json!({ "ok": true }))
+            }
+            "ov_output" => Ok(json!({ "run": self.overview_output(&c) })),
+            "ov_notes" => self.overview_notes(&c),
             "connect_all" => self.op_connect_all(&c),
             "cert_check_start" => self.op_cert_check_start(&c),
             "cert_check_rows" => Ok(json!({ "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() })),
@@ -1286,6 +1297,23 @@ impl App {
 
     /// Speichern mit Konfliktbehandlung. Antwort: `{"saved":bool}`,
     /// `{"conflict":{"mine":r,"theirs":r}}` oder `{"error":…}`.
+    /// Notizen eines Ziels ändern (mit „Rückgängig“) und den Tresor speichern.
+    pub(crate) fn set_target_notes(&mut self, id: Uuid, text: String) -> Result<(), String> {
+        self.simple("Notizen ändern", |idx| match rj_core::inherit::find_node_mut(&mut idx.root, id) {
+            Some(Node::Target(t)) => {
+                t.meta.notes = text;
+                Ok(json!({ "ok": true }))
+            }
+            _ => Err(EditError::NotFound),
+        })?;
+        let r: Value = serde_json::from_str(&self.save_with(None)).map_err(|e| e.to_string())?;
+        match r.get("error").and_then(Value::as_str) {
+            Some(e) => Err(e.to_string()),
+            None if r.get("conflict").is_some() => Err("Die Schlüsseldatenbank wurde inzwischen geändert – bitte über Datei → Speichern abgleichen".into()),
+            None => Ok(()),
+        }
+    }
+
     pub fn save_with(&mut self, choice: Option<&str>) -> String {
         let choice = match choice {
             Some("mine") => Some(ConflictChoice::KeepMine),
@@ -1321,20 +1349,34 @@ impl App {
         let mut specs = Vec::new();
         for id in targets.into_iter().filter(|i| seen.insert(*i)) {
             let Some(Node::Target(t)) = edit::node(&self.index, id) else { continue };
-            if !crate::certcheck::supported(t.protocol) {
-                continue;
-            }
             let tunnel = rj_core::inherit::resolve_tunnel(&self.index, id).ok().flatten().is_some();
-            specs.push(crate::certcheck::ProbeSpec {
-                target: id,
-                name: t.name.clone(),
-                protocol: t.protocol,
-                host: t.host.clone(),
-                port: t.effective_port(),
-                legacy: matches!(&t.options, ProtocolOptions::Ssh(o) if o.legacy_algorithms),
-                options_json: self.options_json(t),
-                skip: tunnel.then(|| "Verbindung über einen Tunnel – wird nicht direkt geprüft".to_string()),
-            });
+            if crate::certcheck::supported(t.protocol) {
+                specs.push(crate::certcheck::ProbeSpec {
+                    target: id,
+                    name: t.name.clone(),
+                    protocol: t.protocol,
+                    host: t.host.clone(),
+                    port: t.effective_port(),
+                    legacy: matches!(&t.options, ProtocolOptions::Ssh(o) if o.legacy_algorithms),
+                    options_json: self.options_json(t),
+                    skip: tunnel.then(|| "Verbindung über einen Tunnel – wird nicht direkt geprüft".to_string()),
+                    extra: false,
+                });
+            }
+            // Windows-Ziele: zusätzlich der SSH-Schlüssel auf Port 22 (über ihn fragt die Übersicht das Inventar ab).
+            if matches!(t.protocol, Protocol::Rdp | Protocol::Psrp) && !tunnel {
+                specs.push(crate::certcheck::ProbeSpec {
+                    target: id,
+                    name: t.name.clone(),
+                    protocol: Protocol::Ssh,
+                    host: t.host.clone(),
+                    port: 22,
+                    legacy: false,
+                    options_json: String::new(),
+                    skip: None,
+                    extra: true,
+                });
+            }
         }
         if specs.is_empty() {
             return Err("Keine prüfbaren Ziele in der Auswahl".into());

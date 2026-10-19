@@ -12,7 +12,7 @@ OUT="${2:?Ausgabeordner fehlt}"
 REL=target/release
 
 
-PROGRAMS=(remotejoe rj-worker-ssh rj-worker-rdp rj-worker-vnc rj-worker-psrp rj-worker-web)
+PROGRAMS=(remotejoe rj-worker-ssh rj-worker-rdp rj-worker-vnc rj-worker-psrp rj-worker-web rj-askpass)
 for p in "${PROGRAMS[@]}"; do
     [ -x "$REL/$p" ] || { echo "Fehlt: $REL/$p – erst bauen (siehe Kopf dieses Skripts)." >&2; exit 1; }
 done

@@ -4,5 +4,5 @@
 pub mod api;
 pub mod net;
 
-pub use api::{Action, Auth, Client, ConsoleBridge, Guest, GuestKind, ProxmoxError};
+pub use api::{Action, Auth, Client, ConsoleBridge, Guest, GuestInfo, GuestKind, ProxmoxError};
 pub use net::{Base, CertCheck};
