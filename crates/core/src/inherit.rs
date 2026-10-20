@@ -434,9 +434,18 @@ pub enum InventorySource {
 /// ein (sonst meldete sich das Inventar mit den Zugangsdaten der Web-Seite per SSH an); ein „aus“ am Ordner gilt
 /// für alle.
 pub fn resolve_inventory(index: &Index, target_id: Uuid) -> Result<(bool, InventorySource), UnknownTarget> {
+    inventory_from(index, target_id, false)
+}
+
+/// Wie [`resolve_inventory`], aber ohne die Festlegung am Ziel selbst: der Wert, den „geerbt“ ergäbe.
+pub fn resolve_inventory_inherited(index: &Index, target_id: Uuid) -> Result<(bool, InventorySource), UnknownTarget> {
+    inventory_from(index, target_id, true)
+}
+
+fn inventory_from(index: &Index, target_id: Uuid, skip_target: bool) -> Result<(bool, InventorySource), UnknownTarget> {
     let c = chain(index, target_id)?;
     let web = c.target.protocol == crate::model::Protocol::Web;
-    for (i, (s, _)) in c.links.iter().enumerate() {
+    for (i, (s, _)) in c.links.iter().enumerate().skip(usize::from(skip_target)) {
         match s.inventory {
             Some(on) if i == 0 => return Ok((on, InventorySource::Target)),
             Some(false) => return Ok((false, InventorySource::Folder)),
@@ -562,6 +571,9 @@ mod tests {
         assert_eq!(resolve_inventory(&f.index, wid).unwrap(), (true, InventorySource::Target));
         settings_mut(&mut f.index, f.target).unwrap().inventory = Some(true);
         assert_eq!(resolve_inventory(&f.index, f.target).unwrap(), (true, InventorySource::Target));
+        // „Geerbt“ zeigt den Wert ohne die eigene Festlegung.
+        assert_eq!(resolve_inventory_inherited(&f.index, f.target).unwrap(), (false, InventorySource::Folder));
+        assert_eq!(resolve_inventory_inherited(&f.index, wid).unwrap(), (false, InventorySource::Folder));
     }
 
     #[test]

@@ -247,6 +247,15 @@ void OverviewTab::showSubject(const QJsonObject& subject, const QIcon& icon)
 	probe(false);
 }
 
+void OverviewTab::refreshInventorySwitch()
+{
+	if (m_subject.isEmpty())
+		return;
+	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("overview") } });
+	if (!r.contains(QStringLiteral("error")))
+		applyInventorySwitch(r);
+}
+
 void OverviewTab::applyInventorySwitch(const QJsonObject& r)
 {
 	auto T = [this](const char* k) { return m_backend->text(QString::fromLatin1(k)); };

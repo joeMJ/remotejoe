@@ -281,8 +281,9 @@ impl App {
         }
         v["inventory"] = json!(match settings.inventory { None => "inherit", Some(true) => "on", Some(false) => "off" });
         if let Some(Node::Target(t)) = node {
-            if let Ok((on, src)) = rj_core::inherit::resolve_inventory(&self.index, t.id) {
-                v["inventory_effective"] = json!(format!("{} ({})", if on { "an" } else { "aus" }, inventory_source_text(src, on)));
+            // Text für „geerbt“: der Wert ohne eigene Festlegung am Ziel.
+            if let Ok((on, src)) = rj_core::inherit::resolve_inventory_inherited(&self.index, t.id) {
+                v["inventory_effective"] = json!(format!("{}, {}", if on { "an" } else { "aus" }, inventory_source_text(src, on)));
             }
         }
         v["credential"] = self.credential_section(id, node.is_some_and(|n| matches!(n, Node::Target(_))));

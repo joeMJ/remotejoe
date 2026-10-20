@@ -39,6 +39,9 @@ public:
 	/// Ergebnis einer Hintergrundaufgabe (`ov_probe`, `ov_query`).
 	void handleResult(const QString& kind, const QString& target, const QJsonObject& r);
 
+	/// Nur den Inventar-Schalter neu lesen (nach Änderungen in den Einstellungen; Notizen bleiben unberührt).
+	void refreshInventorySwitch();
+
 signals:
 	void titleChanged();
 	/// „Verbinden“ in der Kopfkarte.
