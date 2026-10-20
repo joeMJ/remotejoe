@@ -67,29 +67,11 @@ void screenshots(MainWindow& w, const QString& dir)
 	w.tabs()->setCurrentIndex(0);
 	pump(300);
 	save(&w, dir, QStringLiteral("hauptfenster-hell.png"));
-	if (qEnvironmentVariableIsSet("RJ_SHOT_COMPACT"))
-	{
-		// Zur Prüfung des Platzsparmodus (nicht Teil der Dokumentationsbilder).
-		w.setCompact(true);
-		pump(500);
-		save(&w, dir, QStringLiteral("kompakt-baum.png"));
-		w.setTreeVisible(false);
-		pump(500);
-		save(&w, dir, QStringLiteral("kompakt-ohne-baum.png"));
-		w.setTreeVisible(true);
-		w.setCompact(false);
-		pump(500);
-		save(&w, dir, QStringLiteral("normal-nach-kompakt.png"));
-	}
-	// Platzsparmodus als Dokumentationsbild.
-	w.setCompact(true);
-	pump(500);
-	save(&w, dir, QStringLiteral("hauptfenster-kompakt.png"));
+	// Eingeklappter Baum (F9) als Dokumentationsbild.
 	w.setTreeVisible(false);
 	pump(500);
 	save(&w, dir, QStringLiteral("hauptfenster-kompakt-ohne-baum.png"));
 	w.setTreeVisible(true);
-	w.setCompact(false);
 	pump(500);
 	// Dunkles Bild mit Catppuccin Macchiato (Vorgabe für Bildschirmfotos, siehe appearance.rs).
 	qputenv("REMOTEJOE_THEME", "dark");
@@ -454,6 +436,9 @@ std::int32_t rjRunApplication()
 		w.restoreWindowState();
 	else if (!demo)
 		w.resetWindow();
+	// Nur noch die Platzsparvariante (Tabs in der Titelzeile); beim Start ist der Baum immer ausgeklappt.
+	w.setTreeVisible(true);
+	w.setCompact(true);
 	// Standardgröße (1280 × 800) oder gespeicherte Größe nie größer als der sichtbare Bildschirmbereich.
 	if (!demo)
 		w.fitToScreen();

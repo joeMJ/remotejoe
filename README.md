@@ -23,8 +23,8 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
   unberührt. Nach Standby oder Netzabbruch baut remotejoe die Verbindungen selbst wieder auf, Tunnel zuerst.
 - **Extrem schnell, schlanker Quelltext:** Rust und natives Qt 6 – kein Electron, keine
   Laufzeitumgebung. Das Hauptfenster steht im Testlauf nach rund 150 ms, mit über 500 Einträgen im Baum.
-- **Kompakt:** Im Platzsparmodus (F10) wandern die Tabs in die Titelzeile, das Menü hinter einen
-  Knopf, und der Baum lässt sich einklappen (F9) – fast die ganze Fensterfläche gehört der Sitzung.
+- **Kompakt:** Die Tabs stehen in der Titelzeile, das Menü hinter einem Knopf, und der Baum lässt sich
+  einklappen (F9) – fast die ganze Fensterfläche gehört der Sitzung. Beim Start ist der Baum ausgeklappt.
 
 > [!WARNING]
 > **Privates Hobbyprojekt – nicht gepflegt / unmaintained.**
@@ -47,13 +47,9 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
   <br>
   <em>Hauptfenster (Catppuccin Macchiato, Demo-Daten)</em>
   <br><br>
-  <img src="docs/screenshots/hauptfenster-kompakt.png" alt="Platzsparmodus: Tabs in der Titelzeile, Baum sichtbar" width="760">
+  <img src="docs/screenshots/hauptfenster-kompakt-ohne-baum.png" alt="Hauptfenster mit eingeklapptem Baum" width="760">
   <br>
-  <em>Platzsparmodus (F10) mit Baum</em>
-  <br><br>
-  <img src="docs/screenshots/hauptfenster-kompakt-ohne-baum.png" alt="Platzsparmodus mit eingeklapptem Baum" width="760">
-  <br>
-  <em>Platzsparmodus mit eingeklapptem Baum (F9)</em>
+  <em>Mit eingeklapptem Baum (F9)</em>
 </p>
 
 ---

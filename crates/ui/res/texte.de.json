@@ -84,6 +84,7 @@
   "add.proxmox": "&Proxmox",
   "add.hyperv": "&Hyper-V",
   "add.psrp": "Power&Shell",
+  "add.aruba": "Aruba-&AP (SSH und Web 4343)",
   "add.task": "&Aufgabe",
   "add.macro": "&Makro",
   "add.bulk": "&Mehrere Ziele …",

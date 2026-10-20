@@ -896,6 +896,17 @@ impl App {
                 self.index.tasks.push(t);
                 link(&mut self.index, parent, |m| m.tasks.push(tid)).map(|_| json!({ "task": tid }))
             }
+            // Aruba-AP: SSH als Hauptweg (Inventar), dazu die Web-Oberfläche auf 4343 mit denselben Zugangsdaten.
+            // Leere Adresse am Weg: https://<Adresse des Ziels>:4343/ – folgt also der Adresse des Ziels.
+            "aruba" => {
+                let name = str_of(c, "name").filter(|n| !n.is_empty()).unwrap_or("Neuer Aruba-AP");
+                let mut t = edit::new_target(&self.index, parent, Protocol::Ssh, name, None);
+                let mut w = rj_core::model::AccessWay::new(Protocol::Web);
+                w.name = "Web-Oberfläche".into();
+                w.port = Some(4343);
+                t.ways.push(w);
+                edit::insert(&mut self.index, parent, Node::Target(t), None).map(|id| json!({ "id": id }))
+            }
             "macro" => {
                 let m = MacroDef { id: Uuid::new_v4(), name: "Neues Makro".into(), steps: Vec::new() };
                 let mid = m.id;

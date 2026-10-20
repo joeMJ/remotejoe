@@ -1008,20 +1008,6 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_noticeLabel->setObjectName(QStringLiteral("statusNotice"));
 	m_noticeLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 	statusBar()->insertPermanentWidget(1, m_noticeLabel, 1);
-	{
-		auto* box = new QWidget(this);
-		auto* bl = new QHBoxLayout(box);
-		bl->setContentsMargins(6, 0, 4, 0);
-		bl->setSpacing(5);
-		auto* lab = new QLabel(T(m_backend, "status.compact"), box);
-		m_compactSwitch = new SwitchButton(box);
-		bl->addWidget(lab);
-		bl->addWidget(m_compactSwitch);
-		box->setToolTip(T(m_backend, "status.compact.tip"));
-		m_compactSwitch->setAccessibleName(T(m_backend, "status.compact"));
-		connect(m_compactSwitch, &QAbstractButton::toggled, this, [this](bool on) { setCompact(on); });
-		statusBar()->addPermanentWidget(box);
-	}
 	setTreeVisible(true);
 	// Leerlauf: Eingaben überall im Programm zählen.
 	m_activityClock.start();
@@ -1294,10 +1280,6 @@ void MainWindow::buildMenus()
 	});
 	view->addSeparator();
 	view->addAction(T(m_backend, "menu.view.tree"), QKeySequence(Qt::Key_F9), this, [this] { setTreeVisible(m_treeHidden); });
-	m_compactAction = view->addAction(T(m_backend, "menu.view.compact"));
-	m_compactAction->setShortcut(QKeySequence(Qt::Key_F10));
-	m_compactAction->setCheckable(true);
-	connect(m_compactAction, &QAction::triggered, this, [this](bool on) { setCompact(on); });
 	view->addAction(T(m_backend, "menu.view.reset_window"), this, [this] { resetWindow(); });
 	help = m_menuBar->addMenu(T(m_backend, "menu.help"));
 	help->addAction(T(m_backend, "menu.help.update"), this, [this] { openUpdateTab(); });
@@ -3434,8 +3416,7 @@ void MainWindow::restoreWindowState()
 		m_split->setSizes({ tree, qMax(200, size.width() - tree) });
 	if (s.value(QStringLiteral("maximized")).toBool())
 		setWindowState(windowState() | Qt::WindowMaximized);
-	setTreeVisible(!s.value(QStringLiteral("tree_hidden")).toBool());
-	setCompact(s.value(QStringLiteral("compact")).toBool());
+	// Platzsparvariante und ausgeklappter Baum setzt der Programmstart (app.cpp), nicht der gespeicherte Zustand.
 	fitToScreen();
 }
 
@@ -3515,7 +3496,7 @@ void MainWindow::resetWindow()
 	const QRect a = sc ? sc->availableGeometry() : QRect(0, 0, 1280, 800);
 	m_treeWidth = 280;
 	setTreeVisible(true);
-	setCompact(false);
+	setCompact(true);
 	resize(QSize(1280, 800).boundedTo(a.size() - (frameGeometry().size() - size())));
 	if (m_split)
 		m_split->setSizes({ 280, qMax(200, width() - 280) });
@@ -3789,7 +3770,7 @@ void MainWindow::buildAddMenu(QMenu* menu, const QString& parentId)
 {
 	const char* kinds[][2] = { { "folder", "add.folder" }, { "rdp", "add.rdp" },         { "ssh", "add.ssh" },     { "vnc", "add.vnc" },
 		                       { "web", "add.web" },       { "proxmox", "add.proxmox" }, { "hyperv", "add.hyperv" }, { "psrp", "add.psrp" },
-		                       { "task", "add.task" },     { "macro", "add.macro" } };
+		                       { "aruba", "add.aruba" },   { "task", "add.task" },       { "macro", "add.macro" } };
 	auto run = [this, parentId](QJsonObject cmd) {
 		if (!parentId.isEmpty())
 			cmd.insert(QStringLiteral("parent"), parentId);
