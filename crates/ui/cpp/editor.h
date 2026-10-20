@@ -172,6 +172,7 @@ private:
 	QWidget* pageClipboard();
 	QWidget* pageOrganisation();
 	QWidget* pageParent();
+	QWidget* pageWays();
 	void addPage(const QString& key, const char* label, QWidget* page);
 	void track(QWidget* w, const QString& group);
 	void markDirty(const QString& group, QWidget* changed = nullptr);
@@ -224,6 +225,7 @@ private:
 	QLineEdit* m_desc = nullptr;
 	QCheckBox* m_fav = nullptr;
 	QComboBox* m_inventory = nullptr;
+	class WaysEditor* m_ways = nullptr;
 	// Verbindung
 	QLineEdit* m_host = nullptr;
 	QLabel* m_hostWarn = nullptr;

@@ -444,7 +444,8 @@ pub fn resolve_inventory_inherited(index: &Index, target_id: Uuid) -> Result<(bo
 
 fn inventory_from(index: &Index, target_id: Uuid, skip_target: bool) -> Result<(bool, InventorySource), UnknownTarget> {
     let c = chain(index, target_id)?;
-    let web = c.target.protocol == crate::model::Protocol::Web;
+    // Als Web-Ziel gilt nur, wer auch keinen SSH-Zugangsweg hat (sonst fragt das Inventar über diesen ab).
+    let web = c.target.protocol == crate::model::Protocol::Web && !c.target.ways.iter().any(|w| w.protocol == crate::model::Protocol::Ssh);
     for (i, (s, _)) in c.links.iter().enumerate().skip(usize::from(skip_target)) {
         match s.inventory {
             Some(on) if i == 0 => return Ok((on, InventorySource::Target)),

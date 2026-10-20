@@ -298,6 +298,19 @@ impl Target {
         }
         t.port = w.port;
         t.options = w.options.clone();
+        // Web: Steht im Weg eine URL, gilt sie; Rechner und Port (Tunnel, Prüfungen) kommen aus ihr.
+        if w.protocol == Protocol::Web && w.host.contains("://") {
+            let mut o = match &w.options {
+                ProtocolOptions::Web(o) => o.clone(),
+                _ => WebOptions::default(),
+            };
+            o.url = Some(w.host.trim().to_string());
+            if let Some((h, port)) = crate::weburl::endpoint(w.host.trim()) {
+                t.host = h;
+                t.port = Some(port);
+            }
+            t.options = ProtocolOptions::Web(o);
+        }
         t.name = format!("{} – {}", self.name, w.label());
         t.ways.clear();
         t.open_with = None;

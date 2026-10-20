@@ -1,4 +1,5 @@
 #include "editor.h"
+#include "waysedit.h"
 #include "cards.h"
 #include "views.h"
 
@@ -372,6 +373,8 @@ QString PropertiesTab::areaSummary(const QString& key) const
 		const QString desc = d.value(QStringLiteral("description")).toString();
 		return desc.isEmpty() ? T("area.general") : desc;
 	}
+	if (key == QLatin1String("ways") && m_ways)
+		return m_ways->summary();
 	if (key == QLatin1String("connection"))
 	{
 		if (kind != QLatin1String("target"))
@@ -649,6 +652,8 @@ void PropertiesTab::build()
 	};
 	page(QStringLiteral("general"), "edit.cat.general", &PropertiesTab::pageGeneral);
 	page(QStringLiteral("connection"), "edit.cat.connection", &PropertiesTab::pageConnection);
+	if (target)
+		page(QStringLiteral("ways"), "edit.cat.ways", &PropertiesTab::pageWays);
 	page(QStringLiteral("credentials"), "edit.cat.credentials", &PropertiesTab::pageCredentials);
 	page(QStringLiteral("tunnel"), "edit.cat.tunnel", &PropertiesTab::pageTunnel);
 	page(QStringLiteral("tasks"), "edit.cat.tasks", &PropertiesTab::pageTasks);
@@ -671,6 +676,13 @@ void PropertiesTab::build()
 	refreshAreas();
 	updateCredentialMode();
 	m_loading = false;
+}
+
+QWidget* PropertiesTab::pageWays()
+{
+	m_ways = new WaysEditor(m_backend, m_data);
+	connect(m_ways, &WaysEditor::changed, this, [this] { markDirty(QStringLiteral("ways"), nullptr); });
+	return m_ways;
 }
 
 QWidget* PropertiesTab::pageGeneral()
@@ -1519,6 +1531,11 @@ QJsonObject PropertiesTab::collect() const
 		f.insert(QStringLiteral("name"), m_name->text());
 	if (m_dirty.contains(QStringLiteral("description")))
 		f.insert(QStringLiteral("description"), m_desc->text());
+	if (m_ways && m_dirty.contains(QStringLiteral("ways")))
+	{
+		f.insert(QStringLiteral("ways"), m_ways->ways());
+		f.insert(QStringLiteral("open_with"), m_ways->openWith());
+	}
 	if (m_inventory && m_dirty.contains(QStringLiteral("inventory")))
 		f.insert(QStringLiteral("inventory"), m_inventory->currentData().toString());
 	if (target && m_dirty.contains(QStringLiteral("host")))

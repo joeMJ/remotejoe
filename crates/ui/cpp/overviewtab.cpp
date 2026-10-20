@@ -81,9 +81,19 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	hh->addLayout(hv, 1);
 	m_connect = new QPushButton(T("ov.connect"), head);
 	hh->addWidget(m_connect, 0, Qt::AlignTop);
+	// Weitere Zugangswege: je ein Knopf neben „Verbinden“.
+	m_ways = new QHBoxLayout;
+	m_ways->setSpacing(6);
+	hh->addLayout(m_ways);
 	in->addLayout(hh);
 	lay->addWidget(head);
-	connect(m_connect, &QPushButton::clicked, this, [this] { emit connectRequested(m_subject); });
+	connect(m_connect, &QPushButton::clicked, this, [this] {
+		// Mit weiteren Wegen steht dieser Knopf für den Hauptweg; sonst wie ein Doppelklick.
+		if (m_hasWays)
+			emit connectWayRequested(m_subject, QStringLiteral("main"));
+		else
+			emit connectRequested(m_subject);
+	});
 
 	// Kennzahlen
 	auto* inv = rjui::card(page, &in);
@@ -247,13 +257,55 @@ void OverviewTab::showSubject(const QJsonObject& subject, const QIcon& icon)
 	probe(false);
 }
 
+void OverviewTab::renderWays(const QJsonObject& r)
+{
+	while (QLayoutItem* it = m_ways->takeAt(0))
+	{
+		if (QWidget* w = it->widget())
+			w->deleteLater();
+		delete it;
+	}
+	const QJsonArray ways = r.value(QStringLiteral("ways")).toArray();
+	m_hasWays = !ways.isEmpty();
+	const QString open = r.value(QStringLiteral("open_with")).toString();
+	auto mark = [](QPushButton* b, bool on) {
+		QFont f = b->font();
+		f.setBold(on);
+		b->setFont(f);
+		b->setDefault(on);
+	};
+	if (!m_hasWays)
+	{
+		m_connect->setText(m_backend->text(QStringLiteral("ov.connect")));
+		mark(m_connect, false);
+		return;
+	}
+	m_connect->setText(m_backend->text(QStringLiteral("ov.connect.way")).arg(r.value(QStringLiteral("main_way")).toString()));
+	m_connect->setToolTip(m_backend->text(QStringLiteral("ov.connect.main.tip")));
+	mark(m_connect, open.isEmpty());
+	for (const QJsonValue& v : ways)
+	{
+		const QJsonObject w = v.toObject();
+		const QString id = w.value(QStringLiteral("id")).toString();
+		auto* b = new QPushButton(m_backend->text(QStringLiteral("ov.connect.way")).arg(w.value(QStringLiteral("label")).toString()));
+		mark(b, id == open);
+		if (id == open)
+			b->setToolTip(m_backend->text(QStringLiteral("ov.connect.default.tip")));
+		connect(b, &QPushButton::clicked, this, [this, id] { emit connectWayRequested(m_subject, id); });
+		m_ways->addWidget(b, 0, Qt::AlignTop);
+	}
+}
+
 void OverviewTab::refreshInventorySwitch()
 {
 	if (m_subject.isEmpty())
 		return;
 	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("overview") } });
 	if (!r.contains(QStringLiteral("error")))
+	{
 		applyInventorySwitch(r);
+		renderWays(r);
+	}
 }
 
 void OverviewTab::applyInventorySwitch(const QJsonObject& r)
@@ -293,6 +345,7 @@ void OverviewTab::load()
 	m_crumb->setVisible(!m_crumb->text().isEmpty());
 	const bool guest = r.value(QStringLiteral("guest")).toBool();
 	applyInventorySwitch(r);
+	renderWays(r);
 	m_notesCard->setVisible(!guest);
 	emit titleChanged();
 	renderServices(r.value(QStringLiteral("services")));

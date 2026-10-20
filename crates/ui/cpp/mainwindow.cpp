@@ -206,6 +206,8 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 		{ "login", RJ_G("<circle cx='11' cy='16' r='6'/><path d='M17 16h11M24 16v5M28 16v4'/>"), "#6a1b9a" },
 		// Aruba-AP (aus dem Inventar erkannt): Deckenpunkt mit Statuslicht, darüber drei Funkbögen
 		{ "aruba", RJ_G("<rect x='4' y='19' width='24' height='8' rx='4'/><path d='M16 23h.1'/><path d='M12.5 14.5a5 5 0 0 1 7 0'/><path d='M9 11a10 10 0 0 1 14 0'/><path d='M5.5 7.5a15 15 0 0 1 21 0'/>"), "#00897b" },
+		// Mehrere Zugangswege: zwei hintereinanderliegende Fenster
+		{ "multi", RJ_G("<path d='M10 10V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3'/><rect x='4' y='12' width='19' height='15' rx='2'/><path d='M4 17h19'/>"), "#0b5cad" },
 		// Makro: Abspielzeichen
 		{ "macro", RJ_G("<path d='M10 6l16 10-16 10z' fill='COLOR' fill-opacity='0.25'/>"), "#6a1b9a" },
 	};
@@ -287,7 +289,10 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		item->setEditable(false);
 		item->setData(n.value(QStringLiteral("id")).toString(), RoleId);
 		item->setData(folder, RoleFolder);
-		const QString iconKind = n.value(QStringLiteral("device")).toString() == QLatin1String("aruba-ap") ? QStringLiteral("aruba") : n.value(QStringLiteral("protocol")).toString();
+		// Symbol: erkannte Geräteart (Aruba-AP) vor „mehrere Zugangswege“ vor dem Protokoll.
+		const QString iconKind = n.value(QStringLiteral("device")).toString() == QLatin1String("aruba-ap") ? QStringLiteral("aruba")
+		                         : n.value(QStringLiteral("multi")).toBool()                                ? QStringLiteral("multi")
+		                                                                                                    : n.value(QStringLiteral("protocol")).toString();
 		item->setData(iconKind, RoleIconKind);
 		item->setIcon(protocolIcon(iconKind, n.value(QStringLiteral("light")).toString(), folder));
 		item->setData(n.value(QStringLiteral("light")).toString(), RoleLight);
@@ -1936,7 +1941,8 @@ ConnectPromptTab* MainWindow::promptTab(const QString& target)
 			m_tabs->setCurrentWidget(t);
 			return t;
 		}
-	QString name = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), target } })).value(QStringLiteral("name")).toString();
+	// Ziel-ID ohne angehängten Zugangsweg („<id>#<Weg>“).
+	QString name = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), target.section(QLatin1Char('#'), 0, 0) } })).value(QStringLiteral("name")).toString();
 	if (name.isEmpty())
 		name = target;
 	auto* t = new ConnectPromptTab(m_backend, target, name, m_tabs);
@@ -3887,6 +3893,16 @@ void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 		});
 		// Nach einer Inventarabfrage: Symbol im Baum nachziehen (z. B. Aruba-AP erkannt).
 		connect(t, &OverviewTab::inventoryChanged, this, [this] { QTimer::singleShot(0, this, [this] { reloadTree(); }); });
+		// Knopf eines Zugangswegs: Ziel wählen und über diesen Weg verbinden.
+		connect(t, &OverviewTab::connectWayRequested, this, [this](const QJsonObject& s, const QString& way) {
+			const QString id = s.value(QStringLiteral("id")).toString();
+			if (id.isEmpty())
+				return;
+			selectId(id);
+			const QString full = id + QLatin1Char('#') + way;
+			const QSize px = contentSize(false);
+			handleConnectResult(full, m_backend->connectTarget(full, QString(), false, px.width(), px.height()));
+		});
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
 	}
 	else

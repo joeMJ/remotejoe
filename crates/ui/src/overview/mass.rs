@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rj_core::inherit::{resolve_credential, resolve_inventory, CredentialResolution};
+use rj_core::inherit::resolve_inventory;
 use rj_core::model::Node;
 use rj_core::{edit, Protocol};
 use serde_json::{json, Value};
@@ -97,27 +97,26 @@ impl App {
                 Err(_) => skip(&mut row, "Ziel nicht gefunden"),
                 Ok((true, _)) if matches!(t.protocol, Protocol::Proxmox | Protocol::Hyperv) => skip(&mut row, "Hypervisor: Inventar kommt über die Gäste"),
                 Ok((true, _)) if t.host.trim().is_empty() => skip(&mut row, "Keine Adresse"),
-                Ok((true, _)) => match resolve_credential(&self.index, id) {
-                    Ok(CredentialResolution::Found(r)) => {
-                        let windows = matches!(t.protocol, Protocol::Rdp | Protocol::Psrp);
-                        match self.credential_payload(&r, if windows { t.protocol } else { Protocol::Ssh }) {
+                Ok((true, _)) => match self.inventory_view(&t) {
+                    Ok((view, r)) => {
+                        let windows = matches!(view.protocol, Protocol::Rdp | Protocol::Psrp);
+                        match self.credential_payload(&r, if windows { view.protocol } else { Protocol::Ssh }) {
                             Ok(creds) => {
                                 let spec = JobSpec {
-                                    protocol: t.protocol,
-                                    host: t.host.clone(),
-                                    port: t.effective_port(),
+                                    protocol: view.protocol,
+                                    host: view.host.clone(),
+                                    port: view.effective_port(),
                                     credentials: creds,
                                     transport: rj_core::inherit::resolve_psrp_transport(&self.index, id).ok().flatten(),
                                     legacy: self.target_legacy_of(id),
                                 };
-                                let ssh_port = if t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
+                                let ssh_port = if view.protocol == Protocol::Ssh { view.effective_port() } else { 22 };
                                 queue.push_back(Work { row: rows.len(), target: id, spec, ssh_port, windows });
                             }
                             Err(e) => skip(&mut row, &e),
                         }
                     }
-                    Ok(CredentialResolution::Ambiguous(_)) => skip(&mut row, "Mehrere Zugangsdaten kommen in Frage"),
-                    _ => skip(&mut row, "Keine Zugangsdaten hinterlegt"),
+                    Err(e) => skip(&mut row, &e),
                 },
             }
             rows.push(row);

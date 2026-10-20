@@ -281,6 +281,12 @@ impl App {
         }
         v["inventory"] = json!(match settings.inventory { None => "inherit", Some(true) => "on", Some(false) => "off" });
         if let Some(Node::Target(t)) = node {
+            v["ways"] = json!(t.ways.iter().map(way_json).collect::<Vec<_>>());
+            v["open_with"] = json!(t.open_with);
+            v["main_way"] = json!(format!("{} · {}:{}", t.protocol.label(), t.host, t.effective_port()));
+            v["way_logins"] = json!(self.index.logins.iter().map(|l| json!({ "id": l.id, "name": l.name })).collect::<Vec<_>>());
+        }
+        if let Some(Node::Target(t)) = node {
             // Text für „geerbt“: der Wert ohne eigene Festlegung am Ziel.
             if let Ok((on, src)) = rj_core::inherit::resolve_inventory_inherited(&self.index, t.id) {
                 v["inventory_effective"] = json!(format!("{}, {}", if on { "an" } else { "aus" }, inventory_source_text(src, on)));
@@ -634,6 +640,7 @@ impl App {
             "ov_output" => Ok(json!({ "run": self.overview_output(&c) })),
             "ov_notes" => self.overview_notes(&c),
             "ov_inventory" => self.overview_inventory_switch(&c),
+            "ways_suggest" => self.ways_suggest(&c),
             "mass_start" => self.mass_start(&c),
             "mass_rows" => Ok(self.mass_rows()),
             "mass_cancel" => Ok(self.mass_cancel()),
@@ -1027,6 +1034,24 @@ impl App {
                 return Ok(json!({ "errors": errors }));
             }
         }
+        // Zugangswege: vollständig prüfen, bevor etwas geändert wird.
+        let ways = match (&node, f.get("ways")) {
+            (Some(Node::Target(t)), Some(v)) => match ways_from(v, t, &self.index) {
+                Ok(w) => Some(w),
+                Err(e) => return Ok(json!({ "errors": { "ways": e } })),
+            },
+            _ => None,
+        };
+        let open_with: Option<Option<Uuid>> = match f.get("open_with") {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(Value::String(s)) if s == "main" || s.is_empty() => Some(None),
+            Some(Value::String(s)) => match Uuid::parse_str(s) {
+                Ok(u) => Some(Some(u)),
+                Err(_) => return Ok(json!({ "errors": { "ways": "Weg für den Doppelklick ungültig" } })),
+            },
+            Some(_) => return Ok(json!({ "errors": { "ways": "Weg für den Doppelklick ungültig" } })),
+        };
         if let Some(n) = str_of(&f, "name") {
             if n.is_empty() && !is_root {
                 return Ok(json!({ "errors": { "name": "Name darf nicht leer sein" } }));
@@ -1125,6 +1150,16 @@ impl App {
             }
             match rj_core::inherit::find_node_mut(&mut self.index.root, id) {
                 Some(Node::Target(t)) => {
+                    if let Some(w) = ways {
+                        t.ways = w;
+                    }
+                    if let Some(o) = open_with {
+                        t.open_with = o;
+                    }
+                    // Doppelklick-Weg muss es geben (gelöschter Weg → Hauptweg).
+                    if t.open_with.is_some_and(|o| !t.ways.iter().any(|w| w.id == o)) {
+                        t.open_with = None;
+                    }
                     if let Some(n) = str_of(&f, "name") {
                         t.name = n.to_string();
                     }
@@ -2038,3 +2073,76 @@ pub(crate) fn inventory_source_text(src: rj_core::inherit::InventorySource, on: 
         rj_core::inherit::InventorySource::Default => "Vorgabe für Web-Ziele",
     }
 }
+
+/// Zugangsweg für die Oberfläche.
+pub(crate) fn way_json(w: &rj_core::model::AccessWay) -> Value {
+    let cred = match w.credential {
+        rj_core::model::WayCredential::Target => json!("target"),
+        rj_core::model::WayCredential::None => json!("none"),
+        rj_core::model::WayCredential::Login(id) => json!(id),
+    };
+    json!({ "id": w.id, "name": w.name, "label": w.label(), "protocol": w.protocol.as_str(), "host": w.host, "port": w.port, "credential": cred })
+}
+
+/// Zugangswege aus dem Eigenschaften-Tab prüfen. Optionen bekannter Wege (gleiche ID, gleiches Protokoll) bleiben.
+fn ways_from(v: &Value, t: &rj_core::Target, index: &Index) -> Result<Vec<rj_core::model::AccessWay>, String> {
+    use rj_core::model::{AccessWay, WayCredential};
+    let list = v.as_array().ok_or("Zugangswege: Liste erwartet")?;
+    let mut out = Vec::new();
+    for (n, w) in list.iter().enumerate() {
+        let nr = n + 1;
+        let protocol = match w.get("protocol").and_then(Value::as_str) {
+            Some("web") => Protocol::Web,
+            Some("ssh") => Protocol::Ssh,
+            Some("rdp") => Protocol::Rdp,
+            Some("vnc") => Protocol::Vnc,
+            Some("psrp") => Protocol::Psrp,
+            _ => return Err(format!("Weg {nr}: Protokoll fehlt oder wird nicht unterstützt")),
+        };
+        let host = w.get("host").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+        if host.contains("://") {
+            if protocol != Protocol::Web {
+                return Err(format!("Weg {nr}: Eine URL gibt es nur bei Web; sonst Rechnername oder IP eintragen"));
+            }
+            if rj_core::weburl::endpoint(&host).is_none() {
+                return Err(format!("Weg {nr}: URL ungültig; Beispiel: https://192.0.2.4:4343/"));
+            }
+        } else if host.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err(format!("Weg {nr}: Adresse enthält Leer- oder Steuerzeichen"));
+        }
+        let port = match w.get("port") {
+            None | Some(Value::Null) => None,
+            Some(p) => {
+                let n = p.as_u64().or_else(|| p.as_str().filter(|s| !s.trim().is_empty()).and_then(|s| s.trim().parse().ok()));
+                match (n, p.as_str().is_some_and(|s| s.trim().is_empty())) {
+                    (_, true) => None,
+                    (Some(n), _) if (1..=65535).contains(&n) => Some(n as u16),
+                    _ => return Err(format!("Weg {nr}: Port muss zwischen 1 und 65535 liegen")),
+                }
+            }
+        };
+        let credential = match w.get("credential").and_then(Value::as_str) {
+            None | Some("target") => WayCredential::Target,
+            Some("none") => WayCredential::None,
+            Some(s) => match Uuid::parse_str(s) {
+                Ok(id) if index.login(id).is_some() => WayCredential::Login(id),
+                _ => return Err(format!("Weg {nr}: Anmeldeobjekt nicht gefunden")),
+            },
+        };
+        let id = w.get("id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok());
+        let mut way = AccessWay::new(protocol);
+        if let Some(id) = id {
+            way.id = id;
+            if let Some(old) = t.ways.iter().find(|x| x.id == id && x.protocol == protocol) {
+                way.options = old.options.clone();
+            }
+        }
+        way.name = w.get("name").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+        way.host = host;
+        way.port = port;
+        way.credential = credential;
+        out.push(way);
+    }
+    Ok(out)
+}
+

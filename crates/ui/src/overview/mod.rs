@@ -209,6 +209,10 @@ impl App {
                 v["name"] = json!(rj_core::charset::mark_visible(&t.name, false));
                 v["sub"] = json!(format!("{} · {}:{}", protocol_label(t.protocol), rj_core::charset::mark_visible(&t.host, false), t.effective_port()));
                 v["notes"] = json!(t.meta.notes);
+                // Zugangswege: Knopf je Weg in der Kopfkarte; hervorgehoben der Weg für den Doppelklick.
+                v["main_way"] = json!(protocol_label(t.protocol));
+                v["ways"] = json!(t.ways.iter().map(|w| json!({ "id": w.id, "label": w.label(), "protocol": w.protocol.as_str() })).collect::<Vec<_>>());
+                v["open_with"] = json!(t.open_with);
                 v["notes_editable"] = json!(!read_only && !self.demo);
                 let (on, src) = rj_core::inherit::resolve_inventory(&self.index, t.id).unwrap_or((false, rj_core::inherit::InventorySource::Default));
                 v["can_query"] = json!(on);
@@ -325,11 +329,7 @@ impl App {
         if self.demo {
             return Err("In der Vorführung nicht verfügbar".into());
         }
-        let r = match resolve_credential(&self.index, t.id).map_err(|e| e.to_string())? {
-            CredentialResolution::Found(r) => r,
-            CredentialResolution::Ambiguous(_) => return Err("Mehrere Zugangsdaten kommen in Frage. Bitte im Ziel einen Datensatz festlegen.".into()),
-            _ => return Err("Für dieses Ziel sind keine Zugangsdaten hinterlegt".into()),
-        };
+        let (t, r) = self.inventory_view(&t)?;
         let key = t.id.to_string();
         let open = |p: u16| {
             self.overview.services.get(&key).and_then(|(_, v)| v["list"].as_array().map(|l| l.iter().any(|s| s["port"] == p && s["open"] == true)))
@@ -476,6 +476,68 @@ impl App {
     }
 
     /// Notizen des Ziels speichern (Index in der KDBX); Gäste haben keine.
+    /// Für das Inventar: das Ziel über seinen SSH-Zugangsweg, wenn der Hauptweg kein SSH ist, sonst das Ziel selbst;
+    /// dazu die passenden Zugangsdaten (die des Wegs bzw. des Ziels).
+    pub(crate) fn inventory_view(&self, t: &rj_core::Target) -> Result<(rj_core::Target, rj_core::inherit::ResolvedCredential), String> {
+        use rj_core::model::WayCredential;
+        let target_cred = || match resolve_credential(&self.index, t.id).map_err(|e| e.to_string())? {
+            CredentialResolution::Found(r) => Ok(r),
+            CredentialResolution::Ambiguous(_) => Err("Mehrere Zugangsdaten kommen in Frage. Bitte im Ziel einen Datensatz festlegen.".to_string()),
+            _ => Err("Für dieses Ziel sind keine Zugangsdaten hinterlegt".to_string()),
+        };
+        if t.protocol != Protocol::Ssh {
+            if let Some(w) = t.ways.iter().find(|w| w.protocol == Protocol::Ssh) {
+                let view = t.via(w.id).ok_or("Zugangsweg nicht gefunden")?;
+                let r = match w.credential {
+                    WayCredential::Target => target_cred()?,
+                    WayCredential::Login(id) => {
+                        let l = self.index.login(id).ok_or("Das Anmeldeobjekt des SSH-Wegs gibt es nicht mehr")?;
+                        rj_core::inherit::ResolvedCredential { name: l.name.clone(), reference: l.entry.clone(), origin: rj_core::inherit::Origin::Target, overrides: Default::default() }
+                    }
+                    WayCredential::None => return Err("Der SSH-Weg dieses Ziels hat keine Zugangsdaten".into()),
+                };
+                return Ok((view, r));
+            }
+        }
+        Ok((t.clone(), target_cred()?))
+    }
+
+    /// Vorschläge für Zugangswege aus den angebotenen Diensten (Portprüfung der Übersicht): Web auf 4343, 443
+    /// bzw. 80, SSH, RDP, VNC – ohne den Hauptweg.
+    pub fn ways_suggest(&self, c: &Value) -> Result<Value, String> {
+        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
+        let key = t.id.to_string();
+        let Some((_, svc)) = self.overview.services.get(&key) else {
+            return Err("Die angebotenen Dienste sind noch nicht bekannt. Bitte das Ziel einmal anklicken (Übersicht) und danach erneut vorschlagen.".into());
+        };
+        let open: Vec<u64> = svc["list"].as_array().map(|l| l.iter().filter(|s| s["open"] == true).filter_map(|s| s["port"].as_u64()).collect()).unwrap_or_default();
+        let has = |p: u64| open.contains(&p);
+        let main = (t.protocol, u64::from(t.effective_port()));
+        let host = t.host.trim();
+        let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
+        let mut out = Vec::new();
+        let mut web = |port: u64, url: String, name: &str| {
+            if main != (Protocol::Web, port) {
+                out.push(json!({ "protocol": "web", "name": name, "host": url, "credential": "target" }));
+            }
+        };
+        if has(4343) {
+            web(4343, format!("https://{h}:4343/"), "Web-Oberfläche (4343)");
+        }
+        if has(443) {
+            web(443, format!("https://{h}/"), "Web-Oberfläche");
+        } else if has(80) {
+            web(80, format!("http://{h}/"), "Web-Oberfläche (HTTP)");
+        }
+        for (port, proto) in [(22u64, "ssh"), (3389, "rdp"), (5900, "vnc")] {
+            let p = match proto { "ssh" => Protocol::Ssh, "rdp" => Protocol::Rdp, _ => Protocol::Vnc };
+            if has(port) && main != (p, port) {
+                out.push(json!({ "protocol": proto, "name": "", "host": "", "credential": "target" }));
+            }
+        }
+        Ok(json!({ "ways": out }))
+    }
+
     /// Schalter „Inventar abfragen“ in der Übersicht: legt die Einstellung am Ziel selbst fest und speichert.
     pub fn overview_inventory_switch(&mut self, c: &Value) -> Result<Value, String> {
         let Subject::Target(t) = self.ov_subject(c)? else { return Err("Gäste haben keine Inventar-Einstellung".into()) };

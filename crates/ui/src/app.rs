@@ -1041,8 +1041,33 @@ impl App {
     }
 
     pub fn connect(&mut self, target: Uuid, credential: Option<&str>, remember: bool, width: u32, height: u32) -> String {
-        let Some(t) = self.target(target).cloned() else { return json!({ "error": "Ziel nicht gefunden" }).to_string() };
-        let resolved = match credential {
+        self.connect_way(target, WaySel::Default, credential, remember, width, height)
+    }
+
+    /// Wie [`connect`], mit Wahl des Zugangswegs: Hauptweg, Weg für den Doppelklick oder ein bestimmter Weg.
+    pub fn connect_way(&mut self, target: Uuid, sel: WaySel, credential: Option<&str>, remember: bool, width: u32, height: u32) -> String {
+        let Some(base) = self.target(target).cloned() else { return json!({ "error": "Ziel nicht gefunden" }).to_string() };
+        let way = match sel {
+            WaySel::Main => None,
+            WaySel::Default => base.open_with,
+            WaySel::Way(w) => Some(w),
+        };
+        let (t, way_cred) = match way {
+            None => (base, None),
+            Some(w) => match (base.via(w), base.ways.iter().find(|x| x.id == w)) {
+                (Some(v), Some(x)) => (v, Some(x.credential)),
+                // Gelöschter Weg als Doppelklick-Weg: Hauptweg nehmen statt zu scheitern.
+                _ if sel == WaySel::Default => (base, None),
+                _ => return json!({ "error": "Zugangsweg nicht gefunden" }).to_string(),
+            },
+        };
+        let resolved = match (way_cred, credential) {
+            (Some(rj_core::model::WayCredential::None), _) => None,
+            (Some(rj_core::model::WayCredential::Login(lid)), _) => match self.index.login(lid) {
+                Some(l) => Some(ResolvedCredential { name: l.name.clone(), reference: l.entry.clone(), origin: rj_core::inherit::Origin::Target, overrides: Default::default() }),
+                None => return json!({ "error": "Das Anmeldeobjekt dieses Zugangswegs gibt es nicht mehr" }).to_string(),
+            },
+            (_, credential) => match credential {
             Some(name) => match resolve_credential_named(&self.index, target, name) {
                 Ok(Some(r)) => Some(r),
                 _ => return json!({ "error": format!("Zugangsdatensatz „{name}“ nicht gefunden") }).to_string(),
@@ -1057,10 +1082,13 @@ impl App {
                         .collect();
                     return json!({ "ambiguous": choices }).to_string();
                 }
+                // Zusätzlicher Weg „wie das Ziel“, das Ziel hat aber keine: ohne Zugangsdaten verbinden (Anmeldung von Hand).
+                Ok(CredentialResolution::NotFound { .. }) if way_cred.is_some() => None,
                 Ok(CredentialResolution::NotFound { name }) => {
                     return json!({ "error": format!("Kein Zugangsdatensatz „{name}“ am Ziel oder in einem Elternordner") }).to_string();
                 }
                 Err(e) => return json!({ "error": e.to_string() }).to_string(),
+            },
             },
         };
         if remember {
@@ -1729,6 +1757,28 @@ fn set_target_credential(idx: &mut Index, target: Uuid, name: &str) {
         false
     }
     walk(&mut idx.root, target, name);
+}
+
+/// Wahl des Zugangswegs beim Verbinden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaySel {
+    /// Weg für den Doppelklick (fehlt er, der Hauptweg).
+    Default,
+    /// Immer der Hauptweg.
+    Main,
+    /// Ein bestimmter weiterer Weg.
+    Way(Uuid),
+}
+
+impl WaySel {
+    /// Aus der Ziel-ID der Oberfläche: `<id>`, `<id>#main` oder `<id>#<Weg-ID>`.
+    pub fn split(id: &str) -> (&str, WaySel) {
+        match id.split_once('#') {
+            Some((t, "main")) => (t, WaySel::Main),
+            Some((t, w)) => (t, Uuid::parse_str(w).map(WaySel::Way).unwrap_or(WaySel::Default)),
+            None => (id, WaySel::Default),
+        }
+    }
 }
 
 #[cfg(test)]

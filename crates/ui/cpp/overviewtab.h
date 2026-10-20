@@ -39,13 +39,16 @@ public:
 	/// Ergebnis einer Hintergrundaufgabe (`ov_probe`, `ov_query`).
 	void handleResult(const QString& kind, const QString& target, const QJsonObject& r);
 
-	/// Nur den Inventar-Schalter neu lesen (nach Änderungen in den Einstellungen; Notizen bleiben unberührt).
+	/// Inventar-Schalter und Knöpfe der Zugangswege neu lesen (nach Änderungen in den Einstellungen; Notizen bleiben
+	/// unberührt).
 	void refreshInventorySwitch();
 
 signals:
 	void titleChanged();
 	/// „Verbinden“ in der Kopfkarte.
 	void connectRequested(const QJsonObject& subject);
+	/// Knopf eines Zugangswegs: `way` = „main“ (Hauptweg) oder die ID des Wegs.
+	void connectWayRequested(const QJsonObject& subject, const QString& way);
 	/// Inventar abgefragt: die Geräteart (Symbol im Baum) kann sich geändert haben.
 	void inventoryChanged();
 
@@ -53,6 +56,7 @@ private:
 	QJsonObject call(const QJsonObject& cmd) const;
 	void load();
 	void applyInventorySwitch(const QJsonObject& r);
+	void renderWays(const QJsonObject& r);
 	void probe(bool force);
 	void query();
 	void startCheck(const QString& kind);
@@ -79,6 +83,8 @@ private:
 	QLabel* m_title;
 	QLabel* m_sub;
 	QPushButton* m_connect;
+	class QHBoxLayout* m_ways = nullptr;
+	bool m_hasWays = false;
 	QLabel* m_tileValue[4] = {};
 	QLabel* m_inventorySource;
 	QWidget* m_pendingBox;

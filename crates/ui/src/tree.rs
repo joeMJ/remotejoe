@@ -37,6 +37,9 @@ pub struct UiNode {
     /// Geräteart aus dem Inventar (eigenes Symbol, z. B. `aruba-ap`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<&'static str>,
+    /// Ziel mit weiteren Zugangswegen (eigenes Symbol).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub multi: bool,
     /// Anmeldeobjekt (keine Verbindung, öffnet die Bearbeitung).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub login: bool,
@@ -67,6 +70,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         children,
                         folder: true,
                         device: None,
+                        multi: false,
                         login: false,
                     });
                 }
@@ -84,6 +88,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         children: Vec::new(),
                         folder: false,
                         device: None,
+                        multi: !t.ways.is_empty(),
                         login: false,
                     });
                 }
@@ -104,6 +109,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                 children: Vec::new(),
                 folder: false,
                 device: None,
+                        multi: false,
                 login: true,
             });
         }

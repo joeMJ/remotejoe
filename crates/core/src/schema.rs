@@ -216,7 +216,8 @@ mod tests {
         assert_eq!(t.ways[0].credential, WayCredential::None);
         assert_eq!(t.open_with, Some(t.ways[0].id));
         let via = t.via(t.ways[0].id).unwrap();
-        assert_eq!((via.protocol, via.host.as_str(), via.id), (Protocol::Web, "https://192.0.2.4:4343", tid));
+        assert_eq!((via.protocol, via.host.as_str(), via.port, via.id), (Protocol::Web, "192.0.2.4", Some(4343), tid));
+        assert!(matches!(&via.options, ProtocolOptions::Web(o) if o.url.as_deref() == Some("https://192.0.2.4:4343")));
         assert!(via.ways.is_empty());
         // Ein Programm, das nur Schema 3 kennt, öffnet Schema 4 schreibgeschützt (bestehende Regel für neuere Dateien).
         assert!(SCHEMA_VERSION == 4);
