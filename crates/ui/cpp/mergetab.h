@@ -23,6 +23,9 @@ class MergeTab : public ToolTab
 public:
 	MergeTab(RjBackend* backend, const QStringList& ids, const QString& title, QWidget* parent = nullptr);
 
+	/// Der Index hat sich geändert (auch von außen, z. B. Bearbeiten → Rückgängig): Gruppen neu laden.
+	void refresh();
+
 signals:
 	/// Doppelklick auf ein Ziel: im Baum zeigen.
 	void showTarget(const QString& id);
@@ -49,4 +52,5 @@ private:
 	QLabel* m_notes;
 	QTreeWidgetItem* m_current = nullptr;
 	bool m_filling = false;
+	QString m_done;
 };

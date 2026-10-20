@@ -132,7 +132,7 @@ pub fn merge(index: &mut Index, keep: Uuid, others: &[Uuid], name: &str) -> Resu
                 // Vorhandenes Anmeldeobjekt auf denselben Eintrag nehmen, sonst eines anlegen.
                 let login = index.logins.iter().chain(new_logins.iter()).find(|l: &&Login| l.entry.entry == c.reference.entry).map(|l| l.id);
                 WayCredential::Login(login.unwrap_or_else(|| {
-                    let l = Login { id: Uuid::new_v4(), name: format!("{} ({})", t.name, c.name), folder: keep_folder, entry: c.reference.clone() };
+                    let l = Login { id: Uuid::new_v4(), name: if c.name == DEFAULT_CREDENTIAL { t.name.clone() } else { format!("{} ({})", t.name, c.name) }, folder: keep_folder, entry: c.reference.clone() };
                     let id = l.id;
                     new_logins.push(l);
                     id
@@ -266,6 +266,7 @@ mod tests {
         // Zwei Web-Wege: Sie tragen den Namen ihres bisherigen Ziels.
         assert_eq!((k.ways[0].name.as_str(), k.ways[1].name.as_str()), ("ap1 web", "ap1 web alt"));
         assert!(matches!(k.ways[0].credential, WayCredential::Login(l) if idx.login(l).unwrap().entry.entry == e2));
+        assert!(matches!(k.ways[0].credential, WayCredential::Login(l) if idx.login(l).unwrap().name == "ap1 web"), "ohne „(default)“");
         assert_eq!(k.ways[1].credential, WayCredential::Target, "gleicher Eintrag wie das Hauptziel");
         let v = k.via(k.ways[0].id).unwrap();
         assert_eq!((v.host.as_str(), v.port), ("192.0.2.1", Some(4343)));

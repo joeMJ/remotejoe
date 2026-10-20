@@ -364,7 +364,11 @@ void MergeTab::apply()
 	}
 	if (groups.isEmpty())
 		return;
-	if (QMessageBox::question(this, T("merge.apply.title"), T("merge.apply.ask").arg(groups.size()).arg(targets)) != QMessageBox::Yes)
+	QMessageBox box(QMessageBox::Question, T("merge.apply.title"), T("merge.apply.ask").arg(groups.size()).arg(targets), QMessageBox::NoButton, this);
+	auto* ok = box.addButton(T("merge.apply"), QMessageBox::AcceptRole);
+	box.setDefaultButton(box.addButton(T("merge.apply.cancel"), QMessageBox::RejectRole));
+	box.exec();
+	if (box.clickedButton() != ok)
 		return;
 	const QJsonObject r = parseObj(edit({ { QStringLiteral("op"), QStringLiteral("merge_apply") }, { QStringLiteral("groups"), groups } }));
 	if (r.contains(QStringLiteral("error")))
@@ -377,6 +381,7 @@ void MergeTab::apply()
 	QString done = T("merge.done").arg(groups.size()).arg(r.value(QStringLiteral("merged")).toInt()).arg(r.value(QStringLiteral("ways")).toInt());
 	if (const int l = r.value(QStringLiteral("logins")).toInt(); l > 0)
 		done += T("merge.done.logins").arg(l);
+	m_done = done;
 	m_state->setText(done);
 	emit status(done);
 	m_undo->setEnabled(true);
@@ -398,4 +403,15 @@ void MergeTab::undo()
 	m_undo->setEnabled(false);
 	load();
 	m_state->setText(T("merge.undone"));
+}
+
+void MergeTab::refresh()
+{
+	// Der eigene Schritt ist nur noch zurücknehmbar, solange er der letzte im Verlauf ist.
+	const QJsonObject l = parseObj(edit({ { QStringLiteral("op"), QStringLiteral("undo_label") } }));
+	const bool mine = m_undo->isEnabled() && l.value(QStringLiteral("label")).toString() == undoLabel;
+	load();
+	m_undo->setEnabled(mine);
+	if (mine)
+		m_state->setText(m_done);
 }

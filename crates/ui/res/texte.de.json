@@ -159,6 +159,7 @@
   "merge.none": "Unter der Auswahl gibt es keine Ziele mit gleicher Adresse.",
   "merge.state": "Gruppen: %1 gefunden, %2 gewählt · Ziele, die zu Zugangswegen werden: %3",
   "merge.apply": "Zusammenfassen",
+  "merge.apply.cancel": "Abbrechen",
   "merge.apply.title": "Ziele zusammenfassen",
   "merge.apply.ask": "Gruppen zusammenfassen: %1. Ziele, die zu Zugangswegen werden und aus dem Baum verschwinden: %2. Der Schritt lässt sich mit „Rückgängig“ zurücknehmen.",
   "merge.done": "Zusammengefasst – Gruppen: %1, Ziele: %2, neue Zugangswege: %3.",

@@ -1538,6 +1538,9 @@ void MainWindow::reloadTree()
 	// Offene Übersicht: Inventar-Schalter nachziehen (z. B. nach dem Speichern der Einstellungen).
 	if (auto* o = findChild<OverviewTab*>())
 		QTimer::singleShot(0, o, [o] { o->refreshInventorySwitch(); });
+	// Offene Vorschau „Zusammenfassen“: Gruppen neu laden (z. B. nach Bearbeiten → Rückgängig).
+	if (auto* m = findChild<MergeTab*>())
+		QTimer::singleShot(0, m, [m] { m->refresh(); });
 	// Aufgeklappte Ordner, Auswahl und Bildlauf merken, damit eine Änderung den Baum nicht zuklappt.
 	// Während einer Suche klappt alles auf; dann bleibt der zuletzt bekannte Zustand ohne Suche erhalten.
 	const bool searching = !m_search->text().isEmpty();

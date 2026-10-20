@@ -309,6 +309,8 @@ void OverviewTab::refreshInventorySwitch()
 		applyInventorySwitch(r);
 		renderWays(r);
 	}
+	else if (!m_subject.contains(QStringLiteral("hv")))
+		emit closeRequested(); // Ziel gibt es nicht mehr (gelöscht oder zusammengefasst).
 }
 
 void OverviewTab::applyInventorySwitch(const QJsonObject& r)

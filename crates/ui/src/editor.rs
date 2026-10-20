@@ -283,7 +283,10 @@ impl App {
         if let Some(Node::Target(t)) = node {
             v["ways"] = json!(t.ways.iter().map(way_json).collect::<Vec<_>>());
             v["open_with"] = json!(t.open_with);
-            v["main_way"] = json!(format!("{} · {}:{}", t.protocol.label(), t.host, t.effective_port()));
+            // Web-Ziel: Rechner und Port aus der URL, wie beim Verbinden.
+            let (host, port) = App::endpoint_of(t);
+            v["endpoint"] = json!(format!("{host}:{port}"));
+            v["main_way"] = json!(format!("{} · {host}:{port}", t.protocol.label()));
             v["way_logins"] = json!(self.index.logins.iter().map(|l| json!({ "id": l.id, "name": l.name })).collect::<Vec<_>>());
         }
         if let Some(Node::Target(t)) = node {

@@ -379,6 +379,8 @@ QString PropertiesTab::areaSummary(const QString& key) const
 	{
 		if (kind != QLatin1String("target"))
 			return T("area.connection.folder");
+		if (d.value(QStringLiteral("protocol")).toString() == QLatin1String("web") && !d.value(QStringLiteral("endpoint")).toString().isEmpty())
+			return QStringLiteral("%1 · %2").arg(QStringLiteral("WEB"), d.value(QStringLiteral("endpoint")).toString());
 		const QString port = d.value(QStringLiteral("port")).isNull() ? QString::number(d.value(QStringLiteral("default_port")).toInt()) : QString::number(d.value(QStringLiteral("port")).toInt());
 		return QStringLiteral("%1 · %2:%3").arg(d.value(QStringLiteral("protocol")).toString().toUpper(), d.value(QStringLiteral("host")).toString(), port);
 	}
