@@ -117,7 +117,10 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	tiles->setSpacing(8);
 	for (int i = 0; i < 4; ++i)
 	{
-		tiles->addWidget(rjui::tile(fieldLabel(QString::fromLatin1(kTiles[i])), &m_tileValue[i], inv), 0, i);
+		QFrame* t = rjui::tile(fieldLabel(QString::fromLatin1(kTiles[i])), &m_tileValue[i], inv);
+		m_tileCap[i] = t->findChild<QLabel*>(QStringLiteral("rjTileLabel"));
+		m_tileKeys << QString::fromLatin1(kTiles[i]);
+		tiles->addWidget(t, 0, i);
 		tiles->setColumnStretch(i, 1);
 	}
 	in->addLayout(tiles);
@@ -475,8 +478,29 @@ void OverviewTab::updateSub()
 
 void OverviewTab::renderInventory(const QJsonArray& fields)
 {
+	// Aruba-Gerät (System „Aruba …“): Laufzeit und Seriennummer statt vCPU und Speicher.
+	bool aruba = false;
+	for (const QJsonValue& v : fields)
+		if (v.toObject().value(QStringLiteral("key")).toString() == QLatin1String("system") &&
+		    v.toObject().value(QStringLiteral("value")).toString().startsWith(QLatin1String("Aruba")))
+			aruba = true;
+	const QStringList keys = aruba ? QStringList{ QStringLiteral("uptime"), QStringLiteral("serial"), QStringLiteral("ip"), QStringLiteral("mac") }
+	                               : QStringList{ QString::fromLatin1(kTiles[0]), QString::fromLatin1(kTiles[1]), QString::fromLatin1(kTiles[2]), QString::fromLatin1(kTiles[3]) };
+	if (keys != m_tileKeys)
+	{
+		m_tileKeys = keys;
+		for (int i = 0; i < 4; ++i)
+			if (m_tileCap[i])
+				m_tileCap[i]->setText(fieldLabel(keys.at(i)));
+	}
 	m_inventory = fields;
 	updateSub();
+	for (QLabel* v : m_tileValue)
+		if (v)
+		{
+			v->setText(QStringLiteral("–"));
+			v->setToolTip(QString());
+		}
 	// Kacheln und Quelle (jüngster Eintrag)
 	qint64 latest = 0;
 	QString latestSource;
@@ -485,7 +509,7 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 		const QJsonObject f = v.toObject();
 		const QString key = f.value(QStringLiteral("key")).toString();
 		for (int i = 0; i < 4; ++i)
-			if (key == QLatin1String(kTiles[i]))
+			if (key == m_tileKeys.value(i))
 			{
 				const QString value = f.value(QStringLiteral("value")).toString();
 				m_tileValue[i]->setText(value.isEmpty() ? QStringLiteral("–") : value);

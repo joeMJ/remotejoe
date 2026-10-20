@@ -111,6 +111,27 @@ pub fn parse_aruba(out: &str) -> Option<Found> {
     } else {
         f.push(("system", "Aruba Instant".into()));
     }
+    // „AP uptime is 2 days 12 hours 29 minutes 34 seconds“ → „2 T 12 Std 29 Min“.
+    if let Some(l) = out.lines().find(|l| l.contains("uptime is")) {
+        if let Some(rest) = l.split("uptime is").nth(1) {
+            let words: Vec<&str> = rest.split_whitespace().collect();
+            let mut parts = Vec::new();
+            for pair in words.chunks(2) {
+                if let [n, unit] = pair {
+                    let u = match unit.trim_end_matches(',') {
+                        "day" | "days" => "T",
+                        "hour" | "hours" => "Std",
+                        "minute" | "minutes" => "Min",
+                        _ => continue,
+                    };
+                    parts.push(format!("{n} {u}"));
+                }
+            }
+            if !parts.is_empty() {
+                f.push(("uptime", parts.join(" ")));
+            }
+        }
+    }
     // Name aus der Eingabeaufforderung „name# “ (letzte Zeile mit '#').
     if let Some(p) = out.lines().rev().map(|l| l.trim()).find(|l| l.ends_with('#') && !l.contains(' ')) {
         let n = p.trim_end_matches('#');
@@ -119,6 +140,17 @@ pub fn parse_aruba(out: &str) -> Option<Found> {
         }
     }
     Some(f)
+}
+
+/// Seriennummer aus `show aps` (Tabelle aller APs des Schwarms, Spalte „Serial #“): die Zeile mit der IP des Ziels.
+pub fn parse_aruba_serial(out: &str, ip: &str) -> Option<String> {
+    let lines: Vec<&str> = out.lines().collect();
+    let h = lines.iter().position(|l| l.contains("Serial #") && l.contains("IP"))?;
+    let col = lines[h].find("Serial #")?;
+    lines[h + 1..].iter().find(|l| l.split_whitespace().any(|w| w.trim_end_matches('*') == ip)).and_then(|l| {
+        // Spaltenbeginn wie in der Kopfzeile; das erste Wort ab dort.
+        l.get(col..).and_then(|r| r.split_whitespace().next()).filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric()) && s.len() >= 6).map(str::to_string)
+    })
 }
 
 /// Auswertung der JSON-Zeile des Windows-Skripts (Felder nach Schlüsseln).
@@ -256,7 +288,13 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
     }
     let text = text?;
     match parse_aruba(&text) {
-        Some(f) => Ok((f, "SSH (show version)", note)),
+        Some(mut f) => {
+            // Seriennummer aus „show aps“: Zeile mit der Adresse des Ziels.
+            if let Some(sn) = parse_aruba_serial(&text, ip.unwrap_or(spec.host.as_str())) {
+                f.push(("serial", sn));
+            }
+            Ok((f, "SSH (show version)", note))
+        }
         // Auch ohne verwertbare Antwort melden, dass ein Schlüssel übernommen wurde.
         None => Err(format!("Keine verwertbare Antwort über SSH (weder Linux, Windows-PowerShell noch Aruba){}", note.map(|n| format!(". {n}")).unwrap_or_default())),
     }
@@ -280,14 +318,16 @@ pub fn ps_inventory(spec: &JobSpec, ip: Option<&str>) -> Result<(Found, &'static
     lines.iter().find_map(|l| parse_windows(l, ip)).map(|f| (f, "PowerShell", None)).ok_or_else(|| errors.first().cloned().unwrap_or_else(|| "Keine Antwort des Inventarskripts".into()))
 }
 
-/// Interaktive Shell: auf die Eingabeaufforderung warten, `no paging` und `show version` senden, bis zur nächsten
-/// Eingabeaufforderung lesen (wie die Aruba-Instant-Werkzeuge mit `invoke_shell`). Nur dieser lesende Befehl.
+/// Interaktive Shell: auf die Eingabeaufforderung warten, `no paging`, `show version` und `show aps` senden, jeweils
+/// bis zur nächsten Eingabeaufforderung lesen (wie die Aruba-Instant-Werkzeuge mit `invoke_shell`). Nur lesende
+/// Befehle.
 async fn cli_show_version(conn: &SshConnection) -> Result<String, String> {
+    const COMMANDS: [&[u8]; 3] = [b"no paging\r\n", b"show version\r\n", b"show aps\r\n"];
     let mut sh = conn.open_shell("vt100", 200, 50).await.map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    // 0: warten auf die erste Eingabeaufforderung, 1: „no paging“ gesendet, 2: „show version“ gesendet.
-    let mut step = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    // Anzahl gesendeter Befehle; `mark`: Pufferstand beim letzten Senden.
+    let mut sent = 0;
     let mut mark = 0;
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -298,28 +338,20 @@ async fn cli_show_version(conn: &SshConnection) -> Result<String, String> {
         match tokio::time::timeout(left.min(Duration::from_millis(1500)), sh.events.recv()).await {
             Ok(Some(ShellEvent::Data(d))) => {
                 buf.extend_from_slice(&d);
-                if ended_with_prompt(&buf, mark) {
-                    match step {
-                        0 => {
-                            sh.write(b"no paging\r\n").await.map_err(|e| e.to_string())?;
-                            step = 1;
-                            mark = buf.len();
-                        }
-                        1 => {
-                            sh.write(b"show version\r\n").await.map_err(|e| e.to_string())?;
-                            step = 2;
-                            mark = buf.len();
-                        }
-                        _ if String::from_utf8_lossy(&buf[mark..]).contains("Version") => break,
-                        _ => {}
+                if ended_with_prompt(&buf, mark) && buf.len() > mark {
+                    if sent == COMMANDS.len() {
+                        break;
                     }
+                    sh.write(COMMANDS[sent]).await.map_err(|e| e.to_string())?;
+                    sent += 1;
+                    mark = buf.len();
                 }
             }
             Ok(Some(_)) | Ok(None) => break,
-            // Ruhe ohne erkannte Eingabeaufforderung (anderes Gerät): den Befehl trotzdem senden.
-            Err(_) if step < 2 => {
-                sh.write(b"show version\r\n").await.map_err(|e| e.to_string())?;
-                step = 2;
+            // Ruhe ohne erkannte Eingabeaufforderung (anderes Gerät): nur noch „show version“ senden.
+            Err(_) if sent == 0 => {
+                sh.write(COMMANDS[1]).await.map_err(|e| e.to_string())?;
+                sent = COMMANDS.len();
                 mark = buf.len();
             }
             Err(_) => break,
@@ -360,12 +392,29 @@ mod tests {
     }
 
     #[test]
+    fn aruba_uptime_and_serial_from_show_version_and_show_aps() {
+        let out = "94:64:24:cc:9b:12# show version\r\nArubaOS (MODEL: 515), Version 8.10.0.23 LSR\r\n\
+                   AP uptime is 2 days 12 hours 29 minutes 34 seconds\r\n94:64:24:cc:9b:12# show aps\r\n\
+                   2 Access Points\r\n---------------\r\n\
+                   Name               IP Address     Mode    Clients  Type  Serial #    Uptime\r\n\
+                   ----               ----------     ----    -------  ----  --------    ------\r\n\
+                   94:64:24:cc:9b:12  192.0.2.1*  access  0        515   CNQXK9X123  2d:12h:29m\r\n\
+                   ap-kueche          192.0.2.1   access  3        505   CNQXK9X999  1d:01h:02m\r\n94:64:24:cc:9b:12#";
+        let f = parse_aruba(out).unwrap();
+        assert!(f.contains(&("uptime", "2 T 12 Std 29 Min".to_string())), "{f:?}");
+        assert_eq!(parse_aruba_serial(out, "192.0.2.1").as_deref(), Some("CNQXK9X123"));
+        assert_eq!(parse_aruba_serial(out, "192.0.2.1").as_deref(), Some("CNQXK9X999"));
+        assert_eq!(parse_aruba_serial(out, "192.0.2.1"), None);
+        assert_eq!(parse_aruba_serial("keine Tabelle", "192.0.2.1"), None);
+    }
+
+    #[test]
     fn aruba_show_version_names_system_model_and_prompt() {
         let out = "\r\nAP-EG-01# show version\r\nAruba Operating System Software.\r\nArubaOS (MODEL: 315), Version 8.10.0.6\r\n\
                    Website: http://www.arubanetworks.com\r\nAP uptime is 3 days 4 hours\r\nAP-EG-01#";
         let f = parse_aruba(out).unwrap();
         assert_eq!(f[0], ("system", "Aruba Instant 8.10.0.6 (Modell 315)".to_string()));
-        assert_eq!(f[1], ("name", "AP-EG-01".to_string()));
+        assert!(f.contains(&("name", "AP-EG-01".to_string())), "{f:?}");
         assert!(parse_aruba("Linux web01 6.8.0\n$ ").is_none());
     }
 

@@ -86,6 +86,9 @@ private:
 	class QHBoxLayout* m_ways = nullptr;
 	bool m_hasWays = false;
 	QLabel* m_tileValue[4] = {};
+	QLabel* m_tileCap[4] = {};
+	/// Felder der vier Kacheln; bei Aruba-Geräten Laufzeit und Seriennummer statt vCPU und Speicher.
+	QStringList m_tileKeys;
 	QLabel* m_inventorySource;
 	QWidget* m_pendingBox;
 	QVBoxLayout* m_pending;

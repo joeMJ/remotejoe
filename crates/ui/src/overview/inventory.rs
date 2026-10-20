@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Felder in Anzeigereihenfolge.
-pub const FIELDS: [&str; 6] = ["name", "ip", "mac", "vcpu", "memory", "system"];
+pub const FIELDS: [&str; 8] = ["name", "ip", "mac", "vcpu", "memory", "system", "uptime", "serial"];
+
+/// Momentwerte: jede Abfrage überschreibt sie (kein Vorschlag „abweichender Wert“), außer von Hand gesetzt.
+const VOLATILE: [&str; 1] = ["uptime"];
 
 /// Quelle eines von Hand gesetzten Werts.
 pub const MANUAL: &str = "von Hand";
@@ -57,7 +60,7 @@ impl Inventory {
             return;
         }
         let f = self.fields.entry(key.to_string()).or_default();
-        if f.value.is_empty() {
+        if f.value.is_empty() || (VOLATILE.contains(&key) && !f.manual) {
             *f = Field { value: value.to_string(), source: source.to_string(), at, manual: false, pending: None };
         } else if f.value == value {
             if !f.manual {
@@ -189,6 +192,21 @@ pub fn format_bytes(b: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn uptime_is_overwritten_other_fields_become_proposals() {
+        let mut inv = Inventory::default();
+        inv.offer("uptime", "1 T", "SSH", 1);
+        inv.offer("uptime", "2 T", "SSH", 2);
+        assert_eq!((inv.value("uptime"), inv.fields["uptime"].pending.is_none()), (Some("2 T"), true));
+        inv.offer("serial", "CN1", "SSH", 1);
+        inv.offer("serial", "CN2", "SSH", 2);
+        assert_eq!(inv.value("serial"), Some("CN1"));
+        assert!(inv.fields["serial"].pending.is_some(), "abweichende Seriennummer als Vorschlag");
+        inv.set_manual("uptime", "von Hand", 3).unwrap();
+        inv.offer("uptime", "3 T", "SSH", 4);
+        assert_eq!(inv.value("uptime"), Some("von Hand"));
+    }
 
     #[test]
     fn aruba_system_marks_the_device_kind() {
