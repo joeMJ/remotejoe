@@ -77,7 +77,7 @@ MergeTab::MergeTab(RjBackend* backend, const QStringList& ids, const QString& ti
 	// Karte mit den Gruppen; je Gruppe die Ziele darunter.
 	QVBoxLayout* lin = nullptr;
 	auto* listCard = rjui::card(this, &lin);
-	lin->addWidget(rjui::section(T("merge.groups"), listCard));
+	lin->addWidget(rjui::section(T(manual ? "merge.groups.manual" : "merge.groups"), listCard));
 	m_list = new QTreeWidget(listCard);
 	m_list->setUniformRowHeights(true);
 	m_list->setColumnCount(4);
