@@ -2665,19 +2665,39 @@ void MainWindow::rebuildTabs()
 		p->setParent(nullptr);
 	auto fill = [&](QTabWidget* target, const QJsonObject& window) {
 		const auto active = std::uint64_t(window.value(QStringLiteral("active")).toInteger());
-		// Eigenschaften-Tabs bleiben erhalten, Sitzungs-Tabs werden neu aufgebaut.
+		// Erhaltene Tabs (Eigenschaften, Übersicht, …) bleiben hinter der Sitzung, hinter der sie standen; Sitzungs-Tabs
+		// werden in der Reihenfolge des Arbeitsbereichs neu aufgebaut, eine neue Sitzung kommt damit ganz nach rechts.
+		struct Kept
+		{
+			QWidget* w;
+			QString text;
+			std::uint64_t after; // Sitzungs-Tab davor (0 = ganz vorn)
+		};
 		QWidget* current = target->currentWidget();
-		QList<QPair<QWidget*, QString>> editors;
+		QList<Kept> editors;
+		std::uint64_t anchor = 0;
 		while (target->count())
 		{
 			QWidget* w = target->widget(0);
 			const QString text = target->tabText(0);
 			target->removeTab(0);
 			if (w->property("editor").toBool())
-				editors.append({ w, text });
+				editors.append({ w, text, anchor });
 			else
+			{
+				anchor = w->property("tab").toULongLong();
 				w->deleteLater();
+			}
 		}
+		QSet<std::uint64_t> present;
+		for (const QJsonValue& tv : window.value(QStringLiteral("tabs")).toArray())
+			present.insert(std::uint64_t(tv.toInteger()));
+		auto addKept = [&](std::uint64_t after) {
+			for (const Kept& e : std::as_const(editors))
+				if (e.after == after || (after == UINT64_MAX && e.after != 0 && !present.contains(e.after)))
+					target->addTab(e.w, e.text);
+		};
+		addKept(0);
 		int activeIndex = 0;
 		for (const QJsonValue& tv : window.value(QStringLiteral("tabs")).toArray())
 		{
@@ -2700,14 +2720,14 @@ void MainWindow::rebuildTabs()
 						target->setTabIcon(i, protocolIcon(proto, QString(), false));
 					break;
 				}
+			addKept(id);
 		}
+		// Stand die Sitzung davor nicht mehr im Arbeitsbereich (geschlossen): ans Ende.
+		addKept(UINT64_MAX);
 		target->setCurrentIndex(activeIndex);
-		for (const auto& e : editors)
-		{
-			target->addTab(e.first, e.second);
-			if (e.first == current)
-				target->setCurrentWidget(e.first);
-		}
+		for (const Kept& e : std::as_const(editors))
+			if (e.w == current)
+				target->setCurrentWidget(e.w);
 	};
 	const QJsonArray windows = m_workspace.value(QStringLiteral("windows")).toArray();
 	QSet<std::uint64_t> seen;
