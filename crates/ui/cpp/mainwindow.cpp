@@ -5,6 +5,7 @@
 #include "overviewtab.h"
 #include "appearance.h"
 #include "settingstab.h"
+#include "masstab.h"
 #include <algorithm>
 
 #include "editor.h"
@@ -2314,6 +2315,19 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 			closeToolTab(old);
 		addToolTab(new CertCheckTab(m_backend, selectedIds(), m_tabs), T(m_backend, "certcheck.title"));
 	});
+	menu.addAction(T(m_backend, "ctx.mass"), this, [this] {
+		const QStringList ids = selectedIds();
+		if (ids.isEmpty())
+			return;
+		// Ein Lauf zur Zeit: ein vorhandener Reiter wird ersetzt.
+		if (auto* old = findChild<MassInventoryTab*>())
+			closeToolTab(old);
+		const QString title = ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size());
+		auto* t = new MassInventoryTab(m_backend, ids, title, m_tabs);
+		connect(t, &MassInventoryTab::showTarget, this, [this](const QString& id) { selectId(id); });
+		connect(t, &MassInventoryTab::finished, this, [this] { reloadTree(); });
+		addToolTab(t, T(m_backend, "mass.tab"));
+	});
 	QMenu* tasks = menu.addMenu(T(m_backend, "ctx.tasks"));
 	tasks->addAction(T(m_backend, "ctx.tasks.updates"), this, [this] {
 		const QStringList ids = selectedTargets(m_tree, m_model);
@@ -3031,6 +3045,11 @@ void MainWindow::handleEvents(const QString& json)
 				}
 				else if (kind == QLatin1String("guests"))
 					applyGuests(e.value(QStringLiteral("target")).toString(), r);
+				else if (kind == QLatin1String("mass_inventory"))
+				{
+					// Der Reiter fragt den Stand selbst ab; hier nur die Symbole im Baum nachziehen.
+					reloadTree();
+				}
 				else if (kind == QLatin1String("cert_check"))
 				{
 					if (auto* c = findChild<CertCheckTab*>())

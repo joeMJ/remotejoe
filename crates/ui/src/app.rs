@@ -57,6 +57,7 @@ pub struct App {
     pub(crate) cert_rows: Vec<crate::certcheck::CheckRow>,
     /// Objektübersicht: zwischengespeicherte Prüfungen, laufender Ping/Traceroute, Inventarablage.
     pub(crate) overview: crate::overview::OverviewState,
+    pub(crate) mass: crate::overview::mass::MassState,
     /// Fortschritt der laufenden Schlüsselprüfung: fertig geprüfte Ziele und Gesamtzahl.
     pub(crate) cert_done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub(crate) cert_total: usize,
@@ -170,6 +171,7 @@ impl App {
             unlock_key_file: None,
             cert_rows: Vec::new(),
             overview: Default::default(),
+            mass: Default::default(),
             cert_done: Default::default(),
             cert_total: 0,
             vault_lock: None,

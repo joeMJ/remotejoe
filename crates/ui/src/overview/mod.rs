@@ -7,6 +7,7 @@
 //! (Index in der KDBX); das Inventar liegt als Datei im Datenordner.
 
 pub mod inventory;
+pub mod mass;
 pub mod probe;
 pub mod rdpname;
 pub mod remote;

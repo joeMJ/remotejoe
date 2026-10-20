@@ -189,6 +189,28 @@ pub fn format_bytes(b: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn aruba_system_marks_the_device_kind() {
+        let mut inv = Inventory::default();
+        assert_eq!(device_kind(&inv), None);
+        inv.offer("system", "Ubuntu 24.04", "SSH", 1);
+        assert_eq!(device_kind(&inv), None);
+        let mut ap = Inventory::default();
+        ap.offer("system", "Aruba Instant 8.10.0.23 LSR (Modell 515)", "SSH (show version)", 1);
+        assert_eq!(device_kind(&ap), Some("aruba-ap"));
+        let dir = std::env::temp_dir().join(format!("rj-geraete-{}", Uuid::new_v4()));
+        let store = Store { dir: Some(dir.clone()) };
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        store.save(a, &ap).unwrap();
+        store.save(b, &inv).unwrap();
+        store.save_key("gast-x-pve1/qemu/100", &ap).unwrap();
+        let found = store.scan_devices();
+        assert_eq!(found.len(), 1, "nur Ziele mit UUID, Gäste nicht");
+        assert_eq!(found.get(&a), Some(&"aruba-ap"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     use super::*;
 
     #[test]

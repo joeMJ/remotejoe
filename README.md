@@ -384,6 +384,13 @@ neu aufklappen.
   Windows über PowerShell per OpenSSH bzw. WinRM). Ein noch unbekannter SSH-Host-Schlüssel wird dabei übernommen und
   gemeldet, ein geänderter nie. Gäste von Proxmox und Hyper-V zeigen ihr Inventar vom Hypervisor. Das Inventar liegt
   als Datei im Datenordner (`inventar/`), nicht in der Schlüsseldatenbank.
+  Ob sich das Inventar an einem Ziel anmelden darf, ist je Ziel bzw. Ordner einstellbar („Abfragen erlaubt“ in der
+  Übersicht, Einstellungen → Allgemein → Inventar). Web-Ziele sind ohne eigene Festlegung aus; ein „an“ am Ordner
+  schaltet sie nicht ein. Aruba-Instant-APs fragt das Inventar über eine interaktive Sitzung ab (`show version`);
+  erkannte APs bekommen im Baum ein eigenes Symbol.
+- **Masseninventar:** Rechtsklick auf einen Ordner oder eine Auswahl → **Inventar für alle Ziele abfragen …** fragt
+  alle Ziele darin ab, bis zu acht gleichzeitig, mit Fortschritt, Ergebnis je Ziel und „Fehlgeschlagene wiederholen“.
+  Ziele mit abgeschaltetem Inventar werden übersprungen.
 - **RDP** mit Zwischenablage (Text in beide Richtungen, Dateien Ziel → Host), NLA und Grafikkanal
   (GFX; `Automatisch` wiederholt einen abgebrochenen Aufbau einmal mit GFX, GNOME-Remote-Desktop verlangt ihn).
 - **SSH** mit Terminal, Zwischenablage (geschütztes Einfügen; OSC 52: Schreiben erlaubt, Lesen nur nach Nachfrage),
@@ -664,7 +671,8 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
 - **Hilfe → Fehler melden / Wünsche** und **Hilfe → Hilfe** öffnen nur Seiten auf GitHub im Standardbrowser.
 - **Objektübersicht:** Beim Einfachklick auf ein Ziel prüft remotejoe die gängigen Ports **dieses Ziels** (TCP-Verbindungsaufbau
   ohne Anmeldung) und fragt bei offenem RDP mit NLA den Rechnernamen ab (ohne Zugangsdaten). Ping und Traceroute laufen
-  nur auf Knopfdruck, ebenso „Inventar abfragen“ mit den Zugangsdaten des Ziels. Es geht nichts an Dritte.
+  nur auf Knopfdruck, ebenso „Inventar abfragen“ und das Masseninventar mit den Zugangsdaten des Ziels (nur bei
+  Zielen, deren Inventar erlaubt ist). Es geht nichts an Dritte.
 - Es gibt keine Telemetrie und keine Nutzungsstatistik.
 
 ## Fehler melden und Wünsche
