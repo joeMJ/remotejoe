@@ -178,9 +178,17 @@ pub fn parse_aruba_aps(out: &str) -> Vec<ArubaAp> {
         .collect()
 }
 
-/// Seriennummer des abgefragten APs: die Zeile von `show aps` mit der Adresse, über die verbunden wurde.
+/// Seriennummer des abgefragten APs aus `show aps`. Welche Zeile: 1. Name wie in der Eingabeaufforderung (der AP, auf
+/// dem die Sitzung läuft), 2. die Adresse, über die verbunden wurde, 3. der Conductor (Stern) – über die virtuelle
+/// Controller-IP landet man auf ihm, die Tabelle führt aber seine eigene IP.
 pub fn parse_aruba_serial(out: &str, ip: &str) -> Option<String> {
-    parse_aruba_aps(out).into_iter().find(|a| a.ip == ip).and_then(|a| a.serial)
+    let aps = parse_aruba_aps(out);
+    let prompt = out.lines().filter_map(|l| l.trim().split_once("# show aps").map(|(name, _)| name.trim().to_string())).next_back();
+    prompt
+        .and_then(|p| aps.iter().find(|a| a.name == p))
+        .or_else(|| aps.iter().find(|a| a.ip == ip))
+        .or_else(|| aps.iter().find(|a| a.conductor))
+        .and_then(|a| a.serial.clone())
 }
 
 /// Auswertung der JSON-Zeile des Windows-Skripts (Felder nach Schlüsseln).
@@ -445,8 +453,8 @@ mod tests {
         let f = parse_aruba(out).unwrap();
         assert!(f.contains(&("uptime", "2 T 12 Std 29 Min".to_string())), "{f:?}");
         assert_eq!(parse_aruba_serial(out, "192.0.2.1").as_deref(), Some("CNQXK9X123"));
-        assert_eq!(parse_aruba_serial(out, "192.0.2.1").as_deref(), Some("CNQXK9X999"));
-        assert_eq!(parse_aruba_serial(out, "192.0.2.1"), None);
+        // Andere APs des Schwarms stehen in der Liste.
+        assert_eq!(parse_aruba_aps(out).iter().find(|a| a.ip == "192.0.2.1").and_then(|a| a.serial.as_deref()), Some("CNQXK9X999"));
         assert_eq!(parse_aruba_serial("keine Tabelle", "192.0.2.1"), None);
     }
 
@@ -459,7 +467,14 @@ mod tests {
                    MASTER                10.80.227.239*  access  enable    3        515(indoor)  --            N/A        -     CNLGKD5DWX  36\r\n\
                    48:2f:6b:ca:25:fe-lang-ap  10.80.227.225   access  enable    0        505(indoor)  --            N/A        -     CNNPKPPH0Y  40\r\nMASTER#";
         assert_eq!(parse_aruba_serial(out, "10.80.227.239").as_deref(), Some("CNLGKD5DWX"));
-        assert_eq!(parse_aruba_serial(out, "10.80.227.225").as_deref(), Some("CNNPKPPH0Y"), "verschobene Spalten");
+        assert_eq!(parse_aruba_aps(out).iter().find(|a| a.ip == "10.80.227.225").and_then(|a| a.serial.as_deref()), Some("CNNPKPPH0Y"), "verschobene Spalten");
+        // Virtuelle Controller-IP: keine Zeile mit dieser Adresse, der Name aus der Eingabeaufforderung entscheidet.
+        let vc = "94:64:24:cc:9b:12# show aps\r\n\r\n1 Access Point\r\n--------------\r\n\
+                  Name               IP Address       Mode    Spectrum  Clients  Type         IPv6 Address  Mesh Role  Zone  Serial #    radio0 Channel\r\n\
+                  ----               ----------       ----    --------  -------  ----         ------------  ---------  ----  --------    --------------\r\n\
+                  94:64:24:cc:9b:12  192.0.2.1*  access  disable   0        515(indoor)  --            N/A        -     CNMQKD58ZG  52E\r\n\
+                  94:64:24:cc:9b:12#";
+        assert_eq!(parse_aruba_serial(vc, "192.0.2.1").as_deref(), Some("CNMQKD58ZG"));
         let aps = parse_aruba_aps(out);
         assert_eq!(aps.len(), 2);
         assert!(aps[0].conductor && !aps[1].conductor);
