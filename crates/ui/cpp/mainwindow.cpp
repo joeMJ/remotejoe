@@ -3070,6 +3070,12 @@ void MainWindow::handleEvents(const QString& json)
 				{
 					if (auto* o = findChild<OverviewTab*>())
 						o->handleResult(kind, e.value(QStringLiteral("target")).toString(), r);
+					// Inventur hat einen Weg angelegt (Aruba-AP): Baum und Wege-Knöpfe nachziehen.
+					if (r.value(QStringLiteral("ways_changed")).toBool())
+					{
+						reloadTree();
+						statusBar()->showMessage(T(m_backend, "ov.aruba.way"), 8000);
+					}
 				}
 				else if (kind == QLatin1String("guests"))
 					applyGuests(e.value(QStringLiteral("target")).toString(), r);

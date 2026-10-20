@@ -1453,6 +1453,43 @@ impl App {
         }
     }
 
+    /// Nach einer Inventur: beim ersten Erkennen als Aruba-AP den Weg „Web-Oberfläche“ (https, 4343) anlegen, sofern das
+    /// Ziel noch keinen Web-Zugang hat. Gespeichert wird sofort, wenn sonst nichts ungespeichert ist. Liefert, ob ein Weg
+    /// angelegt wurde.
+    pub(crate) fn aruba_web_way(&mut self, id: Uuid) -> bool {
+        if self.demo || self.vault.as_ref().map_or(true, |v| v.index().read_only) {
+            return false;
+        }
+        let mut inv = self.overview.store.load(id);
+        if inv.aruba_web_way || crate::overview::inventory::device_kind(&inv) != Some("aruba-ap") {
+            return false;
+        }
+        inv.aruba_web_way = true;
+        let _ = self.overview.store.save(id, &inv);
+        let Some(t) = self.target(id) else { return false };
+        if t.protocol == Protocol::Web || t.ways.iter().any(|w| w.protocol == Protocol::Web) {
+            return false;
+        }
+        let was_dirty = self.has_unsaved_changes();
+        let r = self.simple("Aruba-Web-Oberfläche anlegen", |idx| match rj_core::inherit::find_node_mut(&mut idx.root, id) {
+            Some(Node::Target(t)) => {
+                let mut w = rj_core::model::AccessWay::new(Protocol::Web);
+                w.name = "Web-Oberfläche".into();
+                w.port = Some(4343);
+                t.ways.push(w);
+                Ok(json!({ "ok": true }))
+            }
+            _ => Err(EditError::NotFound),
+        });
+        if r.is_err() {
+            return false;
+        }
+        if !was_dirty {
+            let _ = self.save_with(None);
+        }
+        true
+    }
+
     pub(crate) fn set_target_notes(&mut self, id: Uuid, text: String) -> Result<(), String> {
         self.simple("Notizen ändern", |idx| match rj_core::inherit::find_node_mut(&mut idx.root, id) {
             Some(Node::Target(t)) => {
@@ -1737,6 +1774,28 @@ mod tests {
     }
 
     #[test]
+    fn aruba_detection_adds_the_web_way_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        app.overview.store.dir = Some(dir.path().join("inventar"));
+        let root = app.index.root.id;
+        let id = Uuid::parse_str(cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "AP" }))["id"].as_str().unwrap()).unwrap();
+        assert!(!app.aruba_web_way(id), "ohne Inventar kein Weg");
+        let mut inv = app.overview.store.load(id);
+        inv.offer("system", "Aruba Instant 8.10.0.23 LSR (Modell 515)", "SSH", 1);
+        app.overview.store.save(id, &inv).unwrap();
+        assert!(app.aruba_web_way(id));
+        let t = app.target(id).unwrap();
+        assert_eq!((t.ways.len(), t.ways[0].protocol, t.ways[0].port), (1, Protocol::Web, Some(4343)));
+        // Weg gelöscht: Die nächste Inventur legt ihn nicht wieder an.
+        if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut app.index.root, id) {
+            t.ways.clear();
+        }
+        assert!(!app.aruba_web_way(id));
+        assert!(app.target(id).unwrap().ways.is_empty());
+    }
+
+    #[test]
     fn merge_same_address_preview_apply_and_undo() {
         let dir = tempfile::tempdir().unwrap();
         let (mut app, _path, _key) = app_with_vault(dir.path());
@@ -1745,6 +1804,7 @@ mod tests {
         let text = "ap1.example.test\nap1.example.test:4343\nap2.example.test";
         let b = cmd(&mut app, json!({ "op": "bulk_add", "parent": f, "kind": "ssh", "text": text, "pattern": "{nr}-{host}" }));
         assert_eq!(b["created"].as_array().map(Vec::len), Some(3), "{b}");
+        assert_eq!(j(app.save_with(None))["saved"], true);
         let before = app.index.clone();
         let p = cmd(&mut app, json!({ "op": "merge_preview", "ids": [f] }));
         let g = p["groups"].as_array().unwrap();
@@ -1761,8 +1821,10 @@ mod tests {
         let t = app.target(keep).unwrap();
         assert_eq!((t.name.as_str(), t.ways.len(), t.ways[0].port), ("AP 1", 1, Some(4343)));
         assert!(app.target(Uuid::parse_str(&members[1]).unwrap()).is_none());
+        assert!(app.has_unsaved_changes());
         assert_eq!(cmd(&mut app, json!({ "op": "undo" }))["undone"], "Ziele zusammenfassen");
         assert_eq!(app.index.root, before.root);
+        assert!(!app.has_unsaved_changes(), "Rückgängig bis zum gespeicherten Stand: nichts mehr ungespeichert");
     }
 
     #[test]

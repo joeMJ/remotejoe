@@ -142,15 +142,45 @@ pub fn parse_aruba(out: &str) -> Option<Found> {
     Some(f)
 }
 
-/// Seriennummer aus `show aps` (Tabelle aller APs des Schwarms, Spalte „Serial #“): die Zeile mit der IP des Ziels.
-pub fn parse_aruba_serial(out: &str, ip: &str) -> Option<String> {
+/// Ein AP aus der Tabelle von `show aps` (Aruba Instant, alle APs des Schwarms).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArubaAp {
+    pub name: String,
+    /// IP-Adresse ohne den Stern des Conductors (Masters).
+    pub ip: String,
+    pub conductor: bool,
+    pub serial: Option<String>,
+}
+
+/// Alle APs aus `show aps`. Die Seriennummer steht in der Spalte „Serial #“; sind die Spalten verschoben, gilt wie in
+/// den Aruba-Werkzeugen das erste seriennummerartige Wort nach dem AP-Typ (z. B. `515(indoor)`).
+pub fn parse_aruba_aps(out: &str) -> Vec<ArubaAp> {
     let lines: Vec<&str> = out.lines().collect();
-    let h = lines.iter().position(|l| l.contains("Serial #") && l.contains("IP"))?;
-    let col = lines[h].find("Serial #")?;
-    lines[h + 1..].iter().find(|l| l.split_whitespace().any(|w| w.trim_end_matches('*') == ip)).and_then(|l| {
-        // Spaltenbeginn wie in der Kopfzeile; das erste Wort ab dort.
-        l.get(col..).and_then(|r| r.split_whitespace().next()).filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric()) && s.len() >= 6).map(str::to_string)
-    })
+    let Some(h) = lines.iter().position(|l| l.contains("Serial #") && l.contains("IP Address")) else { return Vec::new() };
+    let col = lines[h].find("Serial #").unwrap_or(usize::MAX);
+    let is_serial = |s: &&str| s.len() >= 8 && s.chars().all(|c| c.is_ascii_digit() || c.is_ascii_uppercase()) && s.chars().any(|c| c.is_ascii_uppercase());
+    let is_ipv4 = |s: &str| s.split('.').count() == 4 && s.split('.').all(|p| !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit()));
+    lines[h + 1..]
+        .iter()
+        .filter_map(|row| {
+            let words: Vec<&str> = row.split_whitespace().collect();
+            let ip_raw = *words.get(1)?;
+            let ip = ip_raw.trim_end_matches('*');
+            if !is_ipv4(ip) {
+                return None;
+            }
+            let serial = row.get(col..).and_then(|r| r.split_whitespace().next()).filter(is_serial).map(str::to_string).or_else(|| {
+                let t = words.iter().position(|w| w.ends_with(')') && w.split('(').next().is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())))?;
+                words[t + 1..].iter().find(|w| is_serial(w)).map(|s| s.to_string())
+            });
+            Some(ArubaAp { name: words[0].to_string(), ip: ip.to_string(), conductor: ip_raw.ends_with('*'), serial })
+        })
+        .collect()
+}
+
+/// Seriennummer des abgefragten APs: die Zeile von `show aps` mit der Adresse, über die verbunden wurde.
+pub fn parse_aruba_serial(out: &str, ip: &str) -> Option<String> {
+    parse_aruba_aps(out).into_iter().find(|a| a.ip == ip).and_then(|a| a.serial)
 }
 
 /// Auswertung der JSON-Zeile des Windows-Skripts (Felder nach Schlüsseln).
@@ -290,7 +320,12 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
     match parse_aruba(&text) {
         Some(mut f) => {
             // Seriennummer aus „show aps“: Zeile mit der Adresse des Ziels.
-            if let Some(sn) = parse_aruba_serial(&text, ip.unwrap_or(spec.host.as_str())) {
+            // Ohne bekannte IP (Masseninventar, Rechnername als Adresse): Namen auflösen.
+            let addr = ip.map(str::to_string).unwrap_or_else(|| {
+                use std::net::ToSocketAddrs;
+                (spec.host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.find(|x| x.is_ipv4())).map(|a| a.ip().to_string()).unwrap_or_else(|| spec.host.clone())
+            });
+            if let Some(sn) = parse_aruba_serial(&text, &addr) {
                 f.push(("serial", sn));
             }
             Ok((f, "SSH (show version)", note))
@@ -323,7 +358,8 @@ pub fn ps_inventory(spec: &JobSpec, ip: Option<&str>) -> Result<(Found, &'static
 /// Befehle.
 async fn cli_show_version(conn: &SshConnection) -> Result<String, String> {
     const COMMANDS: [&[u8]; 3] = [b"no paging\r\n", b"show version\r\n", b"show aps\r\n"];
-    let mut sh = conn.open_shell("vt100", 200, 50).await.map_err(|e| e.to_string())?;
+    // Breites Terminal: Die Tabelle von `show aps` ist mehrere hundert Zeichen breit.
+    let mut sh = conn.open_shell("vt100", 1000, 50).await.map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     // Anzahl gesendeter Befehle; `mark`: Pufferstand beim letzten Senden.
@@ -334,7 +370,13 @@ async fn cli_show_version(conn: &SshConnection) -> Result<String, String> {
         if left.is_zero() {
             break;
         }
-        let ended_with_prompt = |b: &[u8], from: usize| String::from_utf8_lossy(&b[from.min(b.len())..]).trim_end().ends_with('#');
+        // Eingabeaufforderung: letzte Zeile wie `name#` (ohne Leerzeichen). „Serial #“ in der Kopfzeile von
+        // `show aps` endet ebenfalls auf „#“ und darf das Lesen nicht vorzeitig beenden.
+        let ended_with_prompt = |b: &[u8], from: usize| {
+            let text = String::from_utf8_lossy(&b[from.min(b.len())..]);
+            let last = text.trim_end().rsplit(['\n', '\r']).next().unwrap_or("").trim_start();
+            last.ends_with('#') && last.len() > 1 && !last.contains(char::is_whitespace)
+        };
         match tokio::time::timeout(left.min(Duration::from_millis(1500)), sh.events.recv()).await {
             Ok(Some(ShellEvent::Data(d))) => {
                 buf.extend_from_slice(&d);
@@ -406,6 +448,21 @@ mod tests {
         assert_eq!(parse_aruba_serial(out, "192.0.2.1").as_deref(), Some("CNQXK9X999"));
         assert_eq!(parse_aruba_serial(out, "192.0.2.1"), None);
         assert_eq!(parse_aruba_serial("keine Tabelle", "192.0.2.1"), None);
+    }
+
+    #[test]
+    fn aruba_serial_from_real_show_aps_table() {
+        // Aufbau wie Aruba Instant 8.10 (`show aps`, gekürzt um hintere Spalten); zweite Zeile mit verschobenen Spalten.
+        let out = "MASTER# show aps\r\n\r\n2 Access Points\r\n----------------\r\n\
+                   Name                  IP Address      Mode    Spectrum  Clients  Type         IPv6 Address  Mesh Role  Zone  Serial #    radio0 Channel\r\n\
+                   ----                  ----------      ----    --------  -------  ----         ------------  ---------  ----  --------    --------------\r\n\
+                   MASTER                10.80.227.239*  access  enable    3        515(indoor)  --            N/A        -     CNLGKD5DWX  36\r\n\
+                   48:2f:6b:ca:25:fe-lang-ap  10.80.227.225   access  enable    0        505(indoor)  --            N/A        -     CNNPKPPH0Y  40\r\nMASTER#";
+        assert_eq!(parse_aruba_serial(out, "10.80.227.239").as_deref(), Some("CNLGKD5DWX"));
+        assert_eq!(parse_aruba_serial(out, "10.80.227.225").as_deref(), Some("CNNPKPPH0Y"), "verschobene Spalten");
+        let aps = parse_aruba_aps(out);
+        assert_eq!(aps.len(), 2);
+        assert!(aps[0].conductor && !aps[1].conductor);
     }
 
     #[test]

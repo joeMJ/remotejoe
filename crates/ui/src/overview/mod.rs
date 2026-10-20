@@ -380,7 +380,8 @@ impl App {
                             inv.offer(k, &v, src, at);
                         }
                         let saved = app.overview.save_inventory(&job_key, &inv);
-                        json!({ "inventory": inventory_json(&inv), "error": saved.err(), "note": note })
+                        let way = Uuid::parse_str(&job_key).is_ok_and(|id| app.aruba_web_way(id));
+                        json!({ "inventory": inventory_json(&inv), "error": saved.err(), "note": note, "ways_changed": way })
                     }
                     // Verweise nur, wenn der Dienst fehlt oder nicht erreichbar ist – nicht bei Host-Schlüssel oder Anmeldung.
                     Err(e) => json!({ "error": e, "help": if service_missing(&e) { help } else { json!([]) } }),

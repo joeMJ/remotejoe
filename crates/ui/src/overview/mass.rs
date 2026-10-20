@@ -141,6 +141,11 @@ impl App {
                         None => app.overview.devices.remove(&r.target),
                     };
                 }
+                // Neu erkannte Aruba-APs: Weg zur Web-Oberfläche anlegen.
+                let found: Vec<Uuid> = shared.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|r| r.state == "erkannt").map(|r| r.target).collect();
+                for id in found {
+                    app.aruba_web_way(id);
+                }
                 vec![crate::sessions::UiEvent::JobResult { job, kind: "mass_inventory".into(), target: String::new(), json: "{}".into() }]
             })
         });

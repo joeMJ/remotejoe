@@ -46,6 +46,10 @@ pub struct Field {
 pub struct Inventory {
     #[serde(default)]
     pub fields: BTreeMap<String, Field>,
+    /// Als Aruba-AP erkannt und der Weg zur Web-Oberfläche (4343) geprüft bzw. angelegt; danach nie wieder,
+    /// damit ein gelöschter Weg nicht zurückkommt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub aruba_web_way: bool,
 }
 
 pub fn now() -> u64 {
