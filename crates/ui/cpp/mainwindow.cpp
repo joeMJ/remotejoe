@@ -5,6 +5,8 @@
 #include "overviewtab.h"
 #include "appearance.h"
 #include "settingstab.h"
+#include "masstab.h"
+#include "mergetab.h"
 #include <algorithm>
 
 #include "editor.h"
@@ -95,6 +97,8 @@ constexpr int RoleSessionMark = Qt::UserRole + 9;
 constexpr int RoleLogin = Qt::UserRole + 10;
 /// Zustand eines Gasts (z. B. `running`), für die Übersicht.
 constexpr int RoleGuestState = Qt::UserRole + 11;
+// Symbolart: Protokoll oder erkannte Geräteart (z. B. „aruba“ für einen Aruba-AP aus dem Inventar).
+constexpr int RoleIconKind = Qt::UserRole + 12;
 /// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
 constexpr int RoleMacro = Qt::UserRole + 20;
 
@@ -201,6 +205,10 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 		{ "hyperv", RJ_G("<rect x='4' y='5' width='24' height='9' rx='2'/><rect x='4' y='18' width='24' height='9' rx='2'/><path d='M8.5 9.5h.1M8.5 22.5h.1M14 9.5h10M14 22.5h10'/>"), "#3a4a8c" },
 		// Anmeldung: Schlüssel
 		{ "login", RJ_G("<circle cx='11' cy='16' r='6'/><path d='M17 16h11M24 16v5M28 16v4'/>"), "#6a1b9a" },
+		// Aruba-AP (aus dem Inventar erkannt): Deckenpunkt mit Statuslicht, darüber drei Funkbögen
+		{ "aruba", RJ_G("<rect x='4' y='19' width='24' height='8' rx='4'/><path d='M16 23h.1'/><path d='M12.5 14.5a5 5 0 0 1 7 0'/><path d='M9 11a10 10 0 0 1 14 0'/><path d='M5.5 7.5a15 15 0 0 1 21 0'/>"), "#00897b" },
+		// Mehrere Zugangswege: zwei hintereinanderliegende Fenster
+		{ "multi", RJ_G("<path d='M10 10V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3'/><rect x='4' y='12' width='19' height='15' rx='2'/><path d='M4 17h19'/>"), "#0b5cad" },
 		// Makro: Abspielzeichen
 		{ "macro", RJ_G("<path d='M10 6l16 10-16 10z' fill='COLOR' fill-opacity='0.25'/>"), "#6a1b9a" },
 	};
@@ -282,7 +290,12 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		item->setEditable(false);
 		item->setData(n.value(QStringLiteral("id")).toString(), RoleId);
 		item->setData(folder, RoleFolder);
-		item->setIcon(protocolIcon(n.value(QStringLiteral("protocol")).toString(), n.value(QStringLiteral("light")).toString(), folder));
+		// Symbol: erkannte Geräteart (Aruba-AP) vor „mehrere Zugangswege“ vor dem Protokoll.
+		const QString iconKind = n.value(QStringLiteral("device")).toString() == QLatin1String("aruba-ap") ? QStringLiteral("aruba")
+		                         : n.value(QStringLiteral("multi")).toBool()                                ? QStringLiteral("multi")
+		                                                                                                    : n.value(QStringLiteral("protocol")).toString();
+		item->setData(iconKind, RoleIconKind);
+		item->setIcon(protocolIcon(iconKind, n.value(QStringLiteral("light")).toString(), folder));
 		item->setData(n.value(QStringLiteral("light")).toString(), RoleLight);
 		if (n.value(QStringLiteral("login")).toBool())
 		{
@@ -557,6 +570,23 @@ void MainWindow::patchdayForFirstTargets(int n)
 	};
 	walk(QModelIndex());
 	openPatchday(ids);
+}
+
+void MainWindow::openMerge(const QStringList& ids, const QString& title)
+{
+	// Eine Vorschau zur Zeit: eine vorhandene wird ersetzt.
+	if (auto* old = findChild<MergeTab*>())
+		closeToolTab(old);
+	auto* t = new MergeTab(m_backend, ids, title, m_tabs);
+	connect(t, &MergeTab::showTarget, this, [this](const QString& id) { selectId(id); });
+	addToolTab(t, T(m_backend, "merge.tab"));
+}
+
+void MainWindow::mergeForFirstFolder()
+{
+	const QModelIndex i = m_model->index(0, 0, QModelIndex());
+	if (i.isValid())
+		openMerge({ i.data(RoleId).toString() }, i.data().toString());
 }
 
 namespace {
@@ -996,20 +1026,6 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_noticeLabel->setObjectName(QStringLiteral("statusNotice"));
 	m_noticeLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 	statusBar()->insertPermanentWidget(1, m_noticeLabel, 1);
-	{
-		auto* box = new QWidget(this);
-		auto* bl = new QHBoxLayout(box);
-		bl->setContentsMargins(6, 0, 4, 0);
-		bl->setSpacing(5);
-		auto* lab = new QLabel(T(m_backend, "status.compact"), box);
-		m_compactSwitch = new SwitchButton(box);
-		bl->addWidget(lab);
-		bl->addWidget(m_compactSwitch);
-		box->setToolTip(T(m_backend, "status.compact.tip"));
-		m_compactSwitch->setAccessibleName(T(m_backend, "status.compact"));
-		connect(m_compactSwitch, &QAbstractButton::toggled, this, [this](bool on) { setCompact(on); });
-		statusBar()->addPermanentWidget(box);
-	}
 	setTreeVisible(true);
 	// Leerlauf: Eingaben überall im Programm zählen.
 	m_activityClock.start();
@@ -1101,6 +1117,13 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		connect(s, &QShortcut::activated, this, fn);
 	};
 	sc(QKeySequence(QStringLiteral("Ctrl+F")), [this] {
+		// Fokus in einer Web-Sitzung: in der Seite suchen; sonst die Suche über dem Baum.
+		for (QWidget* w = QApplication::focusWidget(); w; w = w->parentWidget())
+			if (auto* pane = dynamic_cast<SessionPane*>(w); pane && pane->isWeb())
+			{
+				pane->openFind();
+				return;
+			}
 		m_search->setFocus();
 		m_search->selectAll();
 	});
@@ -1282,10 +1305,6 @@ void MainWindow::buildMenus()
 	});
 	view->addSeparator();
 	view->addAction(T(m_backend, "menu.view.tree"), QKeySequence(Qt::Key_F9), this, [this] { setTreeVisible(m_treeHidden); });
-	m_compactAction = view->addAction(T(m_backend, "menu.view.compact"));
-	m_compactAction->setShortcut(QKeySequence(Qt::Key_F10));
-	m_compactAction->setCheckable(true);
-	connect(m_compactAction, &QAction::triggered, this, [this](bool on) { setCompact(on); });
 	view->addAction(T(m_backend, "menu.view.reset_window"), this, [this] { resetWindow(); });
 	help = m_menuBar->addMenu(T(m_backend, "menu.help"));
 	help->addAction(T(m_backend, "menu.help.update"), this, [this] { openUpdateTab(); });
@@ -1516,6 +1535,12 @@ void MainWindow::applyTheme(bool dark)
 
 void MainWindow::reloadTree()
 {
+	// Offene Übersicht: Inventar-Schalter nachziehen (z. B. nach dem Speichern der Einstellungen).
+	if (auto* o = findChild<OverviewTab*>())
+		QTimer::singleShot(0, o, [o] { o->refreshInventorySwitch(); });
+	// Offene Vorschau „Zusammenfassen“: Gruppen neu laden (z. B. nach Bearbeiten → Rückgängig).
+	if (auto* m = findChild<MergeTab*>())
+		QTimer::singleShot(0, m, [m] { m->refresh(); });
 	// Aufgeklappte Ordner, Auswahl und Bildlauf merken, damit eine Änderung den Baum nicht zuklappt.
 	// Während einer Suche klappt alles auf; dann bleibt der zuletzt bekannte Zustand ohne Suche erhalten.
 	const bool searching = !m_search->text().isEmpty();
@@ -1623,7 +1648,8 @@ void MainWindow::updateSessionMarks()
 				if (i->data(RoleSessionMark).toInt() != m)
 				{
 					i->setData(m, RoleSessionMark);
-					i->setIcon(protocolIcon(i->data(RoleProtocol).toString(), i->data(RoleLight).toString(), false, m));
+					const QString kind = i->data(RoleIconKind).toString();
+					i->setIcon(protocolIcon(kind.isEmpty() ? i->data(RoleProtocol).toString() : kind, i->data(RoleLight).toString(), false, m));
 				}
 			}
 			walk(i);
@@ -1925,7 +1951,8 @@ ConnectPromptTab* MainWindow::promptTab(const QString& target)
 			m_tabs->setCurrentWidget(t);
 			return t;
 		}
-	QString name = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), target } })).value(QStringLiteral("name")).toString();
+	// Ziel-ID ohne angehängten Zugangsweg („<id>#<Weg>“).
+	QString name = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), target.section(QLatin1Char('#'), 0, 0) } })).value(QStringLiteral("name")).toString();
 	if (name.isEmpty())
 		name = target;
 	auto* t = new ConnectPromptTab(m_backend, target, name, m_tabs);
@@ -2307,6 +2334,24 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 			closeToolTab(old);
 		addToolTab(new CertCheckTab(m_backend, selectedIds(), m_tabs), T(m_backend, "certcheck.title"));
 	});
+	menu.addAction(T(m_backend, "ctx.mass"), this, [this] {
+		const QStringList ids = selectedIds();
+		if (ids.isEmpty())
+			return;
+		// Ein Lauf zur Zeit: ein vorhandener Reiter wird ersetzt.
+		if (auto* old = findChild<MassInventoryTab*>())
+			closeToolTab(old);
+		const QString title = ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size());
+		auto* t = new MassInventoryTab(m_backend, ids, title, m_tabs);
+		connect(t, &MassInventoryTab::showTarget, this, [this](const QString& id) { selectId(id); });
+		connect(t, &MassInventoryTab::finished, this, [this] { reloadTree(); });
+		addToolTab(t, T(m_backend, "mass.tab"));
+	});
+	menu.addAction(T(m_backend, "ctx.merge"), this, [this] {
+		const QStringList ids = selectedIds();
+		if (!ids.isEmpty())
+			openMerge(ids, ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size()));
+	});
 	QMenu* tasks = menu.addMenu(T(m_backend, "ctx.tasks"));
 	tasks->addAction(T(m_backend, "ctx.tasks.updates"), this, [this] {
 		const QStringList ids = selectedTargets(m_tree, m_model);
@@ -2524,6 +2569,7 @@ QWidget* MainWindow::buildTabContent(const QJsonObject& tab)
 			const QJsonObject i = info.value(QString::number(s)).toObject();
 			p = new SessionPane(m_backend, s, i.value(QStringLiteral("title")).toString(), i.value(QStringLiteral("protocol")).toString());
 			p->setMacroOpener([this](const QString& macroId) { openMacroTab(macroId); });
+			p->setFixedTitle(i.value(QStringLiteral("way")).toBool());
 			if (!i.value(QStringLiteral("state")).toString().isEmpty())
 				p->setState(i.value(QStringLiteral("state")).toString(), QString());
 			m_panes.insert(s, p);
@@ -2802,7 +2848,8 @@ void MainWindow::applyPageTitle(SessionPane* p)
 			if (tabs->widget(i)->isAncestorOf(p) &&
 			    std::count_if(m_panes.cbegin(), m_panes.cend(), [&](SessionPane* o) { return o && tabs->widget(i)->isAncestorOf(o); }) == 1)
 			{
-				tabs->setTabText(i, p->pageTitle());
+				if (!p->fixedTitle())
+					tabs->setTabText(i, p->pageTitle());
 				tabs->setTabToolTip(i, p->title() + QStringLiteral(" — ") + p->pageTitle());
 			}
 }
@@ -2910,6 +2957,8 @@ void MainWindow::handleEvents(const QString& json)
 			}
 			else if (t == QLatin1String("web_menu") && p)
 				p->showWebMenu(e);
+			else if (t == QLatin1String("web_found") && p)
+				p->setFindResult(e.value(QStringLiteral("found")).toBool());
 			else if (t == QLatin1String("web_focus") && p && p->frame())
 				p->frame()->webFocus(e.value(QStringLiteral("on")).toBool(), e.value(QStringLiteral("forward")).toBool());
 			else if (t == QLatin1String("web_key") && p)
@@ -3021,9 +3070,20 @@ void MainWindow::handleEvents(const QString& json)
 				{
 					if (auto* o = findChild<OverviewTab*>())
 						o->handleResult(kind, e.value(QStringLiteral("target")).toString(), r);
+					// Inventur hat einen Weg angelegt (Aruba-AP): Baum und Wege-Knöpfe nachziehen.
+					if (r.value(QStringLiteral("ways_changed")).toBool())
+					{
+						reloadTree();
+						statusBar()->showMessage(T(m_backend, "ov.aruba.way"), 8000);
+					}
 				}
 				else if (kind == QLatin1String("guests"))
 					applyGuests(e.value(QStringLiteral("target")).toString(), r);
+				else if (kind == QLatin1String("mass_inventory"))
+				{
+					// Der Reiter fragt den Stand selbst ab; hier nur die Symbole im Baum nachziehen.
+					reloadTree();
+				}
 				else if (kind == QLatin1String("cert_check"))
 				{
 					if (auto* c = findChild<CertCheckTab*>())
@@ -3399,8 +3459,7 @@ void MainWindow::restoreWindowState()
 		m_split->setSizes({ tree, qMax(200, size.width() - tree) });
 	if (s.value(QStringLiteral("maximized")).toBool())
 		setWindowState(windowState() | Qt::WindowMaximized);
-	setTreeVisible(!s.value(QStringLiteral("tree_hidden")).toBool());
-	setCompact(s.value(QStringLiteral("compact")).toBool());
+	// Platzsparvariante und ausgeklappter Baum setzt der Programmstart (app.cpp), nicht der gespeicherte Zustand.
 	fitToScreen();
 }
 
@@ -3480,7 +3539,7 @@ void MainWindow::resetWindow()
 	const QRect a = sc ? sc->availableGeometry() : QRect(0, 0, 1280, 800);
 	m_treeWidth = 280;
 	setTreeVisible(true);
-	setCompact(false);
+	setCompact(true);
 	resize(QSize(1280, 800).boundedTo(a.size() - (frameGeometry().size() - size())));
 	if (m_split)
 		m_split->setSizes({ 280, qMax(200, width() - 280) });
@@ -3754,7 +3813,7 @@ void MainWindow::buildAddMenu(QMenu* menu, const QString& parentId)
 {
 	const char* kinds[][2] = { { "folder", "add.folder" }, { "rdp", "add.rdp" },         { "ssh", "add.ssh" },     { "vnc", "add.vnc" },
 		                       { "web", "add.web" },       { "proxmox", "add.proxmox" }, { "hyperv", "add.hyperv" }, { "psrp", "add.psrp" },
-		                       { "task", "add.task" },     { "macro", "add.macro" } };
+		                       { "aruba", "add.aruba" },   { "task", "add.task" },       { "macro", "add.macro" } };
 	auto run = [this, parentId](QJsonObject cmd) {
 		if (!parentId.isEmpty())
 			cmd.insert(QStringLiteral("parent"), parentId);
@@ -3855,6 +3914,18 @@ void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 			}
 			selectId(s.value(QStringLiteral("id")).toString());
 			connectSelected();
+		});
+		// Nach einer Inventarabfrage: Symbol im Baum nachziehen (z. B. Aruba-AP erkannt).
+		connect(t, &OverviewTab::inventoryChanged, this, [this] { QTimer::singleShot(0, this, [this] { reloadTree(); }); });
+		// Knopf eines Zugangswegs: Ziel wählen und über diesen Weg verbinden.
+		connect(t, &OverviewTab::connectWayRequested, this, [this](const QJsonObject& s, const QString& way) {
+			const QString id = s.value(QStringLiteral("id")).toString();
+			if (id.isEmpty())
+				return;
+			selectId(id);
+			const QString full = id + QLatin1Char('#') + way;
+			const QSize px = contentSize(false);
+			handleConnectResult(full, m_backend->connectTarget(full, QString(), false, px.width(), px.height()));
 		});
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
 	}

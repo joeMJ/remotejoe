@@ -418,6 +418,45 @@ pub fn resolve_psrp_transport(index: &Index, target_id: Uuid) -> Result<Option<P
     Ok(c.links.iter().find_map(|(s, _)| s.psrp_transport.clone()))
 }
 
+/// Woher die Inventar-Einstellung kommt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InventorySource {
+    /// Am Ziel selbst festgelegt.
+    Target,
+    /// Von einem Ordner geerbt.
+    Folder,
+    /// Nichts festgelegt: Vorgabe (Web-Ziele aus, alle anderen an).
+    Default,
+}
+
+/// Darf das Inventar sich am Ziel anmelden (SSH/PowerShell)? Das Ziel selbst entscheidet zuerst, dann die
+/// Ordner nach oben. Web-Ziele sind ohne eigene Festlegung immer aus – ein „an“ am Ordner schaltet sie nicht
+/// ein (sonst meldete sich das Inventar mit den Zugangsdaten der Web-Seite per SSH an); ein „aus“ am Ordner gilt
+/// für alle.
+pub fn resolve_inventory(index: &Index, target_id: Uuid) -> Result<(bool, InventorySource), UnknownTarget> {
+    inventory_from(index, target_id, false)
+}
+
+/// Wie [`resolve_inventory`], aber ohne die Festlegung am Ziel selbst: der Wert, den „geerbt“ ergäbe.
+pub fn resolve_inventory_inherited(index: &Index, target_id: Uuid) -> Result<(bool, InventorySource), UnknownTarget> {
+    inventory_from(index, target_id, true)
+}
+
+fn inventory_from(index: &Index, target_id: Uuid, skip_target: bool) -> Result<(bool, InventorySource), UnknownTarget> {
+    let c = chain(index, target_id)?;
+    // Als Web-Ziel gilt nur, wer auch keinen SSH-Zugangsweg hat (sonst fragt das Inventar über diesen ab).
+    let web = c.target.protocol == crate::model::Protocol::Web && !c.target.ways.iter().any(|w| w.protocol == crate::model::Protocol::Ssh);
+    for (i, (s, _)) in c.links.iter().enumerate().skip(usize::from(skip_target)) {
+        match s.inventory {
+            Some(on) if i == 0 => return Ok((on, InventorySource::Target)),
+            Some(false) => return Ok((false, InventorySource::Folder)),
+            Some(true) if !web => return Ok((true, InventorySource::Folder)),
+            _ => {}
+        }
+    }
+    Ok((!web, InventorySource::Default))
+}
+
 /// Geerbtes SNMP-Gerät; `None` bei abgeschaltetem SNMP.
 pub fn resolve_snmp(index: &Index, target_id: Uuid) -> Result<Option<Uuid>, UnknownTarget> {
     let c = chain(index, target_id)?;
@@ -505,6 +544,37 @@ mod tests {
         let _ = e_folder;
         let _ = e_target;
         Fixture { index, folder: fid, sub: sid, target: tid, e_root, e_folder, e_target, tunnel }
+    }
+
+    #[test]
+    fn inventory_defaults_off_for_web_and_folder_on_does_not_enable_web() {
+        let mut f = fixture();
+        let web = Target::new("web", Protocol::Web, "https://ap.example.test:4343");
+        let wid = web.id;
+        if let Some(Node::Folder(folder)) = f.index.root.children.first_mut() {
+            if let Some(Node::Folder(sub)) = folder.children.first_mut() {
+                sub.children.push(Node::Target(web));
+            }
+        }
+        // Ohne Festlegung: SSH an, Web aus.
+        assert_eq!(resolve_inventory(&f.index, f.target).unwrap(), (true, InventorySource::Default));
+        assert_eq!(resolve_inventory(&f.index, wid).unwrap(), (false, InventorySource::Default));
+        // Ordner „an“: gilt für SSH, nicht für Web.
+        settings_mut(&mut f.index, f.folder).unwrap().inventory = Some(true);
+        assert_eq!(resolve_inventory(&f.index, f.target).unwrap(), (true, InventorySource::Folder));
+        assert_eq!(resolve_inventory(&f.index, wid).unwrap(), (false, InventorySource::Default));
+        // Ordner „aus“ (näher am Ziel): gilt für alle.
+        settings_mut(&mut f.index, f.sub).unwrap().inventory = Some(false);
+        assert_eq!(resolve_inventory(&f.index, f.target).unwrap(), (false, InventorySource::Folder));
+        assert_eq!(resolve_inventory(&f.index, wid).unwrap(), (false, InventorySource::Folder));
+        // Am Ziel selbst festgelegt: gewinnt immer, auch beim Web-Ziel.
+        settings_mut(&mut f.index, wid).unwrap().inventory = Some(true);
+        assert_eq!(resolve_inventory(&f.index, wid).unwrap(), (true, InventorySource::Target));
+        settings_mut(&mut f.index, f.target).unwrap().inventory = Some(true);
+        assert_eq!(resolve_inventory(&f.index, f.target).unwrap(), (true, InventorySource::Target));
+        // „Geerbt“ zeigt den Wert ohne die eigene Festlegung.
+        assert_eq!(resolve_inventory_inherited(&f.index, f.target).unwrap(), (false, InventorySource::Folder));
+        assert_eq!(resolve_inventory_inherited(&f.index, wid).unwrap(), (false, InventorySource::Folder));
     }
 
     #[test]

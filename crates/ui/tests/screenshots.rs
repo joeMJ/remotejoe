@@ -18,7 +18,7 @@ fn offscreen_screenshots_and_start_time() {
     let out = cmd.output().unwrap();
     let log = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{log}");
-    for f in ["hauptfenster-hell.png", "hauptfenster-dunkel.png", "hauptfenster-kompakt.png", "hauptfenster-kompakt-ohne-baum.png", "suche.png", "hypervisor.png", "verbinden-zugangsdaten.png", "hostschluessel-unbekannt.png", "hostschluessel-geaendert.png", "import-vorschau.png", "patchday.png", "abgerissenes-fenster.png", "eigenschaften.png", "zugangsdaten-auswahl.png", "hinzufuegen-menue.png", "entsperren.png", "mehrere-ziele.png"] {
+    for f in ["hauptfenster-hell.png", "hauptfenster-dunkel.png", "hauptfenster-kompakt-ohne-baum.png", "suche.png", "hypervisor.png", "verbinden-zugangsdaten.png", "hostschluessel-unbekannt.png", "hostschluessel-geaendert.png", "import-vorschau.png", "patchday.png", "abgerissenes-fenster.png", "eigenschaften.png", "zugangsdaten-auswahl.png", "hinzufuegen-menue.png", "entsperren.png", "mehrere-ziele.png", "zusammenfassen.png"] {
         let len = std::fs::metadata(dir.path().join(f)).map(|m| m.len()).unwrap_or(0);
         assert!(len > 5000, "{f} fehlt oder ist leer ({len} Bytes)\n{log}");
     }

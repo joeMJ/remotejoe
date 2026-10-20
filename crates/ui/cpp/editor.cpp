@@ -1,4 +1,5 @@
 #include "editor.h"
+#include "waysedit.h"
 #include "cards.h"
 #include "views.h"
 
@@ -372,10 +373,14 @@ QString PropertiesTab::areaSummary(const QString& key) const
 		const QString desc = d.value(QStringLiteral("description")).toString();
 		return desc.isEmpty() ? T("area.general") : desc;
 	}
+	if (key == QLatin1String("ways") && m_ways)
+		return m_ways->summary();
 	if (key == QLatin1String("connection"))
 	{
 		if (kind != QLatin1String("target"))
 			return T("area.connection.folder");
+		if (d.value(QStringLiteral("protocol")).toString() == QLatin1String("web") && !d.value(QStringLiteral("endpoint")).toString().isEmpty())
+			return QStringLiteral("%1 · %2").arg(QStringLiteral("WEB"), d.value(QStringLiteral("endpoint")).toString());
 		const QString port = d.value(QStringLiteral("port")).isNull() ? QString::number(d.value(QStringLiteral("default_port")).toInt()) : QString::number(d.value(QStringLiteral("port")).toInt());
 		return QStringLiteral("%1 · %2:%3").arg(d.value(QStringLiteral("protocol")).toString().toUpper(), d.value(QStringLiteral("host")).toString(), port);
 	}
@@ -649,6 +654,8 @@ void PropertiesTab::build()
 	};
 	page(QStringLiteral("general"), "edit.cat.general", &PropertiesTab::pageGeneral);
 	page(QStringLiteral("connection"), "edit.cat.connection", &PropertiesTab::pageConnection);
+	if (target)
+		page(QStringLiteral("ways"), "edit.cat.ways", &PropertiesTab::pageWays);
 	page(QStringLiteral("credentials"), "edit.cat.credentials", &PropertiesTab::pageCredentials);
 	page(QStringLiteral("tunnel"), "edit.cat.tunnel", &PropertiesTab::pageTunnel);
 	page(QStringLiteral("tasks"), "edit.cat.tasks", &PropertiesTab::pageTasks);
@@ -671,6 +678,13 @@ void PropertiesTab::build()
 	refreshAreas();
 	updateCredentialMode();
 	m_loading = false;
+}
+
+QWidget* PropertiesTab::pageWays()
+{
+	m_ways = new WaysEditor(m_backend, m_data);
+	connect(m_ways, &WaysEditor::changed, this, [this] { markDirty(QStringLiteral("ways"), nullptr); });
+	return m_ways;
 }
 
 QWidget* PropertiesTab::pageGeneral()
@@ -705,6 +719,26 @@ QWidget* PropertiesTab::pageGeneral()
 		m_fav->setEnabled(false);
 	track(m_fav, QStringLiteral("favorite"));
 	f->addRow(QString(), m_fav);
+	// Inventar mit Anmeldung (SSH/PowerShell): geerbt, an, aus. Web-Ziele sind ohne eigene Festlegung aus.
+	if (m_data.contains(QStringLiteral("inventory")))
+	{
+		m_inventory = new QComboBox(w);
+		QString inherit = rjText(m_backend, "edit.inherit");
+		if (m_data.contains(QStringLiteral("inventory_effective")))
+			inherit += QStringLiteral(" (") + m_data.value(QStringLiteral("inventory_effective")).toString() + QLatin1Char(')');
+		m_inventory->addItem(inherit, QStringLiteral("inherit"));
+		m_inventory->addItem(rjText(m_backend, "edit.inventory.on"), QStringLiteral("on"));
+		m_inventory->addItem(rjText(m_backend, "edit.inventory.off"), QStringLiteral("off"));
+		m_inventory->setCurrentIndex(qMax(0, m_inventory->findData(m_data.value(QStringLiteral("inventory")).toString())));
+		track(m_inventory, QStringLiteral("inventory"));
+		auto* il = new QLabel(rjText(m_backend, "edit.inventory"), w);
+		il->setBuddy(m_inventory);
+		f->addRow(il, m_inventory);
+		auto* ih = new QLabel(rjText(m_backend, "edit.inventory.hint"), w);
+		ih->setObjectName(QStringLiteral("rjMuted"));
+		ih->setWordWrap(true);
+		f->addRow(QString(), ih);
+	}
 	if (m_data.value(QStringLiteral("kind")).toString() == QLatin1String("target"))
 	{
 		f->addRow(rjText(m_backend, "edit.protocol") + QLatin1Char(':'), new QLabel(m_data.value(QStringLiteral("protocol")).toString().toUpper(), w));
@@ -1499,6 +1533,13 @@ QJsonObject PropertiesTab::collect() const
 		f.insert(QStringLiteral("name"), m_name->text());
 	if (m_dirty.contains(QStringLiteral("description")))
 		f.insert(QStringLiteral("description"), m_desc->text());
+	if (m_ways && m_dirty.contains(QStringLiteral("ways")))
+	{
+		f.insert(QStringLiteral("ways"), m_ways->ways());
+		f.insert(QStringLiteral("open_with"), m_ways->openWith());
+	}
+	if (m_inventory && m_dirty.contains(QStringLiteral("inventory")))
+		f.insert(QStringLiteral("inventory"), m_inventory->currentData().toString());
 	if (target && m_dirty.contains(QStringLiteral("host")))
 		f.insert(QStringLiteral("host"), m_host->text());
 	if (target && m_dirty.contains(QStringLiteral("port")))

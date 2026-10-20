@@ -34,6 +34,12 @@ pub struct UiNode {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<UiNode>,
     pub folder: bool,
+    /// Geräteart aus dem Inventar (eigenes Symbol, z. B. `aruba-ap`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<&'static str>,
+    /// Ziel mit weiteren Zugangswegen (eigenes Symbol).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub multi: bool,
     /// Anmeldeobjekt (keine Verbindung, öffnet die Bearbeitung).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub login: bool,
@@ -63,6 +69,8 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         light: lights(sub.id),
                         children,
                         folder: true,
+                        device: None,
+                        multi: false,
                         login: false,
                     });
                 }
@@ -79,6 +87,8 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         light: lights(t.id),
                         children: Vec::new(),
                         folder: false,
+                        device: None,
+                        multi: !t.ways.is_empty(),
                         login: false,
                     });
                 }
@@ -98,6 +108,8 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                 light: None,
                 children: Vec::new(),
                 folder: false,
+                device: None,
+                        multi: false,
                 login: true,
             });
         }
@@ -148,7 +160,10 @@ pub fn demo_index(targets: usize) -> Index {
                 }
                 let p = protos[n % protos.len()];
                 let name = if n == 7 { "versteckt\u{200B}name".to_string() } else { format!("{}-{:03}", p.as_str(), i) };
-                let t = rj_core::Target::new(name, p, format!("h{n}.site{si}.example.test"));
+                // Standort Nord → Netz: drei Ziele (verschiedene Protokolle) unter einer Adresse, für
+                // „Gleiche Adressen zusammenfassen“.
+                let host_nr = if si == 0 && g == 2 && (1..3).contains(&i) { n - i } else { n };
+                let t = rj_core::Target::new(name, p, format!("h{host_nr}.site{si}.example.test"));
                 group.children.push(Node::Target(t));
                 n += 1;
             }
@@ -214,5 +229,16 @@ mod tests {
         assert_eq!(targets, 500);
         assert!(el.as_millis() < 200, "Baum für 500 Einträge in {el:?}");
         assert!(json.len() > 10_000);
+    }
+}
+
+/// Geräteart in die Knoten eintragen (nach dem Aufbau, aus der Merkliste des Inventars).
+pub fn mark_devices(nodes: &mut [UiNode], device: &dyn Fn(Uuid) -> Option<&'static str>) {
+    for n in nodes {
+        if n.folder {
+            mark_devices(&mut n.children, device);
+        } else if n.protocol.is_some() {
+            n.device = device(n.id);
+        }
     }
 }

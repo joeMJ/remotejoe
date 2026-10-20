@@ -279,6 +279,22 @@ impl App {
             v["clipboard"] = json!(settings.clipboard.map(clip_str).unwrap_or("inherit"));
             v["clipboard_effective"] = json!(clip_str(edit::folder_clipboard(&self.index, id)));
         }
+        v["inventory"] = json!(match settings.inventory { None => "inherit", Some(true) => "on", Some(false) => "off" });
+        if let Some(Node::Target(t)) = node {
+            v["ways"] = json!(t.ways.iter().map(way_json).collect::<Vec<_>>());
+            v["open_with"] = json!(t.open_with);
+            // Web-Ziel: Rechner und Port aus der URL, wie beim Verbinden.
+            let (host, port) = App::endpoint_of(t);
+            v["endpoint"] = json!(format!("{host}:{port}"));
+            v["main_way"] = json!(format!("{} · {host}:{port}", t.protocol.label()));
+            v["way_logins"] = json!(self.index.logins.iter().map(|l| json!({ "id": l.id, "name": l.name })).collect::<Vec<_>>());
+        }
+        if let Some(Node::Target(t)) = node {
+            // Text für „geerbt“: der Wert ohne eigene Festlegung am Ziel.
+            if let Ok((on, src)) = rj_core::inherit::resolve_inventory_inherited(&self.index, t.id) {
+                v["inventory_effective"] = json!(format!("{}, {}", if on { "an" } else { "aus" }, inventory_source_text(src, on)));
+            }
+        }
         v["credential"] = self.credential_section(id, node.is_some_and(|n| matches!(n, Node::Target(_))));
         // Ordner für eine neue Anmeldung aus diesem Tab: der Ordner selbst bzw. der Ordner des Ziels.
         v["folder_for_new"] = json!(match node {
@@ -430,7 +446,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -626,6 +642,14 @@ impl App {
             }
             "ov_output" => Ok(json!({ "run": self.overview_output(&c) })),
             "ov_notes" => self.overview_notes(&c),
+            "ov_inventory" => self.overview_inventory_switch(&c),
+            "ways_suggest" => self.ways_suggest(&c),
+            "mass_start" => self.mass_start(&c),
+            "merge_preview" => self.merge_preview(&c),
+            "merge_check" => self.merge_check(&c),
+            "merge_apply" => self.merge_apply(&c),
+            "mass_rows" => Ok(self.mass_rows()),
+            "mass_cancel" => Ok(self.mass_cancel()),
             "connect_all" => self.op_connect_all(&c),
             "cert_check_start" => self.op_cert_check_start(&c),
             "cert_check_rows" => Ok(json!({ "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() })),
@@ -846,6 +870,72 @@ impl App {
         Ok(json!({ "started": true, "name": def.name }))
     }
 
+    /// Vorschau „Gleiche Adressen zusammenfassen“: Gruppen unter der Auswahl mit vorgeschlagenem Hauptziel.
+    fn merge_preview(&self, c: &Value) -> Result<Value, String> {
+        use rj_core::merge;
+        let scope = ids_of(c, "ids");
+        let groups: Vec<Value> = merge::groups(&self.index, &scope)
+            .into_iter()
+            .map(|(address, members)| {
+                let keep = merge::default_keep(&self.index, &members);
+                let list: Vec<Value> = members
+                    .iter()
+                    .filter_map(|id| self.target(*id))
+                    .map(|t| {
+                        let (host, port) = App::endpoint_of(t);
+                        let path: Vec<String> = self.index.path_to(t.id).unwrap_or_default().iter().map(|n| rj_core::charset::mark_visible(n.name(), false).into_owned()).collect();
+                        json!({
+                            "id": t.id,
+                            "name": rj_core::charset::mark_visible(&t.name, false),
+                            "protocol": t.protocol.as_str(),
+                            "label": t.protocol.label(),
+                            "endpoint": format!("{}:{port}", rj_core::charset::mark_visible(&host, false)),
+                            "ways": t.ways.len(),
+                            "path": path[..path.len().saturating_sub(1)].join(" › "),
+                        })
+                    })
+                    .collect();
+                let name = keep.and_then(|k| self.target(k)).map(|t| t.name.clone()).unwrap_or_default();
+                json!({ "address": address, "members": list, "keep": keep, "name": name })
+            })
+            .collect();
+        Ok(json!({ "groups": groups }))
+    }
+
+    /// Hinweise für eine Gruppe (Probelauf auf einer Kopie des Index).
+    fn merge_check(&self, c: &Value) -> Result<Value, String> {
+        let keep = id_of(c, "keep").ok_or("Hauptziel fehlt")?;
+        let mut idx = self.index.clone();
+        let r = rj_core::merge::merge(&mut idx, keep, &ids_of(c, "others"), "").map_err(|e| e.to_string())?;
+        Ok(json!({ "ways": r.ways, "logins": r.logins, "notes": r.notes }))
+    }
+
+    /// Fasst die gewählten Gruppen zusammen; ein Schritt zum Rückgängigmachen.
+    fn merge_apply(&mut self, c: &Value) -> Result<Value, String> {
+        let groups: Vec<(Uuid, Vec<Uuid>, String)> = c
+            .get("groups")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|g| Some((id_of(g, "keep")?, ids_of(g, "others"), str_of(g, "name").unwrap_or_default().to_string()))).collect())
+            .unwrap_or_default();
+        if groups.iter().all(|(_, o, _)| o.is_empty()) {
+            return Err("Keine Gruppe gewählt".into());
+        }
+        self.simple("Ziele zusammenfassen", |idx| {
+            let (mut targets, mut ways, mut logins, mut notes) = (0, 0, 0, Vec::new());
+            for (keep, others, name) in &groups {
+                if others.is_empty() {
+                    continue;
+                }
+                let r = rj_core::merge::merge(idx, *keep, others, name)?;
+                targets += others.len();
+                ways += r.ways;
+                logins += r.logins;
+                notes.extend(r.notes);
+            }
+            Ok(json!({ "merged": targets, "ways": ways, "logins": logins, "notes": notes }))
+        })
+    }
+
     fn simple(&mut self, label: &str, f: impl FnOnce(&mut Index) -> Result<Value, EditError>) -> Result<Value, String> {
         let before = self.index.clone();
         match f(&mut self.index) {
@@ -877,6 +967,17 @@ impl App {
                 let tid = t.id;
                 self.index.tasks.push(t);
                 link(&mut self.index, parent, |m| m.tasks.push(tid)).map(|_| json!({ "task": tid }))
+            }
+            // Aruba-AP: SSH als Hauptweg (Inventar), dazu die Web-Oberfläche auf 4343 mit denselben Zugangsdaten.
+            // Leere Adresse am Weg: https://<Adresse des Ziels>:4343/ – folgt also der Adresse des Ziels.
+            "aruba" => {
+                let name = str_of(c, "name").filter(|n| !n.is_empty()).unwrap_or("Neuer Aruba-AP");
+                let mut t = edit::new_target(&self.index, parent, Protocol::Ssh, name, None);
+                let mut w = rj_core::model::AccessWay::new(Protocol::Web);
+                w.name = "Web-Oberfläche".into();
+                w.port = Some(4343);
+                t.ways.push(w);
+                edit::insert(&mut self.index, parent, Node::Target(t), None).map(|id| json!({ "id": id }))
             }
             "macro" => {
                 let m = MacroDef { id: Uuid::new_v4(), name: "Neues Makro".into(), steps: Vec::new() };
@@ -1016,6 +1117,24 @@ impl App {
                 return Ok(json!({ "errors": errors }));
             }
         }
+        // Zugangswege: vollständig prüfen, bevor etwas geändert wird.
+        let ways = match (&node, f.get("ways")) {
+            (Some(Node::Target(t)), Some(v)) => match ways_from(v, t, &self.index) {
+                Ok(w) => Some(w),
+                Err(e) => return Ok(json!({ "errors": { "ways": e } })),
+            },
+            _ => None,
+        };
+        let open_with: Option<Option<Uuid>> = match f.get("open_with") {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(Value::String(s)) if s == "main" || s.is_empty() => Some(None),
+            Some(Value::String(s)) => match Uuid::parse_str(s) {
+                Ok(u) => Some(Some(u)),
+                Err(_) => return Ok(json!({ "errors": { "ways": "Weg für den Doppelklick ungültig" } })),
+            },
+            Some(_) => return Ok(json!({ "errors": { "ways": "Weg für den Doppelklick ungültig" } })),
+        };
         if let Some(n) = str_of(&f, "name") {
             if n.is_empty() && !is_root {
                 return Ok(json!({ "errors": { "name": "Name darf nicht leer sein" } }));
@@ -1063,6 +1182,13 @@ impl App {
                 Some(Value::String(s)) if s == "inherit" => Some(None),
                 Some(v) => Some(Some(serde_json::from_value(v.clone()).map_err(|e| format!("PowerShell-Transport: {e}"))?)),
             };
+            let inventory = match f.get("inventory").and_then(Value::as_str) {
+                None => None,
+                Some("inherit") => Some(None),
+                Some("on") => Some(Some(true)),
+                Some("off") => Some(Some(false)),
+                Some(_) => return Err("Inventar-Einstellung ungültig".into()),
+            };
             let clipboard = match f.get("clipboard").and_then(Value::as_str) {
                 None => None,
                 Some("inherit") => Some(None),
@@ -1084,6 +1210,9 @@ impl App {
             if let Some(cl) = clipboard {
                 settings.clipboard = cl;
             }
+            if let Some(i) = inventory {
+                settings.inventory = i;
+            }
             if let Some(d) = str_of(&f, "description") {
                 meta.description = d.to_string();
             }
@@ -1104,6 +1233,16 @@ impl App {
             }
             match rj_core::inherit::find_node_mut(&mut self.index.root, id) {
                 Some(Node::Target(t)) => {
+                    if let Some(w) = ways {
+                        t.ways = w;
+                    }
+                    if let Some(o) = open_with {
+                        t.open_with = o;
+                    }
+                    // Doppelklick-Weg muss es geben (gelöschter Weg → Hauptweg).
+                    if t.open_with.is_some_and(|o| !t.ways.iter().any(|w| w.id == o)) {
+                        t.open_with = None;
+                    }
                     if let Some(n) = str_of(&f, "name") {
                         t.name = n.to_string();
                     }
@@ -1298,6 +1437,59 @@ impl App {
     /// Speichern mit Konfliktbehandlung. Antwort: `{"saved":bool}`,
     /// `{"conflict":{"mine":r,"theirs":r}}` oder `{"error":…}`.
     /// Notizen eines Ziels ändern (mit „Rückgängig“) und den Tresor speichern.
+    pub(crate) fn set_target_inventory(&mut self, id: Uuid, on: Option<bool>) -> Result<(), String> {
+        self.simple("Inventar umschalten", |idx| match rj_core::inherit::find_node_mut(&mut idx.root, id) {
+            Some(Node::Target(t)) => {
+                t.settings.inventory = on;
+                Ok(json!({ "ok": true }))
+            }
+            _ => Err(EditError::NotFound),
+        })?;
+        let r: Value = serde_json::from_str(&self.save_with(None)).map_err(|e| e.to_string())?;
+        match r.get("error").and_then(Value::as_str) {
+            Some(e) => Err(e.to_string()),
+            None if r.get("conflict").is_some() => Err("Die Schlüsseldatenbank wurde inzwischen geändert – bitte über Datei → Speichern abgleichen".into()),
+            None => Ok(()),
+        }
+    }
+
+    /// Nach einer Inventur: beim ersten Erkennen als Aruba-AP den Weg „Web-Oberfläche“ (https, 4343) anlegen, sofern das
+    /// Ziel noch keinen Web-Zugang hat. Gespeichert wird sofort, wenn sonst nichts ungespeichert ist. Liefert, ob ein Weg
+    /// angelegt wurde.
+    pub(crate) fn aruba_web_way(&mut self, id: Uuid) -> bool {
+        if self.demo || self.vault.as_ref().map_or(true, |v| v.index().read_only) {
+            return false;
+        }
+        let mut inv = self.overview.store.load(id);
+        if inv.aruba_web_way || crate::overview::inventory::device_kind(&inv) != Some("aruba-ap") {
+            return false;
+        }
+        inv.aruba_web_way = true;
+        let _ = self.overview.store.save(id, &inv);
+        let Some(t) = self.target(id) else { return false };
+        if t.protocol == Protocol::Web || t.ways.iter().any(|w| w.protocol == Protocol::Web) {
+            return false;
+        }
+        let was_dirty = self.has_unsaved_changes();
+        let r = self.simple("Aruba-Web-Oberfläche anlegen", |idx| match rj_core::inherit::find_node_mut(&mut idx.root, id) {
+            Some(Node::Target(t)) => {
+                let mut w = rj_core::model::AccessWay::new(Protocol::Web);
+                w.name = "Web-Oberfläche".into();
+                w.port = Some(4343);
+                t.ways.push(w);
+                Ok(json!({ "ok": true }))
+            }
+            _ => Err(EditError::NotFound),
+        });
+        if r.is_err() {
+            return false;
+        }
+        if !was_dirty {
+            let _ = self.save_with(None);
+        }
+        true
+    }
+
     pub(crate) fn set_target_notes(&mut self, id: Uuid, text: String) -> Result<(), String> {
         self.simple("Notizen ändern", |idx| match rj_core::inherit::find_node_mut(&mut idx.root, id) {
             Some(Node::Target(t)) => {
@@ -1579,6 +1771,60 @@ mod tests {
         // Kennwort steht nie im Index.
         let json = String::from_utf8(rj_core::schema::to_json(&v2.index().index).unwrap()).unwrap();
         assert!(!json.contains("Kennwo"));
+    }
+
+    #[test]
+    fn aruba_detection_adds_the_web_way_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        app.overview.store.dir = Some(dir.path().join("inventar"));
+        let root = app.index.root.id;
+        let id = Uuid::parse_str(cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "AP" }))["id"].as_str().unwrap()).unwrap();
+        assert!(!app.aruba_web_way(id), "ohne Inventar kein Weg");
+        let mut inv = app.overview.store.load(id);
+        inv.offer("system", "Aruba Instant 8.10.0.23 LSR (Modell 515)", "SSH", 1);
+        app.overview.store.save(id, &inv).unwrap();
+        assert!(app.aruba_web_way(id));
+        let t = app.target(id).unwrap();
+        assert_eq!((t.ways.len(), t.ways[0].protocol, t.ways[0].port), (1, Protocol::Web, Some(4343)));
+        // Weg gelöscht: Die nächste Inventur legt ihn nicht wieder an.
+        if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut app.index.root, id) {
+            t.ways.clear();
+        }
+        assert!(!app.aruba_web_way(id));
+        assert!(app.target(id).unwrap().ways.is_empty());
+    }
+
+    #[test]
+    fn merge_same_address_preview_apply_and_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let f = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "APs" }))["id"].as_str().unwrap().to_string();
+        let text = "ap1.example.test\nap1.example.test:4343\nap2.example.test";
+        let b = cmd(&mut app, json!({ "op": "bulk_add", "parent": f, "kind": "ssh", "text": text, "pattern": "{nr}-{host}" }));
+        assert_eq!(b["created"].as_array().map(Vec::len), Some(3), "{b}");
+        assert_eq!(j(app.save_with(None))["saved"], true);
+        let before = app.index.clone();
+        let p = cmd(&mut app, json!({ "op": "merge_preview", "ids": [f] }));
+        let g = p["groups"].as_array().unwrap();
+        assert_eq!(g.len(), 1, "{p}");
+        assert_eq!(g[0]["address"], "ap1.example.test");
+        let members: Vec<String> = g[0]["members"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(g[0]["keep"], members[0].as_str());
+        let c = cmd(&mut app, json!({ "op": "merge_check", "keep": members[0], "others": [members[1]] }));
+        assert_eq!((c["ways"].as_u64(), c["logins"].as_u64()), (Some(1), Some(0)), "{c}");
+        assert_eq!(app.index, before, "Vorschau und Prüfung ändern nichts");
+        let r = cmd(&mut app, json!({ "op": "merge_apply", "groups": [{ "keep": members[0], "others": [members[1]], "name": "AP 1" }] }));
+        assert_eq!(r["merged"], 1, "{r}");
+        let keep = Uuid::parse_str(&members[0]).unwrap();
+        let t = app.target(keep).unwrap();
+        assert_eq!((t.name.as_str(), t.ways.len(), t.ways[0].port), ("AP 1", 1, Some(4343)));
+        assert!(app.target(Uuid::parse_str(&members[1]).unwrap()).is_none());
+        assert!(app.has_unsaved_changes());
+        assert_eq!(cmd(&mut app, json!({ "op": "undo" }))["undone"], "Ziele zusammenfassen");
+        assert_eq!(app.index.root, before.root);
+        assert!(!app.has_unsaved_changes(), "Rückgängig bis zum gespeicherten Stand: nichts mehr ungespeichert");
     }
 
     #[test]
@@ -1991,3 +2237,86 @@ mod web_tests {
         assert!(r["errors"]["url"].as_str().unwrap().contains("leer"), "{r}");
     }
 }
+
+/// Herkunft der Inventar-Einstellung für die Anzeige.
+pub(crate) fn inventory_source_text(src: rj_core::inherit::InventorySource, on: bool) -> &'static str {
+    match src {
+        rj_core::inherit::InventorySource::Target => "am Ziel festgelegt",
+        rj_core::inherit::InventorySource::Folder => "vom Ordner geerbt",
+        rj_core::inherit::InventorySource::Default if on => "Vorgabe",
+        rj_core::inherit::InventorySource::Default => "Vorgabe für Web-Ziele",
+    }
+}
+
+/// Zugangsweg für die Oberfläche.
+pub(crate) fn way_json(w: &rj_core::model::AccessWay) -> Value {
+    let cred = match w.credential {
+        rj_core::model::WayCredential::Target => json!("target"),
+        rj_core::model::WayCredential::None => json!("none"),
+        rj_core::model::WayCredential::Login(id) => json!(id),
+    };
+    json!({ "id": w.id, "name": w.name, "label": w.label(), "protocol": w.protocol.as_str(), "host": w.host, "port": w.port, "credential": cred })
+}
+
+/// Zugangswege aus dem Eigenschaften-Tab prüfen. Optionen bekannter Wege (gleiche ID, gleiches Protokoll) bleiben.
+fn ways_from(v: &Value, t: &rj_core::Target, index: &Index) -> Result<Vec<rj_core::model::AccessWay>, String> {
+    use rj_core::model::{AccessWay, WayCredential};
+    let list = v.as_array().ok_or("Zugangswege: Liste erwartet")?;
+    let mut out = Vec::new();
+    for (n, w) in list.iter().enumerate() {
+        let nr = n + 1;
+        let protocol = match w.get("protocol").and_then(Value::as_str) {
+            Some("web") => Protocol::Web,
+            Some("ssh") => Protocol::Ssh,
+            Some("rdp") => Protocol::Rdp,
+            Some("vnc") => Protocol::Vnc,
+            Some("psrp") => Protocol::Psrp,
+            _ => return Err(format!("Weg {nr}: Protokoll fehlt oder wird nicht unterstützt")),
+        };
+        let host = w.get("host").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+        if host.contains("://") {
+            if protocol != Protocol::Web {
+                return Err(format!("Weg {nr}: Eine URL gibt es nur bei Web; sonst Rechnername oder IP eintragen"));
+            }
+            if rj_core::weburl::endpoint(&host).is_none() {
+                return Err(format!("Weg {nr}: URL ungültig; Beispiel: https://192.0.2.4:4343/"));
+            }
+        } else if host.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err(format!("Weg {nr}: Adresse enthält Leer- oder Steuerzeichen"));
+        }
+        let port = match w.get("port") {
+            None | Some(Value::Null) => None,
+            Some(p) => {
+                let n = p.as_u64().or_else(|| p.as_str().filter(|s| !s.trim().is_empty()).and_then(|s| s.trim().parse().ok()));
+                match (n, p.as_str().is_some_and(|s| s.trim().is_empty())) {
+                    (_, true) => None,
+                    (Some(n), _) if (1..=65535).contains(&n) => Some(n as u16),
+                    _ => return Err(format!("Weg {nr}: Port muss zwischen 1 und 65535 liegen")),
+                }
+            }
+        };
+        let credential = match w.get("credential").and_then(Value::as_str) {
+            None | Some("target") => WayCredential::Target,
+            Some("none") => WayCredential::None,
+            Some(s) => match Uuid::parse_str(s) {
+                Ok(id) if index.login(id).is_some() => WayCredential::Login(id),
+                _ => return Err(format!("Weg {nr}: Anmeldeobjekt nicht gefunden")),
+            },
+        };
+        let id = w.get("id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok());
+        let mut way = AccessWay::new(protocol);
+        if let Some(id) = id {
+            way.id = id;
+            if let Some(old) = t.ways.iter().find(|x| x.id == id && x.protocol == protocol) {
+                way.options = old.options.clone();
+            }
+        }
+        way.name = w.get("name").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+        way.host = host;
+        way.port = port;
+        way.credential = credential;
+        out.push(way);
+    }
+    Ok(out)
+}
+

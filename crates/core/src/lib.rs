@@ -8,6 +8,7 @@ pub mod config;
 pub mod edit;
 pub mod fsutil;
 pub mod inherit;
+pub mod merge;
 pub mod model;
 pub mod schema;
 pub mod secret;

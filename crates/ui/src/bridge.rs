@@ -356,9 +356,11 @@ impl qobject::RjBackend {
 
     fn connect_target(self: Pin<&mut Self>, id: &QString, credential: &QString, remember: bool, width: i32, height: i32) -> QString {
         let cred = credential.to_string();
-        let Some(u) = uuid(id) else { return q(r#"{"error":"Ziel ungültig"}"#) };
+        let full = id.to_string();
+        let (tid, sel) = crate::app::WaySel::split(&full);
+        let Ok(u) = uuid::Uuid::parse_str(tid) else { return q(r#"{"error":"Ziel ungültig"}"#) };
         q(match self.app_mut() {
-            Some(a) => a.connect(u, (!cred.is_empty()).then_some(cred.as_str()), remember, width.max(1) as u32, height.max(1) as u32),
+            Some(a) => a.connect_way(u, sel, (!cred.is_empty()).then_some(cred.as_str()), remember, width.max(1) as u32, height.max(1) as u32),
             None => r#"{"error":"nicht bereit"}"#.into(),
         })
     }
@@ -405,6 +407,8 @@ impl qobject::RjBackend {
                         "title": a.sessions.title(*s),
                         "protocol": a.sessions.protocol(*s).map(|p| p.as_str()),
                         "state": a.sessions.state(*s),
+                        // Sitzung über einen Zugangsweg: Tab behält „Ziel – Weg“ statt des Seitentitels.
+                        "way": a.sessions.target(*s).and_then(|t| a.target(t)).zip(a.sessions.title(*s)).is_some_and(|(t, title)| t.name != title),
                     }),
                 )
             })

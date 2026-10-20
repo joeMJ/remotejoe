@@ -564,6 +564,16 @@ pub enum WebCommand {
     Visible { on: bool },
     /// Windows: Tasten, die der Anwendung gehören (Kurzbefehle des Hauptfensters); sie gehen nicht an die Seite.
     Keys { keys: Vec<ReservedKey> },
+    /// Text in der Seite suchen und markieren (nächster bzw. mit `backwards` voriger Treffer; Antwort `Found`).
+    /// `restart`: Auswahl aufheben und vom Seitenanfang suchen (beim Tippen).
+    Find { text: String, #[serde(default)] backwards: bool, #[serde(default)] restart: bool },
+}
+
+/// Skript für `WebCommand::Find`: `window.find` (Groß-/Kleinschreibung egal, am Ende umbrechen); Ergebnis "1"/"0".
+pub fn find_script(text: &str, backwards: bool, restart: bool) -> String {
+    let t = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+    let reset = if restart { "try{window.getSelection().removeAllRanges();}catch(e){}" } else { "" };
+    format!("(function(){{{reset}try{{return window.find({t},false,{backwards},true,false,false,false)?'1':'0';}}catch(e){{return '0';}}}})()")
 }
 
 /// Tastenkombination (Windows-Tastencode) für `WebCommand::Keys`.
@@ -627,6 +637,8 @@ pub enum WebEvent {
     /// Windows: Download; `state`: `started`, `progress`, `done`, `failed`. `opened`: Datei wurde mit dem
     /// zugeordneten Programm gestartet (nur .ica).
     Download { id: u32, state: String, name: String, dir: String, received: u64, total: u64, error: Option<String>, opened: bool },
+    /// Ergebnis der Suche in der Seite (`WebCommand::Find`).
+    Found { found: bool },
 }
 
 /// Gefundenes Feld oder gefundener Knopf mit Selektor und lesbarer Beschriftung.

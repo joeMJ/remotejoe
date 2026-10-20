@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Felder in Anzeigereihenfolge.
-pub const FIELDS: [&str; 6] = ["name", "ip", "mac", "vcpu", "memory", "system"];
+pub const FIELDS: [&str; 8] = ["name", "ip", "mac", "vcpu", "memory", "system", "uptime", "serial"];
+
+/// Momentwerte: jede Abfrage überschreibt sie (kein Vorschlag „abweichender Wert“), außer von Hand gesetzt.
+const VOLATILE: [&str; 1] = ["uptime"];
 
 /// Quelle eines von Hand gesetzten Werts.
 pub const MANUAL: &str = "von Hand";
@@ -43,6 +46,10 @@ pub struct Field {
 pub struct Inventory {
     #[serde(default)]
     pub fields: BTreeMap<String, Field>,
+    /// Als Aruba-AP erkannt und der Weg zur Web-Oberfläche (4343) geprüft bzw. angelegt; danach nie wieder,
+    /// damit ein gelöschter Weg nicht zurückkommt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub aruba_web_way: bool,
 }
 
 pub fn now() -> u64 {
@@ -57,7 +64,7 @@ impl Inventory {
             return;
         }
         let f = self.fields.entry(key.to_string()).or_default();
-        if f.value.is_empty() {
+        if f.value.is_empty() || (VOLATILE.contains(&key) && !f.manual) {
             *f = Field { value: value.to_string(), source: source.to_string(), at, manual: false, pending: None };
         } else if f.value == value {
             if !f.manual {
@@ -99,6 +106,12 @@ impl Inventory {
     }
 }
 
+/// Geräteart aus dem Inventar, für ein eigenes Symbol im Baum: `aruba-ap`, sobald das Inventar ein Aruba-Gerät
+/// meldet (System „Aruba Instant …“ aus `show version`).
+pub fn device_kind(inv: &Inventory) -> Option<&'static str> {
+    inv.value("system").filter(|s| s.starts_with("Aruba")).map(|_| "aruba-ap")
+}
+
 /// Ablage der Inventardateien.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -114,6 +127,21 @@ impl Store {
     fn path(&self, key: &str) -> Option<PathBuf> {
         let safe: String = key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
         self.dir.as_ref().map(|d| d.join(format!("{safe}.json")))
+    }
+
+    /// Gerätearten aller Ziele mit Inventardatei (einmal beim Start; Gäste haben keine UUID als Namen).
+    pub fn scan_devices(&self) -> std::collections::HashMap<Uuid, &'static str> {
+        let mut out = std::collections::HashMap::new();
+        let Some(dir) = &self.dir else { return out };
+        let Ok(entries) = std::fs::read_dir(dir) else { return out };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let Some(id) = name.strip_suffix(".json").and_then(|s| Uuid::parse_str(s).ok()) else { continue };
+            if let Some(kind) = device_kind(&self.load(id)) {
+                out.insert(id, kind);
+            }
+        }
+        out
     }
 
     pub fn load(&self, id: Uuid) -> Inventory {
@@ -168,6 +196,43 @@ pub fn format_bytes(b: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn uptime_is_overwritten_other_fields_become_proposals() {
+        let mut inv = Inventory::default();
+        inv.offer("uptime", "1 T", "SSH", 1);
+        inv.offer("uptime", "2 T", "SSH", 2);
+        assert_eq!((inv.value("uptime"), inv.fields["uptime"].pending.is_none()), (Some("2 T"), true));
+        inv.offer("serial", "CN1", "SSH", 1);
+        inv.offer("serial", "CN2", "SSH", 2);
+        assert_eq!(inv.value("serial"), Some("CN1"));
+        assert!(inv.fields["serial"].pending.is_some(), "abweichende Seriennummer als Vorschlag");
+        inv.set_manual("uptime", "von Hand", 3).unwrap();
+        inv.offer("uptime", "3 T", "SSH", 4);
+        assert_eq!(inv.value("uptime"), Some("von Hand"));
+    }
+
+    #[test]
+    fn aruba_system_marks_the_device_kind() {
+        let mut inv = Inventory::default();
+        assert_eq!(device_kind(&inv), None);
+        inv.offer("system", "Ubuntu 24.04", "SSH", 1);
+        assert_eq!(device_kind(&inv), None);
+        let mut ap = Inventory::default();
+        ap.offer("system", "Aruba Instant 8.10.0.23 LSR (Modell 515)", "SSH (show version)", 1);
+        assert_eq!(device_kind(&ap), Some("aruba-ap"));
+        let dir = std::env::temp_dir().join(format!("rj-geraete-{}", Uuid::new_v4()));
+        let store = Store { dir: Some(dir.clone()) };
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        store.save(a, &ap).unwrap();
+        store.save(b, &inv).unwrap();
+        store.save_key("gast-x-pve1/qemu/100", &ap).unwrap();
+        let found = store.scan_devices();
+        assert_eq!(found.len(), 1, "nur Ziele mit UUID, Gäste nicht");
+        assert_eq!(found.get(&a), Some(&"aruba-ap"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     use super::*;
 
     #[test]

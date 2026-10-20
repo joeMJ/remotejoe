@@ -235,6 +235,9 @@ pub struct Vault {
     /// Prüfsumme des Index beim Laden (Grundlage für Konflikterkennung).
     base_index_sha: Option<[u8; 32]>,
     index_dirty: bool,
+    /// Index wie zuletzt geladen bzw. gespeichert: Stimmt der aktuelle wieder damit überein (z. B. nach
+    /// Rückgängig), gilt er nicht mehr als geändert.
+    clean_index: Option<Index>,
     ops: Vec<EntryOp>,
     /// Abgeleiteter Schlüssel der Indexdatei (nur bei `IndexStorage::IndexFile`).
     index_file_key: Option<index_file::FileKey>,
@@ -257,6 +260,7 @@ impl Vault {
             index: LoadedIndex { index: Index::default(), original_version: rj_core::SCHEMA_VERSION, read_only: false, notice: None },
             base_index_sha: None,
             index_dirty: true,
+            clean_index: None,
             ops: Vec::new(),
             index_file_key: None,
         }
@@ -275,6 +279,7 @@ impl Vault {
             index: LoadedIndex { index: Index::default(), original_version: rj_core::SCHEMA_VERSION, read_only: false, notice: None },
             base_index_sha: None,
             index_dirty: false,
+            clean_index: None,
             ops: Vec::new(),
             index_file_key: None,
         };
@@ -287,6 +292,7 @@ impl Vault {
             }
             None => v.index_dirty = false,
         }
+        v.clean_index = Some(v.index.index.clone());
         Ok(v)
     }
 
@@ -343,7 +349,7 @@ impl Vault {
         }
         if index != self.index.index {
             self.index.index = index;
-            self.index_dirty = true;
+            self.index_dirty = self.clean_index.as_ref() != Some(&self.index.index);
         }
         Ok(())
     }
@@ -720,6 +726,7 @@ impl Vault {
         self.disk = Some(fingerprint(&out));
         self.base_index_sha = index_sha;
         self.index_dirty = false;
+        self.clean_index = Some(self.index.index.clone());
         self.ops.clear();
         Ok(true)
     }

@@ -23,8 +23,8 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
   unberührt. Nach Standby oder Netzabbruch baut remotejoe die Verbindungen selbst wieder auf, Tunnel zuerst.
 - **Extrem schnell, schlanker Quelltext:** Rust und natives Qt 6 – kein Electron, keine
   Laufzeitumgebung. Das Hauptfenster steht im Testlauf nach rund 150 ms, mit über 500 Einträgen im Baum.
-- **Kompakt:** Im Platzsparmodus (F10) wandern die Tabs in die Titelzeile, das Menü hinter einen
-  Knopf, und der Baum lässt sich einklappen (F9) – fast die ganze Fensterfläche gehört der Sitzung.
+- **Kompakt:** Die Tabs stehen in der Titelzeile, das Menü hinter einem Knopf, und der Baum lässt sich
+  einklappen (F9) – fast die ganze Fensterfläche gehört der Sitzung. Beim Start ist der Baum ausgeklappt.
 
 > [!WARNING]
 > **Privates Hobbyprojekt – nicht gepflegt / unmaintained.**
@@ -47,13 +47,9 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
   <br>
   <em>Hauptfenster (Catppuccin Macchiato, Demo-Daten)</em>
   <br><br>
-  <img src="docs/screenshots/hauptfenster-kompakt.png" alt="Platzsparmodus: Tabs in der Titelzeile, Baum sichtbar" width="760">
+  <img src="docs/screenshots/hauptfenster-kompakt-ohne-baum.png" alt="Hauptfenster mit eingeklapptem Baum" width="760">
   <br>
-  <em>Platzsparmodus (F10) mit Baum</em>
-  <br><br>
-  <img src="docs/screenshots/hauptfenster-kompakt-ohne-baum.png" alt="Platzsparmodus mit eingeklapptem Baum" width="760">
-  <br>
-  <em>Platzsparmodus mit eingeklapptem Baum (F9)</em>
+  <em>Mit eingeklapptem Baum (F9)</em>
 </p>
 
 ---
@@ -384,6 +380,27 @@ neu aufklappen.
   Windows über PowerShell per OpenSSH bzw. WinRM). Ein noch unbekannter SSH-Host-Schlüssel wird dabei übernommen und
   gemeldet, ein geänderter nie. Gäste von Proxmox und Hyper-V zeigen ihr Inventar vom Hypervisor. Das Inventar liegt
   als Datei im Datenordner (`inventar/`), nicht in der Schlüsseldatenbank.
+  Ob sich das Inventar an einem Ziel anmelden darf, ist je Ziel bzw. Ordner einstellbar („Abfragen erlaubt“ in der
+  Übersicht, Einstellungen → Allgemein → Inventar). Web-Ziele sind ohne eigene Festlegung aus; ein „an“ am Ordner
+  schaltet sie nicht ein. Aruba-Instant-APs fragt das Inventar über eine interaktive Sitzung ab (`show version`);
+  erkannte APs bekommen im Baum ein eigenes Symbol.
+- **Masseninventar:** Rechtsklick auf einen Ordner oder eine Auswahl → **Inventar für alle Ziele abfragen …** fragt
+  alle Ziele darin ab, bis zu acht gleichzeitig, mit Fortschritt, Ergebnis je Ziel und „Fehlgeschlagene wiederholen“.
+  Ziele mit abgeschaltetem Inventar werden übersprungen.
+- **Zugangswege:** Ein Ziel kann neben dem Hauptweg weitere Wege haben (z. B. SSH und die Web-Oberfläche auf
+  4343), jeder mit eigenem Protokoll, Port, Optionen und Zugangsdaten (die des Ziels, ein Anmeldeobjekt oder keine).
+  Die Übersicht zeigt je Weg einen Knopf; welcher Weg beim Doppelklick öffnet, ist wählbar. „Hinzufügen → Aruba-AP“
+  legt SSH und Web (4343) in einem Schritt an; „Vorschlagen“ übernimmt die in der Übersicht gefundenen Dienste.
+- **Gleiche Adressen zusammenfassen:** Rechtsklick auf einen Ordner oder eine Auswahl → **Gleiche Adressen
+  zusammenfassen …** zeigt die Ziele mit gleicher Adresse (bei Web-Zielen der Rechner aus der URL) als Gruppen. Je
+  Gruppe lassen sich Hauptziel, Name und die beteiligten Ziele wählen; die übrigen Ziele werden Zugangswege des
+  Hauptziels, abweichende Zugangsdaten werden als Anmeldeobjekt auf denselben KDBX-Eintrag übernommen. Ordner bleiben
+  unberührt, der ganze Schritt lässt sich rückgängig machen.
+
+<p align="center">
+  <img src="docs/screenshots/zusammenfassen.png" alt="Gleiche Adressen zusammenfassen: Gruppe mit Hauptziel und zwei künftigen Zugangswegen" width="760">
+</p>
+
 - **RDP** mit Zwischenablage (Text in beide Richtungen, Dateien Ziel → Host), NLA und Grafikkanal
   (GFX; `Automatisch` wiederholt einen abgebrochenen Aufbau einmal mit GFX, GNOME-Remote-Desktop verlangt ihn).
 - **SSH** mit Terminal, Zwischenablage (geschütztes Einfügen; OSC 52: Schreiben erlaubt, Lesen nur nach Nachfrage),
@@ -394,7 +411,7 @@ neu aufklappen.
   UTF-8-Zwischenablage.
 - **Web** im Tab wie RDP und VNC, auch gekachelt: Die Seite wird im Worker ohne eigenes
   Fenster gerendert (WebKitGTK); Zurück, Vor, Neu laden in der Kopfzeile, Seitentitel als
-  Tab-Titel, Zwischenablage über das Hauptprogramm, eigenes Browserprofil je Ziel und
+  Tab-Titel (bei einem Zugangsweg „Ziel – Weg“), Zwischenablage über das Hauptprogramm, eigenes Browserprofil je Ziel und
   automatische Formular-Anmeldung mit „Felder erkennen“ (auch bei Seiten, die ihr Formular erst nach
   dem Laden aufbauen). Anmeldung und Seitenwechsel werden je Ziel mit Zeiten protokolliert
   (`protokoll.log` im Profilordner, ohne Eingaben). Unter Windows über WebView2 (Microsoft Edge).
@@ -664,7 +681,8 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
 - **Hilfe → Fehler melden / Wünsche** und **Hilfe → Hilfe** öffnen nur Seiten auf GitHub im Standardbrowser.
 - **Objektübersicht:** Beim Einfachklick auf ein Ziel prüft remotejoe die gängigen Ports **dieses Ziels** (TCP-Verbindungsaufbau
   ohne Anmeldung) und fragt bei offenem RDP mit NLA den Rechnernamen ab (ohne Zugangsdaten). Ping und Traceroute laufen
-  nur auf Knopfdruck, ebenso „Inventar abfragen“ mit den Zugangsdaten des Ziels. Es geht nichts an Dritte.
+  nur auf Knopfdruck, ebenso „Inventar abfragen“ und das Masseninventar mit den Zugangsdaten des Ziels (nur bei
+  Zielen, deren Inventar erlaubt ist). Es geht nichts an Dritte.
 - Es gibt keine Telemetrie und keine Nutzungsstatistik.
 
 ## Fehler melden und Wünsche

@@ -8,7 +8,7 @@
     Programmordner. Der Datenordner %USERPROFILE%\remotejoe bleibt unberührt.
   - Der UpgradeCode ist fest und darf sich nie ändern: Jede neue MSI ersetzt die alte (MajorUpgrade).
 -->
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <Product Id="*" Name="remotejoe" Language="1031" Codepage="1252" Version="$(var.Version)" Manufacturer="John Lose (joeMJ)"
            UpgradeCode="DB4709D5-54F6-4A98-AB02-E96A60D16CE1">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited" Platform="x64"
@@ -47,6 +47,18 @@
         <RegistryValue Root="HKCU" Key="Software\remotejoe\Installer" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
+
+    <!-- Laufende Programme vor dem Ersetzen der Dateien (vor InstallValidate): remotejoe wird gebeten, sich zu
+         schließen; läuft es danach noch, fragt eine Meldung, ob es beendet werden soll (Wiederholen/Abbrechen).
+         Worker ohne Fenster gehören zu remotejoe und werden beendet. Sonst wartet Windows Installer auf die
+         Dateien (Hängen bei „Erforderliche Informationen werden ermittelt“). -->
+    <util:CloseApplication Id="CloseRemotejoe" Target="remotejoe.exe" Sequence="1" CloseMessage="yes" PromptToContinue="yes" RebootPrompt="no"
+                           Description="remotejoe läuft noch und muss für die Installation beendet werden. Bitte remotejoe schließen (offene Sitzungen werden getrennt) und dann „Wiederholen“ wählen." />
+    <util:CloseApplication Id="CloseWorkerSsh" Target="rj-worker-ssh.exe" Sequence="2" TerminateProcess="0" RebootPrompt="no" />
+    <util:CloseApplication Id="CloseWorkerRdp" Target="rj-worker-rdp.exe" Sequence="3" TerminateProcess="0" RebootPrompt="no" />
+    <util:CloseApplication Id="CloseWorkerVnc" Target="rj-worker-vnc.exe" Sequence="4" TerminateProcess="0" RebootPrompt="no" />
+    <util:CloseApplication Id="CloseWorkerWeb" Target="rj-worker-web.exe" Sequence="5" TerminateProcess="0" RebootPrompt="no" />
+    <util:CloseApplication Id="CloseWorkerPsrp" Target="rj-worker-psrp.exe" Sequence="6" TerminateProcess="0" RebootPrompt="no" />
 
     <Feature Id="Main" Title="remotejoe" Level="1">
       <ComponentGroupRef Id="AppFiles" />

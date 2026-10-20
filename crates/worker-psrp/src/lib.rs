@@ -100,6 +100,8 @@ pub fn driver_script(t: &PsTarget) -> String {
     format!(
         r#"$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'Continue'
+# Ausgabe als UTF-8 (sonst schreibt Windows PowerShell in der OEM-Codepage, Umlaute in Fehlermeldungen wären kaputt).
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
 function Emit($o) {{ [Console]::Out.WriteLine(($o | ConvertTo-Json -Compress -Depth 3)); [Console]::Out.Flush() }}
 $pwB64 = [Console]::In.ReadLine()
 $bytes = [Convert]::FromBase64String($pwB64)
@@ -237,11 +239,13 @@ impl PsSession {
 
     fn read_record(&mut self) -> Result<Record, PsError> {
         loop {
-            let mut l = String::new();
-            if self.stdout.read_line(&mut l)? == 0 {
+            // Bytes lesen und ungültige Folgen ersetzen statt abzubrechen: eine Zeile in einer anderen Codepage soll
+            // die eigentliche Meldung nicht verschlucken („stream did not contain valid UTF-8“).
+            let mut b = Vec::new();
+            if self.stdout.read_until(b'\n', &mut b)? == 0 {
                 return Err(PsError::Ended);
             }
-            if let Some(r) = parse_record(&l) {
+            if let Some(r) = parse_record(&String::from_utf8_lossy(&b)) {
                 return Ok(r);
             }
         }

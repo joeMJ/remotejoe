@@ -67,6 +67,9 @@ public:
 	void detachTabAt(int index);
 	void openPatchday(const QStringList& ids);
 	void patchdayForFirstTargets(int n);
+	/// Vorschau „Gleiche Adressen zusammenfassen“ für den ersten Ordner (Bildschirmfotos).
+	void mergeForFirstFolder();
+	void openMerge(const QStringList& ids, const QString& title);
 	/// Messwerte der Patchday-Ansicht (längstes Neuzeichnen, Anzahl).
 	QString patchdayMeasurement() const;
 	QTreeView* tree() const { return m_tree; }

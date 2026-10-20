@@ -7,6 +7,7 @@
 //! (Index in der KDBX); das Inventar liegt als Datei im Datenordner.
 
 pub mod inventory;
+pub mod mass;
 pub mod probe;
 pub mod rdpname;
 pub mod remote;
@@ -75,11 +76,29 @@ pub struct OverviewState {
     run: Option<Run>,
     /// Laufende Abfragen je Ziel bzw. Gast (keine doppelten Starts).
     busy: HashMap<String, u64>,
+    /// Geräteart je Ziel aus dem Inventar (eigenes Symbol im Baum, z. B. Aruba-AP).
+    pub devices: HashMap<Uuid, &'static str>,
 }
 
 impl Default for OverviewState {
     fn default() -> Self {
-        OverviewState { store: Store::default_location(), services: HashMap::new(), run: None, busy: HashMap::new() }
+        let store = Store::default_location();
+        let devices = store.scan_devices();
+        OverviewState { store, services: HashMap::new(), run: None, busy: HashMap::new(), devices }
+    }
+}
+
+impl OverviewState {
+    /// Inventar speichern und die Geräteart des Ziels nachführen.
+    pub fn save_inventory(&mut self, key: &str, inv: &Inventory) -> Result<(), String> {
+        let r = self.store.save_key(key, inv);
+        if let Ok(id) = Uuid::parse_str(key) {
+            match inventory::device_kind(inv) {
+                Some(k) => self.devices.insert(id, k),
+                None => self.devices.remove(&id),
+            };
+        }
+        r
     }
 }
 
@@ -149,7 +168,14 @@ impl App {
             });
         }
         let id = str_of(c, "id").and_then(|s| Uuid::parse_str(s).ok()).ok_or("ID fehlt")?;
-        self.target_ref(id).cloned().map(Subject::Target).ok_or_else(|| "Das ist kein Verbindungsziel".into())
+        let mut t = self.target_ref(id).cloned().ok_or("Das ist kein Verbindungsziel")?;
+        // Web-Ziel: Rechner und Port stehen in der URL; Übersicht, Ping und Portprüfung nehmen sie von dort.
+        if t.protocol == Protocol::Web {
+            let (host, port) = App::endpoint_of(&t);
+            t.host = host;
+            t.port = Some(port);
+        }
+        Ok(Subject::Target(t))
     }
 
     /// Adresse für Portprüfung und Ping: beim Ziel der Host, beim Gast die gemeldete bzw. ermittelte IP.
@@ -190,8 +216,16 @@ impl App {
                 v["name"] = json!(rj_core::charset::mark_visible(&t.name, false));
                 v["sub"] = json!(format!("{} · {}:{}", protocol_label(t.protocol), rj_core::charset::mark_visible(&t.host, false), t.effective_port()));
                 v["notes"] = json!(t.meta.notes);
+                // Zugangswege: Knopf je Weg in der Kopfkarte; hervorgehoben der Weg für den Doppelklick.
+                v["main_way"] = json!(protocol_label(t.protocol));
+                v["ways"] = json!(t.ways.iter().map(|w| json!({ "id": w.id, "label": w.label(), "protocol": w.protocol.as_str() })).collect::<Vec<_>>());
+                v["open_with"] = json!(t.open_with);
                 v["notes_editable"] = json!(!read_only && !self.demo);
-                v["can_query"] = json!(true);
+                let (on, src) = rj_core::inherit::resolve_inventory(&self.index, t.id).unwrap_or((false, rj_core::inherit::InventorySource::Default));
+                v["can_query"] = json!(on);
+                v["inventory_on"] = json!(on);
+                v["inventory_source"] = json!(crate::editor::inventory_source_text(src, on));
+                v["inventory_switchable"] = json!(!read_only && !self.demo);
             }
             Subject::Guest { hv_name, hv_protocol, name, .. } => {
                 v["name"] = json!(name);
@@ -281,7 +315,7 @@ impl App {
                     }
                     inv.offer(k, &v, src, at);
                 }
-                let saved = app.overview.store.save_key(&job_key, &inv);
+                let saved = app.overview.save_inventory(&job_key, &inv);
                 if services.get("list").is_some() {
                     app.overview.services.insert(job_key.clone(), (Instant::now(), services.clone()));
                 }
@@ -296,14 +330,13 @@ impl App {
     /// Mit Anmeldung am Ziel: SSH (Linux, Aruba) oder PowerShell (Windows), Zugangsdaten aus der KDBX.
     pub fn overview_query(&mut self, c: &Value) -> Result<Value, String> {
         let Subject::Target(t) = self.ov_subject(c)? else { return Err("Gäste liefern ihr Inventar über den Hypervisor".into()) };
+        if !rj_core::inherit::resolve_inventory(&self.index, t.id).map(|(on, _)| on).unwrap_or(false) {
+            return Err("Inventar ist für dieses Ziel abgeschaltet (Übersicht oder Einstellungen → Allgemein)".into());
+        }
         if self.demo {
             return Err("In der Vorführung nicht verfügbar".into());
         }
-        let r = match resolve_credential(&self.index, t.id).map_err(|e| e.to_string())? {
-            CredentialResolution::Found(r) => r,
-            CredentialResolution::Ambiguous(_) => return Err("Mehrere Zugangsdaten kommen in Frage. Bitte im Ziel einen Datensatz festlegen.".into()),
-            _ => return Err("Für dieses Ziel sind keine Zugangsdaten hinterlegt".into()),
-        };
+        let (t, r) = self.inventory_view(&t)?;
         let key = t.id.to_string();
         let open = |p: u16| {
             self.overview.services.get(&key).and_then(|(_, v)| v["list"].as_array().map(|l| l.iter().any(|s| s["port"] == p && s["open"] == true)))
@@ -346,8 +379,9 @@ impl App {
                         for (k, v) in found {
                             inv.offer(k, &v, src, at);
                         }
-                        let saved = app.overview.store.save_key(&job_key, &inv);
-                        json!({ "inventory": inventory_json(&inv), "error": saved.err(), "note": note })
+                        let saved = app.overview.save_inventory(&job_key, &inv);
+                        let way = Uuid::parse_str(&job_key).is_ok_and(|id| app.aruba_web_way(id));
+                        json!({ "inventory": inventory_json(&inv), "error": saved.err(), "note": note, "ways_changed": way })
                     }
                     // Verweise nur, wenn der Dienst fehlt oder nicht erreichbar ist – nicht bei Host-Schlüssel oder Anmeldung.
                     Err(e) => json!({ "error": e, "help": if service_missing(&e) { help } else { json!([]) } }),
@@ -369,7 +403,7 @@ impl App {
         } else {
             inv.set_manual(field, c.get("value").and_then(Value::as_str).unwrap_or_default(), now())?;
         }
-        self.overview.store.save_key(&key, &inv)?;
+        self.overview.save_inventory(&key, &inv)?;
         Ok(json!({ "inventory": inventory_json(&inv) }))
     }
 
@@ -450,6 +484,76 @@ impl App {
     }
 
     /// Notizen des Ziels speichern (Index in der KDBX); Gäste haben keine.
+    /// Für das Inventar: das Ziel über seinen SSH-Zugangsweg, wenn der Hauptweg kein SSH ist, sonst das Ziel selbst;
+    /// dazu die passenden Zugangsdaten (die des Wegs bzw. des Ziels).
+    pub(crate) fn inventory_view(&self, t: &rj_core::Target) -> Result<(rj_core::Target, rj_core::inherit::ResolvedCredential), String> {
+        use rj_core::model::WayCredential;
+        let target_cred = || match resolve_credential(&self.index, t.id).map_err(|e| e.to_string())? {
+            CredentialResolution::Found(r) => Ok(r),
+            CredentialResolution::Ambiguous(_) => Err("Mehrere Zugangsdaten kommen in Frage. Bitte im Ziel einen Datensatz festlegen.".to_string()),
+            _ => Err("Für dieses Ziel sind keine Zugangsdaten hinterlegt".to_string()),
+        };
+        if t.protocol != Protocol::Ssh {
+            if let Some(w) = t.ways.iter().find(|w| w.protocol == Protocol::Ssh) {
+                let view = t.via(w.id).ok_or("Zugangsweg nicht gefunden")?;
+                let r = match w.credential {
+                    WayCredential::Target => target_cred()?,
+                    WayCredential::Login(id) => {
+                        let l = self.index.login(id).ok_or("Das Anmeldeobjekt des SSH-Wegs gibt es nicht mehr")?;
+                        rj_core::inherit::ResolvedCredential { name: l.name.clone(), reference: l.entry.clone(), origin: rj_core::inherit::Origin::Target, overrides: Default::default() }
+                    }
+                    WayCredential::None => return Err("Der SSH-Weg dieses Ziels hat keine Zugangsdaten".into()),
+                };
+                return Ok((view, r));
+            }
+        }
+        Ok((t.clone(), target_cred()?))
+    }
+
+    /// Vorschläge für Zugangswege aus den angebotenen Diensten (Portprüfung der Übersicht): Web auf 4343, 443
+    /// bzw. 80, SSH, RDP, VNC – ohne den Hauptweg.
+    pub fn ways_suggest(&self, c: &Value) -> Result<Value, String> {
+        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
+        let key = t.id.to_string();
+        let Some((_, svc)) = self.overview.services.get(&key) else {
+            return Err("Die angebotenen Dienste sind noch nicht bekannt. Bitte das Ziel einmal anklicken (Übersicht) und danach erneut vorschlagen.".into());
+        };
+        let open: Vec<u64> = svc["list"].as_array().map(|l| l.iter().filter(|s| s["open"] == true).filter_map(|s| s["port"].as_u64()).collect()).unwrap_or_default();
+        let has = |p: u64| open.contains(&p);
+        let main = (t.protocol, u64::from(t.effective_port()));
+        let host = t.host.trim();
+        let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
+        let mut out = Vec::new();
+        let mut web = |port: u64, url: String, name: &str| {
+            if main != (Protocol::Web, port) {
+                out.push(json!({ "protocol": "web", "name": name, "host": url, "credential": "target" }));
+            }
+        };
+        if has(4343) {
+            web(4343, format!("https://{h}:4343/"), "Web-Oberfläche (4343)");
+        }
+        if has(443) {
+            web(443, format!("https://{h}/"), "Web-Oberfläche");
+        } else if has(80) {
+            web(80, format!("http://{h}/"), "Web-Oberfläche (HTTP)");
+        }
+        for (port, proto) in [(22u64, "ssh"), (3389, "rdp"), (5900, "vnc")] {
+            let p = match proto { "ssh" => Protocol::Ssh, "rdp" => Protocol::Rdp, _ => Protocol::Vnc };
+            if has(port) && main != (p, port) {
+                out.push(json!({ "protocol": proto, "name": "", "host": "", "credential": "target" }));
+            }
+        }
+        Ok(json!({ "ways": out }))
+    }
+
+    /// Schalter „Inventar abfragen“ in der Übersicht: legt die Einstellung am Ziel selbst fest und speichert.
+    pub fn overview_inventory_switch(&mut self, c: &Value) -> Result<Value, String> {
+        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Gäste haben keine Inventar-Einstellung".into()) };
+        let on = c.get("on").and_then(Value::as_bool).ok_or("Wert fehlt")?;
+        self.set_target_inventory(t.id, Some(on))?;
+        self.overview_json(c)
+    }
+
     pub fn overview_notes(&mut self, c: &Value) -> Result<Value, String> {
         let Subject::Target(t) = self.ov_subject(c)? else { return Err("Gäste haben keine Notizen".into()) };
         let text = c.get("notes").and_then(Value::as_str).unwrap_or_default().to_string();

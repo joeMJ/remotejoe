@@ -49,6 +49,8 @@ enum Msg {
     /// Ergebnisse von Skripten (die Rückrufe von wry müssen `Send` sein und reichen den Text deshalb hierher weiter).
     Detected(String),
     Rejected(String),
+    /// Ergebnis der Suche in der Seite.
+    Found(String),
     LoginResult { text: String, script: zeroize::Zeroizing<String>, tries: u32 },
     /// Anmeldung in Schritten: Schritt-Skript (erneut) ausführen, sein Ergebnis, Eingabe getippt.
     RunStep(Step, u32),
@@ -271,6 +273,10 @@ impl Worker {
                 let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
                 let list = |k: &str| -> Vec<FieldCandidate> { parsed.get(k).and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or_default() };
                 self.event(WebEvent::Fields { users: list("users"), passwords: list("passwords"), submits: list("submits") });
+            }
+            Msg::Found(r) => {
+                let text: String = serde_json::from_str(&r).unwrap_or_default();
+                self.event(WebEvent::Found { found: text == "1" });
             }
             Msg::Rejected(r) => {
                 let text: String = serde_json::from_str(&r).unwrap_or(r);
@@ -916,6 +922,11 @@ impl Worker {
                 let Some(v) = self.view() else { return };
                 let q = self.0.queue.clone();
                 let _ = v.evaluate_script_with_callback(DETECT_SCRIPT, move |r| q.push(Msg::Detected(r)));
+            }
+            WebCommand::Find { text, backwards, restart } => {
+                let Some(v) = self.view() else { return };
+                let q = self.0.queue.clone();
+                let _ = v.evaluate_script_with_callback(&rj_web::find_script(&text, backwards, restart), move |r| q.push(Msg::Found(r)));
             }
             // Das Menü der Seite zeigt WebView2 selbst (Kontextmenü, Auswahllisten).
             WebCommand::Menu { .. } => {}

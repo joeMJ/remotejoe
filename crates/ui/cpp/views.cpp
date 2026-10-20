@@ -19,6 +19,8 @@
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QShortcut>
+#include <QtWidgets/QLineEdit>
+#include <QtCore/QJsonArray>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QApplication>
 #include <QtCore/QPointer>
@@ -1233,6 +1235,15 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 		nav(m_reload, "web.reload", "web.tip.reload", "reload");
 		m_back->setEnabled(false);
 		m_forward->setEnabled(false);
+		// Adresse der Seite: nur lesen, zum Markieren und Kopieren.
+		m_url = new QLineEdit(headRow);
+		m_url->setReadOnly(true);
+		m_url->setObjectName(QStringLiteral("webUrl"));
+		m_url->setPlaceholderText(backend->text(QStringLiteral("web.url.ph")));
+		m_url->setToolTip(backend->text(QStringLiteral("web.url.tip")));
+		m_url->setAccessibleName(backend->text(QStringLiteral("web.url.tip")));
+		m_url->setMinimumWidth(220);
+		hl->addWidget(m_url, 2);
 	}
 	// Schmale Kopfzeile: kleinere Schaltflächen und Schrift.
 	m_header->setMinimumHeight(18);
@@ -1246,6 +1257,47 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 	// Seitentitel (Web) füllt den Rest der Zeile; alle Knöpfe stehen links.
 	hl->addWidget(m_header, 1);
 	hl->addStretch(1);
+	if (m_back)
+	{
+		// Suche in der Seite (Strg+F), rechtsbündig: Feld, ↑ voriger, ↓ nächster Treffer, × schließen.
+		m_findBox = new QWidget(headRow);
+		auto* fl = new QHBoxLayout(m_findBox);
+		fl->setContentsMargins(0, 0, 0, 0);
+		fl->setSpacing(2);
+		m_find = new QLineEdit(m_findBox);
+		m_find->setPlaceholderText(backend->text(QStringLiteral("web.find.ph")));
+		m_find->setClearButtonEnabled(true);
+		m_find->setMinimumWidth(180);
+		auto mk = [&](const QString& text, const char* tip) {
+			auto* b = new QPushButton(text, m_findBox);
+			b->setToolTip(backend->text(QString::fromLatin1(tip)));
+			b->setAccessibleName(b->toolTip());
+			b->setObjectName(QStringLiteral("paneBtn"));
+			b->setFixedWidth(28);
+			return b;
+		};
+		auto* up = mk(QStringLiteral("↑"), "web.find.prev");
+		auto* down = mk(QStringLiteral("↓"), "web.find.next");
+		auto* close = mk(QStringLiteral("×"), "web.find.close");
+		fl->addWidget(m_find);
+		fl->addWidget(up);
+		fl->addWidget(down);
+		fl->addWidget(close);
+		hl->addWidget(m_findBox);
+		m_findBox->hide();
+		connect(up, &QPushButton::clicked, this, [this] { find(true); });
+		connect(down, &QPushButton::clicked, this, [this] { find(false); });
+		connect(m_find, &QLineEdit::returnPressed, this, [this] { find(QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier)); });
+		connect(m_find, &QLineEdit::textEdited, this, [this] { find(false, true); });
+		auto closeFind = [this] {
+			m_findBox->hide();
+			if (m_frame)
+				m_frame->setFocus();
+		};
+		connect(close, &QPushButton::clicked, this, closeFind);
+		auto* esc = new QShortcut(QKeySequence(Qt::Key_Escape), m_find, nullptr, nullptr, Qt::WidgetShortcut);
+		connect(esc, &QShortcut::activated, this, closeFind);
+	}
 	// Ohne Bedienknöpfe (RDP, VNC) entfällt die Zeile; sie erscheint, sobald es dort Knöpfe gibt.
 	headRow->setVisible(protocol == QLatin1String("ssh") || protocol == QLatin1String("web") || protocol == QLatin1String("proxmox"));
 	lay->addWidget(headRow);
@@ -1306,6 +1358,15 @@ void SessionPane::webCommand(const QString& json)
 void SessionPane::setWebStatus(const QJsonObject& e)
 {
 	m_pageTitle = e.value(QStringLiteral("title")).toString();
+	if (m_url)
+	{
+		const QString uri = e.value(QStringLiteral("uri")).toString();
+		if (!uri.isEmpty() && m_url->text() != uri && !m_url->hasFocus())
+		{
+			m_url->setText(uri);
+			m_url->setCursorPosition(0);
+		}
+	}
 	const bool loading = e.value(QStringLiteral("loading")).toBool();
 	m_progress = e.value(QStringLiteral("progress")).toInt();
 	if (loading && !m_loading)
@@ -1322,6 +1383,34 @@ void SessionPane::setWebStatus(const QJsonObject& e)
 		m_forward->setEnabled(e.value(QStringLiteral("forward")).toBool());
 	}
 	updateHeader();
+}
+
+void SessionPane::openFind()
+{
+	if (!m_findBox)
+		return;
+	m_findBox->show();
+	m_find->setFocus();
+	m_find->selectAll();
+}
+
+void SessionPane::find(bool backwards, bool restart)
+{
+	const QString text = m_find->text();
+	if (text.isEmpty())
+	{
+		m_find->setStyleSheet(QString());
+		return;
+	}
+	webCommand(QStringLiteral("{\"op\":\"find\",\"text\":%1,\"backwards\":%2,\"restart\":%3}")
+	             .arg(QString::fromUtf8(QJsonDocument(QJsonArray{ text }).toJson(QJsonDocument::Compact)).mid(1).chopped(1), backwards ? QStringLiteral("true") : QStringLiteral("false"),
+	                  restart ? QStringLiteral("true") : QStringLiteral("false")));
+}
+
+void SessionPane::setFindResult(bool found)
+{
+	if (m_find)
+		m_find->setStyleSheet(found ? QString() : QStringLiteral("QLineEdit { background: #f6d5d5; color: #7a1010; }"));
 }
 
 void SessionPane::showWebMenu(const QJsonObject& e)

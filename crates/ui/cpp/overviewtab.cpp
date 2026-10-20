@@ -7,6 +7,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QTimer>
 #include <QtGui/QFontDatabase>
+#include <QtWidgets/QCheckBox>
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
@@ -80,9 +81,19 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	hh->addLayout(hv, 1);
 	m_connect = new QPushButton(T("ov.connect"), head);
 	hh->addWidget(m_connect, 0, Qt::AlignTop);
+	// Weitere Zugangswege: je ein Knopf neben „Verbinden“.
+	m_ways = new QHBoxLayout;
+	m_ways->setSpacing(6);
+	hh->addLayout(m_ways);
 	in->addLayout(hh);
 	lay->addWidget(head);
-	connect(m_connect, &QPushButton::clicked, this, [this] { emit connectRequested(m_subject); });
+	connect(m_connect, &QPushButton::clicked, this, [this] {
+		// Mit weiteren Wegen steht dieser Knopf für den Hauptweg; sonst wie ein Doppelklick.
+		if (m_hasWays)
+			emit connectWayRequested(m_subject, QStringLiteral("main"));
+		else
+			emit connectRequested(m_subject);
+	});
 
 	// Kennzahlen
 	auto* inv = rjui::card(page, &in);
@@ -93,14 +104,23 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	m_editToggle->setCheckable(true);
 	m_query = new QPushButton(T("ov.inventory.query"), inv);
 	m_query->setToolTip(T("ov.inventory.query.tip"));
+	// Schalter: darf sich das Inventar am Ziel anmelden (SSH/PowerShell)? Bei Web-Zielen ohne Festlegung aus.
+	m_inventoryOn = new QCheckBox(T("ov.inventory.allowed"), inv);
+	m_inventoryOn->setToolTip(T("ov.inventory.allowed.tip"));
+	ih->addWidget(m_inventoryOn);
 	ih->addWidget(m_editToggle);
 	ih->addWidget(m_query);
 	in->addLayout(ih);
+	m_inventoryRule = muted(QString(), inv);
+	in->addWidget(m_inventoryRule);
 	auto* tiles = new QGridLayout;
 	tiles->setSpacing(8);
 	for (int i = 0; i < 4; ++i)
 	{
-		tiles->addWidget(rjui::tile(fieldLabel(QString::fromLatin1(kTiles[i])), &m_tileValue[i], inv), 0, i);
+		QFrame* t = rjui::tile(fieldLabel(QString::fromLatin1(kTiles[i])), &m_tileValue[i], inv);
+		m_tileCap[i] = t->findChild<QLabel*>(QStringLiteral("rjTileLabel"));
+		m_tileKeys << QString::fromLatin1(kTiles[i]);
+		tiles->addWidget(t, 0, i);
 		tiles->setColumnStretch(i, 1);
 	}
 	in->addLayout(tiles);
@@ -124,6 +144,15 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	in->addWidget(m_queryState);
 	lay->addWidget(inv);
 	connect(m_query, &QPushButton::clicked, this, [this] { query(); });
+	connect(m_inventoryOn, &QCheckBox::toggled, this, [this](bool on) {
+		const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_inventory") }, { QStringLiteral("on"), on } });
+		if (r.contains(QStringLiteral("error")))
+		{
+			setQueryState(r.value(QStringLiteral("error")).toString());
+			return;
+		}
+		applyInventorySwitch(r);
+	});
 	connect(m_editToggle, &QPushButton::toggled, m_inventoryBox, &QWidget::setVisible);
 
 	// Dienste
@@ -231,6 +260,75 @@ void OverviewTab::showSubject(const QJsonObject& subject, const QIcon& icon)
 	probe(false);
 }
 
+void OverviewTab::renderWays(const QJsonObject& r)
+{
+	while (QLayoutItem* it = m_ways->takeAt(0))
+	{
+		if (QWidget* w = it->widget())
+			w->deleteLater();
+		delete it;
+	}
+	const QJsonArray ways = r.value(QStringLiteral("ways")).toArray();
+	m_hasWays = !ways.isEmpty();
+	const QString open = r.value(QStringLiteral("open_with")).toString();
+	auto mark = [](QPushButton* b, bool on) {
+		QFont f = b->font();
+		f.setBold(on);
+		b->setFont(f);
+		b->setDefault(on);
+	};
+	if (!m_hasWays)
+	{
+		m_connect->setText(m_backend->text(QStringLiteral("ov.connect")));
+		mark(m_connect, false);
+		return;
+	}
+	m_connect->setText(m_backend->text(QStringLiteral("ov.connect.way")).arg(r.value(QStringLiteral("main_way")).toString()));
+	m_connect->setToolTip(m_backend->text(QStringLiteral("ov.connect.main.tip")));
+	mark(m_connect, open.isEmpty());
+	for (const QJsonValue& v : ways)
+	{
+		const QJsonObject w = v.toObject();
+		const QString id = w.value(QStringLiteral("id")).toString();
+		auto* b = new QPushButton(m_backend->text(QStringLiteral("ov.connect.way")).arg(w.value(QStringLiteral("label")).toString()));
+		mark(b, id == open);
+		if (id == open)
+			b->setToolTip(m_backend->text(QStringLiteral("ov.connect.default.tip")));
+		connect(b, &QPushButton::clicked, this, [this, id] { emit connectWayRequested(m_subject, id); });
+		m_ways->addWidget(b, 0, Qt::AlignTop);
+	}
+}
+
+void OverviewTab::refreshInventorySwitch()
+{
+	if (m_subject.isEmpty())
+		return;
+	const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("overview") } });
+	if (!r.contains(QStringLiteral("error")))
+	{
+		applyInventorySwitch(r);
+		renderWays(r);
+	}
+	else if (!m_subject.contains(QStringLiteral("hv")))
+		emit closeRequested(); // Ziel gibt es nicht mehr (gelöscht oder zusammengefasst).
+}
+
+void OverviewTab::applyInventorySwitch(const QJsonObject& r)
+{
+	auto T = [this](const char* k) { return m_backend->text(QString::fromLatin1(k)); };
+	const bool guest = r.value(QStringLiteral("guest")).toBool();
+	const bool on = r.value(QStringLiteral("can_query")).toBool();
+	// Knopf bleibt sichtbar (kein Springen beim Umschalten), ist aber nur bei erlaubtem Inventar bedienbar.
+	m_query->setVisible(!guest);
+	m_query->setEnabled(on && !r.value(QStringLiteral("busy")).toBool());
+	const QSignalBlocker block(m_inventoryOn);
+	m_inventoryOn->setVisible(!guest);
+	m_inventoryOn->setChecked(on);
+	m_inventoryOn->setEnabled(r.value(QStringLiteral("inventory_switchable")).toBool());
+	m_inventoryRule->setVisible(!guest);
+	m_inventoryRule->setText(T("ov.inventory.rule").arg(on ? T("ov.inventory.rule.on") : T("ov.inventory.rule.off"), r.value(QStringLiteral("inventory_source")).toString()));
+}
+
 QString OverviewTab::fieldLabel(const QString& key) const
 {
 	return m_backend->text(QStringLiteral("ov.field.") + key);
@@ -251,12 +349,12 @@ void OverviewTab::load()
 	m_crumb->setText(r.value(QStringLiteral("path")).toString());
 	m_crumb->setVisible(!m_crumb->text().isEmpty());
 	const bool guest = r.value(QStringLiteral("guest")).toBool();
-	m_query->setVisible(r.value(QStringLiteral("can_query")).toBool());
+	applyInventorySwitch(r);
+	renderWays(r);
 	m_notesCard->setVisible(!guest);
 	emit titleChanged();
 	renderServices(r.value(QStringLiteral("services")));
 	renderInventory(r.value(QStringLiteral("inventory")).toArray());
-	m_query->setEnabled(!r.value(QStringLiteral("busy")).toBool());
 	setQueryState(QString());
 	m_notesEditable = r.value(QStringLiteral("notes_editable")).toBool();
 	const QSignalBlocker block(m_notes);
@@ -311,7 +409,7 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 	}
 	else if (kind == QLatin1String("ov_query"))
 	{
-		m_query->setEnabled(true);
+		m_query->setEnabled(m_inventoryOn->isChecked());
 		if (r.contains(QStringLiteral("inventory")))
 		{
 			renderInventory(r.value(QStringLiteral("inventory")).toArray());
@@ -321,6 +419,7 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 			setQueryState(done);
 			// Aruba erst nach der Abfrage bekannt.
 			m_arubaCard->setVisible(call({ { QStringLiteral("op"), QStringLiteral("overview") } }).value(QStringLiteral("aruba")).toBool());
+			emit inventoryChanged();
 		}
 		if (r.value(QStringLiteral("error")).isString())
 			showQueryError(r);
@@ -381,8 +480,29 @@ void OverviewTab::updateSub()
 
 void OverviewTab::renderInventory(const QJsonArray& fields)
 {
+	// Aruba-Gerät (System „Aruba …“): Laufzeit und Seriennummer statt vCPU und Speicher.
+	bool aruba = false;
+	for (const QJsonValue& v : fields)
+		if (v.toObject().value(QStringLiteral("key")).toString() == QLatin1String("system") &&
+		    v.toObject().value(QStringLiteral("value")).toString().startsWith(QLatin1String("Aruba")))
+			aruba = true;
+	const QStringList keys = aruba ? QStringList{ QStringLiteral("uptime"), QStringLiteral("serial"), QStringLiteral("ip"), QStringLiteral("mac") }
+	                               : QStringList{ QString::fromLatin1(kTiles[0]), QString::fromLatin1(kTiles[1]), QString::fromLatin1(kTiles[2]), QString::fromLatin1(kTiles[3]) };
+	if (keys != m_tileKeys)
+	{
+		m_tileKeys = keys;
+		for (int i = 0; i < 4; ++i)
+			if (m_tileCap[i])
+				m_tileCap[i]->setText(fieldLabel(keys.at(i)));
+	}
 	m_inventory = fields;
 	updateSub();
+	for (QLabel* v : m_tileValue)
+		if (v)
+		{
+			v->setText(QStringLiteral("–"));
+			v->setToolTip(QString());
+		}
 	// Kacheln und Quelle (jüngster Eintrag)
 	qint64 latest = 0;
 	QString latestSource;
@@ -391,7 +511,7 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 		const QJsonObject f = v.toObject();
 		const QString key = f.value(QStringLiteral("key")).toString();
 		for (int i = 0; i < 4; ++i)
-			if (key == QLatin1String(kTiles[i]))
+			if (key == m_tileKeys.value(i))
 			{
 				const QString value = f.value(QStringLiteral("value")).toString();
 				m_tileValue[i]->setText(value.isEmpty() ? QStringLiteral("–") : value);
