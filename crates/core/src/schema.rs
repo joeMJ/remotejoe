@@ -45,9 +45,27 @@ impl LoadedIndex {
     }
 }
 
-/// Serialisiert einen Index (UTF-8, lesbar eingerückt).
+/// Serialisiert einen Index (UTF-8, lesbar eingerückt). Ohne zusätzliche Zugangswege mit Schema 3, damit
+/// ältere Fassungen die Datei weiter bearbeiten können; mit ihnen Schema 4 (ältere öffnen sie dann schreibgeschützt).
 pub fn to_json(index: &Index) -> Result<Vec<u8>, SchemaError> {
-    Ok(serde_json::to_vec_pretty(index)?)
+    let mut value = serde_json::to_value(index)?;
+    value["schema_version"] = Value::from(written_version(index));
+    Ok(serde_json::to_vec_pretty(&value)?)
+}
+
+/// Schema, mit dem `index` geschrieben wird.
+pub fn written_version(index: &Index) -> u32 {
+    fn any_ways(f: &crate::model::Folder) -> bool {
+        f.children.iter().any(|n| match n {
+            crate::model::Node::Target(t) => !t.ways.is_empty() || t.open_with.is_some(),
+            crate::model::Node::Folder(sub) => any_ways(sub),
+        })
+    }
+    if any_ways(&index.root) {
+        SCHEMA_VERSION
+    } else {
+        crate::model::SCHEMA_VERSION_WITHOUT_WAYS
+    }
 }
 
 /// Liest einen Index aus Bytes, prüft UTF-8 und migriert ältere Versionen.
@@ -85,7 +103,8 @@ pub fn from_json(bytes: &[u8], source_name: &str) -> Result<LoadedIndex, SchemaE
         index,
         original_version: version,
         read_only: false,
-        notice: (version < SCHEMA_VERSION).then(|| {
+        // 3 → 4 ändert nichts an vorhandenen Daten (Schema 3 wird ohne Zugangswege weiter geschrieben): kein Hinweis.
+        notice: (version < crate::model::SCHEMA_VERSION_WITHOUT_WAYS).then(|| {
             format!("Der Index wurde von Schema {version} auf {SCHEMA_VERSION} umgestellt.")
         }),
     })
@@ -98,6 +117,8 @@ fn migrate_step(from: u32, value: Value) -> Result<Value, SchemaError> {
         // 2 → 3: neue, optionale Felder (Vorlagen, Favoriten, Beschreibungen,
         // Zugangsdaten-Art); vorhandene Daten bleiben unverändert.
         2 => Ok(value),
+        // 3 → 4: zusätzliche Zugangswege je Ziel (optional); vorhandene Daten bleiben unverändert.
+        3 => Ok(value),
         _ => Err(SchemaError::Migration {
             from,
             reason: "keine Migration bekannt".into(),
@@ -157,6 +178,49 @@ mod tests {
     use super::*;
     use crate::model::*;
     use uuid::Uuid;
+
+    #[test]
+    fn schema_3_stays_until_the_first_access_way() {
+        use crate::model::{AccessWay, Folder, Node, Protocol, Target, WayCredential};
+        let mut idx = Index::default();
+        let mut f = Folder::new("Schule");
+        let mut t = Target::new("ap-01", Protocol::Ssh, "192.0.2.4");
+        let tid = t.id;
+        t.meta.notes = "Notiz".into();
+        f.children.push(Node::Target(t));
+        idx.root.children.push(Node::Folder(f));
+        // Ohne Zugangswege: Schema 3, und ein erneutes Laden/Speichern ändert nichts.
+        let v3 = to_json(&idx).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&v3).unwrap()["schema_version"], 3);
+        let loaded = from_json(&v3, "test").unwrap();
+        assert!(!loaded.read_only && loaded.notice.is_none(), "kein Hinweis bei Schema 3");
+        assert_eq!(loaded.to_json_for_save().unwrap(), v3, "unverändert gespeichert");
+        assert!(!String::from_utf8_lossy(&v3).contains("\"ways\""));
+        // Mit einem Zugangsweg: Schema 4, Weg bleibt beim Laden erhalten.
+        let mut idx2 = loaded.index.clone();
+        if let Some(Node::Folder(f)) = idx2.root.children.first_mut() {
+            if let Some(Node::Target(t)) = f.children.first_mut() {
+                let mut w = AccessWay::new(Protocol::Web);
+                w.host = "https://192.0.2.4:4343".into();
+                w.credential = WayCredential::None;
+                t.open_with = Some(w.id);
+                t.ways.push(w);
+            }
+        }
+        let v4 = to_json(&idx2).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&v4).unwrap()["schema_version"], 4);
+        let back = from_json(&v4, "test").unwrap();
+        assert!(!back.read_only);
+        let Some(Node::Target(t)) = crate::edit::node(&back.index, tid) else { panic!("Ziel fehlt") };
+        assert_eq!(t.ways.len(), 1);
+        assert_eq!(t.ways[0].credential, WayCredential::None);
+        assert_eq!(t.open_with, Some(t.ways[0].id));
+        let via = t.via(t.ways[0].id).unwrap();
+        assert_eq!((via.protocol, via.host.as_str(), via.id), (Protocol::Web, "https://192.0.2.4:4343", tid));
+        assert!(via.ways.is_empty());
+        // Ein Programm, das nur Schema 3 kennt, öffnet Schema 4 schreibgeschützt (bestehende Regel für neuere Dateien).
+        assert!(SCHEMA_VERSION == 4);
+    }
 
     fn sample() -> Index {
         let mut idx = Index::default();

@@ -11,7 +11,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 /// Aktuelle Schema-Version des Index.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
+/// Ohne zusätzliche Zugangswege wird weiter Schema 3 geschrieben, damit ältere Fassungen die Datei weiter
+/// bearbeiten können; erst der erste Zugangsweg hebt die Datei auf Schema 4.
+pub const SCHEMA_VERSION_WITHOUT_WAYS: u32 = 3;
 
 /// Name des Zugangsdatensatzes, wenn das Ziel keinen nennt.
 pub const DEFAULT_CREDENTIAL: &str = "default";
@@ -150,6 +153,19 @@ pub enum Protocol {
 }
 
 impl Protocol {
+    /// Name für die Anzeige.
+    pub fn label(self) -> &'static str {
+        match self {
+            Protocol::Rdp => "RDP",
+            Protocol::Ssh => "SSH",
+            Protocol::Vnc => "VNC",
+            Protocol::Web => "Web",
+            Protocol::Proxmox => "Proxmox",
+            Protocol::Hyperv => "Hyper-V",
+            Protocol::Psrp => "PowerShell",
+        }
+    }
+
     pub fn default_port(self) -> u16 {
         match self {
             Protocol::Rdp | Protocol::Hyperv => 3389,
@@ -193,6 +209,65 @@ pub struct Target {
     pub settings: Settings,
     #[serde(default, skip_serializing_if = "Meta::is_empty")]
     pub meta: Meta,
+    /// Weitere Zugangswege neben dem Hauptweg (z. B. Web-Oberfläche eines SSH-Geräts).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ways: Vec<AccessWay>,
+    /// Weg beim Doppelklick: fehlt er, der Hauptweg.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_with: Option<Uuid>,
+}
+
+/// Weiterer Zugangsweg eines Ziels: eigenes Protokoll, eigene Adresse bzw. URL, eigene Zugangsdaten.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AccessWay {
+    pub id: Uuid,
+    /// Anzeigename, z. B. „Web-Oberfläche“; leer = Protokollname.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    pub protocol: Protocol,
+    /// Adresse bzw. bei Web die URL; leer = Adresse des Ziels.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "ProtocolOptions::is_none")]
+    pub options: ProtocolOptions,
+    #[serde(default, skip_serializing_if = "WayCredential::is_target")]
+    pub credential: WayCredential,
+}
+
+/// Zugangsdaten eines Zugangswegs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "id", rename_all = "lowercase")]
+pub enum WayCredential {
+    /// Wie das Ziel (Hauptweg).
+    #[default]
+    Target,
+    /// Aus einem Anmeldeobjekt.
+    Login(Uuid),
+    /// Keine (Anmeldung von Hand, z. B. auf einer Web-Seite).
+    None,
+}
+
+impl WayCredential {
+    pub fn is_target(&self) -> bool {
+        matches!(self, WayCredential::Target)
+    }
+}
+
+impl AccessWay {
+    pub fn new(protocol: Protocol) -> Self {
+        AccessWay { id: Uuid::new_v4(), name: String::new(), protocol, host: String::new(), port: None, options: ProtocolOptions::None, credential: WayCredential::Target }
+    }
+
+    /// Anzeigename: eigener Name, sonst das Protokoll.
+    pub fn label(&self) -> String {
+        if self.name.trim().is_empty() {
+            self.protocol.label().to_string()
+        } else {
+            self.name.clone()
+        }
+    }
 }
 
 impl Target {
@@ -207,7 +282,26 @@ impl Target {
             credential: None,
             settings: Settings::default(),
             meta: Meta::default(),
+            ways: Vec::new(),
+            open_with: None,
         }
+    }
+
+    /// Ziel, wie es über den Zugangsweg `way` aussieht: Protokoll, Adresse, Port und Optionen des Wegs; alles
+    /// andere (ID, Name, Einstellungen, Tunnel) vom Ziel. `None` bei unbekanntem Weg.
+    pub fn via(&self, way: Uuid) -> Option<Target> {
+        let w = self.ways.iter().find(|w| w.id == way)?;
+        let mut t = self.clone();
+        t.protocol = w.protocol;
+        if !w.host.trim().is_empty() {
+            t.host = w.host.clone();
+        }
+        t.port = w.port;
+        t.options = w.options.clone();
+        t.name = format!("{} – {}", self.name, w.label());
+        t.ways.clear();
+        t.open_with = None;
+        Some(t)
     }
 
     pub fn effective_port(&self) -> u16 {
