@@ -200,6 +200,10 @@ public:
 	/// Titel der Webseite (leer, solange keiner bekannt ist).
 	QString pageTitle() const { return m_pageTitle; }
 	bool isWeb() const { return m_back != nullptr; }
+	/// Web-Sitzung: Suchfeld rechts in der Leiste öffnen (Strg+F).
+	void openFind();
+	/// Ergebnis der Suche (Feld rot ohne Treffer).
+	void setFindResult(bool found);
 
 private:
 	void fillMacroMenu();
@@ -215,6 +219,11 @@ private:
 	QPushButton* m_back = nullptr;
 	QPushButton* m_forward = nullptr;
 	QPushButton* m_reload = nullptr;
+	/// Web: Adresse der Seite (markier- und kopierbar) und Suche in der Seite.
+	class QLineEdit* m_url = nullptr;
+	QWidget* m_findBox = nullptr;
+	class QLineEdit* m_find = nullptr;
+	void find(bool backwards, bool restart = false);
 	RjBackend* m_backend;
 	std::uint64_t m_session;
 	QString m_title;

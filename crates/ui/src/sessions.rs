@@ -119,7 +119,7 @@ pub enum UiEvent {
     ClipboardReadRequest { s: SessionId },
     Title { s: SessionId, title: String },
     /// Zustand einer Web-Sitzung: Seitentitel, Laden, Fehler, Zurück/Vor möglich.
-    WebStatus { s: SessionId, title: String, loading: bool, progress: u8, error: Option<String>, back: bool, forward: bool },
+    WebStatus { s: SessionId, title: String, uri: String, loading: bool, progress: u8, error: Option<String>, back: bool, forward: bool },
     /// Menü des Web-Workers (Kontextmenü oder Auswahlliste) an Bildpunkt `x`, `y`.
     WebMenu { s: SessionId, id: u32, kind: String, x: i32, y: i32, items: serde_json::Value },
     /// Felder und Knöpfe einer Web-Seite (Antwort auf „Felder erkennen“): `users`, `passwords`, `submits`.
@@ -128,6 +128,8 @@ pub enum UiEvent {
     WebKey { s: SessionId, vk: u32, ctrl: bool, alt: bool, shift: bool },
     /// Windows: Die Seite hat den Systemfokus bekommen (`on`) oder gibt ihn ab (`forward`: weiter, sonst zurück).
     WebFocus { s: SessionId, on: bool, forward: bool },
+    /// Ergebnis der Suche in einer Web-Seite.
+    WebFound { s: SessionId, found: bool },
     /// Windows: Download (`state`: started, progress, done, failed).
     WebDownload { s: SessionId, id: u32, state: String, name: String, dir: String, received: u64, total: u64, error: Option<String>, opened: bool },
     /// Ergebnis von „Felder erkennen“ für ein Ziel (`error`: Grund, wenn nichts erkannt wurde).
@@ -708,7 +710,7 @@ impl Manager {
             return Err("Keine Web-Sitzung".into());
         }
         let op = cmd.get("op").and_then(|v| v.as_str()).unwrap_or("");
-        if !matches!(op, "nav" | "focus" | "edit" | "menu" | "detect" | "embed" | "bounds" | "visible" | "keys") {
+        if !matches!(op, "nav" | "focus" | "edit" | "menu" | "detect" | "embed" | "bounds" | "visible" | "keys" | "find") {
             return Err(format!("Unbekannter Web-Befehl „{op}“"));
         }
         self.send(s, &ToWorker::Custom(cmd.to_string().into_bytes()));
@@ -1192,6 +1194,8 @@ fn web_event(s: SessionId, bytes: &[u8]) -> Option<UiEvent> {
         "status" => Some(UiEvent::WebStatus {
             s,
             title: text("title"),
+            // Adresse für das Feld in der Leiste (markiert auffällige Zeichen wie der Titel).
+            uri: text("uri"),
             loading: flag("loading"),
             progress: v.get("progress").and_then(|x| x.as_u64()).unwrap_or(0).min(100) as u8,
             error: v.get("error").and_then(|x| x.as_str()).map(|t| rj_core::charset::mark_visible(t, false).into_owned()),
@@ -1214,6 +1218,7 @@ fn web_event(s: SessionId, bytes: &[u8]) -> Option<UiEvent> {
             shift: flag("shift"),
         }),
         "focus" => Some(UiEvent::WebFocus { s, on: flag("on"), forward: flag("forward") }),
+        "found" => Some(UiEvent::WebFound { s, found: flag("found") }),
         "download" => Some(UiEvent::WebDownload {
             s,
             id: v.get("id").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
@@ -1351,7 +1356,7 @@ mod web_tests {
     fn web_events_and_clipboard_limit() {
         let st = br#"{"ev":"status","title":"Seite\u202e","uri":"http://example.test/","loading":true,"progress":40,"error":null,"back":true,"forward":false}"#;
         match web_event(7, st) {
-            Some(UiEvent::WebStatus { s, title, loading, progress, error, back, forward }) => {
+            Some(UiEvent::WebStatus { s, title, loading, progress, error, back, forward, .. }) => {
                 assert_eq!((s, loading, progress, error, back, forward), (7, true, 40, None, true, false));
                 assert_eq!(title, "Seite⟦U+202E⟧");
             }

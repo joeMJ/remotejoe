@@ -463,6 +463,13 @@ impl Worker {
                     me.send(FromWorker::Custom(WebEvent::Fields { users: list("users"), passwords: list("passwords"), submits: list("submits") }.to_bytes()));
                 });
             }
+            WebCommand::Find { text, backwards, restart } => {
+                let me = self.clone();
+                v.evaluate_javascript(&rj_web::find_script(&text, backwards, restart), None, None, None::<&gtk::gio::Cancellable>, move |r| {
+                    let found = r.map(|v| v.to_str().as_str() == "1").unwrap_or(false);
+                    me.send(FromWorker::Custom(WebEvent::Found { found }.to_bytes()));
+                });
+            }
             WebCommand::Focus { on } => self.focus(on),
             // Einbetten, Bereich, Sichtbarkeit und Tastenliste gibt es nur unter Windows (WebView2 als Kindfenster).
             WebCommand::Embed { .. } | WebCommand::Bounds { .. } | WebCommand::Visible { .. } | WebCommand::Keys { .. } => {}

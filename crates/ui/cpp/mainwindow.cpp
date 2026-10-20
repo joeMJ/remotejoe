@@ -1099,6 +1099,13 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		connect(s, &QShortcut::activated, this, fn);
 	};
 	sc(QKeySequence(QStringLiteral("Ctrl+F")), [this] {
+		// Fokus in einer Web-Sitzung: in der Seite suchen; sonst die Suche über dem Baum.
+		for (QWidget* w = QApplication::focusWidget(); w; w = w->parentWidget())
+			if (auto* pane = dynamic_cast<SessionPane*>(w); pane && pane->isWeb())
+			{
+				pane->openFind();
+				return;
+			}
 		m_search->setFocus();
 		m_search->selectAll();
 	});
@@ -2922,6 +2929,8 @@ void MainWindow::handleEvents(const QString& json)
 			}
 			else if (t == QLatin1String("web_menu") && p)
 				p->showWebMenu(e);
+			else if (t == QLatin1String("web_found") && p)
+				p->setFindResult(e.value(QStringLiteral("found")).toBool());
 			else if (t == QLatin1String("web_focus") && p && p->frame())
 				p->frame()->webFocus(e.value(QStringLiteral("on")).toBool(), e.value(QStringLiteral("forward")).toBool());
 			else if (t == QLatin1String("web_key") && p)
