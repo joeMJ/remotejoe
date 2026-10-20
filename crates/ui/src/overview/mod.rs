@@ -168,7 +168,14 @@ impl App {
             });
         }
         let id = str_of(c, "id").and_then(|s| Uuid::parse_str(s).ok()).ok_or("ID fehlt")?;
-        self.target_ref(id).cloned().map(Subject::Target).ok_or_else(|| "Das ist kein Verbindungsziel".into())
+        let mut t = self.target_ref(id).cloned().ok_or("Das ist kein Verbindungsziel")?;
+        // Web-Ziel: Rechner und Port stehen in der URL; Übersicht, Ping und Portprüfung nehmen sie von dort.
+        if t.protocol == Protocol::Web {
+            let (host, port) = App::endpoint_of(&t);
+            t.host = host;
+            t.port = Some(port);
+        }
+        Ok(Subject::Target(t))
     }
 
     /// Adresse für Portprüfung und Ping: beim Ziel der Host, beim Gast die gemeldete bzw. ermittelte IP.

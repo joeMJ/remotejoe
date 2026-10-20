@@ -443,7 +443,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -642,6 +642,9 @@ impl App {
             "ov_inventory" => self.overview_inventory_switch(&c),
             "ways_suggest" => self.ways_suggest(&c),
             "mass_start" => self.mass_start(&c),
+            "merge_preview" => self.merge_preview(&c),
+            "merge_check" => self.merge_check(&c),
+            "merge_apply" => self.merge_apply(&c),
             "mass_rows" => Ok(self.mass_rows()),
             "mass_cancel" => Ok(self.mass_cancel()),
             "connect_all" => self.op_connect_all(&c),
@@ -862,6 +865,72 @@ impl App {
         let run = crate::macro_run::spawn(s, def.name.clone(), mac, creds, tap_rx, self.macro_input_tx.clone());
         self.macro_runs.push(run);
         Ok(json!({ "started": true, "name": def.name }))
+    }
+
+    /// Vorschau „Gleiche Adressen zusammenfassen“: Gruppen unter der Auswahl mit vorgeschlagenem Hauptziel.
+    fn merge_preview(&self, c: &Value) -> Result<Value, String> {
+        use rj_core::merge;
+        let scope = ids_of(c, "ids");
+        let groups: Vec<Value> = merge::groups(&self.index, &scope)
+            .into_iter()
+            .map(|(address, members)| {
+                let keep = merge::default_keep(&self.index, &members);
+                let list: Vec<Value> = members
+                    .iter()
+                    .filter_map(|id| self.target(*id))
+                    .map(|t| {
+                        let (host, port) = App::endpoint_of(t);
+                        let path: Vec<String> = self.index.path_to(t.id).unwrap_or_default().iter().map(|n| rj_core::charset::mark_visible(n.name(), false).into_owned()).collect();
+                        json!({
+                            "id": t.id,
+                            "name": rj_core::charset::mark_visible(&t.name, false),
+                            "protocol": t.protocol.as_str(),
+                            "label": t.protocol.label(),
+                            "endpoint": format!("{}:{port}", rj_core::charset::mark_visible(&host, false)),
+                            "ways": t.ways.len(),
+                            "path": path[..path.len().saturating_sub(1)].join(" › "),
+                        })
+                    })
+                    .collect();
+                let name = keep.and_then(|k| self.target(k)).map(|t| t.name.clone()).unwrap_or_default();
+                json!({ "address": address, "members": list, "keep": keep, "name": name })
+            })
+            .collect();
+        Ok(json!({ "groups": groups }))
+    }
+
+    /// Hinweise für eine Gruppe (Probelauf auf einer Kopie des Index).
+    fn merge_check(&self, c: &Value) -> Result<Value, String> {
+        let keep = id_of(c, "keep").ok_or("Hauptziel fehlt")?;
+        let mut idx = self.index.clone();
+        let r = rj_core::merge::merge(&mut idx, keep, &ids_of(c, "others"), "").map_err(|e| e.to_string())?;
+        Ok(json!({ "ways": r.ways, "logins": r.logins, "notes": r.notes }))
+    }
+
+    /// Fasst die gewählten Gruppen zusammen; ein Schritt zum Rückgängigmachen.
+    fn merge_apply(&mut self, c: &Value) -> Result<Value, String> {
+        let groups: Vec<(Uuid, Vec<Uuid>, String)> = c
+            .get("groups")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|g| Some((id_of(g, "keep")?, ids_of(g, "others"), str_of(g, "name").unwrap_or_default().to_string()))).collect())
+            .unwrap_or_default();
+        if groups.iter().all(|(_, o, _)| o.is_empty()) {
+            return Err("Keine Gruppe gewählt".into());
+        }
+        self.simple("Ziele zusammenfassen", |idx| {
+            let (mut targets, mut ways, mut logins, mut notes) = (0, 0, 0, Vec::new());
+            for (keep, others, name) in &groups {
+                if others.is_empty() {
+                    continue;
+                }
+                let r = rj_core::merge::merge(idx, *keep, others, name)?;
+                targets += others.len();
+                ways += r.ways;
+                logins += r.logins;
+                notes.extend(r.notes);
+            }
+            Ok(json!({ "merged": targets, "ways": ways, "logins": logins, "notes": notes }))
+        })
     }
 
     fn simple(&mut self, label: &str, f: impl FnOnce(&mut Index) -> Result<Value, EditError>) -> Result<Value, String> {
@@ -1662,6 +1731,35 @@ mod tests {
         // Kennwort steht nie im Index.
         let json = String::from_utf8(rj_core::schema::to_json(&v2.index().index).unwrap()).unwrap();
         assert!(!json.contains("Kennwo"));
+    }
+
+    #[test]
+    fn merge_same_address_preview_apply_and_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let f = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "APs" }))["id"].as_str().unwrap().to_string();
+        let text = "ap1.example.test\nap1.example.test:4343\nap2.example.test";
+        let b = cmd(&mut app, json!({ "op": "bulk_add", "parent": f, "kind": "ssh", "text": text, "pattern": "{nr}-{host}" }));
+        assert_eq!(b["created"].as_array().map(Vec::len), Some(3), "{b}");
+        let before = app.index.clone();
+        let p = cmd(&mut app, json!({ "op": "merge_preview", "ids": [f] }));
+        let g = p["groups"].as_array().unwrap();
+        assert_eq!(g.len(), 1, "{p}");
+        assert_eq!(g[0]["address"], "ap1.example.test");
+        let members: Vec<String> = g[0]["members"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(g[0]["keep"], members[0].as_str());
+        let c = cmd(&mut app, json!({ "op": "merge_check", "keep": members[0], "others": [members[1]] }));
+        assert_eq!((c["ways"].as_u64(), c["logins"].as_u64()), (Some(1), Some(0)), "{c}");
+        assert_eq!(app.index, before, "Vorschau und Prüfung ändern nichts");
+        let r = cmd(&mut app, json!({ "op": "merge_apply", "groups": [{ "keep": members[0], "others": [members[1]], "name": "AP 1" }] }));
+        assert_eq!(r["merged"], 1, "{r}");
+        let keep = Uuid::parse_str(&members[0]).unwrap();
+        let t = app.target(keep).unwrap();
+        assert_eq!((t.name.as_str(), t.ways.len(), t.ways[0].port), ("AP 1", 1, Some(4343)));
+        assert!(app.target(Uuid::parse_str(&members[1]).unwrap()).is_none());
+        assert_eq!(cmd(&mut app, json!({ "op": "undo" }))["undone"], "Ziele zusammenfassen");
+        assert_eq!(app.index.root, before.root);
     }
 
     #[test]

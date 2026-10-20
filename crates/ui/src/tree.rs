@@ -160,7 +160,10 @@ pub fn demo_index(targets: usize) -> Index {
                 }
                 let p = protos[n % protos.len()];
                 let name = if n == 7 { "versteckt\u{200B}name".to_string() } else { format!("{}-{:03}", p.as_str(), i) };
-                let t = rj_core::Target::new(name, p, format!("h{n}.site{si}.example.test"));
+                // Standort Nord → Netz: drei Ziele (verschiedene Protokolle) unter einer Adresse, für
+                // „Gleiche Adressen zusammenfassen“.
+                let host_nr = if si == 0 && g == 2 && (1..3).contains(&i) { n - i } else { n };
+                let t = rj_core::Target::new(name, p, format!("h{host_nr}.site{si}.example.test"));
                 group.children.push(Node::Target(t));
                 n += 1;
             }

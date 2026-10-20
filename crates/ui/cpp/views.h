@@ -199,6 +199,9 @@ public:
 	void showWebMenu(const QJsonObject& e);
 	/// Titel der Webseite (leer, solange keiner bekannt ist).
 	QString pageTitle() const { return m_pageTitle; }
+	// Sitzung über einen Zugangsweg: der Tab-Titel bleibt „Ziel – Weg“.
+	bool fixedTitle() const { return m_fixedTitle; }
+	void setFixedTitle(bool on) { m_fixedTitle = on; }
 	bool isWeb() const { return m_back != nullptr; }
 	/// Web-Sitzung: Suchfeld rechts in der Leiste öffnen (Strg+F).
 	void openFind();
@@ -210,6 +213,7 @@ private:
 	void updateHeader();
 	void webCommand(const QString& json);
 	QString m_pageTitle;
+	bool m_fixedTitle = false;
 	QString m_stateText;
 	/// Ladezustand der Webseite für „lädt seit N s“ in der Kopfzeile.
 	bool m_loading = false;

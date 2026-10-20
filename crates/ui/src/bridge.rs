@@ -407,6 +407,8 @@ impl qobject::RjBackend {
                         "title": a.sessions.title(*s),
                         "protocol": a.sessions.protocol(*s).map(|p| p.as_str()),
                         "state": a.sessions.state(*s),
+                        // Sitzung über einen Zugangsweg: Tab behält „Ziel – Weg“ statt des Seitentitels.
+                        "way": a.sessions.target(*s).and_then(|t| a.target(t)).zip(a.sessions.title(*s)).is_some_and(|(t, title)| t.name != title),
                     }),
                 )
             })

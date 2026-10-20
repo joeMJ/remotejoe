@@ -889,7 +889,7 @@ impl App {
     }
 
     /// Host und Port zum Verbinden: bei Web-Zielen aus der Adresse, sonst aus dem Ziel.
-    fn endpoint_of(t: &Target) -> (String, u16) {
+    pub(crate) fn endpoint_of(t: &Target) -> (String, u16) {
         if t.protocol == Protocol::Web {
             if let ProtocolOptions::Web(o) = &t.options {
                 if let Some(ep) = o.url.as_deref().filter(|u| !u.is_empty()).and_then(rj_core::weburl::endpoint) {

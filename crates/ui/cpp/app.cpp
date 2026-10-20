@@ -135,6 +135,14 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.tabs()->removeTab(w.tabs()->indexOf(t));
 		t->deleteLater();
 	}
+	w.mergeForFirstFolder();
+	pump(300);
+	if (auto* t = w.findChild<ToolTab*>(QStringLiteral("mergeTab")))
+	{
+		save(&w, dir, QStringLiteral("zusammenfassen.png"));
+		w.tabs()->removeTab(w.tabs()->indexOf(t));
+		t->deleteLater();
+	}
 	w.patchdayForFirstTargets(25);
 	pump(1500);
 	QString patchday;

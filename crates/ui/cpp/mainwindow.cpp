@@ -6,6 +6,7 @@
 #include "appearance.h"
 #include "settingstab.h"
 #include "masstab.h"
+#include "mergetab.h"
 #include <algorithm>
 
 #include "editor.h"
@@ -569,6 +570,23 @@ void MainWindow::patchdayForFirstTargets(int n)
 	};
 	walk(QModelIndex());
 	openPatchday(ids);
+}
+
+void MainWindow::openMerge(const QStringList& ids, const QString& title)
+{
+	// Eine Vorschau zur Zeit: eine vorhandene wird ersetzt.
+	if (auto* old = findChild<MergeTab*>())
+		closeToolTab(old);
+	auto* t = new MergeTab(m_backend, ids, title, m_tabs);
+	connect(t, &MergeTab::showTarget, this, [this](const QString& id) { selectId(id); });
+	addToolTab(t, T(m_backend, "merge.tab"));
+}
+
+void MainWindow::mergeForFirstFolder()
+{
+	const QModelIndex i = m_model->index(0, 0, QModelIndex());
+	if (i.isValid())
+		openMerge({ i.data(RoleId).toString() }, i.data().toString());
 }
 
 namespace {
@@ -2326,6 +2344,11 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		connect(t, &MassInventoryTab::finished, this, [this] { reloadTree(); });
 		addToolTab(t, T(m_backend, "mass.tab"));
 	});
+	menu.addAction(T(m_backend, "ctx.merge"), this, [this] {
+		const QStringList ids = selectedIds();
+		if (!ids.isEmpty())
+			openMerge(ids, ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size()));
+	});
 	QMenu* tasks = menu.addMenu(T(m_backend, "ctx.tasks"));
 	tasks->addAction(T(m_backend, "ctx.tasks.updates"), this, [this] {
 		const QStringList ids = selectedTargets(m_tree, m_model);
@@ -2543,6 +2566,7 @@ QWidget* MainWindow::buildTabContent(const QJsonObject& tab)
 			const QJsonObject i = info.value(QString::number(s)).toObject();
 			p = new SessionPane(m_backend, s, i.value(QStringLiteral("title")).toString(), i.value(QStringLiteral("protocol")).toString());
 			p->setMacroOpener([this](const QString& macroId) { openMacroTab(macroId); });
+			p->setFixedTitle(i.value(QStringLiteral("way")).toBool());
 			if (!i.value(QStringLiteral("state")).toString().isEmpty())
 				p->setState(i.value(QStringLiteral("state")).toString(), QString());
 			m_panes.insert(s, p);
@@ -2821,7 +2845,8 @@ void MainWindow::applyPageTitle(SessionPane* p)
 			if (tabs->widget(i)->isAncestorOf(p) &&
 			    std::count_if(m_panes.cbegin(), m_panes.cend(), [&](SessionPane* o) { return o && tabs->widget(i)->isAncestorOf(o); }) == 1)
 			{
-				tabs->setTabText(i, p->pageTitle());
+				if (!p->fixedTitle())
+					tabs->setTabText(i, p->pageTitle());
 				tabs->setTabToolTip(i, p->title() + QStringLiteral(" — ") + p->pageTitle());
 			}
 }

@@ -387,6 +387,20 @@ neu aufklappen.
 - **Masseninventar:** Rechtsklick auf einen Ordner oder eine Auswahl → **Inventar für alle Ziele abfragen …** fragt
   alle Ziele darin ab, bis zu acht gleichzeitig, mit Fortschritt, Ergebnis je Ziel und „Fehlgeschlagene wiederholen“.
   Ziele mit abgeschaltetem Inventar werden übersprungen.
+- **Zugangswege:** Ein Ziel kann neben dem Hauptweg weitere Wege haben (z. B. SSH und die Web-Oberfläche auf
+  4343), jeder mit eigenem Protokoll, Port, Optionen und Zugangsdaten (die des Ziels, ein Anmeldeobjekt oder keine).
+  Die Übersicht zeigt je Weg einen Knopf; welcher Weg beim Doppelklick öffnet, ist wählbar. „Hinzufügen → Aruba-AP“
+  legt SSH und Web (4343) in einem Schritt an; „Vorschlagen“ übernimmt die in der Übersicht gefundenen Dienste.
+- **Gleiche Adressen zusammenfassen:** Rechtsklick auf einen Ordner oder eine Auswahl → **Gleiche Adressen
+  zusammenfassen …** zeigt die Ziele mit gleicher Adresse (bei Web-Zielen der Rechner aus der URL) als Gruppen. Je
+  Gruppe lassen sich Hauptziel, Name und die beteiligten Ziele wählen; die übrigen Ziele werden Zugangswege des
+  Hauptziels, abweichende Zugangsdaten werden als Anmeldeobjekt auf denselben KDBX-Eintrag übernommen. Ordner bleiben
+  unberührt, der ganze Schritt lässt sich rückgängig machen.
+
+<p align="center">
+  <img src="docs/screenshots/zusammenfassen.png" alt="Gleiche Adressen zusammenfassen: Gruppe mit Hauptziel und zwei künftigen Zugangswegen" width="760">
+</p>
+
 - **RDP** mit Zwischenablage (Text in beide Richtungen, Dateien Ziel → Host), NLA und Grafikkanal
   (GFX; `Automatisch` wiederholt einen abgebrochenen Aufbau einmal mit GFX, GNOME-Remote-Desktop verlangt ihn).
 - **SSH** mit Terminal, Zwischenablage (geschütztes Einfügen; OSC 52: Schreiben erlaubt, Lesen nur nach Nachfrage),
@@ -397,7 +411,7 @@ neu aufklappen.
   UTF-8-Zwischenablage.
 - **Web** im Tab wie RDP und VNC, auch gekachelt: Die Seite wird im Worker ohne eigenes
   Fenster gerendert (WebKitGTK); Zurück, Vor, Neu laden in der Kopfzeile, Seitentitel als
-  Tab-Titel, Zwischenablage über das Hauptprogramm, eigenes Browserprofil je Ziel und
+  Tab-Titel (bei einem Zugangsweg „Ziel – Weg“), Zwischenablage über das Hauptprogramm, eigenes Browserprofil je Ziel und
   automatische Formular-Anmeldung mit „Felder erkennen“ (auch bei Seiten, die ihr Formular erst nach
   dem Laden aufbauen). Anmeldung und Seitenwechsel werden je Ziel mit Zeiten protokolliert
   (`protokoll.log` im Profilordner, ohne Eingaben). Unter Windows über WebView2 (Microsoft Edge).
