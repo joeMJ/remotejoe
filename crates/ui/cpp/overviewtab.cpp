@@ -41,6 +41,8 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
   , m_backend(backend)
 {
 	auto T = [backend](const char* k) { return backend->text(QString::fromLatin1(k)); };
+	// Bleibt erhalten, wenn die Sitzungs-Tabs neu aufgebaut werden (z. B. beim Verbinden).
+	setProperty("editor", true);
 	setObjectName(QStringLiteral("overviewTab"));
 	auto* outer = new QVBoxLayout(this);
 	outer->setContentsMargins(0, 0, 0, 0);
@@ -310,7 +312,13 @@ void OverviewTab::refreshInventorySwitch()
 		renderWays(r);
 	}
 	else if (!m_subject.contains(QStringLiteral("hv")))
-		emit closeRequested(); // Ziel gibt es nicht mehr (gelöscht oder zusammengefasst).
+	{
+		// Nur schließen, wenn es das Ziel nicht mehr gibt (gelöscht oder zusammengefasst); ein anderer Fehler
+		// beim Auffrischen (z. B. während eine Verbindung aufgebaut wird) lässt die Übersicht offen.
+		const QJsonObject e = call({ { QStringLiteral("op"), QStringLiteral("target_exists") } });
+		if (e.contains(QStringLiteral("exists")) && !e.value(QStringLiteral("exists")).toBool())
+			emit closeRequested();
+	}
 }
 
 void OverviewTab::applyInventorySwitch(const QJsonObject& r)

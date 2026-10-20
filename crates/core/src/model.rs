@@ -11,10 +11,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 /// Aktuelle Schema-Version des Index.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 /// Ohne zusätzliche Zugangswege wird weiter Schema 3 geschrieben, damit ältere Fassungen die Datei weiter
 /// bearbeiten können; erst der erste Zugangsweg hebt die Datei auf Schema 4.
 pub const SCHEMA_VERSION_WITHOUT_WAYS: u32 = 3;
+/// Mit Zugangswegen, aber ohne eigene Zugangsdaten an einem Weg: Schema 4 (bearbeitbar ab 0.1.15).
+pub const SCHEMA_VERSION_WAYS: u32 = 4;
 
 /// Name des Zugangsdatensatzes, wenn das Ziel keinen nennt.
 pub const DEFAULT_CREDENTIAL: &str = "default";
@@ -234,6 +236,10 @@ pub struct AccessWay {
     pub options: ProtocolOptions,
     #[serde(default, skip_serializing_if = "WayCredential::is_target")]
     pub credential: WayCredential,
+    /// Eigene Zugangsdaten des Wegs (eigener KDBX-Eintrag); hat Vorrang vor `credential`. Eigenes Feld statt
+    /// einer weiteren Art in `credential`, damit ältere Fassungen die Datei (schreibgeschützt) noch lesen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own: Option<CredentialRef>,
 }
 
 /// Zugangsdaten eines Zugangswegs.
@@ -257,7 +263,7 @@ impl WayCredential {
 
 impl AccessWay {
     pub fn new(protocol: Protocol) -> Self {
-        AccessWay { id: Uuid::new_v4(), name: String::new(), protocol, host: String::new(), port: None, options: ProtocolOptions::None, credential: WayCredential::Target }
+        AccessWay { id: Uuid::new_v4(), name: String::new(), protocol, host: String::new(), port: None, options: ProtocolOptions::None, credential: WayCredential::Target, own: None }
     }
 
     /// Anzeigename: eigener Name, sonst das Protokoll.
@@ -355,20 +361,20 @@ pub enum ClipboardDirection {
     Both,
 }
 
-/// Grafikkanal (RDPGFX) einer RDP-Verbindung. GNOME-Remote-Desktop verlangt ihn; `Auto` versucht
-/// es zuerst ohne und bei einem Abbruch im Verbindungsaufbau einmal mit.
+/// Grafikkanal (RDPGFX) einer RDP-Verbindung. Vorgabe: an (ohne ihn überträgt z. B. Windows 11 das Bild
+/// sehr träge); `Auto` versucht es zuerst ohne und bei einem Abbruch im Verbindungsaufbau einmal mit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GfxMode {
-    #[default]
     Auto,
+    #[default]
     On,
     Off,
 }
 
 impl GfxMode {
-    pub fn is_auto(&self) -> bool {
-        *self == GfxMode::Auto
+    pub fn is_default(&self) -> bool {
+        *self == GfxMode::On
     }
 }
 
@@ -387,7 +393,7 @@ pub struct RdpOptions {
     pub keyboard_layout: Option<String>,
     #[serde(default)]
     pub ignore_certificate: bool,
-    #[serde(default, skip_serializing_if = "GfxMode::is_auto")]
+    #[serde(default, skip_serializing_if = "GfxMode::is_default")]
     pub gfx: GfxMode,
     /// Tastenfolge, die nach dem Verbinden automatisch gesendet wird.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -875,6 +881,15 @@ impl Index {
         for d in &self.snmp_devices {
             out.insert(d.credential.entry);
         }
+        fn ways(f: &Folder, out: &mut std::collections::BTreeSet<Uuid>) {
+            for n in &f.children {
+                match n {
+                    Node::Target(t) => out.extend(t.ways.iter().filter_map(|w| w.own.as_ref().map(|r| r.entry))),
+                    Node::Folder(sub) => ways(sub, out),
+                }
+            }
+        }
+        ways(&self.root, &mut out);
         out
     }
 }
@@ -884,13 +899,15 @@ mod gfx_tests {
     use super::*;
 
     #[test]
-    fn gfx_option_defaults_to_auto_and_is_not_written_then() {
+    fn gfx_option_defaults_to_on_and_is_not_written_then() {
         let o: RdpOptions = serde_json::from_str("{}").unwrap();
-        assert_eq!(o.gfx, GfxMode::Auto);
-        assert!(!serde_json::to_string(&o).unwrap().contains("gfx"));
-        let o: RdpOptions = serde_json::from_str(r#"{"gfx":"on"}"#).unwrap();
         assert_eq!(o.gfx, GfxMode::On);
-        assert!(serde_json::to_string(&o).unwrap().contains(r#""gfx":"on""#));
+        assert!(!serde_json::to_string(&o).unwrap().contains("gfx"));
+        let o: RdpOptions = serde_json::from_str(r#"{"gfx":"auto"}"#).unwrap();
+        assert_eq!(o.gfx, GfxMode::Auto);
+        assert!(serde_json::to_string(&o).unwrap().contains(r#""gfx":"auto""#));
+        let o: RdpOptions = serde_json::from_str(r#"{"gfx":"off"}"#).unwrap();
+        assert!(serde_json::to_string(&o).unwrap().contains(r#""gfx":"off""#), "ausdrücklich aus bleibt aus");
         assert!(serde_json::from_str::<RdpOptions>(r#"{"gfx":"x"}"#).is_err());
     }
 }

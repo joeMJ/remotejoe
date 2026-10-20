@@ -825,10 +825,10 @@ QWidget* PropertiesTab::pageConnection()
 			if (proto == QLatin1String("rdp"))
 			{
 				auto* g = new QComboBox(w);
-				g->addItem(rjText(m_backend, "edit.opt.gfx.auto"), QStringLiteral("auto"));
 				g->addItem(rjText(m_backend, "edit.opt.gfx.on"), QStringLiteral("on"));
+				g->addItem(rjText(m_backend, "edit.opt.gfx.auto"), QStringLiteral("auto"));
 				g->addItem(rjText(m_backend, "edit.opt.gfx.off"), QStringLiteral("off"));
-				g->setCurrentIndex(qMax(0, g->findData(o.value(QStringLiteral("gfx")).toString(QStringLiteral("auto")))));
+				g->setCurrentIndex(qMax(0, g->findData(o.value(QStringLiteral("gfx")).toString(QStringLiteral("on")))));
 				track(g, QStringLiteral("options"));
 				f->addRow(rjText(m_backend, "edit.opt.gfx"), g);
 				m_opts.insert(QStringLiteral("gfx"), g);
@@ -1821,6 +1821,8 @@ void PropertiesTab::wipeSecrets()
 		pw.fill(QLatin1Char(' '));
 		m_password->clear();
 	}
+	if (m_ways)
+		m_ways->wipeSecrets();
 }
 
 void PropertiesTab::requestClose(std::function<void()> close)

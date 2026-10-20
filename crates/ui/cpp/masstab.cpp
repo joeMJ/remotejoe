@@ -29,6 +29,8 @@ MassInventoryTab::MassInventoryTab(RjBackend* backend, const QStringList& ids, c
   , m_title(title)
 {
 	auto T = [backend](const char* k) { return backend->text(QString::fromLatin1(k)); };
+	// Bleibt erhalten, wenn die Sitzungs-Tabs neu aufgebaut werden (z. B. beim Verbinden).
+	setProperty("editor", true);
 	setObjectName(QStringLiteral("massInventoryTab"));
 	auto* lay = new QVBoxLayout(this);
 	lay->setContentsMargins(6, 6, 6, 6);

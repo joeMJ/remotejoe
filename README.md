@@ -388,21 +388,24 @@ neu aufklappen.
   alle Ziele darin ab, bis zu acht gleichzeitig, mit Fortschritt, Ergebnis je Ziel und „Fehlgeschlagene wiederholen“.
   Ziele mit abgeschaltetem Inventar werden übersprungen.
 - **Zugangswege:** Ein Ziel kann neben dem Hauptweg weitere Wege haben (z. B. SSH und die Web-Oberfläche auf
-  4343), jeder mit eigenem Protokoll, Port, Optionen und Zugangsdaten (die des Ziels, ein Anmeldeobjekt oder keine).
+  4343), jeder mit eigenem Protokoll, Adresse, Port, Optionen und Zugangsdaten (die des Ziels, ein Anmeldeobjekt,
+  eigene Zugangsdaten direkt am Weg oder keine).
   Die Übersicht zeigt je Weg einen Knopf; welcher Weg beim Doppelklick öffnet, ist wählbar. „Hinzufügen → Aruba-AP“
   legt SSH und Web (4343) in einem Schritt an; „Vorschlagen“ übernimmt die in der Übersicht gefundenen Dienste.
 - **Gleiche Adressen zusammenfassen:** Rechtsklick auf einen Ordner oder eine Auswahl → **Gleiche Adressen
   zusammenfassen …** zeigt die Ziele mit gleicher Adresse (bei Web-Zielen der Rechner aus der URL) als Gruppen. Je
   Gruppe lassen sich Hauptziel, Name und die beteiligten Ziele wählen; die übrigen Ziele werden Zugangswege des
-  Hauptziels, abweichende Zugangsdaten werden als Anmeldeobjekt auf denselben KDBX-Eintrag übernommen. Ordner bleiben
-  unberührt, der ganze Schritt lässt sich rückgängig machen.
+  Hauptziels, abweichende Zugangsdaten bekommt der Weg als eigene Zugangsdaten (derselbe KDBX-Eintrag). Ordner bleiben
+  unberührt, der ganze Schritt lässt sich rückgängig machen. Mehrere markierte Ziele lassen sich über **Zu einem Ziel
+  zusammenfassen …** auch mit verschiedenen Adressen zusammenfassen (z. B. Hyper-V-Host, RDP und iLO); ein Hypervisor
+  wird dabei als Hauptziel vorgeschlagen, damit die Gästeliste erhalten bleibt.
 
 <p align="center">
   <img src="docs/screenshots/zusammenfassen.png" alt="Gleiche Adressen zusammenfassen: Gruppe mit Hauptziel und zwei künftigen Zugangswegen" width="760">
 </p>
 
 - **RDP** mit Zwischenablage (Text in beide Richtungen, Dateien Ziel → Host), NLA und Grafikkanal
-  (GFX; `Automatisch` wiederholt einen abgebrochenen Aufbau einmal mit GFX, GNOME-Remote-Desktop verlangt ihn).
+  (GFX, Vorgabe „Immer an“; ohne ihn überträgt z. B. Windows 11 das Bild sehr träge).
 - **SSH** mit Terminal, Zwischenablage (geschütztes Einfügen; OSC 52: Schreiben erlaubt, Lesen nur nach Nachfrage),
   Host-Schlüssel-Prüfung im OpenSSH-Format, Schlüssel aus KDBX-Anhängen. Das Mausrad blättert im
   Rücklauf (einstellbar bis 200 000 Zeilen). Für alte Geräte lässt sich je Ziel „Unsichere ältere
@@ -417,7 +420,8 @@ neu aufklappen.
   (`protokoll.log` im Profilordner, ohne Eingaben). Unter Windows über WebView2 (Microsoft Edge).
 - **PowerShell-Remoting** (WinRM oder SSH) über ein lokal installiertes PowerShell 7.
 - **Proxmox VE und Hyper-V:** Ziele im Baum aufklappen, Gäste starten, herunterfahren, neu
-  starten, ausschalten und deren Konsole öffnen.
+  starten, ausschalten und deren Konsole öffnen. Die Gäste lädt erst der Pfeil im Baum; ein Doppelklick lädt sie nur,
+  wenn er den Hauptweg (Hyper-V bzw. Proxmox) öffnet.
 - **Tunnel:** SSH-Sprungserver (auch mehrstufig), WireGuard ohne Systemadapter, oder ein
   vorhandenes VPN.
 - **Aufgaben:** Aktualisierungen prüfen und einspielen (apt über SSH, Windows Update über

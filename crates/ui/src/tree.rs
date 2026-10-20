@@ -40,6 +40,9 @@ pub struct UiNode {
     /// Ziel mit weiteren Zugangswegen (eigenes Symbol).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub multi: bool,
+    /// Doppelklick öffnet einen anderen Weg als den Hauptweg (Hypervisor: dann lädt der Doppelklick keine Gäste).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub other_way: bool,
     /// Anmeldeobjekt (keine Verbindung, öffnet die Bearbeitung).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub login: bool,
@@ -71,6 +74,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         folder: true,
                         device: None,
                         multi: false,
+                        other_way: false,
                         login: false,
                     });
                 }
@@ -89,6 +93,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         folder: false,
                         device: None,
                         multi: !t.ways.is_empty(),
+                        other_way: t.open_with.is_some_and(|w| t.ways.iter().any(|x| x.id == w)),
                         login: false,
                     });
                 }
@@ -110,6 +115,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                 folder: false,
                 device: None,
                         multi: false,
+                        other_way: false,
                 login: true,
             });
         }

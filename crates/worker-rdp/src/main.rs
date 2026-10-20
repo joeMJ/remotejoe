@@ -145,7 +145,7 @@ mod imp {
                 }
                 })
             };
-            // `Auto`: erst ohne Grafikkanal; scheitert der Aufbau, einmal mit (GNOME-Remote-Desktop).
+            // `Auto`: erst ohne Grafikkanal; scheitert der Aufbau, einmal mit. Vorgabe ist `On`.
             let mut gfx_on = opts.gfx == rj_core::model::GfxMode::On;
             loop {
             let mut session = match make_session() {

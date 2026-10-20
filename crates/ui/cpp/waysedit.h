@@ -26,6 +26,8 @@ public:
 	QString openWith() const;
 	/// Kurzfassung für die Bereichsliste.
 	QString summary() const;
+	/// Eingegebene Kennwörter der Wege leeren.
+	void wipeSecrets();
 
 signals:
 	void changed();
@@ -40,6 +42,10 @@ private:
 		QLineEdit* host;
 		QLineEdit* port;
 		QComboBox* credential;
+		/// Eigene Zugangsdaten des Wegs (nur sichtbar bei „Eigene Zugangsdaten“).
+		QWidget* ownBox;
+		QLineEdit* user;
+		QLineEdit* pass;
 	};
 	void addRow(const QJsonObject& w);
 	void removeRow(QWidget* box);

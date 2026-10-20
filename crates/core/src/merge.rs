@@ -36,15 +36,7 @@ fn target(index: &Index, id: Uuid) -> Option<&Target> {
 /// Gruppen gleicher Adresse unter den gewählten Knoten (Ordner samt Unterordnern, einzelne Ziele).
 /// Je Gruppe die Adresse und die Ziele in Baumreihenfolge; nur Gruppen mit mindestens zwei Zielen.
 pub fn groups(index: &Index, scope: &[Uuid]) -> Vec<(String, Vec<Uuid>)> {
-    let mut ids: Vec<Uuid> = Vec::new();
-    for id in scope {
-        let below = if *id == index.root.id || edit::folder(index, *id).is_some() { edit::targets_below(index, *id) } else { vec![*id] };
-        for t in below {
-            if !ids.contains(&t) {
-                ids.push(t);
-            }
-        }
-    }
+    let ids = selection(index, scope);
     let mut order: Vec<String> = Vec::new();
     let mut by: HashMap<String, Vec<Uuid>> = HashMap::new();
     for id in ids {
@@ -59,15 +51,30 @@ pub fn groups(index: &Index, scope: &[Uuid]) -> Vec<(String, Vec<Uuid>)> {
     order.into_iter().filter_map(|k| by.remove(&k).filter(|v| v.len() > 1).map(|v| (k, v))).collect()
 }
 
-/// Vorschlag für das Hauptziel: SSH vor PowerShell, RDP, VNC und Web; bei Gleichstand das erste.
+/// Ziele der Auswahl (Ordner samt Unterordnern, einzelne Ziele) in Baumreihenfolge, ohne Doppelte.
+pub fn selection(index: &Index, scope: &[Uuid]) -> Vec<Uuid> {
+    let mut ids: Vec<Uuid> = Vec::new();
+    for id in scope {
+        let below = if *id == index.root.id || edit::folder(index, *id).is_some() { edit::targets_below(index, *id) } else { vec![*id] };
+        for t in below {
+            if !ids.contains(&t) && target(index, t).is_some() {
+                ids.push(t);
+            }
+        }
+    }
+    ids
+}
+
+/// Vorschlag für das Hauptziel: Hypervisor (nur dort gibt es die Gästeliste), dann SSH vor PowerShell, RDP, VNC und
+/// Web; bei Gleichstand das erste.
 pub fn default_keep(index: &Index, members: &[Uuid]) -> Option<Uuid> {
     let rank = |p: Protocol| match p {
+        Protocol::Hyperv | Protocol::Proxmox => -1,
         Protocol::Ssh => 0,
         Protocol::Psrp => 1,
         Protocol::Rdp => 2,
         Protocol::Vnc => 3,
         Protocol::Web => 4,
-        _ => 5,
     };
     members.iter().filter_map(|id| target(index, *id)).min_by_key(|t| rank(t.protocol)).map(|t| t.id)
 }
@@ -76,8 +83,8 @@ pub fn default_keep(index: &Index, members: &[Uuid]) -> Option<Uuid> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Merged {
     pub ways: usize,
-    /// Neu angelegte Anmeldeobjekte (für abweichende Zugangsdaten).
-    pub logins: usize,
+    /// Wege mit eigenen Zugangsdaten (abweichender KDBX-Eintrag des bisherigen Ziels).
+    pub own: usize,
     /// Hinweise auf Angaben, die nicht übernommen werden konnten.
     pub notes: Vec<String>,
 }
@@ -97,43 +104,42 @@ pub fn merge(index: &mut Index, keep: Uuid, others: &[Uuid], name: &str) -> Resu
     let mut out = Merged::default();
     let keep_cred = inherit::resolve_credential(index, keep);
     let keep_tunnel = inherit::resolve_tunnel(index, keep).ok().flatten().map(|(t, _)| t);
-    let keep_folder = edit::parent_of(index, keep).unwrap_or(index.root.id);
     let mut members = Vec::new();
     for id in others.iter().filter(|o| **o != keep) {
         let t = target(index, *id).cloned().ok_or(EditError::NotFound)?;
         members.push(t);
     }
     let mut ways = Vec::new();
-    let mut new_logins = Vec::new();
     let mut notes = base.meta.clone();
     for t in &members {
         let shown = crate::charset::mark_visible(&t.name, false).into_owned();
         let r = inherit::resolve_credential(index, t.id);
-        let credential = match (&r, found(&r)) {
+        let (credential, own) = match (&r, found(&r)) {
             // Gleiche Auflösung wie beim Hauptziel (auch „keine“ oder „Auswahl“): dessen Zugangsdaten.
-            _ if r == keep_cred => WayCredential::Target,
-            (Ok(CredentialResolution::Disabled), _) => WayCredential::None,
+            _ if r == keep_cred => (WayCredential::Target, None),
+            (Ok(CredentialResolution::Disabled), _) => (WayCredential::None, None),
             (Ok(CredentialResolution::NotFound { .. }), _) => {
                 out.notes.push(format!("„{shown}“: keine Zugangsdaten hinterlegt – der Weg verbindet ohne"));
-                WayCredential::None
+                (WayCredential::None, None)
             }
-            (_, Some(c)) if found(&keep_cred).is_some_and(|k| k.reference.entry == c.reference.entry && k.overrides == c.overrides) => WayCredential::Target,
+            (_, Some(c)) if found(&keep_cred).is_some_and(|k| k.reference.entry == c.reference.entry && k.overrides == c.overrides) => (WayCredential::Target, None),
             (_, Some(c)) => {
                 if !c.overrides.is_empty() {
                     out.notes.push(format!("„{shown}“: überschriebene Felder der Zugangsdaten werden nicht übernommen"));
                 }
-                // Vorhandenes Anmeldeobjekt auf denselben Eintrag nehmen, sonst eines anlegen.
-                let login = index.logins.iter().chain(new_logins.iter()).find(|l: &&Login| l.entry.entry == c.reference.entry).map(|l| l.id);
-                WayCredential::Login(login.unwrap_or_else(|| {
-                    let l = Login { id: Uuid::new_v4(), name: if c.name == DEFAULT_CREDENTIAL { t.name.clone() } else { format!("{} ({})", t.name, c.name) }, folder: keep_folder, entry: c.reference.clone() };
-                    let id = l.id;
-                    new_logins.push(l);
-                    id
-                }))
+                // Steht der Eintrag schon in einem Anmeldeobjekt, dieses nehmen; sonst bekommt der Weg den
+                // Eintrag als eigene Zugangsdaten.
+                match index.logins.iter().find(|l| l.entry.entry == c.reference.entry) {
+                    Some(l) => (WayCredential::Login(l.id), None),
+                    None => {
+                        out.own += 1;
+                        (WayCredential::Target, Some(c.reference.clone()))
+                    }
+                }
             }
             _ => {
                 out.notes.push(format!("„{shown}“: Zugangsdaten nicht eindeutig – der Weg nutzt die des Hauptziels"));
-                WayCredential::Target
+                (WayCredential::Target, None)
             }
         };
         if inherit::resolve_tunnel(index, t.id).ok().flatten().map(|(x, _)| x) != keep_tunnel {
@@ -153,13 +159,28 @@ pub fn merge(index: &mut Index, keep: Uuid, others: &[Uuid], name: &str) -> Resu
             None if address_key(t) == address_key(&base) => String::new(),
             None => t.host.clone(),
         };
+        // Hypervisor als Weg: dessen Verbindung (Hyper-V: RDP zum Host, Proxmox: Web-Oberfläche); die Gästeliste
+        // gibt es nur am Hauptziel.
+        let protocol = match t.protocol {
+            Protocol::Hyperv => Protocol::Rdp,
+            Protocol::Proxmox => Protocol::Web,
+            p => p,
+        };
+        if protocol != t.protocol {
+            out.notes.push(format!("„{shown}“ ist ein Hypervisor: als Weg nur die Verbindung, ohne Gästeliste – dafür als Hauptziel wählen"));
+        }
+        let port = match t.protocol {
+            Protocol::Proxmox => Some(t.port.unwrap_or(8006)),
+            _ => t.port,
+        };
         // Der Weg trägt den Namen des bisherigen Ziels (Knopf in der Übersicht, Tab „Ziel – Weg“).
-        ways.push(AccessWay { id: Uuid::new_v4(), name: t.name.clone(), protocol: t.protocol, host, port: t.port, options: t.options.clone(), credential });
+        ways.push(AccessWay { id: Uuid::new_v4(), name: t.name.clone(), protocol, host, port, options: t.options.clone(), credential, own: own.clone() });
         // Weitere Wege des Ziels mitnehmen; „Zugangsdaten des Ziels“ meint dort das bisherige Ziel.
         for w in &t.ways {
             let mut w = w.clone();
-            if w.credential == WayCredential::Target {
-                w.credential = ways.last().map(|x: &AccessWay| x.credential).unwrap_or(WayCredential::Target);
+            if w.credential == WayCredential::Target && w.own.is_none() {
+                w.credential = credential;
+                w.own = own.clone();
             }
             ways.push(w);
         }
@@ -187,8 +208,6 @@ pub fn merge(index: &mut Index, keep: Uuid, others: &[Uuid], name: &str) -> Resu
         }
     }
     out.ways = ways.len();
-    out.logins = new_logins.len();
-    index.logins.extend(new_logins);
     {
         let Some(Node::Target(k)) = inherit::find_node_mut(&mut index.root, keep) else { return Err(EditError::NotFound) };
         k.ways.extend(ways);
@@ -252,14 +271,15 @@ mod tests {
         assert_eq!(g, vec![("192.0.2.1".to_string(), ids[..3].to_vec())]);
         assert_eq!(default_keep(&idx, &g[0].1), Some(ids[0]));
         let r = merge(&mut idx, ids[0], &ids[1..3], "AP Flur").unwrap();
-        assert_eq!((r.ways, r.logins), (2, 1), "ein Anmeldeobjekt für den abweichenden Eintrag");
+        assert_eq!((r.ways, r.own), (2, 1), "eigene Zugangsdaten für den abweichenden Eintrag");
         let Some(Node::Target(k)) = edit::node(&idx, ids[0]) else { panic!() };
         assert_eq!(k.name, "AP Flur");
         assert_eq!(k.ways.len(), 2);
         // Die Wege tragen den Namen ihres bisherigen Ziels.
         assert_eq!((k.ways[0].name.as_str(), k.ways[1].name.as_str()), ("ap1 web", "ap1 web alt"));
-        assert!(matches!(k.ways[0].credential, WayCredential::Login(l) if idx.login(l).unwrap().entry.entry == e2));
-        assert!(matches!(k.ways[0].credential, WayCredential::Login(l) if idx.login(l).unwrap().name == "ap1 web"), "ohne „(default)“");
+        assert_eq!(k.ways[0].own.as_ref().map(|r| r.entry), Some(e2), "abweichender Eintrag als eigene Zugangsdaten des Wegs");
+        assert!(idx.logins.is_empty(), "kein neues Anmeldeobjekt");
+        assert!(idx.referenced_entries().contains(&e2), "Eintrag bleibt zugeordnet");
         assert_eq!(k.ways[1].credential, WayCredential::Target, "gleicher Eintrag wie das Hauptziel");
         let v = k.via(k.ways[0].id).unwrap();
         assert_eq!((v.host.as_str(), v.port), ("192.0.2.1", Some(4343)));
@@ -267,6 +287,26 @@ mod tests {
         assert!(edit::node(&idx, ids[1]).is_none() && edit::node(&idx, ids[2]).is_none() && edit::node(&idx, ids[3]).is_some());
         assert_eq!(idx.favorites, vec![ids[0]]);
         assert!(groups(&idx, &[root]).is_empty());
+    }
+
+    #[test]
+    fn selection_with_different_addresses_keeps_the_hypervisor_as_main() {
+        let mut idx = Index::default();
+        let root = idx.root.id;
+        let hv = edit::insert(&mut idx, root, Node::Target(Target::new("210 HyperV", Protocol::Hyperv, "192.0.2.210")), None).unwrap();
+        let rdp = edit::insert(&mut idx, root, Node::Target(Target::new("210 RDP", Protocol::Rdp, "192.0.2.210")), None).unwrap();
+        let ilo = edit::insert(&mut idx, root, Node::Target(web("210 iLO", "https://192.0.2.192/")), None).unwrap();
+        let pve = edit::insert(&mut idx, root, Node::Target(Target::new("pve", Protocol::Proxmox, "192.0.2.50")), None).unwrap();
+        let sel = selection(&idx, &[rdp, ilo, hv, pve]);
+        assert_eq!(sel, vec![rdp, ilo, hv, pve], "Reihenfolge der Auswahl");
+        assert_eq!(default_keep(&idx, &sel), Some(hv), "Hypervisor als Hauptziel");
+        let r = merge(&mut idx, hv, &[rdp, ilo, pve], "").unwrap();
+        let Some(Node::Target(k)) = edit::node(&idx, hv) else { panic!() };
+        assert_eq!(k.protocol, Protocol::Hyperv);
+        assert_eq!((k.ways[0].protocol, k.ways[0].host.as_str()), (Protocol::Rdp, ""), "gleiche Adresse: die des Hauptziels");
+        assert_eq!((k.ways[1].protocol, k.ways[1].host.as_str()), (Protocol::Web, "https://192.0.2.192/"), "iLO mit eigener Adresse");
+        assert_eq!((k.ways[2].protocol, k.ways[2].host.as_str(), k.ways[2].port), (Protocol::Web, "192.0.2.50", Some(8006)), "Proxmox als Weg: Web-Oberfläche");
+        assert!(r.notes.iter().any(|n| n.contains("„pve“ ist ein Hypervisor")), "{:?}", r.notes);
     }
 
     #[test]
@@ -283,6 +323,6 @@ mod tests {
         let Some(Node::Target(k)) = edit::node(&idx, a) else { panic!() };
         assert_eq!((k.name.as_str(), k.ways[0].credential, k.ways[0].host.as_str()), ("a", WayCredential::None, ""));
         assert_eq!(k.ways[0].name, "b", "Weg trägt den Namen des bisherigen Ziels");
-        assert_eq!(r.logins, 0);
+        assert_eq!(r.own, 0);
     }
 }

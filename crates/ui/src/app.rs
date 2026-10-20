@@ -1052,16 +1052,18 @@ impl App {
             WaySel::Default => base.open_with,
             WaySel::Way(w) => Some(w),
         };
-        let (t, way_cred) = match way {
-            None => (base, None),
+        let (t, way_cred, way_own) = match way {
+            None => (base, None, None),
             Some(w) => match (base.via(w), base.ways.iter().find(|x| x.id == w)) {
-                (Some(v), Some(x)) => (v, Some(x.credential)),
+                (Some(v), Some(x)) => (v, Some(x.credential), x.own.clone().map(|r| (x.label(), r))),
                 // Gelöschter Weg als Doppelklick-Weg: Hauptweg nehmen statt zu scheitern.
-                _ if sel == WaySel::Default => (base, None),
+                _ if sel == WaySel::Default => (base, None, None),
                 _ => return json!({ "error": "Zugangsweg nicht gefunden" }).to_string(),
             },
         };
         let resolved = match (way_cred, credential) {
+            // Eigene Zugangsdaten des Wegs (eigener KDBX-Eintrag) gehen vor.
+            _ if way_own.is_some() => way_own.map(|(name, reference)| ResolvedCredential { name, reference, origin: rj_core::inherit::Origin::Target, overrides: Default::default() }),
             (Some(rj_core::model::WayCredential::None), _) => None,
             (Some(rj_core::model::WayCredential::Login(lid)), _) => match self.index.login(lid) {
                 Some(l) => Some(ResolvedCredential { name: l.name.clone(), reference: l.entry.clone(), origin: rj_core::inherit::Origin::Target, overrides: Default::default() }),

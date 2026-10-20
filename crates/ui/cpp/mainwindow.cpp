@@ -97,6 +97,8 @@ constexpr int RoleSessionMark = Qt::UserRole + 9;
 constexpr int RoleLogin = Qt::UserRole + 10;
 /// Zustand eines Gasts (z. B. `running`), für die Übersicht.
 constexpr int RoleGuestState = Qt::UserRole + 11;
+/// Doppelklick öffnet einen anderen Zugangsweg als den Hauptweg.
+constexpr int RoleOtherWay = Qt::UserRole + 40;
 // Symbolart: Protokoll oder erkannte Geräteart (z. B. „aruba“ für einen Aruba-AP aus dem Inventar).
 constexpr int RoleIconKind = Qt::UserRole + 12;
 /// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
@@ -310,6 +312,7 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		item->setToolTip(tip);
 		const QString proto = n.value(QStringLiteral("protocol")).toString();
 		item->setData(proto, RoleProtocol);
+		item->setData(n.value(QStringLiteral("other_way")).toBool(), RoleOtherWay);
 		parent->appendRow(item);
 		addNodes(item, n.value(QStringLiteral("children")).toArray());
 		if (proto == QStringLiteral("proxmox") || proto == QStringLiteral("hyperv"))
@@ -572,12 +575,12 @@ void MainWindow::patchdayForFirstTargets(int n)
 	openPatchday(ids);
 }
 
-void MainWindow::openMerge(const QStringList& ids, const QString& title)
+void MainWindow::openMerge(const QStringList& ids, const QString& title, bool manual)
 {
 	// Eine Vorschau zur Zeit: eine vorhandene wird ersetzt.
 	if (auto* old = findChild<MergeTab*>())
 		closeToolTab(old);
-	auto* t = new MergeTab(m_backend, ids, title, m_tabs);
+	auto* t = new MergeTab(m_backend, ids, title, manual, m_tabs);
 	connect(t, &MergeTab::showTarget, this, [this](const QString& id) { selectId(id); });
 	addToolTab(t, T(m_backend, "merge.tab"));
 }
@@ -731,6 +734,8 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	m_model = new QStandardItemModel(this);
 	m_tree->setModel(m_model);
 	m_tree->setHeaderHidden(true);
+	// Doppelklick verbindet; Ordner klappt der Handler selbst auf. Hypervisor-Gäste lädt nur der Pfeil.
+	m_tree->setExpandsOnDoubleClick(false);
 	m_tree->setUniformRowHeights(true);
 	m_tree->setIconSize(QSize(20, 20));
 	m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -949,8 +954,16 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		if (i.data(RoleGuest).isValid())
 			openGuestConsole(i);
 		else if (!i.data(RolePlaceholder).toBool() && !i.data(RoleFolder).toBool())
+		{
 			connectSelected();
-		// Ordner klappen beim Doppelklick wie üblich auf oder zu.
+			// Hypervisor mit Hauptweg für den Doppelklick: Gäste wie bisher aufklappen (und laden). Öffnet der
+			// Doppelklick einen anderen Weg (z. B. RDP), lädt nur der Pfeil die Gäste.
+			const QModelIndex first = m_model->index(0, 0, i);
+			if (first.isValid() && first.data(RolePlaceholder).toBool() && !i.data(RoleOtherWay).toBool())
+				m_tree->expand(i);
+		}
+		else if (i.data(RoleFolder).toBool() || i.data(RoleMacro).toInt() == 1)
+			m_tree->setExpanded(i, !m_tree->isExpanded(i)); // Ordner klappen wie üblich auf oder zu.
 	});
 	treeKey(QKeySequence(Qt::Key_F4), [this] { if (!currentId().isEmpty()) openProperties(currentId()); });
 	treeKey(QKeySequence(QStringLiteral("Alt+Return")), [this] { if (!currentId().isEmpty()) openProperties(currentId()); });
@@ -1040,6 +1053,8 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	qApp->installNativeEventFilter(&power);
 #endif
 	connect(m_tree, &QTreeView::expanded, this, [this](const QModelIndex& i) {
+		if (m_autoExpand)
+			return;
 		const QModelIndex first = m_model->index(0, 0, i);
 		if (first.isValid() && first.data(RolePlaceholder).toBool())
 			loadGuests(i);
@@ -1581,19 +1596,26 @@ void MainWindow::reloadTree()
 			for (int r = 0; r < m_model->rowCount(parent); ++r)
 			{
 				const QModelIndex i = m_model->index(r, 0, parent);
-				if (m_expandedIds.contains(i.data(RoleId).toString()))
+				// Hypervisoren bleiben zu: ihre Gäste lädt erst der Pfeil (sonst eine Abfrage je Neuaufbau).
+				const QModelIndex first = m_model->index(0, 0, i);
+				if (m_expandedIds.contains(i.data(RoleId).toString()) && !(first.isValid() && first.data(RolePlaceholder).toBool()))
 					m_tree->expand(i);
 				restore(i);
 			}
 		};
+		m_autoExpand = true;
 		restore(QModelIndex());
+		m_autoExpand = false;
 	}
 	else
 	{
+		m_autoExpand = true;
 		m_tree->expandToDepth(0);
 		// Erster Start: den ersten Ordner mit Zielen aufklappen.
 		if (m_model->rowCount() > 0)
 			m_tree->expand(m_model->index(0, 0, m_model->index(0, 0)));
+		collapseUnloadedHypervisors();
+		m_autoExpand = false;
 	}
 	m_treeLoaded = true;
 	addMacroShelf();
@@ -1714,7 +1736,10 @@ void MainWindow::applySearch()
 		}
 	};
 	apply(QModelIndex());
+	m_autoExpand = true;
 	m_tree->expandAll();
+	collapseUnloadedHypervisors();
+	m_autoExpand = false;
 	m_tree->setUpdatesEnabled(true);
 	m_searchApplied = true;
 	if (qEnvironmentVariableIsSet("RJ_TIMING"))
@@ -1889,6 +1914,11 @@ void MainWindow::handleConnectResult(const QString& id, const QString& json)
 		const auto s = std::uint64_t(r.value(QStringLiteral("session")).toInteger());
 		if (auto* p = pane(s))
 		{
+			// Neue Sitzung nach vorn, auch wenn eine Übersicht oder ein anderer erhaltener Tab vorn war.
+			for (QTabWidget* tabs : findChildren<QTabWidget*>())
+				for (int i = 0; i < tabs->count(); ++i)
+					if (tabs->widget(i)->isAncestorOf(p))
+						tabs->setCurrentIndex(i);
 			if (p->terminal())
 			{
 				const QSize c = contentSize(true);
@@ -2038,6 +2068,22 @@ void MainWindow::expandFirstHypervisor()
 				return true;
 		}
 		return false;
+	};
+	walk(QModelIndex());
+}
+
+void MainWindow::collapseUnloadedHypervisors()
+{
+	std::function<void(const QModelIndex&)> walk = [&](const QModelIndex& parent) {
+		for (int r = 0; r < m_model->rowCount(parent); ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			const QModelIndex first = m_model->index(0, 0, i);
+			if (first.isValid() && first.data(RolePlaceholder).toBool())
+				m_tree->collapse(i);
+			else
+				walk(i);
+		}
 	};
 	walk(QModelIndex());
 }
@@ -2352,6 +2398,9 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		if (!ids.isEmpty())
 			openMerge(ids, ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size()));
 	});
+	// Mehrere markierte Ziele: zu einem Ziel zusammenfassen, gleich welche Adresse.
+	if (const QStringList sel = selectedTargets(m_tree, m_model); sel.size() > 1)
+		menu.addAction(T(m_backend, "ctx.merge.manual"), this, [this, sel] { openMerge(sel, T(m_backend, "mass.title.n").arg(sel.size()), true); });
 	QMenu* tasks = menu.addMenu(T(m_backend, "ctx.tasks"));
 	tasks->addAction(T(m_backend, "ctx.tasks.updates"), this, [this] {
 		const QStringList ids = selectedTargets(m_tree, m_model);
@@ -2616,19 +2665,41 @@ void MainWindow::rebuildTabs()
 		p->setParent(nullptr);
 	auto fill = [&](QTabWidget* target, const QJsonObject& window) {
 		const auto active = std::uint64_t(window.value(QStringLiteral("active")).toInteger());
-		// Eigenschaften-Tabs bleiben erhalten, Sitzungs-Tabs werden neu aufgebaut.
+		// Erhaltene Tabs (Eigenschaften, Übersicht, …) bleiben hinter der Sitzung, hinter der sie standen; Sitzungs-Tabs
+		// werden in der Reihenfolge des Arbeitsbereichs neu aufgebaut, eine neue Sitzung kommt damit ganz nach rechts.
+		struct Kept
+		{
+			QWidget* w;
+			QString text;
+			std::uint64_t after; // Sitzungs-Tab davor (0 = ganz vorn)
+		};
 		QWidget* current = target->currentWidget();
-		QList<QPair<QWidget*, QString>> editors;
+		QList<Kept> editors;
+		std::uint64_t anchor = 0;
 		while (target->count())
 		{
 			QWidget* w = target->widget(0);
 			const QString text = target->tabText(0);
 			target->removeTab(0);
-			if (w->property("editor").toBool())
-				editors.append({ w, text });
+			// Alles außer Sitzungs-Tabs bleibt (Einstellungen, Übersicht, Prüfungen, Anmeldung, Makros, …); nur die
+			// Abfrage der Zugangsdaten gehört zur Verbindung und entfällt mit ihr.
+			if (!w->property("tab").isValid() && !dynamic_cast<ConnectPromptTab*>(w))
+				editors.append({ w, text, anchor });
 			else
+			{
+				anchor = w->property("tab").toULongLong();
 				w->deleteLater();
+			}
 		}
+		QSet<std::uint64_t> present;
+		for (const QJsonValue& tv : window.value(QStringLiteral("tabs")).toArray())
+			present.insert(std::uint64_t(tv.toInteger()));
+		auto addKept = [&](std::uint64_t after) {
+			for (const Kept& e : std::as_const(editors))
+				if (e.after == after || (after == UINT64_MAX && e.after != 0 && !present.contains(e.after)))
+					target->addTab(e.w, e.text);
+		};
+		addKept(0);
 		int activeIndex = 0;
 		for (const QJsonValue& tv : window.value(QStringLiteral("tabs")).toArray())
 		{
@@ -2651,14 +2722,14 @@ void MainWindow::rebuildTabs()
 						target->setTabIcon(i, protocolIcon(proto, QString(), false));
 					break;
 				}
+			addKept(id);
 		}
+		// Stand die Sitzung davor nicht mehr im Arbeitsbereich (geschlossen): ans Ende.
+		addKept(UINT64_MAX);
 		target->setCurrentIndex(activeIndex);
-		for (const auto& e : editors)
-		{
-			target->addTab(e.first, e.second);
-			if (e.first == current)
-				target->setCurrentWidget(e.first);
-		}
+		for (const Kept& e : std::as_const(editors))
+			if (e.w == current)
+				target->setCurrentWidget(e.w);
 	};
 	const QJsonArray windows = m_workspace.value(QStringLiteral("windows")).toArray();
 	QSet<std::uint64_t> seen;

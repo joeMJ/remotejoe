@@ -21,7 +21,8 @@ class MergeTab : public ToolTab
 {
 	Q_OBJECT
 public:
-	MergeTab(RjBackend* backend, const QStringList& ids, const QString& title, QWidget* parent = nullptr);
+	/// `manual`: die markierten Ziele als eine Gruppe, gleich welche Adresse („Zu einem Ziel zusammenfassen“).
+	MergeTab(RjBackend* backend, const QStringList& ids, const QString& title, bool manual = false, QWidget* parent = nullptr);
 
 	/// Der Index hat sich geändert (auch von außen, z. B. Bearbeiten → Rückgängig): Gruppen neu laden.
 	void refresh();
@@ -53,4 +54,5 @@ private:
 	QTreeWidgetItem* m_current = nullptr;
 	bool m_filling = false;
 	QString m_done;
+	bool m_manual = false;
 };
