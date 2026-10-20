@@ -361,20 +361,20 @@ pub enum ClipboardDirection {
     Both,
 }
 
-/// Grafikkanal (RDPGFX) einer RDP-Verbindung. GNOME-Remote-Desktop verlangt ihn; `Auto` versucht
-/// es zuerst ohne und bei einem Abbruch im Verbindungsaufbau einmal mit.
+/// Grafikkanal (RDPGFX) einer RDP-Verbindung. Vorgabe: an (ohne ihn überträgt z. B. Windows 11 das Bild
+/// sehr träge); `Auto` versucht es zuerst ohne und bei einem Abbruch im Verbindungsaufbau einmal mit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GfxMode {
-    #[default]
     Auto,
+    #[default]
     On,
     Off,
 }
 
 impl GfxMode {
-    pub fn is_auto(&self) -> bool {
-        *self == GfxMode::Auto
+    pub fn is_default(&self) -> bool {
+        *self == GfxMode::On
     }
 }
 
@@ -393,7 +393,7 @@ pub struct RdpOptions {
     pub keyboard_layout: Option<String>,
     #[serde(default)]
     pub ignore_certificate: bool,
-    #[serde(default, skip_serializing_if = "GfxMode::is_auto")]
+    #[serde(default, skip_serializing_if = "GfxMode::is_default")]
     pub gfx: GfxMode,
     /// Tastenfolge, die nach dem Verbinden automatisch gesendet wird.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -899,13 +899,15 @@ mod gfx_tests {
     use super::*;
 
     #[test]
-    fn gfx_option_defaults_to_auto_and_is_not_written_then() {
+    fn gfx_option_defaults_to_on_and_is_not_written_then() {
         let o: RdpOptions = serde_json::from_str("{}").unwrap();
-        assert_eq!(o.gfx, GfxMode::Auto);
-        assert!(!serde_json::to_string(&o).unwrap().contains("gfx"));
-        let o: RdpOptions = serde_json::from_str(r#"{"gfx":"on"}"#).unwrap();
         assert_eq!(o.gfx, GfxMode::On);
-        assert!(serde_json::to_string(&o).unwrap().contains(r#""gfx":"on""#));
+        assert!(!serde_json::to_string(&o).unwrap().contains("gfx"));
+        let o: RdpOptions = serde_json::from_str(r#"{"gfx":"auto"}"#).unwrap();
+        assert_eq!(o.gfx, GfxMode::Auto);
+        assert!(serde_json::to_string(&o).unwrap().contains(r#""gfx":"auto""#));
+        let o: RdpOptions = serde_json::from_str(r#"{"gfx":"off"}"#).unwrap();
+        assert!(serde_json::to_string(&o).unwrap().contains(r#""gfx":"off""#), "ausdrücklich aus bleibt aus");
         assert!(serde_json::from_str::<RdpOptions>(r#"{"gfx":"x"}"#).is_err());
     }
 }
