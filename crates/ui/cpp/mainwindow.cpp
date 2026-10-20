@@ -2681,7 +2681,9 @@ void MainWindow::rebuildTabs()
 			QWidget* w = target->widget(0);
 			const QString text = target->tabText(0);
 			target->removeTab(0);
-			if (w->property("editor").toBool())
+			// Alles außer Sitzungs-Tabs bleibt (Einstellungen, Übersicht, Prüfungen, Anmeldung, Makros, …); nur die
+			// Abfrage der Zugangsdaten gehört zur Verbindung und entfällt mit ihr.
+			if (!w->property("tab").isValid() && !dynamic_cast<ConnectPromptTab*>(w))
 				editors.append({ w, text, anchor });
 			else
 			{
