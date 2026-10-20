@@ -281,7 +281,18 @@ impl App {
         }
         v["inventory"] = json!(match settings.inventory { None => "inherit", Some(true) => "on", Some(false) => "off" });
         if let Some(Node::Target(t)) = node {
-            v["ways"] = json!(t.ways.iter().map(way_json).collect::<Vec<_>>());
+            // Eigene Zugangsdaten eines Wegs: Benutzername zeigen, nie das Kennwort.
+            v["ways"] = json!(t
+                .ways
+                .iter()
+                .map(|w| {
+                    let mut j = way_json(w);
+                    if let Some(r) = &w.own {
+                        j["username"] = json!(self.vault.as_ref().and_then(|v| v.credential(r.entry)).map(|c| c.data.username).unwrap_or_default());
+                    }
+                    j
+                })
+                .collect::<Vec<_>>());
             v["open_with"] = json!(t.open_with);
             // Web-Ziel: Rechner und Port aus der URL, wie beim Verbinden.
             let (host, port) = App::endpoint_of(t);
@@ -446,7 +457,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -646,6 +657,8 @@ impl App {
             "ways_suggest" => self.ways_suggest(&c),
             "mass_start" => self.mass_start(&c),
             "merge_preview" => self.merge_preview(&c),
+            // Gibt es das Ziel noch? (Übersicht nach einem Fehler beim Auffrischen)
+            "target_exists" => Ok(json!({ "exists": id_of(&c, "id").is_some_and(|id| self.target(id).is_some()) })),
             "merge_check" => self.merge_check(&c),
             "merge_apply" => self.merge_apply(&c),
             "mass_rows" => Ok(self.mass_rows()),
@@ -874,7 +887,14 @@ impl App {
     fn merge_preview(&self, c: &Value) -> Result<Value, String> {
         use rj_core::merge;
         let scope = ids_of(c, "ids");
-        let groups: Vec<Value> = merge::groups(&self.index, &scope)
+        // „Zu einem Ziel zusammenfassen“: die markierten Ziele als eine Gruppe, gleich welche Adresse.
+        let found = if c.get("manual").and_then(Value::as_bool).unwrap_or(false) {
+            let sel = merge::selection(&self.index, &scope);
+            if sel.len() > 1 { vec![("Auswahl".to_string(), sel)] } else { Vec::new() }
+        } else {
+            merge::groups(&self.index, &scope)
+        };
+        let groups: Vec<Value> = found
             .into_iter()
             .map(|(address, members)| {
                 let keep = merge::default_keep(&self.index, &members);
@@ -907,7 +927,7 @@ impl App {
         let keep = id_of(c, "keep").ok_or("Hauptziel fehlt")?;
         let mut idx = self.index.clone();
         let r = rj_core::merge::merge(&mut idx, keep, &ids_of(c, "others"), "").map_err(|e| e.to_string())?;
-        Ok(json!({ "ways": r.ways, "logins": r.logins, "notes": r.notes }))
+        Ok(json!({ "ways": r.ways, "own": r.own, "notes": r.notes }))
     }
 
     /// Fasst die gewählten Gruppen zusammen; ein Schritt zum Rückgängigmachen.
@@ -921,7 +941,7 @@ impl App {
             return Err("Keine Gruppe gewählt".into());
         }
         self.simple("Ziele zusammenfassen", |idx| {
-            let (mut targets, mut ways, mut logins, mut notes) = (0, 0, 0, Vec::new());
+            let (mut targets, mut ways, mut own, mut notes) = (0, 0, 0, Vec::new());
             for (keep, others, name) in &groups {
                 if others.is_empty() {
                     continue;
@@ -929,10 +949,10 @@ impl App {
                 let r = rj_core::merge::merge(idx, *keep, others, name)?;
                 targets += others.len();
                 ways += r.ways;
-                logins += r.logins;
+                own += r.own;
                 notes.extend(r.notes);
             }
-            Ok(json!({ "merged": targets, "ways": ways, "logins": logins, "notes": notes }))
+            Ok(json!({ "merged": targets, "ways": ways, "own": own, "notes": notes }))
         })
     }
 
@@ -1120,7 +1140,7 @@ impl App {
         // Zugangswege: vollständig prüfen, bevor etwas geändert wird.
         let ways = match (&node, f.get("ways")) {
             (Some(Node::Target(t)), Some(v)) => match ways_from(v, t, &self.index) {
-                Ok(w) => Some(w),
+                Ok((w, own)) => Some((w, own)),
                 Err(e) => return Ok(json!({ "errors": { "ways": e } })),
             },
             _ => None,
@@ -1155,6 +1175,18 @@ impl App {
                 return Err(e);
             }
         }
+        // Eigene Zugangsdaten an Zugangswegen: KDBX-Eintrag anlegen bzw. ändern.
+        let ways = match ways {
+            Some((mut list, own)) => {
+                let target_name = edit::node(&self.index, id).map(|n| n.name().to_string()).unwrap_or_default();
+                if let Err(e) = self.apply_way_credentials(&target_name, &mut list, own) {
+                    self.index = before;
+                    return Err(e);
+                }
+                Some(list)
+            }
+            None => None,
+        };
         let res = (|| -> Result<(), String> {
             let protocol = match &node {
                 Some(Node::Target(t)) => Some(t.protocol),
@@ -1490,6 +1522,41 @@ impl App {
         true
     }
 
+    /// Eigene Zugangsdaten der Wege: vorhandenen eigenen Eintrag ändern (leeres Kennwort = unverändert), sonst einen
+    /// neuen Eintrag „Ziel – Weg“ anlegen.
+    fn apply_way_credentials(&mut self, target_name: &str, list: &mut [rj_core::model::AccessWay], own: Vec<OwnInput>) -> Result<(), String> {
+        if own.is_empty() {
+            return Ok(());
+        }
+        let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
+        for (wid, username, password) in own {
+            let Some(w) = list.iter_mut().find(|w| w.id == wid) else { continue };
+            // Unverändert (gleicher Benutzer, kein neues Kennwort): Eintrag nicht anfassen.
+            let current = w.own.as_ref().and_then(|r| vault.credential(r.entry)).map(|c| c.data.username);
+            if password.is_none() && current.as_deref() == Some(username.as_str()) {
+                continue;
+            }
+            let title = format!("{target_name} – {}", w.label());
+            let entry = match w.own.as_ref().map(|r| r.entry).filter(|e| vault.is_own_entry(*e)) {
+                Some(e) => {
+                    let old = vault.credential(e).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
+                    let data = CredentialData { title: title.clone(), username, password: password.unwrap_or(old.data.password.clone()), ..old.data };
+                    vault.update_credential(e, data).map_err(|e| e.to_string())?;
+                    e
+                }
+                None => {
+                    // Fremder Eintrag (z. B. aus dem Zusammenfassen): ohne neues Kennwort das bisherige übernehmen.
+                    let old_pw = w.own.as_ref().and_then(|r| vault.credential(r.entry)).map(|c| c.data.password);
+                    vault
+                        .add_credential(CredentialData { title: title.clone(), username, password: password.or(old_pw).unwrap_or_default(), ..Default::default() })
+                        .map_err(|e| e.to_string())?
+                }
+            };
+            w.own = Some(CredentialRef { entry, last_title: Some(title) });
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_target_notes(&mut self, id: Uuid, text: String) -> Result<(), String> {
         self.simple("Notizen ändern", |idx| match rj_core::inherit::find_node_mut(&mut idx.root, id) {
             Some(Node::Target(t)) => {
@@ -1774,6 +1841,42 @@ mod tests {
     }
 
     #[test]
+    fn own_way_credentials_create_update_and_raise_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let id = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "rdp", "name": "HV" }))["id"].as_str().unwrap().to_string();
+        let tid = Uuid::parse_str(&id).unwrap();
+        let wid = Uuid::new_v4().to_string();
+        let way = |user: &str, pw: Option<&str>| {
+            let mut w = json!({ "id": wid, "protocol": "web", "name": "iLO", "host": "https://192.0.2.192/", "credential": "own", "username": user });
+            if let Some(p) = pw {
+                w["password"] = json!(p);
+            }
+            json!({ "op": "update", "id": id, "fields": { "ways": [w] } })
+        };
+        let r = cmd(&mut app, way("Administrator", Some("geheim ")));
+        assert!(r.get("errors").is_none() && r.get("error").is_none(), "{r}");
+        let own = app.target(tid).unwrap().ways[0].own.clone().expect("eigener Eintrag");
+        let c = app.vault.as_ref().unwrap().credential(own.entry).unwrap();
+        assert_eq!((c.data.username.as_str(), c.data.password.as_bytes()), ("Administrator", "geheim ".as_bytes()));
+        assert_eq!(rj_core::schema::written_version(&app.index), rj_core::SCHEMA_VERSION, "eigene Zugangsdaten: Schema 5");
+        // Unverändert gespeichert: derselbe Eintrag, Kennwort bleibt.
+        cmd(&mut app, way("Administrator", None));
+        assert_eq!(app.target(tid).unwrap().ways[0].own.as_ref().map(|r| r.entry), Some(own.entry));
+        // Neues Kennwort: derselbe (eigene) Eintrag wird geändert.
+        cmd(&mut app, way("Administrator", Some("neu")));
+        assert_eq!(app.vault.as_ref().unwrap().credential(own.entry).unwrap().data.password.as_bytes(), b"neu");
+        let e = j(app.editor_json(tid));
+        assert_eq!((e["ways"][0]["credential"].as_str(), e["ways"][0]["username"].as_str()), (Some("own"), Some("Administrator")));
+        assert!(e["ways"][0].get("password").is_none());
+        // Zurück auf „wie das Ziel“: Schema 4.
+        cmd(&mut app, json!({ "op": "update", "id": id, "fields": { "ways": [{ "id": wid, "protocol": "web", "credential": "target" }] } }));
+        assert!(app.target(tid).unwrap().ways[0].own.is_none());
+        assert_eq!(rj_core::schema::written_version(&app.index), rj_core::model::SCHEMA_VERSION_WAYS);
+    }
+
+    #[test]
     fn aruba_detection_adds_the_web_way_once() {
         let dir = tempfile::tempdir().unwrap();
         let (mut app, _path, _key) = app_with_vault(dir.path());
@@ -1813,7 +1916,7 @@ mod tests {
         let members: Vec<String> = g[0]["members"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_string()).collect();
         assert_eq!(g[0]["keep"], members[0].as_str());
         let c = cmd(&mut app, json!({ "op": "merge_check", "keep": members[0], "others": [members[1]] }));
-        assert_eq!((c["ways"].as_u64(), c["logins"].as_u64()), (Some(1), Some(0)), "{c}");
+        assert_eq!((c["ways"].as_u64(), c["own"].as_u64()), (Some(1), Some(0)), "{c}");
         assert_eq!(app.index, before, "Vorschau und Prüfung ändern nichts");
         let r = cmd(&mut app, json!({ "op": "merge_apply", "groups": [{ "keep": members[0], "others": [members[1]], "name": "AP 1" }] }));
         assert_eq!(r["merged"], 1, "{r}");
@@ -2251,6 +2354,7 @@ pub(crate) fn inventory_source_text(src: rj_core::inherit::InventorySource, on: 
 /// Zugangsweg für die Oberfläche.
 pub(crate) fn way_json(w: &rj_core::model::AccessWay) -> Value {
     let cred = match w.credential {
+        _ if w.own.is_some() => json!("own"),
         rj_core::model::WayCredential::Target => json!("target"),
         rj_core::model::WayCredential::None => json!("none"),
         rj_core::model::WayCredential::Login(id) => json!(id),
@@ -2259,10 +2363,14 @@ pub(crate) fn way_json(w: &rj_core::model::AccessWay) -> Value {
 }
 
 /// Zugangswege aus dem Eigenschaften-Tab prüfen. Optionen bekannter Wege (gleiche ID, gleiches Protokoll) bleiben.
-fn ways_from(v: &Value, t: &rj_core::Target, index: &Index) -> Result<Vec<rj_core::model::AccessWay>, String> {
+/// Eigene Zugangsdaten eines Wegs aus dem Eigenschaften-Tab: Weg, Benutzername, neues Kennwort (falls eingegeben).
+type OwnInput = (Uuid, String, Option<Secret>);
+
+fn ways_from(v: &Value, t: &rj_core::Target, index: &Index) -> Result<(Vec<rj_core::model::AccessWay>, Vec<OwnInput>), String> {
     use rj_core::model::{AccessWay, WayCredential};
     let list = v.as_array().ok_or("Zugangswege: Liste erwartet")?;
     let mut out = Vec::new();
+    let mut own = Vec::new();
     for (n, w) in list.iter().enumerate() {
         let nr = n + 1;
         let protocol = match w.get("protocol").and_then(Value::as_str) {
@@ -2295,8 +2403,9 @@ fn ways_from(v: &Value, t: &rj_core::Target, index: &Index) -> Result<Vec<rj_cor
                 }
             }
         };
+        let own_input = w.get("credential").and_then(Value::as_str) == Some("own");
         let credential = match w.get("credential").and_then(Value::as_str) {
-            None | Some("target") => WayCredential::Target,
+            None | Some("target") | Some("own") => WayCredential::Target,
             Some("none") => WayCredential::None,
             Some(s) => match Uuid::parse_str(s) {
                 Ok(id) if index.login(id).is_some() => WayCredential::Login(id),
@@ -2310,6 +2419,16 @@ fn ways_from(v: &Value, t: &rj_core::Target, index: &Index) -> Result<Vec<rj_cor
             if let Some(old) = t.ways.iter().find(|x| x.id == id && x.protocol == protocol) {
                 way.options = old.options.clone();
             }
+            // Eigene Zugangsdaten: bisherigen Eintrag behalten (Benutzer und Kennwort setzt `apply_way_credentials`).
+            if own_input {
+                way.own = t.ways.iter().find(|x| x.id == id).and_then(|x| x.own.clone());
+            }
+        }
+        if own_input {
+            let username = w.get("username").and_then(Value::as_str).unwrap_or_default().to_string();
+            // Kennwort byte-genau; leer = unverändert.
+            let password = w.get("password").and_then(Value::as_str).filter(|p| !p.is_empty()).map(Secret::from_str_exact);
+            own.push((way.id, username, password));
         }
         way.name = w.get("name").and_then(Value::as_str).unwrap_or_default().trim().to_string();
         way.host = host;
@@ -2317,6 +2436,6 @@ fn ways_from(v: &Value, t: &rj_core::Target, index: &Index) -> Result<Vec<rj_cor
         way.credential = credential;
         out.push(way);
     }
-    Ok(out)
+    Ok((out, own))
 }
 

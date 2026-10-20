@@ -32,10 +32,11 @@ constexpr int RoleName = Qt::UserRole + 2;
 const QString undoLabel = QStringLiteral("Ziele zusammenfassen");
 } // namespace
 
-MergeTab::MergeTab(RjBackend* backend, const QStringList& ids, const QString& title, QWidget* parent)
+MergeTab::MergeTab(RjBackend* backend, const QStringList& ids, const QString& title, bool manual, QWidget* parent)
   : ToolTab(parent)
   , m_backend(backend)
   , m_ids(ids)
+  , m_manual(manual)
 {
 	auto T = [backend](const char* k) { return backend->text(QString::fromLatin1(k)); };
 	setObjectName(QStringLiteral("mergeTab"));
@@ -49,7 +50,7 @@ MergeTab::MergeTab(RjBackend* backend, const QStringList& ids, const QString& ti
 	auto* hh = new QHBoxLayout;
 	auto* hv = new QVBoxLayout;
 	hv->setSpacing(2);
-	auto* caption = new QLabel(T("merge.head").arg(title), head);
+	auto* caption = new QLabel(T(manual ? "merge.head.manual" : "merge.head").arg(title), head);
 	QFont tf = caption->font();
 	tf.setPointSizeF(tf.pointSizeF() * 1.3);
 	tf.setBold(true);
@@ -188,7 +189,7 @@ QString MergeTab::edit(const QJsonObject& cmd) const
 void MergeTab::load()
 {
 	auto T = [this](const char* k) { return m_backend->text(QString::fromLatin1(k)); };
-	const QJsonObject r = parseObj(edit({ { QStringLiteral("op"), QStringLiteral("merge_preview") }, { QStringLiteral("ids"), QJsonArray::fromStringList(m_ids) } }));
+	const QJsonObject r = parseObj(edit({ { QStringLiteral("op"), QStringLiteral("merge_preview") }, { QStringLiteral("ids"), QJsonArray::fromStringList(m_ids) }, { QStringLiteral("manual"), m_manual } }));
 	m_filling = true;
 	m_list->clear();
 	m_current = nullptr;
@@ -318,7 +319,7 @@ void MergeTab::check(QTreeWidgetItem* g)
 	}
 	QStringList lines;
 	lines << T("merge.notes.ways").arg(r.value(QStringLiteral("ways")).toInt());
-	if (const int l = r.value(QStringLiteral("logins")).toInt(); l > 0)
+	if (const int l = r.value(QStringLiteral("own")).toInt(); l > 0)
 		lines << T("merge.notes.logins").arg(l);
 	for (const QJsonValue& n : r.value(QStringLiteral("notes")).toArray())
 		lines << QStringLiteral("• ") + n.toString();
@@ -340,7 +341,7 @@ void MergeTab::updateState()
 		}
 	}
 	if (groups == 0)
-		m_state->setText(T("merge.none"));
+		m_state->setText(T(m_manual ? "merge.none.manual" : "merge.none"));
 	else
 		m_state->setText(T("merge.state").arg(groups).arg(chosen).arg(targets));
 	m_apply->setEnabled(chosen > 0);
@@ -379,7 +380,7 @@ void MergeTab::apply()
 	emit indexChanged();
 	load();
 	QString done = T("merge.done").arg(groups.size()).arg(r.value(QStringLiteral("merged")).toInt()).arg(r.value(QStringLiteral("ways")).toInt());
-	if (const int l = r.value(QStringLiteral("logins")).toInt(); l > 0)
+	if (const int l = r.value(QStringLiteral("own")).toInt(); l > 0)
 		done += T("merge.done.logins").arg(l);
 	m_done = done;
 	m_state->setText(done);

@@ -11,10 +11,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 /// Aktuelle Schema-Version des Index.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 /// Ohne zusätzliche Zugangswege wird weiter Schema 3 geschrieben, damit ältere Fassungen die Datei weiter
 /// bearbeiten können; erst der erste Zugangsweg hebt die Datei auf Schema 4.
 pub const SCHEMA_VERSION_WITHOUT_WAYS: u32 = 3;
+/// Mit Zugangswegen, aber ohne eigene Zugangsdaten an einem Weg: Schema 4 (bearbeitbar ab 0.1.15).
+pub const SCHEMA_VERSION_WAYS: u32 = 4;
 
 /// Name des Zugangsdatensatzes, wenn das Ziel keinen nennt.
 pub const DEFAULT_CREDENTIAL: &str = "default";
@@ -234,6 +236,10 @@ pub struct AccessWay {
     pub options: ProtocolOptions,
     #[serde(default, skip_serializing_if = "WayCredential::is_target")]
     pub credential: WayCredential,
+    /// Eigene Zugangsdaten des Wegs (eigener KDBX-Eintrag); hat Vorrang vor `credential`. Eigenes Feld statt
+    /// einer weiteren Art in `credential`, damit ältere Fassungen die Datei (schreibgeschützt) noch lesen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own: Option<CredentialRef>,
 }
 
 /// Zugangsdaten eines Zugangswegs.
@@ -257,7 +263,7 @@ impl WayCredential {
 
 impl AccessWay {
     pub fn new(protocol: Protocol) -> Self {
-        AccessWay { id: Uuid::new_v4(), name: String::new(), protocol, host: String::new(), port: None, options: ProtocolOptions::None, credential: WayCredential::Target }
+        AccessWay { id: Uuid::new_v4(), name: String::new(), protocol, host: String::new(), port: None, options: ProtocolOptions::None, credential: WayCredential::Target, own: None }
     }
 
     /// Anzeigename: eigener Name, sonst das Protokoll.
@@ -875,6 +881,15 @@ impl Index {
         for d in &self.snmp_devices {
             out.insert(d.credential.entry);
         }
+        fn ways(f: &Folder, out: &mut std::collections::BTreeSet<Uuid>) {
+            for n in &f.children {
+                match n {
+                    Node::Target(t) => out.extend(t.ways.iter().filter_map(|w| w.own.as_ref().map(|r| r.entry))),
+                    Node::Folder(sub) => ways(sub, out),
+                }
+            }
+        }
+        ways(&self.root, &mut out);
         out
     }
 }

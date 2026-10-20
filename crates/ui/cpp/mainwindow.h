@@ -69,7 +69,7 @@ public:
 	void patchdayForFirstTargets(int n);
 	/// Vorschau „Gleiche Adressen zusammenfassen“ für den ersten Ordner (Bildschirmfotos).
 	void mergeForFirstFolder();
-	void openMerge(const QStringList& ids, const QString& title);
+	void openMerge(const QStringList& ids, const QString& title, bool manual = false);
 	/// Messwerte der Patchday-Ansicht (längstes Neuzeichnen, Anzahl).
 	QString patchdayMeasurement() const;
 	QTreeView* tree() const { return m_tree; }
@@ -214,6 +214,10 @@ private:
 	QLineEdit* m_search;
 	bool m_edgeOverride = false;
 	bool m_treeLoaded = false;
+	/// Aufklappen durch das Programm (Wiederherstellen, Suche): dabei keine Gäste laden.
+	bool m_autoExpand = false;
+	/// Hypervisor-Knoten, deren Gäste noch nicht geladen sind, wieder zuklappen.
+	void collapseUnloadedHypervisors();
 	/// Suche aktiv (Zeilen ausgeblendet); beim Verlassen wird der Baum einmal neu aufgebaut.
 	bool m_searchApplied = false;
 	QSet<QString> m_expandedIds;

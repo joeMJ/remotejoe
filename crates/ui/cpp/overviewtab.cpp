@@ -310,7 +310,13 @@ void OverviewTab::refreshInventorySwitch()
 		renderWays(r);
 	}
 	else if (!m_subject.contains(QStringLiteral("hv")))
-		emit closeRequested(); // Ziel gibt es nicht mehr (gelöscht oder zusammengefasst).
+	{
+		// Nur schließen, wenn es das Ziel nicht mehr gibt (gelöscht oder zusammengefasst); ein anderer Fehler
+		// beim Auffrischen (z. B. während eine Verbindung aufgebaut wird) lässt die Übersicht offen.
+		const QJsonObject e = call({ { QStringLiteral("op"), QStringLiteral("target_exists") } });
+		if (e.contains(QStringLiteral("exists")) && !e.value(QStringLiteral("exists")).toBool())
+			emit closeRequested();
+	}
 }
 
 void OverviewTab::applyInventorySwitch(const QJsonObject& r)

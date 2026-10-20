@@ -61,8 +61,16 @@ pub fn written_version(index: &Index) -> u32 {
             crate::model::Node::Folder(sub) => any_ways(sub),
         })
     }
-    if any_ways(&index.root) {
+    fn any_own(f: &crate::model::Folder) -> bool {
+        f.children.iter().any(|n| match n {
+            crate::model::Node::Target(t) => t.ways.iter().any(|w| w.own.is_some()),
+            crate::model::Node::Folder(sub) => any_own(sub),
+        })
+    }
+    if any_own(&index.root) {
         SCHEMA_VERSION
+    } else if any_ways(&index.root) {
+        crate::model::SCHEMA_VERSION_WAYS
     } else {
         crate::model::SCHEMA_VERSION_WITHOUT_WAYS
     }
@@ -119,6 +127,8 @@ fn migrate_step(from: u32, value: Value) -> Result<Value, SchemaError> {
         2 => Ok(value),
         // 3 → 4: zusätzliche Zugangswege je Ziel (optional); vorhandene Daten bleiben unverändert.
         3 => Ok(value),
+        // 4 → 5: eigene Zugangsdaten an Zugangswegen (optional); vorhandene Daten bleiben unverändert.
+        4 => Ok(value),
         _ => Err(SchemaError::Migration {
             from,
             reason: "keine Migration bekannt".into(),
@@ -220,7 +230,7 @@ mod tests {
         assert!(matches!(&via.options, ProtocolOptions::Web(o) if o.url.as_deref() == Some("https://192.0.2.4:4343")));
         assert!(via.ways.is_empty());
         // Ein Programm, das nur Schema 3 kennt, öffnet Schema 4 schreibgeschützt (bestehende Regel für neuere Dateien).
-        assert!(SCHEMA_VERSION == 4);
+        assert!(SCHEMA_VERSION == 5);
     }
 
     fn sample() -> Index {

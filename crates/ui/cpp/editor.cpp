@@ -1821,6 +1821,8 @@ void PropertiesTab::wipeSecrets()
 		pw.fill(QLatin1Char(' '));
 		m_password->clear();
 	}
+	if (m_ways)
+		m_ways->wipeSecrets();
 }
 
 void PropertiesTab::requestClose(std::function<void()> close)

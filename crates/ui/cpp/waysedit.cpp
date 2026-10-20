@@ -115,11 +115,24 @@ void WaysEditor::addRow(const QJsonObject& w)
 	r.port->setMaximumWidth(110);
 	r.credential = new QComboBox(box);
 	r.credential->addItem(T("ways.cred.target"), QStringLiteral("target"));
+	r.credential->addItem(T("ways.cred.own"), QStringLiteral("own"));
 	for (const QJsonValue& l : m_logins)
 		r.credential->addItem(T("ways.cred.login").arg(l.toObject().value(QStringLiteral("name")).toString()), l.toObject().value(QStringLiteral("id")).toString());
 	r.credential->addItem(T("ways.cred.none"), QStringLiteral("none"));
 	const QJsonValue cred = w.value(QStringLiteral("credential"));
 	r.credential->setCurrentIndex(qMax(0, r.credential->findData(cred.isString() ? cred.toString() : QStringLiteral("target"))));
+	// Eigene Zugangsdaten: Benutzer und Kennwort direkt am Weg (eigener KDBX-Eintrag).
+	r.ownBox = new QWidget(box);
+	auto* oh = new QHBoxLayout(r.ownBox);
+	oh->setContentsMargins(0, 0, 0, 0);
+	r.user = new QLineEdit(w.value(QStringLiteral("username")).toString(), r.ownBox);
+	r.user->setPlaceholderText(T("ways.own.user"));
+	r.pass = new QLineEdit(r.ownBox);
+	r.pass->setEchoMode(QLineEdit::Password);
+	r.pass->setPlaceholderText(cred.toString() == QLatin1String("own") ? T("ways.own.pass.keep") : T("ways.own.pass"));
+	oh->addWidget(r.user, 1);
+	oh->addWidget(r.pass, 1);
+	r.ownBox->setVisible(r.credential->currentData().toString() == QLatin1String("own"));
 	auto* remove = new QPushButton(T("ways.remove"), box);
 	auto lab = [box](const QString& t) { return new QLabel(t, box); };
 	g->addWidget(lab(T("ways.protocol")), 0, 0);
@@ -132,6 +145,7 @@ void WaysEditor::addRow(const QJsonObject& w)
 	g->addWidget(r.port, 1, 4);
 	g->addWidget(lab(T("ways.cred")), 2, 0);
 	g->addWidget(r.credential, 2, 1, 1, 4);
+	g->addWidget(r.ownBox, 3, 1, 1, 4);
 	g->setColumnStretch(3, 1);
 	m_rows->addWidget(box);
 	m_list.append(r);
@@ -144,6 +158,9 @@ void WaysEditor::addRow(const QJsonObject& w)
 	};
 	connect(r.protocol, &QComboBox::currentIndexChanged, this, changed);
 	connect(r.credential, &QComboBox::currentIndexChanged, this, changed);
+	connect(r.credential, &QComboBox::currentIndexChanged, this, [r] { r.ownBox->setVisible(r.credential->currentData().toString() == QLatin1String("own")); });
+	connect(r.user, &QLineEdit::textEdited, this, changed);
+	connect(r.pass, &QLineEdit::textEdited, this, changed);
 	connect(r.name, &QLineEdit::textEdited, this, changed);
 	connect(r.host, &QLineEdit::textEdited, this, changed);
 	connect(r.port, &QLineEdit::textEdited, this, changed);
@@ -191,6 +208,13 @@ QJsonArray WaysEditor::ways() const
 		w.insert(QStringLiteral("host"), r.host->text().trimmed());
 		w.insert(QStringLiteral("port"), r.port->text().trimmed());
 		w.insert(QStringLiteral("credential"), r.credential->currentData().toString());
+		if (r.credential->currentData().toString() == QLatin1String("own"))
+		{
+			w.insert(QStringLiteral("username"), r.user->text());
+			// Kennwort byte-genau; leer = unverändert.
+			if (!r.pass->text().isEmpty())
+				w.insert(QStringLiteral("password"), r.pass->text());
+		}
 		out.append(w);
 	}
 	return out;
@@ -242,4 +266,14 @@ void WaysEditor::suggest()
 	m_hint->show();
 	if (added)
 		emit changed();
+}
+
+void WaysEditor::wipeSecrets()
+{
+	for (const Row& r : std::as_const(m_list))
+	{
+		QString pw = r.pass->text();
+		pw.fill(QLatin1Char(' '));
+		r.pass->clear();
+	}
 }
