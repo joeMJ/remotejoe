@@ -99,6 +99,12 @@ impl Inventory {
     }
 }
 
+/// Geräteart aus dem Inventar, für ein eigenes Symbol im Baum: `aruba-ap`, sobald das Inventar ein Aruba-Gerät
+/// meldet (System „Aruba Instant …“ aus `show version`).
+pub fn device_kind(inv: &Inventory) -> Option<&'static str> {
+    inv.value("system").filter(|s| s.starts_with("Aruba")).map(|_| "aruba-ap")
+}
+
 /// Ablage der Inventardateien.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -114,6 +120,21 @@ impl Store {
     fn path(&self, key: &str) -> Option<PathBuf> {
         let safe: String = key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
         self.dir.as_ref().map(|d| d.join(format!("{safe}.json")))
+    }
+
+    /// Gerätearten aller Ziele mit Inventardatei (einmal beim Start; Gäste haben keine UUID als Namen).
+    pub fn scan_devices(&self) -> std::collections::HashMap<Uuid, &'static str> {
+        let mut out = std::collections::HashMap::new();
+        let Some(dir) = &self.dir else { return out };
+        let Ok(entries) = std::fs::read_dir(dir) else { return out };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let Some(id) = name.strip_suffix(".json").and_then(|s| Uuid::parse_str(s).ok()) else { continue };
+            if let Some(kind) = device_kind(&self.load(id)) {
+                out.insert(id, kind);
+            }
+        }
+        out
     }
 
     pub fn load(&self, id: Uuid) -> Inventory {

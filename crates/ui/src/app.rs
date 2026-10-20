@@ -800,7 +800,7 @@ impl App {
 
     pub fn tree_json(&self, filter: &str) -> String {
         let lights = |id: Uuid| self.lights.get(&id).copied();
-        let nodes = match self.view.as_str() {
+        let mut nodes = match self.view.as_str() {
             "" => tree::tree(&self.index, filter, &lights),
             "favorites" => tree::listed(&self.index, &self.index.favorites, filter, &lights),
             v => match self.index.views.iter().find(|x| x.id.to_string() == v) {
@@ -808,6 +808,7 @@ impl App {
                 None => tree::tree(&self.index, filter, &lights),
             },
         };
+        tree::mark_devices(&mut nodes, &|id| self.overview.devices.get(&id).copied());
         serde_json::to_string(&nodes).unwrap_or_else(|_| "[]".into())
     }
 

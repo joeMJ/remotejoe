@@ -56,6 +56,10 @@ pub fn colors(id: &str, dark: bool, style: &str, accent: &str, muted: &str, own:
             m.insert(k.clone(), c.clone());
         }
     }
+    // Aruba-AP (aus dem Inventar erkannt) wie SSH: über SSH erreicht, eigene Form statt eigener Farbe.
+    if let Some(c) = m.get("ssh").cloned() {
+        m.insert("aruba".into(), c);
+    }
     m
 }
 

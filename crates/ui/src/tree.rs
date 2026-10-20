@@ -34,6 +34,9 @@ pub struct UiNode {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<UiNode>,
     pub folder: bool,
+    /// Geräteart aus dem Inventar (eigenes Symbol, z. B. `aruba-ap`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<&'static str>,
     /// Anmeldeobjekt (keine Verbindung, öffnet die Bearbeitung).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub login: bool,
@@ -63,6 +66,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         light: lights(sub.id),
                         children,
                         folder: true,
+                        device: None,
                         login: false,
                     });
                 }
@@ -79,6 +83,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         light: lights(t.id),
                         children: Vec::new(),
                         folder: false,
+                        device: None,
                         login: false,
                     });
                 }
@@ -98,6 +103,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                 light: None,
                 children: Vec::new(),
                 folder: false,
+                device: None,
                 login: true,
             });
         }
@@ -214,5 +220,16 @@ mod tests {
         assert_eq!(targets, 500);
         assert!(el.as_millis() < 200, "Baum für 500 Einträge in {el:?}");
         assert!(json.len() > 10_000);
+    }
+}
+
+/// Geräteart in die Knoten eintragen (nach dem Aufbau, aus der Merkliste des Inventars).
+pub fn mark_devices(nodes: &mut [UiNode], device: &dyn Fn(Uuid) -> Option<&'static str>) {
+    for n in nodes {
+        if n.folder {
+            mark_devices(&mut n.children, device);
+        } else if n.protocol.is_some() {
+            n.device = device(n.id);
+        }
     }
 }

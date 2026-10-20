@@ -75,11 +75,29 @@ pub struct OverviewState {
     run: Option<Run>,
     /// Laufende Abfragen je Ziel bzw. Gast (keine doppelten Starts).
     busy: HashMap<String, u64>,
+    /// Geräteart je Ziel aus dem Inventar (eigenes Symbol im Baum, z. B. Aruba-AP).
+    pub devices: HashMap<Uuid, &'static str>,
 }
 
 impl Default for OverviewState {
     fn default() -> Self {
-        OverviewState { store: Store::default_location(), services: HashMap::new(), run: None, busy: HashMap::new() }
+        let store = Store::default_location();
+        let devices = store.scan_devices();
+        OverviewState { store, services: HashMap::new(), run: None, busy: HashMap::new(), devices }
+    }
+}
+
+impl OverviewState {
+    /// Inventar speichern und die Geräteart des Ziels nachführen.
+    pub fn save_inventory(&mut self, key: &str, inv: &Inventory) -> Result<(), String> {
+        let r = self.store.save_key(key, inv);
+        if let Ok(id) = Uuid::parse_str(key) {
+            match inventory::device_kind(inv) {
+                Some(k) => self.devices.insert(id, k),
+                None => self.devices.remove(&id),
+            };
+        }
+        r
     }
 }
 
@@ -285,7 +303,7 @@ impl App {
                     }
                     inv.offer(k, &v, src, at);
                 }
-                let saved = app.overview.store.save_key(&job_key, &inv);
+                let saved = app.overview.save_inventory(&job_key, &inv);
                 if services.get("list").is_some() {
                     app.overview.services.insert(job_key.clone(), (Instant::now(), services.clone()));
                 }
@@ -353,7 +371,7 @@ impl App {
                         for (k, v) in found {
                             inv.offer(k, &v, src, at);
                         }
-                        let saved = app.overview.store.save_key(&job_key, &inv);
+                        let saved = app.overview.save_inventory(&job_key, &inv);
                         json!({ "inventory": inventory_json(&inv), "error": saved.err(), "note": note })
                     }
                     // Verweise nur, wenn der Dienst fehlt oder nicht erreichbar ist – nicht bei Host-Schlüssel oder Anmeldung.
@@ -376,7 +394,7 @@ impl App {
         } else {
             inv.set_manual(field, c.get("value").and_then(Value::as_str).unwrap_or_default(), now())?;
         }
-        self.overview.store.save_key(&key, &inv)?;
+        self.overview.save_inventory(&key, &inv)?;
         Ok(json!({ "inventory": inventory_json(&inv) }))
     }
 

@@ -95,6 +95,8 @@ constexpr int RoleSessionMark = Qt::UserRole + 9;
 constexpr int RoleLogin = Qt::UserRole + 10;
 /// Zustand eines Gasts (z. B. `running`), für die Übersicht.
 constexpr int RoleGuestState = Qt::UserRole + 11;
+// Symbolart: Protokoll oder erkannte Geräteart (z. B. „aruba“ für einen Aruba-AP aus dem Inventar).
+constexpr int RoleIconKind = Qt::UserRole + 12;
 /// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
 constexpr int RoleMacro = Qt::UserRole + 20;
 
@@ -201,6 +203,8 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 		{ "hyperv", RJ_G("<rect x='4' y='5' width='24' height='9' rx='2'/><rect x='4' y='18' width='24' height='9' rx='2'/><path d='M8.5 9.5h.1M8.5 22.5h.1M14 9.5h10M14 22.5h10'/>"), "#3a4a8c" },
 		// Anmeldung: Schlüssel
 		{ "login", RJ_G("<circle cx='11' cy='16' r='6'/><path d='M17 16h11M24 16v5M28 16v4'/>"), "#6a1b9a" },
+		// Aruba-AP (aus dem Inventar erkannt): Deckenpunkt mit Statuslicht, darüber drei Funkbögen
+		{ "aruba", RJ_G("<rect x='4' y='19' width='24' height='8' rx='4'/><path d='M16 23h.1'/><path d='M12.5 14.5a5 5 0 0 1 7 0'/><path d='M9 11a10 10 0 0 1 14 0'/><path d='M5.5 7.5a15 15 0 0 1 21 0'/>"), "#00897b" },
 		// Makro: Abspielzeichen
 		{ "macro", RJ_G("<path d='M10 6l16 10-16 10z' fill='COLOR' fill-opacity='0.25'/>"), "#6a1b9a" },
 	};
@@ -282,7 +286,9 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		item->setEditable(false);
 		item->setData(n.value(QStringLiteral("id")).toString(), RoleId);
 		item->setData(folder, RoleFolder);
-		item->setIcon(protocolIcon(n.value(QStringLiteral("protocol")).toString(), n.value(QStringLiteral("light")).toString(), folder));
+		const QString iconKind = n.value(QStringLiteral("device")).toString() == QLatin1String("aruba-ap") ? QStringLiteral("aruba") : n.value(QStringLiteral("protocol")).toString();
+		item->setData(iconKind, RoleIconKind);
+		item->setIcon(protocolIcon(iconKind, n.value(QStringLiteral("light")).toString(), folder));
 		item->setData(n.value(QStringLiteral("light")).toString(), RoleLight);
 		if (n.value(QStringLiteral("login")).toBool())
 		{
@@ -1623,7 +1629,8 @@ void MainWindow::updateSessionMarks()
 				if (i->data(RoleSessionMark).toInt() != m)
 				{
 					i->setData(m, RoleSessionMark);
-					i->setIcon(protocolIcon(i->data(RoleProtocol).toString(), i->data(RoleLight).toString(), false, m));
+					const QString kind = i->data(RoleIconKind).toString();
+					i->setIcon(protocolIcon(kind.isEmpty() ? i->data(RoleProtocol).toString() : kind, i->data(RoleLight).toString(), false, m));
 				}
 			}
 			walk(i);
@@ -3856,6 +3863,8 @@ void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 			selectId(s.value(QStringLiteral("id")).toString());
 			connectSelected();
 		});
+		// Nach einer Inventarabfrage: Symbol im Baum nachziehen (z. B. Aruba-AP erkannt).
+		connect(t, &OverviewTab::inventoryChanged, this, [this] { QTimer::singleShot(0, this, [this] { reloadTree(); }); });
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
 	}
 	else

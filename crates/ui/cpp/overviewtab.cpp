@@ -352,6 +352,7 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 			setQueryState(done);
 			// Aruba erst nach der Abfrage bekannt.
 			m_arubaCard->setVisible(call({ { QStringLiteral("op"), QStringLiteral("overview") } }).value(QStringLiteral("aruba")).toBool());
+			emit inventoryChanged();
 		}
 		if (r.value(QStringLiteral("error")).isString())
 			showQueryError(r);

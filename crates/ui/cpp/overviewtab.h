@@ -43,6 +43,8 @@ signals:
 	void titleChanged();
 	/// „Verbinden“ in der Kopfkarte.
 	void connectRequested(const QJsonObject& subject);
+	/// Inventar abgefragt: die Geräteart (Symbol im Baum) kann sich geändert haben.
+	void inventoryChanged();
 
 private:
 	QJsonObject call(const QJsonObject& cmd) const;
