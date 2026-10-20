@@ -1914,6 +1914,11 @@ void MainWindow::handleConnectResult(const QString& id, const QString& json)
 		const auto s = std::uint64_t(r.value(QStringLiteral("session")).toInteger());
 		if (auto* p = pane(s))
 		{
+			// Neue Sitzung nach vorn, auch wenn eine Übersicht oder ein anderer erhaltener Tab vorn war.
+			for (QTabWidget* tabs : findChildren<QTabWidget*>())
+				for (int i = 0; i < tabs->count(); ++i)
+					if (tabs->widget(i)->isAncestorOf(p))
+						tabs->setCurrentIndex(i);
 			if (p->terminal())
 			{
 				const QSize c = contentSize(true);
