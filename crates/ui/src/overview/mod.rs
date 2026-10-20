@@ -191,7 +191,11 @@ impl App {
                 v["sub"] = json!(format!("{} · {}:{}", protocol_label(t.protocol), rj_core::charset::mark_visible(&t.host, false), t.effective_port()));
                 v["notes"] = json!(t.meta.notes);
                 v["notes_editable"] = json!(!read_only && !self.demo);
-                v["can_query"] = json!(true);
+                let (on, src) = rj_core::inherit::resolve_inventory(&self.index, t.id).unwrap_or((false, rj_core::inherit::InventorySource::Default));
+                v["can_query"] = json!(on);
+                v["inventory_on"] = json!(on);
+                v["inventory_source"] = json!(crate::editor::inventory_source_text(src, on));
+                v["inventory_switchable"] = json!(!read_only && !self.demo);
             }
             Subject::Guest { hv_name, hv_protocol, name, .. } => {
                 v["name"] = json!(name);
@@ -296,6 +300,9 @@ impl App {
     /// Mit Anmeldung am Ziel: SSH (Linux, Aruba) oder PowerShell (Windows), Zugangsdaten aus der KDBX.
     pub fn overview_query(&mut self, c: &Value) -> Result<Value, String> {
         let Subject::Target(t) = self.ov_subject(c)? else { return Err("Gäste liefern ihr Inventar über den Hypervisor".into()) };
+        if !rj_core::inherit::resolve_inventory(&self.index, t.id).map(|(on, _)| on).unwrap_or(false) {
+            return Err("Inventar ist für dieses Ziel abgeschaltet (Übersicht oder Einstellungen → Allgemein)".into());
+        }
         if self.demo {
             return Err("In der Vorführung nicht verfügbar".into());
         }
@@ -450,6 +457,14 @@ impl App {
     }
 
     /// Notizen des Ziels speichern (Index in der KDBX); Gäste haben keine.
+    /// Schalter „Inventar abfragen“ in der Übersicht: legt die Einstellung am Ziel selbst fest und speichert.
+    pub fn overview_inventory_switch(&mut self, c: &Value) -> Result<Value, String> {
+        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Gäste haben keine Inventar-Einstellung".into()) };
+        let on = c.get("on").and_then(Value::as_bool).ok_or("Wert fehlt")?;
+        self.set_target_inventory(t.id, Some(on))?;
+        self.overview_json(c)
+    }
+
     pub fn overview_notes(&mut self, c: &Value) -> Result<Value, String> {
         let Subject::Target(t) = self.ov_subject(c)? else { return Err("Gäste haben keine Notizen".into()) };
         let text = c.get("notes").and_then(Value::as_str).unwrap_or_default().to_string();

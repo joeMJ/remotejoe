@@ -7,6 +7,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QTimer>
 #include <QtGui/QFontDatabase>
+#include <QtWidgets/QCheckBox>
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
@@ -93,9 +94,15 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	m_editToggle->setCheckable(true);
 	m_query = new QPushButton(T("ov.inventory.query"), inv);
 	m_query->setToolTip(T("ov.inventory.query.tip"));
+	// Schalter: darf sich das Inventar am Ziel anmelden (SSH/PowerShell)? Bei Web-Zielen ohne Festlegung aus.
+	m_inventoryOn = new QCheckBox(T("ov.inventory.allowed"), inv);
+	m_inventoryOn->setToolTip(T("ov.inventory.allowed.tip"));
+	ih->addWidget(m_inventoryOn);
 	ih->addWidget(m_editToggle);
 	ih->addWidget(m_query);
 	in->addLayout(ih);
+	m_inventoryRule = muted(QString(), inv);
+	in->addWidget(m_inventoryRule);
 	auto* tiles = new QGridLayout;
 	tiles->setSpacing(8);
 	for (int i = 0; i < 4; ++i)
@@ -124,6 +131,15 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	in->addWidget(m_queryState);
 	lay->addWidget(inv);
 	connect(m_query, &QPushButton::clicked, this, [this] { query(); });
+	connect(m_inventoryOn, &QCheckBox::toggled, this, [this](bool on) {
+		const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("ov_inventory") }, { QStringLiteral("on"), on } });
+		if (r.contains(QStringLiteral("error")))
+		{
+			setQueryState(r.value(QStringLiteral("error")).toString());
+			return;
+		}
+		applyInventorySwitch(r);
+	});
 	connect(m_editToggle, &QPushButton::toggled, m_inventoryBox, &QWidget::setVisible);
 
 	// Dienste
@@ -231,6 +247,22 @@ void OverviewTab::showSubject(const QJsonObject& subject, const QIcon& icon)
 	probe(false);
 }
 
+void OverviewTab::applyInventorySwitch(const QJsonObject& r)
+{
+	auto T = [this](const char* k) { return m_backend->text(QString::fromLatin1(k)); };
+	const bool guest = r.value(QStringLiteral("guest")).toBool();
+	const bool on = r.value(QStringLiteral("can_query")).toBool();
+	// Knopf bleibt sichtbar (kein Springen beim Umschalten), ist aber nur bei erlaubtem Inventar bedienbar.
+	m_query->setVisible(!guest);
+	m_query->setEnabled(on && !r.value(QStringLiteral("busy")).toBool());
+	const QSignalBlocker block(m_inventoryOn);
+	m_inventoryOn->setVisible(!guest);
+	m_inventoryOn->setChecked(on);
+	m_inventoryOn->setEnabled(r.value(QStringLiteral("inventory_switchable")).toBool());
+	m_inventoryRule->setVisible(!guest);
+	m_inventoryRule->setText(T("ov.inventory.rule").arg(on ? T("ov.inventory.rule.on") : T("ov.inventory.rule.off"), r.value(QStringLiteral("inventory_source")).toString()));
+}
+
 QString OverviewTab::fieldLabel(const QString& key) const
 {
 	return m_backend->text(QStringLiteral("ov.field.") + key);
@@ -251,12 +283,11 @@ void OverviewTab::load()
 	m_crumb->setText(r.value(QStringLiteral("path")).toString());
 	m_crumb->setVisible(!m_crumb->text().isEmpty());
 	const bool guest = r.value(QStringLiteral("guest")).toBool();
-	m_query->setVisible(r.value(QStringLiteral("can_query")).toBool());
+	applyInventorySwitch(r);
 	m_notesCard->setVisible(!guest);
 	emit titleChanged();
 	renderServices(r.value(QStringLiteral("services")));
 	renderInventory(r.value(QStringLiteral("inventory")).toArray());
-	m_query->setEnabled(!r.value(QStringLiteral("busy")).toBool());
 	setQueryState(QString());
 	m_notesEditable = r.value(QStringLiteral("notes_editable")).toBool();
 	const QSignalBlocker block(m_notes);
@@ -311,7 +342,7 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 	}
 	else if (kind == QLatin1String("ov_query"))
 	{
-		m_query->setEnabled(true);
+		m_query->setEnabled(m_inventoryOn->isChecked());
 		if (r.contains(QStringLiteral("inventory")))
 		{
 			renderInventory(r.value(QStringLiteral("inventory")).toArray());

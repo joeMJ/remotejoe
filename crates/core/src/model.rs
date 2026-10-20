@@ -483,6 +483,10 @@ pub struct Settings {
     /// Zugangsdatensatzes in `credentials`, damit die Auflösung (und ältere Fassungen) ihn finden.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<Uuid>,
+    /// Inventar mit Anmeldung (SSH/PowerShell) erlaubt; `None` = geerbt, sonst Vorgabe (siehe
+    /// `inherit::resolve_inventory`: bei Web-Zielen aus).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<bool>,
 }
 
 impl Settings {
@@ -496,6 +500,7 @@ impl Settings {
             && self.credential_name.is_none()
             && self.clipboard.is_none()
             && self.login.is_none()
+            && self.inventory.is_none()
     }
 }
 

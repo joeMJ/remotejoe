@@ -279,6 +279,12 @@ impl App {
             v["clipboard"] = json!(settings.clipboard.map(clip_str).unwrap_or("inherit"));
             v["clipboard_effective"] = json!(clip_str(edit::folder_clipboard(&self.index, id)));
         }
+        v["inventory"] = json!(match settings.inventory { None => "inherit", Some(true) => "on", Some(false) => "off" });
+        if let Some(Node::Target(t)) = node {
+            if let Ok((on, src)) = rj_core::inherit::resolve_inventory(&self.index, t.id) {
+                v["inventory_effective"] = json!(format!("{} ({})", if on { "an" } else { "aus" }, inventory_source_text(src, on)));
+            }
+        }
         v["credential"] = self.credential_section(id, node.is_some_and(|n| matches!(n, Node::Target(_))));
         // Ordner für eine neue Anmeldung aus diesem Tab: der Ordner selbst bzw. der Ordner des Ziels.
         v["folder_for_new"] = json!(match node {
@@ -626,6 +632,7 @@ impl App {
             }
             "ov_output" => Ok(json!({ "run": self.overview_output(&c) })),
             "ov_notes" => self.overview_notes(&c),
+            "ov_inventory" => self.overview_inventory_switch(&c),
             "connect_all" => self.op_connect_all(&c),
             "cert_check_start" => self.op_cert_check_start(&c),
             "cert_check_rows" => Ok(json!({ "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() })),
@@ -1063,6 +1070,13 @@ impl App {
                 Some(Value::String(s)) if s == "inherit" => Some(None),
                 Some(v) => Some(Some(serde_json::from_value(v.clone()).map_err(|e| format!("PowerShell-Transport: {e}"))?)),
             };
+            let inventory = match f.get("inventory").and_then(Value::as_str) {
+                None => None,
+                Some("inherit") => Some(None),
+                Some("on") => Some(Some(true)),
+                Some("off") => Some(Some(false)),
+                Some(_) => return Err("Inventar-Einstellung ungültig".into()),
+            };
             let clipboard = match f.get("clipboard").and_then(Value::as_str) {
                 None => None,
                 Some("inherit") => Some(None),
@@ -1083,6 +1097,9 @@ impl App {
             }
             if let Some(cl) = clipboard {
                 settings.clipboard = cl;
+            }
+            if let Some(i) = inventory {
+                settings.inventory = i;
             }
             if let Some(d) = str_of(&f, "description") {
                 meta.description = d.to_string();
@@ -1298,6 +1315,22 @@ impl App {
     /// Speichern mit Konfliktbehandlung. Antwort: `{"saved":bool}`,
     /// `{"conflict":{"mine":r,"theirs":r}}` oder `{"error":…}`.
     /// Notizen eines Ziels ändern (mit „Rückgängig“) und den Tresor speichern.
+    pub(crate) fn set_target_inventory(&mut self, id: Uuid, on: Option<bool>) -> Result<(), String> {
+        self.simple("Inventar umschalten", |idx| match rj_core::inherit::find_node_mut(&mut idx.root, id) {
+            Some(Node::Target(t)) => {
+                t.settings.inventory = on;
+                Ok(json!({ "ok": true }))
+            }
+            _ => Err(EditError::NotFound),
+        })?;
+        let r: Value = serde_json::from_str(&self.save_with(None)).map_err(|e| e.to_string())?;
+        match r.get("error").and_then(Value::as_str) {
+            Some(e) => Err(e.to_string()),
+            None if r.get("conflict").is_some() => Err("Die Schlüsseldatenbank wurde inzwischen geändert – bitte über Datei → Speichern abgleichen".into()),
+            None => Ok(()),
+        }
+    }
+
     pub(crate) fn set_target_notes(&mut self, id: Uuid, text: String) -> Result<(), String> {
         self.simple("Notizen ändern", |idx| match rj_core::inherit::find_node_mut(&mut idx.root, id) {
             Some(Node::Target(t)) => {
@@ -1989,5 +2022,15 @@ mod web_tests {
         let t = cmd(&mut app, json!({ "op": "add", "kind": "web" }))["id"].as_str().unwrap().to_string();
         let r = cmd(&mut app, json!({ "op": "update", "id": t, "fields": { "host": "", "options": { "url": "" } } }));
         assert!(r["errors"]["url"].as_str().unwrap().contains("leer"), "{r}");
+    }
+}
+
+/// Herkunft der Inventar-Einstellung für die Anzeige.
+pub(crate) fn inventory_source_text(src: rj_core::inherit::InventorySource, on: bool) -> &'static str {
+    match src {
+        rj_core::inherit::InventorySource::Target => "am Ziel festgelegt",
+        rj_core::inherit::InventorySource::Folder => "vom Ordner geerbt",
+        rj_core::inherit::InventorySource::Default if on => "Vorgabe",
+        rj_core::inherit::InventorySource::Default => "Vorgabe für Web-Ziele",
     }
 }

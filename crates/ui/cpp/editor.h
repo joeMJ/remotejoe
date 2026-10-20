@@ -223,6 +223,7 @@ private:
 	QLabel* m_nameWarn = nullptr;
 	QLineEdit* m_desc = nullptr;
 	QCheckBox* m_fav = nullptr;
+	QComboBox* m_inventory = nullptr;
 	// Verbindung
 	QLineEdit* m_host = nullptr;
 	QLabel* m_hostWarn = nullptr;

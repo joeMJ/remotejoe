@@ -7,6 +7,7 @@
 #include <QtGui/QIcon>
 
 class QGridLayout;
+class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -46,6 +47,7 @@ signals:
 private:
 	QJsonObject call(const QJsonObject& cmd) const;
 	void load();
+	void applyInventorySwitch(const QJsonObject& r);
 	void probe(bool force);
 	void query();
 	void startCheck(const QString& kind);
@@ -80,6 +82,8 @@ private:
 	QWidget* m_inventoryBox;
 	QGridLayout* m_inventoryGrid;
 	QPushButton* m_query;
+	QCheckBox* m_inventoryOn;
+	QLabel* m_inventoryRule;
 	QLabel* m_queryState;
 	QLabel* m_servicesInfo;
 	rjui::FlowBox* m_chipsBox;

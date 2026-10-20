@@ -195,7 +195,7 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
     if !params.legacy && connected.as_ref().err().is_some_and(|e| e.to_string().contains("No common")) {
         params.legacy = true;
         legacy_used = true;
-        connected = rt.block_on(SshConnection::connect(&params, known, ask));
+        connected = rt.block_on(SshConnection::connect(&params, known.clone(), ask.clone()));
     }
     let question = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let notes: Vec<String> = [
@@ -238,31 +238,23 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
         }
     }
     // Geräte-CLI (z. B. Aruba Instant): Shell öffnen, `show version` senden, bis zur nächsten Eingabeaufforderung lesen.
-    let text = rt.block_on(async {
-        let mut sh = conn.open_shell("vt100", 200, 50).await.map_err(|e| e.to_string())?;
-        let mut buf = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
-        let mut sent = false;
-        loop {
-            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if left.is_zero() {
-                break;
+    // Aruba Instant lehnt Einzelbefehle ab und beendet danach den Kanal bzw. die Verbindung („Channel send error“);
+    // scheitert die Shell auf der bisherigen Verbindung, darum einmal auf einer frischen versuchen.
+    let mut text = rt.block_on(cli_show_version(&conn));
+    if text.as_ref().map_or(true, |t| parse_aruba(t).is_none()) {
+        rt.block_on(conn.disconnect());
+        // Gleiche Regeln wie oben; den Schlüssel kennt die Ablage nach der ersten Verbindung bereits.
+        match rt.block_on(SshConnection::connect(&params, known, ask)) {
+            Ok(fresh) => {
+                text = rt.block_on(cli_show_version(&fresh));
+                rt.block_on(fresh.disconnect());
             }
-            match tokio::time::timeout(left.min(Duration::from_millis(1500)), sh.events.recv()).await {
-                Ok(Some(ShellEvent::Data(d))) => buf.extend_from_slice(&d),
-                Ok(Some(_)) | Ok(None) => break,
-                Err(_) if !sent => {
-                    // Ruhe nach dem Anmeldetext: Befehl senden.
-                    sh.write(b"show version\r\n").await.map_err(|e| e.to_string())?;
-                    sent = true;
-                }
-                Err(_) => break,
-            }
+            Err(e) => text = Err(e.to_string()),
         }
-        sh.close().await;
-        Ok::<String, String>(String::from_utf8_lossy(&buf).into_owned())
-    })?;
-    rt.block_on(conn.disconnect());
+    } else {
+        rt.block_on(conn.disconnect());
+    }
+    let text = text?;
     match parse_aruba(&text) {
         Some(f) => Ok((f, "SSH (show version)", note)),
         // Auch ohne verwertbare Antwort melden, dass ein Schlüssel übernommen wurde.
@@ -286,6 +278,55 @@ pub fn ps_inventory(spec: &JobSpec, ip: Option<&str>) -> Result<(Found, &'static
     })
     .map_err(|e| rj_psrp::explain(e.to_string()))?;
     lines.iter().find_map(|l| parse_windows(l, ip)).map(|f| (f, "PowerShell", None)).ok_or_else(|| errors.first().cloned().unwrap_or_else(|| "Keine Antwort des Inventarskripts".into()))
+}
+
+/// Interaktive Shell: auf die Eingabeaufforderung warten, `no paging` und `show version` senden, bis zur nächsten
+/// Eingabeaufforderung lesen (wie die Aruba-Instant-Werkzeuge mit `invoke_shell`). Nur dieser lesende Befehl.
+async fn cli_show_version(conn: &SshConnection) -> Result<String, String> {
+    let mut sh = conn.open_shell("vt100", 200, 50).await.map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    // 0: warten auf die erste Eingabeaufforderung, 1: „no paging“ gesendet, 2: „show version“ gesendet.
+    let mut step = 0;
+    let mut mark = 0;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        let ended_with_prompt = |b: &[u8], from: usize| String::from_utf8_lossy(&b[from.min(b.len())..]).trim_end().ends_with('#');
+        match tokio::time::timeout(left.min(Duration::from_millis(1500)), sh.events.recv()).await {
+            Ok(Some(ShellEvent::Data(d))) => {
+                buf.extend_from_slice(&d);
+                if ended_with_prompt(&buf, mark) {
+                    match step {
+                        0 => {
+                            sh.write(b"no paging\r\n").await.map_err(|e| e.to_string())?;
+                            step = 1;
+                            mark = buf.len();
+                        }
+                        1 => {
+                            sh.write(b"show version\r\n").await.map_err(|e| e.to_string())?;
+                            step = 2;
+                            mark = buf.len();
+                        }
+                        _ if String::from_utf8_lossy(&buf[mark..]).contains("Version") => break,
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Some(_)) | Ok(None) => break,
+            // Ruhe ohne erkannte Eingabeaufforderung (anderes Gerät): den Befehl trotzdem senden.
+            Err(_) if step < 2 => {
+                sh.write(b"show version\r\n").await.map_err(|e| e.to_string())?;
+                step = 2;
+                mark = buf.len();
+            }
+            Err(_) => break,
+        }
+    }
+    sh.close().await;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 #[cfg(test)]
