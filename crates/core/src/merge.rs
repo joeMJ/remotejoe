@@ -98,16 +98,9 @@ pub fn merge(index: &mut Index, keep: Uuid, others: &[Uuid], name: &str) -> Resu
     let keep_cred = inherit::resolve_credential(index, keep);
     let keep_tunnel = inherit::resolve_tunnel(index, keep).ok().flatten().map(|(t, _)| t);
     let keep_folder = edit::parent_of(index, keep).unwrap_or(index.root.id);
-    // Protokolle in der Gruppe: kommt eines mehrfach vor, tragen die Wege den Namen ihres Ziels.
-    let mut count: HashMap<Protocol, usize> = HashMap::new();
-    count.insert(base.protocol, 1);
-    for w in &base.ways {
-        *count.entry(w.protocol).or_default() += 1;
-    }
     let mut members = Vec::new();
     for id in others.iter().filter(|o| **o != keep) {
         let t = target(index, *id).cloned().ok_or(EditError::NotFound)?;
-        *count.entry(t.protocol).or_default() += 1;
         members.push(t);
     }
     let mut ways = Vec::new();
@@ -160,8 +153,8 @@ pub fn merge(index: &mut Index, keep: Uuid, others: &[Uuid], name: &str) -> Resu
             None if address_key(t) == address_key(&base) => String::new(),
             None => t.host.clone(),
         };
-        let way_name = if count.get(&t.protocol).copied().unwrap_or(0) > 1 { t.name.clone() } else { String::new() };
-        ways.push(AccessWay { id: Uuid::new_v4(), name: way_name, protocol: t.protocol, host, port: t.port, options: t.options.clone(), credential });
+        // Der Weg trägt den Namen des bisherigen Ziels (Knopf in der Übersicht, Tab „Ziel – Weg“).
+        ways.push(AccessWay { id: Uuid::new_v4(), name: t.name.clone(), protocol: t.protocol, host, port: t.port, options: t.options.clone(), credential });
         // Weitere Wege des Ziels mitnehmen; „Zugangsdaten des Ziels“ meint dort das bisherige Ziel.
         for w in &t.ways {
             let mut w = w.clone();
@@ -263,7 +256,7 @@ mod tests {
         let Some(Node::Target(k)) = edit::node(&idx, ids[0]) else { panic!() };
         assert_eq!(k.name, "AP Flur");
         assert_eq!(k.ways.len(), 2);
-        // Zwei Web-Wege: Sie tragen den Namen ihres bisherigen Ziels.
+        // Die Wege tragen den Namen ihres bisherigen Ziels.
         assert_eq!((k.ways[0].name.as_str(), k.ways[1].name.as_str()), ("ap1 web", "ap1 web alt"));
         assert!(matches!(k.ways[0].credential, WayCredential::Login(l) if idx.login(l).unwrap().entry.entry == e2));
         assert!(matches!(k.ways[0].credential, WayCredential::Login(l) if idx.login(l).unwrap().name == "ap1 web"), "ohne „(default)“");
@@ -289,6 +282,7 @@ mod tests {
         let r = merge(&mut idx, a, &[b], "").unwrap();
         let Some(Node::Target(k)) = edit::node(&idx, a) else { panic!() };
         assert_eq!((k.name.as_str(), k.ways[0].credential, k.ways[0].host.as_str()), ("a", WayCredential::None, ""));
+        assert_eq!(k.ways[0].name, "b", "Weg trägt den Namen des bisherigen Ziels");
         assert_eq!(r.logins, 0);
     }
 }
