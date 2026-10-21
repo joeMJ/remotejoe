@@ -1286,6 +1286,14 @@ impl App {
                     if t.open_with.is_some_and(|o| !t.ways.iter().any(|w| w.id == o)) {
                         t.open_with = None;
                     }
+                    // Aruba-AP: Web-Weg auf 4343 ohne Adresse bekommt die URL, sobald das Ziel eine Adresse hat.
+                    let host = t.host.trim().to_string();
+                    if !host.is_empty() {
+                        let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host };
+                        for w in t.ways.iter_mut().filter(|w| w.protocol == Protocol::Web && w.host.trim().is_empty() && w.port == Some(4343)) {
+                            w.host = format!("https://{h}:4343/");
+                        }
+                    }
                     if let Some(n) = str_of(&f, "name") {
                         t.name = n.to_string();
                     }
