@@ -214,7 +214,7 @@ pub fn download_verified_progress(
 ) -> Result<Vec<u8>> {
     let mut ctl = Control::new(limits, cancel);
     ctl.progress = progress;
-    let small = Control { limits: Limits { max_bytes: 1024 * 1024, ..limits }, cancel, deadline: ctl.deadline, progress: None };
+    let small = Control { limits: Limits { max_bytes: 1024 * 1024, ..limits }, cancel, deadline: ctl.deadline, progress: None, proxy: ctl.proxy.clone() };
     let sig = fetch(source, token, &found.sig, &small)?;
     let sums = fetch(source, token, &found.sums, &small)?;
     sign::verify(key, &sums, &sig)?;

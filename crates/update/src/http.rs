@@ -103,11 +103,19 @@ pub struct Control<'a> {
     pub deadline: Instant,
     /// Bisher gelesene Bytes des Inhalts (Fortschrittsanzeige); `None`: nicht gezählt.
     pub progress: Option<&'a AtomicU64>,
+    /// Proxy-Einstellung nur für diesen Abruf (Tests); `None`: die mit [`crate::proxy::set_mode`] gesetzte.
+    pub proxy: Option<crate::proxy::ProxyMode>,
 }
 
 impl<'a> Control<'a> {
     pub fn new(limits: Limits, cancel: Option<&'a AtomicBool>) -> Self {
-        Control { limits, cancel, deadline: Instant::now() + limits.timeout, progress: None }
+        Control { limits, cancel, deadline: Instant::now() + limits.timeout, progress: None, proxy: None }
+    }
+
+    /// Proxy-Einstellung nur für diesen Abruf.
+    pub fn with_proxy(mut self, mode: crate::proxy::ProxyMode) -> Self {
+        self.proxy = Some(mode);
+        self
     }
 
     /// Zählt die gelesenen Bytes des Inhalts mit (für eine Fortschrittsanzeige).
@@ -187,14 +195,51 @@ fn net(e: io::Error) -> UpdateError {
     UpdateError::Net(e.to_string())
 }
 
-fn connect(u: &Url, ctl: &Control) -> Result<Stream> {
-    ctl.check()?;
-    let addr = (u.host.as_str(), u.port).to_socket_addrs().map_err(net)?.next().ok_or_else(|| UpdateError::Net(format!("{} nicht auflösbar", u.host)))?;
+fn tcp(host: &str, port: u16, ctl: &Control) -> Result<TcpStream> {
+    let addr = (host, port).to_socket_addrs().map_err(net)?.next().ok_or_else(|| UpdateError::Net(format!("{host} nicht auflösbar")))?;
     let left = ctl.deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(1));
     let sock = TcpStream::connect_timeout(&addr, left.min(Duration::from_secs(30))).map_err(net)?;
     // Kurze Lesefrist, damit Abbruch und Zeitlimit greifen.
     sock.set_read_timeout(Some(Duration::from_millis(250))).map_err(net)?;
     sock.set_write_timeout(Some(Duration::from_secs(30))).map_err(net)?;
+    Ok(sock)
+}
+
+/// Tunnel durch einen HTTP-Proxy (`CONNECT`). Die Antwort wird byteweise gelesen, damit nichts vom
+/// anschließenden TLS-Austausch verloren geht.
+fn tunnel(proxy: &(String, u16), u: &Url, ctl: &Control) -> Result<TcpStream> {
+    let mut sock = tcp(&proxy.0, proxy.1, ctl).map_err(|e| UpdateError::Net(format!("Proxy {}:{} nicht erreichbar: {e}", proxy.0, proxy.1)))?;
+    let target = if u.host.contains(':') { format!("[{}]:{}", u.host, u.port) } else { format!("{}:{}", u.host, u.port) };
+    let req = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nUser-Agent: remotejoe/{}\r\n\r\n", crate::CURRENT_VERSION);
+    sock.write_all(req.as_bytes()).map_err(net)?;
+    let mut head = Vec::new();
+    let mut b = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        if read_retry(&mut sock, &mut b, ctl)? == 0 {
+            return Err(UpdateError::Net("Proxy hat die Verbindung beendet".into()));
+        }
+        head.push(b[0]);
+        if head.len() > 16 * 1024 {
+            return Err(UpdateError::Parse("Antwort des Proxys zu lang".into()));
+        }
+    }
+    let text = String::from_utf8_lossy(&head);
+    let first = text.lines().next().unwrap_or("").trim().to_string();
+    match first.split_whitespace().nth(1) {
+        Some("200") => Ok(sock),
+        Some("407") => Err(UpdateError::Net(format!("Proxy {}:{} verlangt eine Anmeldung; das wird nicht unterstützt", proxy.0, proxy.1))),
+        _ => Err(UpdateError::Net(format!("Proxy {}:{} lehnt die Verbindung ab: {first}", proxy.0, proxy.1))),
+    }
+}
+
+fn connect(u: &Url, ctl: &Control) -> Result<Stream> {
+    ctl.check()?;
+    let mode = ctl.proxy.clone().unwrap_or_else(crate::proxy::mode);
+    let url = format!("{}://{}:{}{}", if u.tls { "https" } else { "http" }, u.host, u.port, u.path);
+    let sock = match crate::proxy::for_target(&mode, &url, &u.host) {
+        Some(p) => tunnel(&p, u, ctl)?,
+        None => tcp(&u.host, u.port, ctl)?,
+    };
     if !u.tls {
         return Ok(Stream::Plain(sock));
     }
@@ -364,5 +409,63 @@ mod tests {
         assert_eq!((u.port, u.path.as_str()), (8443, "/"));
         assert!(u.join("http://dl.example.test/a").is_err(), "Weiterleitung auf http");
         assert_eq!(u.join("/b").unwrap().host, "git.example.test");
+    }
+
+    /// Abruf über einen Proxy mit CONNECT: Der Proxy bekommt nur Rechner und Port, die Anfrage geht durch den Tunnel.
+    #[test]
+    fn request_through_connect_proxy() {
+        use std::net::TcpListener;
+        use std::sync::Mutex;
+        let origin = TcpListener::bind("127.0.0.1:0").unwrap();
+        let oport = origin.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = origin.accept().unwrap();
+            let mut r = BufReader::new(s.try_clone().unwrap());
+            let mut l = String::new();
+            while r.read_line(&mut l).unwrap() > 0 && !l.ends_with("\r\n\r\n") {}
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhallo").unwrap();
+        });
+        let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+        let pport = proxy.local_addr().unwrap().port();
+        let seen = Arc::new(Mutex::new(String::new()));
+        let seen2 = seen.clone();
+        std::thread::spawn(move || {
+            let (mut c, _) = proxy.accept().unwrap();
+            let mut r = BufReader::new(c.try_clone().unwrap());
+            let mut first = String::new();
+            r.read_line(&mut first).unwrap();
+            *seen2.lock().unwrap() = first.trim().to_string();
+            let mut l = String::new();
+            while r.read_line(&mut l).unwrap() > 0 && l != "\r\n" {
+                l.clear();
+            }
+            let target = first.split_whitespace().nth(1).unwrap().to_string();
+            let up = TcpStream::connect(target).unwrap();
+            c.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").unwrap();
+            let (mut a, mut b) = (c.try_clone().unwrap(), up.try_clone().unwrap());
+            std::thread::spawn(move || {
+                let _ = io::copy(&mut b, &mut a);
+            });
+            let mut up = up;
+            let _ = io::copy(&mut r, &mut up);
+        });
+        let limits = Limits { max_bytes: 1024, timeout: Duration::from_secs(10) };
+        let ctl = Control::new(limits, None).with_proxy(crate::proxy::ProxyMode::Manual(format!("127.0.0.1:{pport}")));
+        let body = get(&format!("http://127.0.0.1:{oport}/x"), &[], "Test", &ctl).unwrap();
+        assert_eq!(body, b"hallo");
+        assert_eq!(*seen.lock().unwrap(), format!("CONNECT 127.0.0.1:{oport} HTTP/1.1"));
+        // Proxy verlangt Anmeldung: verständliche Meldung.
+        let p407 = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port407 = p407.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut c, _) = p407.accept().unwrap();
+            let mut r = BufReader::new(c.try_clone().unwrap());
+            let mut l = String::new();
+            while r.read_line(&mut l).unwrap() > 0 && !l.ends_with("\r\n\r\n") {}
+            c.write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n").unwrap();
+        });
+        let ctl = Control::new(limits, None).with_proxy(crate::proxy::ProxyMode::Manual(format!("127.0.0.1:{port407}")));
+        let e = get("http://127.0.0.1:9/x", &[], "Test", &ctl).unwrap_err().to_string();
+        assert!(e.contains("Anmeldung"), "{e}");
     }
 }

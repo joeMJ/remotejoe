@@ -4260,6 +4260,22 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 	// Die Quelle ist fest (GitHub); einstellbar ist nur die Prüfung beim Start.
 	m_onStart = new QCheckBox(T("update.on_start"), this);
 	lay->addWidget(m_onStart);
+	// Proxy: automatisch (Systemeinstellung bzw. Umgebung), keiner oder Rechner:Port.
+	auto* proxyRow = new QHBoxLayout;
+	auto* proxyLabel = new QLabel(T("update.proxy"), this);
+	m_proxyMode = new QComboBox(this);
+	m_proxyMode->addItem(T("update.proxy.auto"), QStringLiteral("auto"));
+	m_proxyMode->addItem(T("update.proxy.none"), QStringLiteral("none"));
+	m_proxyMode->addItem(T("update.proxy.manual"), QStringLiteral("manual"));
+	proxyLabel->setBuddy(m_proxyMode);
+	m_proxy = new QLineEdit(this);
+	m_proxy->setPlaceholderText(T("update.proxy.ph"));
+	m_proxy->setVisible(false);
+	proxyRow->addWidget(proxyLabel);
+	proxyRow->addWidget(m_proxyMode);
+	proxyRow->addWidget(m_proxy, 1);
+	proxyRow->addStretch(0);
+	lay->addLayout(proxyRow);
 	m_current = new QLabel(this);
 	m_found = new QLabel(this);
 	m_state = new QLabel(this);
@@ -4288,6 +4304,14 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 	row->addStretch(1);
 	lay->addLayout(row);
 	connect(m_onStart, &QCheckBox::toggled, this, [this] { saveSettings(); });
+	connect(m_proxyMode, &QComboBox::currentIndexChanged, this, [this] {
+		const bool manual = m_proxyMode->currentData().toString() == QLatin1String("manual");
+		m_proxy->setVisible(manual);
+		// Manuell wird erst mit einer Eingabe gespeichert.
+		if (!manual || !m_proxy->text().trimmed().isEmpty())
+			saveSettings();
+	});
+	connect(m_proxy, &QLineEdit::editingFinished, this, [this] { saveSettings(); });
 	connect(m_check, &QPushButton::clicked, this, [this] { check(); });
 	connect(m_install, &QPushButton::clicked, this, [this] { install(false); });
 	connect(m_later, &QPushButton::clicked, this, [this] { emit closeRequested(); });
@@ -4326,6 +4350,14 @@ void UpdateTab::refresh()
 	const QJsonObject s = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_status\"}")).toUtf8()).object();
 	const QSignalBlocker block(m_onStart);
 	m_onStart->setChecked(s.value(QStringLiteral("check_on_start")).toBool());
+	{
+		const QSignalBlocker b1(m_proxyMode);
+		const QString p = s.value(QStringLiteral("proxy")).toString().trimmed();
+		const QString mode = p.isEmpty() || p == QLatin1String("auto") ? QStringLiteral("auto") : p == QLatin1String("none") ? QStringLiteral("none") : QStringLiteral("manual");
+		m_proxyMode->setCurrentIndex(qMax(0, m_proxyMode->findData(mode)));
+		m_proxy->setText(mode == QLatin1String("manual") ? p : QString());
+		m_proxy->setVisible(mode == QLatin1String("manual"));
+	}
 	m_current->setText(m_backend->text(QStringLiteral("update.current")).arg(s.value(QStringLiteral("current")).toString(), s.value(QStringLiteral("platform")).toString()));
 	m_pageOnly = s.value(QStringLiteral("page_only")).toBool();
 	m_msi = s.value(QStringLiteral("msi")).toBool();
@@ -4359,9 +4391,13 @@ void UpdateTab::saveSettings()
 	QJsonObject o;
 	o.insert(QStringLiteral("op"), QStringLiteral("update_settings"));
 	o.insert(QStringLiteral("check_on_start"), m_onStart->isChecked());
+	const QString mode = m_proxyMode->currentData().toString();
+	o.insert(QStringLiteral("proxy"), mode == QLatin1String("manual") ? m_proxy->text().trimmed() : mode);
 	const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact))).toUtf8()).object();
 	if (r.contains(QStringLiteral("error")))
 		m_state->setText(r.value(QStringLiteral("error")).toString());
+	else if (mode == QLatin1String("manual"))
+		m_state->setText(m_backend->text(QStringLiteral("update.proxy.saved")));
 }
 
 void UpdateTab::setBusy(bool busy, const QString& text)

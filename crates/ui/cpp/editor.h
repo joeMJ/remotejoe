@@ -350,6 +350,8 @@ private:
 	void setBusy(bool busy, const QString& text = QString());
 	RjBackend* m_backend;
 	QCheckBox* m_onStart;
+	QComboBox* m_proxyMode;
+	QLineEdit* m_proxy;
 	QLabel* m_current;
 	QLabel* m_found;
 	QLabel* m_state;
