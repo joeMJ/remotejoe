@@ -99,11 +99,14 @@ impl WriteLock {
 
 impl Drop for WriteLock {
     fn drop(&mut self) {
-        let _ = self.file.unlock();
+        // Erst entfernen, dann entsperren: Andersherum könnte ein Wartender die alte Datei sperren und als aktuell
+        // ansehen, während sie gleich danach verschwindet und ein Dritter eine neue sperrt – zwei Schreiber
+        // gleichzeitig. So sieht jeder, der die alte Datei noch sperrt, dass sie nicht mehr unter dem Pfad liegt.
         // Unter Windows bleibt die Sperrdatei liegen: Eine gelöschte, aber noch von einem Wartenden geöffnete
         // Datei lässt zwei Schreiber gleichzeitig die Sperre bekommen (verschiedene „Generationen“ derselben Datei).
         #[cfg(not(windows))]
         let _ = fs::remove_file(&self.path);
+        let _ = self.file.unlock();
     }
 }
 

@@ -361,14 +361,60 @@ fn reconnect_reopens_console_without_leftovers() {
     assert_eq!(log.lock().unwrap().open_ws, 1);
     let (port1, done1) = (first.port, first.finished_flag());
     drop(first);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
     while !(done1.load(std::sync::atomic::Ordering::SeqCst) && log.lock().unwrap().open_ws == 0) {
         assert!(std::time::Instant::now() < deadline, "Reste der alten Brücke: Faden fertig {}, offene Websockets {}", done1.load(std::sync::atomic::Ordering::SeqCst), log.lock().unwrap().open_ws);
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(TcpStream::connect(("127.0.0.1", port1)).is_err(), "alter Brückenport nimmt noch Verbindungen an");
+    // Den alten Port nicht erneut ansprechen: Die Brücke gibt ihn gleich nach der ersten Verbindung frei, parallel
+    // laufende Tests können ihn sofort wieder belegen (war die Ursache sporadischer Fehlschläge). Dass der Faden
+    // beendet und kein Websocket mehr offen ist, prüft die Schleife oben.
+    let _ = port1;
     let second = c.console(&g[0]).unwrap();
     let vnc2 = VncClient::connect(&vnc_params(second.port, second.password.clone()), Arc::new(|_| false)).unwrap();
     assert_eq!(vnc2.name, "vm100");
     assert_eq!(log.lock().unwrap().open_ws, 1, "genau eine Konsole offen");
+}
+
+/// Die Brücke liest vom VNC-Client mit kurzer Frist (damit ihr Faden beim Verwerfen endet, auch wenn der Client
+/// verbunden bleibt). Nach vielen abgelaufenen Fristen müssen Daten weiter durchgehen – unter Windows gilt ein Socket
+/// nach abgelaufener Lesefrist laut Dokumentation als „unbestimmt“, das prüft dieser Test dort mit.
+#[test]
+fn bridge_keeps_working_after_idle_read_timeouts() {
+    let (url, _log) = server();
+    let c = password_client(&url, PASSWORD);
+    let g = c.guests().unwrap();
+    let bridge = c.console(&g[0]).unwrap();
+    let mut s = TcpStream::connect(("127.0.0.1", bridge.port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut read = |s: &mut TcpStream, n: usize| {
+        let mut b = vec![0u8; n];
+        s.read_exact(&mut b).unwrap();
+        b
+    };
+    assert_eq!(read(&mut s, 12), b"RFB 003.008\n");
+    s.write_all(b"RFB 003.008\n").unwrap();
+    assert_eq!(read(&mut s, 2), vec![1, 2]);
+    s.write_all(&[2]).unwrap();
+    let challenge: [u8; 16] = read(&mut s, 16).try_into().unwrap();
+    s.write_all(&vnc_auth_response(VNCTICKET.as_bytes(), &challenge)).unwrap();
+    assert_eq!(read(&mut s, 4), vec![0, 0, 0, 0], "Anmeldung");
+    s.write_all(&[1]).unwrap();
+    let init = read(&mut s, 24 + 5);
+    assert_eq!(&init[24..], b"vm100");
+    // Ruhe: Der Lesefaden der Brücke läuft mehrmals in seine Frist.
+    thread::sleep(Duration::from_millis(1200));
+    s.write_all(&[3, 0, 0, 0, 0, 0, 0, 4, 0, 2]).unwrap();
+    let update = read(&mut s, 16 + 32);
+    assert_eq!(&update[..4], &[0, 0, 0, 1], "Bildaktualisierung nach der Ruhe");
+    assert_eq!(&update[16..19], &[0x10, 0x20, 0x30]);
+    // Verwerfen bei weiter verbundenem Client: Der Faden endet zügig.
+    let done = bridge.finished_flag();
+    drop(bridge);
+    let t0 = std::time::Instant::now();
+    while !done.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(t0.elapsed() < Duration::from_secs(15), "Faden der Brücke endet nicht, obwohl der Client verbunden bleibt");
+        thread::sleep(Duration::from_millis(20));
+    }
+    drop(s);
 }

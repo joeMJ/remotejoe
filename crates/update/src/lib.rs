@@ -14,6 +14,7 @@ pub mod msi;
 pub mod github;
 pub mod http;
 pub mod install;
+pub mod proxy;
 pub mod release;
 pub mod sign;
 pub mod version;

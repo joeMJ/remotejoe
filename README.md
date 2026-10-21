@@ -686,6 +686,10 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
   Verbindungsziele, Hostnamen oder Sitzungsinhalte werden **nicht** übertragen.
 - Die Prüfung läuft nur, wenn du sie auslöst. Beim Start prüft remotejoe nur, wenn du „Beim Start prüfen“
   einschaltest (Vorgabe: aus).
+- **Proxy:** Im Update-Tab einstellbar: „Automatisch“ nimmt unter Windows die Systemeinstellung (auch mit
+  Konfigurationsskript bzw. automatischer Erkennung), sonst `HTTPS_PROXY`/`NO_PROXY`; außerdem „Kein Proxy“ oder
+  „Manuell“ (Rechner:Port). Die Verschlüsselung reicht durch den Proxy bis GitHub; eine Anmeldung am Proxy wird nicht
+  unterstützt.
 - **Hilfe → Fehler melden / Wunsch …** und **Hilfe → Hilfe** öffnen nur Seiten auf GitHub im Standardbrowser; den
   Bericht schickst du dort selbst ab, remotejoe sendet nichts.
 - **Objektübersicht:** Beim Einfachklick auf ein Ziel prüft remotejoe die gängigen Ports **dieses Ziels** (TCP-Verbindungsaufbau

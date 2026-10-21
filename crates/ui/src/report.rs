@@ -102,14 +102,17 @@ fn ipv6(text: &str) -> String {
                 Some((i, c)) if c.is_whitespace() || matches!(c, '[' | ']' | '(' | ')' | ',' | '/') => (&w[..i], &w[i..]),
                 _ => (w, ""),
             };
-            // Zonenangabe („%eth0“) gehört zur Adresse, ist aber kein Hexblock.
-            let addr = core.split('%').next().unwrap_or(core);
-            let hexish = !addr.is_empty() && addr.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.');
+            // Adresse = längster Anfang aus Hexziffern, Doppelpunkten und Punkten; folgt direkt Text
+            // („fe80::1Langtext“), bleibt nur der Text stehen (lieber zu viel ersetzt als zu wenig).
+            // Eine Zonenangabe („%eth0“) gehört zur Adresse, ist aber kein Hexblock.
+            let len = core.find(|c: char| !(c.is_ascii_hexdigit() || c == ':' || c == '.')).unwrap_or(core.len());
+            let addr = &core[..len];
+            let rest = if core[len..].starts_with('%') { "" } else { &core[len..] };
             let colons = addr.matches(':').count();
             // MAC-Adressen (aa:bb:cc:dd:ee:ff) bleiben; IPv6 hat „::“ oder mehr als fünf Doppelpunkte mit Hexblöcken.
             let mac = colons == 5 && addr.split(':').all(|p| p.len() == 2);
-            if hexish && !mac && (addr.contains("::") && colons >= 2 || colons >= 6) {
-                format!("<IPv6>{tail}")
+            if !addr.is_empty() && !mac && (addr.contains("::") && colons >= 2 || colons >= 6) {
+                format!("<IPv6>{rest}{tail}")
             } else {
                 w.to_string()
             }
@@ -153,12 +156,17 @@ mod tests {
     #[test]
     fn internal_details_are_removed() {
         let words = vec![("werkbank".to_string(), "<Rechner>"), ("anna".to_string(), "<Benutzer>"), ("ap-flur-2".to_string(), "<Ziel>")];
-        let t = "Fehler bei 10.20.30.4:22 und 198.51.100.4 (ap-flur-2), Mail an a.b@example.org; MAC 94:64:24:cc:9b:12, v6 fe80::1%eth0, Version 8.10.0.23, Nutzer Anna auf Werkbank";
+        let t = "Fehler bei 10.20.30.4:22 und 198.51.100.4 (ap-flur-2), Mail an a.b@example.org; MAC 02:00:5e:00:53:12, v6 fe80::1%eth0, Version 8.10.0.23, Nutzer Anna auf Werkbank";
         let s = sanitize(t, &words);
         assert!(!s.contains("10.20.30") && !s.contains("198.51") && !s.contains("example.org") && !s.contains("fe80"), "{s}");
         assert!(s.contains("<IP>:22") && s.contains("<Mail>") && s.contains("<IPv6>") && s.contains("<Ziel>") && s.contains("<Benutzer>") && s.contains("<Rechner>"), "{s}");
-        assert!(s.contains("94:64:24:cc:9b:12"), "MAC bleibt: {s}");
+        assert!(s.contains("02:00:5e:00:53:12"), "MAC bleibt: {s}");
         assert!(s.contains("Version 8.10.0.23"), "Versionsnummer bleibt: {s}");
+        // Adresse mit direkt anschließendem Text (Befund der Windows-Prüfung).
+        let s = sanitize("Ziel fe80::1234:5678:9abc:def0Langtext und 2001:db8::7Port", &[]);
+        assert!(!s.contains("fe80") && !s.contains("2001:db8") && s.contains("<IPv6>Langtext") && s.contains("<IPv6>Port"), "{s}");
+        // Uhrzeiten und Wörter bleiben.
+        assert_eq!(sanitize("um 12:30:45 fertig, Fehlercode deadbeef", &[]), "um 12:30:45 fertig, Fehlercode deadbeef");
     }
 
     #[test]

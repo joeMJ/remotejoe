@@ -8,6 +8,7 @@
 #include <QtWidgets/QTabBar>
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
+#include <QtCore/QCryptographicHash>
 #include <QtCore/QDir>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QFile>
@@ -272,6 +273,8 @@ void screenshots(MainWindow& w, const QString& dir)
 
 // Einzelinstanz: Eine Sperrdatei im Laufzeitordner des Benutzers und ein lokaler Server.
 // Ein zweiter Start meldet sich beim laufenden Programm (Fenster nach vorn) und endet.
+// Je Datenordner eine Instanz: Mit REMOTEJOE_HOME (z. B. Testdaten) läuft eine eigene Instanz neben der normalen.
+// Dieselbe Schlüsseldatenbank zweimal zu öffnen verhindert weiterhin deren eigene Sperre.
 struct SingleInstance
 {
 	QLockFile lock;
@@ -279,10 +282,20 @@ struct SingleInstance
 	QString serverName;
 
 	SingleInstance()
-		: lock(baseDir() + QStringLiteral("/remotejoe.lock"))
-		, serverName(QStringLiteral("remotejoe-%1").arg(qEnvironmentVariable("USER", qEnvironmentVariable("USERNAME", QStringLiteral("benutzer")))))
+		: lock(baseDir() + QStringLiteral("/remotejoe%1.lock").arg(homeSuffix()))
+		, serverName(QStringLiteral("remotejoe-%1%2").arg(qEnvironmentVariable("USER", qEnvironmentVariable("USERNAME", QStringLiteral("benutzer"))), homeSuffix()))
 	{
 		lock.setStaleLockTime(0); // veraltet nur, wenn der Prozess nicht mehr läuft
+	}
+
+	/// Leer ohne REMOTEJOE_HOME, sonst „-“ und ein Kurzhash des Ordners.
+	static QString homeSuffix()
+	{
+		const QString home = qEnvironmentVariable("REMOTEJOE_HOME").trimmed();
+		if (home.isEmpty())
+			return QString();
+		const QString clean = QDir::cleanPath(QDir(home).absolutePath());
+		return QStringLiteral("-") + QString::fromLatin1(QCryptographicHash::hash(clean.toUtf8(), QCryptographicHash::Sha256).toHex().left(10));
 	}
 
 	static QString baseDir()

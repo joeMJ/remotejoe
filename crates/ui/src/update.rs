@@ -55,8 +55,10 @@ impl App {
         self.update.dir_override.clone().or_else(|| std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())))
     }
 
-    /// Quelle der Updates: immer GitHub (außer in Tests und Vorführung).
+    /// Quelle der Updates: immer GitHub (außer in Tests und Vorführung). Jeder Abruf holt sie hier ab; dabei gilt
+    /// auch die aktuelle Proxy-Einstellung.
     fn update_source(&self) -> Source {
+        rj_update::proxy::set_mode(rj_update::proxy::ProxyMode::from_setting(&self.config.update.proxy));
         self.update.source_override.clone().unwrap_or_else(github_source)
     }
 
@@ -67,6 +69,7 @@ impl App {
             "current": rj_update::CURRENT_VERSION,
             "platform": rj_update::platform(),
             "check_on_start": self.config.update.check_on_start,
+            "proxy": self.config.update.proxy,
             "package_managed": matches!(plan, Some(install::Plan::PackageManaged { .. })),
             "development": matches!(plan, Some(install::Plan::Development { .. })),
             "busy": self.update.job.is_some_and(|j| self.jobs.is_pending(j)),
@@ -126,10 +129,17 @@ impl App {
         Ok(json!({ "job": job }))
     }
 
-    /// Einstellungen ändern: nur „Beim Start im Hintergrund prüfen“.
+    /// Einstellungen ändern: „Beim Start im Hintergrund prüfen“ und Proxy.
     pub fn update_settings(&mut self, c: &Value) -> Result<Value, String> {
         if let Some(v) = c.get("check_on_start").and_then(Value::as_bool) {
             self.config.update.check_on_start = v;
+        }
+        if let Some(p) = c.get("proxy").and_then(Value::as_str) {
+            let p = p.trim();
+            if let rj_update::proxy::ProxyMode::Manual(m) = rj_update::proxy::ProxyMode::from_setting(p) {
+                rj_update::proxy::check_manual(&m)?;
+            }
+            self.config.update.proxy = if p == "auto" { String::new() } else { p.to_string() };
         }
         if !self.demo {
             if let Some(cp) = self.config_path.clone() {

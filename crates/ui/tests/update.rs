@@ -177,6 +177,11 @@ fn check_and_install_from_the_fixed_source() {
     let r = edit(&mut app, json!({"op": "update_settings", "check_on_start": true, "source": "gitea", "repo": "fremd/repo"}));
     assert_eq!(r["check_on_start"], true, "{r}");
     assert!(app.config.update.check_on_start);
+    // Proxy: Rechner:Port wird geprüft; „auto“ wird als leer (Vorgabe) gespeichert.
+    assert!(edit(&mut app, json!({"op": "update_settings", "proxy": "proxy:keinport"}))["error"].is_string());
+    assert_eq!(edit(&mut app, json!({"op": "update_settings", "proxy": "proxy.example:3128"}))["proxy"], "proxy.example:3128");
+    assert_eq!(edit(&mut app, json!({"op": "update_settings", "proxy": "none"}))["proxy"], "none");
+    assert_eq!(edit(&mut app, json!({"op": "update_settings", "proxy": "auto"}))["proxy"], "");
     // Die Vorführquelle gibt es nur im Vorführbetrieb.
     assert!(edit(&mut app, json!({"op": "update_demo_source", "base_url": mock.base}))["error"].is_string());
     app.update.source_override = Some(Source { kind: SourceKind::Gitea, base_url: mock.base.clone(), repo: "team/remotejoe".into() });

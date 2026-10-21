@@ -403,11 +403,22 @@ fn bridge(sock: TcpStream, ws: net::WebSocket, stop: Arc<AtomicBool>) {
     let Ok(mut sock_r) = sock.try_clone() else { return };
     let mut sock_w = sock;
     let w2 = writer.clone();
+    // Kurze Lesefrist und Stopp-Marke: Unter Windows weckt `shutdown` von einem anderen Faden einen schon
+    // blockierten `recv` nicht zuverlässig auf. Bleibt der VNC-Client verbunden (z. B. beim Neuverbinden), hinge
+    // der Faden sonst samt Socket, bis der Client trennt.
+    let _ = sock_r.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+    let stop_up = stop.clone();
     let up = thread::spawn(move || {
         let mut buf = vec![0u8; 16 * 1024];
         loop {
             match sock_r.read(&mut buf) {
-                Ok(0) | Err(_) => break,
+                Ok(0) => break,
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted) => {
+                    if stop_up.load(Ordering::SeqCst) {
+                        break;
+                    }
+                }
+                Err(_) => break,
                 Ok(n) => {
                     let mut w = w2.lock().expect("Sperre");
                     if net::write_frame(&mut **w, 2, &buf[..n], true).is_err() {

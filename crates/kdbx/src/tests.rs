@@ -386,3 +386,29 @@ fn created_vault_with_generated_key_file_roundtrip() {
     assert!(Vault::open(&path, MasterKey::password("Prüf-Kennwort ✓"), IndexStorage::KdbxCustomData).is_err());
     assert!(Vault::open(&path, key, IndexStorage::KdbxCustomData).is_ok());
 }
+
+#[test]
+fn withdrawn_entries_vanish_unsaved_and_go_to_recycle_bin_once_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut v, path, key) = new_vault(dir.path(), IndexStorage::KdbxCustomData);
+    // Älterer Eintrag (nicht in dieser Sitzung angelegt) bleibt immer unberührt.
+    let old = v.add_credential(data("Alt", "alt", "a")).unwrap();
+    v.save(None).unwrap();
+    let mut v = Vault::open(&path, key.clone(), IndexStorage::KdbxCustomData).unwrap();
+    assert!(!v.withdraw_created(old).unwrap());
+    // Ungespeichert: verschwindet ganz, die Datei gilt nicht als geändert.
+    let a = v.add_credential(data("Neu", "neu", "n")).unwrap();
+    assert!(v.is_dirty());
+    assert!(v.withdraw_created(a).unwrap());
+    assert!(v.database().entry(EntryId::from_uuid(a)).is_none());
+    assert!(!v.is_dirty(), "nichts mehr zu speichern");
+    // Gespeichert: in den Papierkorb, nach dem Speichern auch in der Datei.
+    let b = v.add_credential(data("Neu 2", "neu2", "n")).unwrap();
+    v.save(None).unwrap();
+    assert!(v.withdraw_created(b).unwrap());
+    assert!(!v.entries().iter().any(|e| e.uuid == b));
+    v.save(None).unwrap();
+    let r = Vault::open(&path, key, IndexStorage::KdbxCustomData).unwrap();
+    assert!(Vault::in_recycle_bin(&r.db, EntryId::from_uuid(b)), "im Papierkorb, nicht gelöscht");
+    assert!(r.entries().iter().any(|e| e.uuid == old));
+}

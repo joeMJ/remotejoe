@@ -582,13 +582,27 @@ impl App {
             }),
             "templates" => Ok(json!(self.index.templates.iter().map(|t| json!({ "id": t.id, "name": t.name, "protocol": t.protocol.as_str(), "is_default": t.is_default })).collect::<Vec<_>>())),
             "views" => Ok(json!(self.index.views.iter().map(|v| json!({ "id": v.id, "name": v.name, "count": v.targets.len() })).collect::<Vec<_>>())),
-            "undo" => match self.history.undo(&mut self.index) {
-                Some(label) => {
-                    self.push_index();
-                    Ok(json!({ "undone": label }))
+            "undo" => {
+                let before = self.index.referenced_entries();
+                match self.history.undo(&mut self.index) {
+                    Some(label) => {
+                        // Von remotejoe in dieser Sitzung angelegte Einträge, die nach dem Rückgängigmachen niemand
+                        // mehr verwendet, zurücknehmen (sonst blieben sie als „Nicht zugeordnet“ in der KDBX).
+                        let after = self.index.referenced_entries();
+                        let mut withdrawn = 0;
+                        if let Some(v) = self.vault.as_mut() {
+                            for u in before.difference(&after) {
+                                if v.created_this_session(*u) && v.withdraw_created(*u).unwrap_or(false) {
+                                    withdrawn += 1;
+                                }
+                            }
+                        }
+                        self.push_index();
+                        Ok(json!({ "undone": label, "withdrawn": withdrawn }))
+                    }
+                    None => Err("Nichts rückgängig zu machen".into()),
                 }
-                None => Err("Nichts rückgängig zu machen".into()),
-            },
+            }
             "undo_label" => Ok(json!({ "label": self.history.last_label() })),
             "jobs" => Ok(self.jobs.json()),
             "patchday" => Ok(self.patchday_view(id_of(&c, "selected"), c.get("since").and_then(Value::as_u64).unwrap_or(0))),
@@ -2536,6 +2550,30 @@ mod tests {
         // Löschen lässt den KDBX-Eintrag bestehen: er erscheint unter „Nicht zugeordnet“.
         cmd(&mut app, json!({ "op": "delete", "id": f }));
         assert_eq!(app.vault.as_ref().unwrap().unassigned().len(), 1);
+    }
+
+    #[test]
+    fn undo_withdraws_entries_created_for_the_undone_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let t = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "web01" }))["id"].as_str().unwrap().to_string();
+        let count = |app: &App| app.vault.as_ref().unwrap().entries().len();
+        // Ungespeichert angelegt und rückgängig gemacht: kein Eintrag bleibt zurück.
+        cmd(&mut app, json!({ "op": "update", "id": t, "credential": { "mode": "direct", "username": "root", "password": "x" } }));
+        assert_eq!(count(&app), 1);
+        let u = cmd(&mut app, json!({ "op": "undo" }));
+        assert_eq!(u["withdrawn"], 1, "{u}");
+        assert_eq!(count(&app), 0);
+        assert!(app.vault.as_ref().unwrap().unassigned().is_empty());
+        // Gespeichert und dann rückgängig: wandert in den Papierkorb, nicht unter „Nicht zugeordnet“.
+        cmd(&mut app, json!({ "op": "update", "id": t, "credential": { "mode": "direct", "username": "root", "password": "y" } }));
+        app.save().unwrap();
+        assert_eq!(cmd(&mut app, json!({ "op": "undo" }))["withdrawn"], 1);
+        assert!(app.vault.as_ref().unwrap().unassigned().is_empty());
+        // Eintrag eines Anmeldeobjekts gilt als zugeordnet.
+        cmd(&mut app, json!({ "op": "login_save", "name": "Switch", "folder": root, "username": "admin", "password": "p" }));
+        assert!(app.vault.as_ref().unwrap().unassigned().is_empty(), "Anmeldeobjekt nicht unter „Nicht zugeordnet“");
     }
 
     #[test]

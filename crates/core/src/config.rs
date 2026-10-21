@@ -89,6 +89,8 @@ impl Default for AppearanceSettings {
 pub struct UpdateSettings {
     /// Beim Start im Hintergrund prüfen (Voreinstellung aus).
     pub check_on_start: bool,
+    /// Proxy: leer = automatisch (Systemeinstellung bzw. Umgebung), „none“ = keiner, sonst `Rechner:Port`.
+    pub proxy: String,
 }
 
 impl Default for Config {
