@@ -8,6 +8,7 @@
 #include "masstab.h"
 #include "mergetab.h"
 #include "sharedtab.h"
+#include "reporttab.h"
 #include <algorithm>
 
 #include "editor.h"
@@ -1339,8 +1340,13 @@ void MainWindow::buildMenus()
 	help = m_menuBar->addMenu(T(m_backend, "menu.help"));
 	help->addAction(T(m_backend, "menu.help.update"), this, [this] { openUpdateTab(); });
 	help->addAction(T(m_backend, "menu.help.help"), QKeySequence::HelpContents, this, [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kHelpUrl))); });
-	help->addAction(T(m_backend, "menu.help.issues"), this, [] {
-		QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/joeMJ/remotejoe#fehler-melden-und-w%C3%BCnsche"), QUrl::TolerantMode));
+	help->addAction(T(m_backend, "menu.help.issues"), this, [this] {
+		if (auto* old = findChild<ReportTab*>())
+		{
+			m_tabs->setCurrentWidget(old);
+			return;
+		}
+		addToolTab(new ReportTab(m_backend, m_tabs), T(m_backend, "report.tab"));
 	});
 	help->addSeparator();
 	// Das einzige Popup des Programms: „Über remotejoe“.

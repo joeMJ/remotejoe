@@ -457,7 +457,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -655,6 +655,7 @@ impl App {
             "mass_start" => self.mass_start(&c),
             "merge_preview" => self.merge_preview(&c),
             "shared_list" => Ok(self.shared_list()),
+            "report_build" => Ok(self.report_build(&c)),
             "shared_split" => self.shared_split(&c),
             "shared_to_login" => self.shared_to_login(&c),
             // Gibt es das Ziel noch? (Übersicht nach einem Fehler beim Auffrischen)
@@ -1647,6 +1648,43 @@ impl App {
         Ok(json!({ "login": lid }))
     }
 
+    /// „Fehler melden“: Text für ein GitHub-Issue zusammenstellen und bereinigen (Rechner-, Benutzer- und Zielnamen,
+    /// Adressen, Mailadressen). Gesendet wird nichts.
+    fn report_build(&self, c: &Value) -> Value {
+        let mut words: Vec<(String, &str)> = Vec::new();
+        for k in ["USER", "USERNAME", "LOGNAME"] {
+            if let Ok(v) = std::env::var(k) {
+                words.push((v, "<Benutzer>"));
+            }
+        }
+        for k in ["HOSTNAME", "COMPUTERNAME"] {
+            if let Ok(v) = std::env::var(k) {
+                words.push((v, "<Rechner>"));
+            }
+        }
+        if let Ok(h) = std::fs::read_to_string("/etc/hostname") {
+            words.push((h.trim().to_string(), "<Rechner>"));
+        }
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            words.push((home.to_string_lossy().into_owned(), "<Benutzerordner>"));
+        }
+        self.index.for_each_target(|t| {
+            words.push((t.name.clone(), "<Ziel>"));
+            words.push((t.host.clone(), "<Ziel-Adresse>"));
+        });
+        let clean = |s: &str| crate::report::sanitize(s, &words);
+        let kind = str_of(c, "kind").unwrap_or("bug");
+        let title = clean(str_of(c, "title").unwrap_or_default().trim());
+        let text = clean(str_of(c, "text").unwrap_or_default().trim());
+        let mut body = format!("### Beschreibung\n\n{text}\n\n### Umgebung\n\n- remotejoe {}\n- {}\n", str_of(c, "version").unwrap_or("?"), clean(str_of(c, "os").unwrap_or("?")));
+        let diag: Vec<String> = c.get("diag").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(clean).collect()).unwrap_or_default();
+        if !diag.is_empty() {
+            body.push_str(&format!("\n### Diagnose (letzte Einträge, bereinigt)\n\n```\n{}\n```\n", diag.join("\n")));
+        }
+        let (url, cut) = crate::report::issue_url(&title, &body, if kind == "wish" { "enhancement" } else { "bug" });
+        json!({ "url": url, "cut": cut, "title": title, "body": body })
+    }
+
     fn op_duplicate(&mut self, c: &Value) -> Result<Value, String> {
         let id = id_of(c, "id").ok_or("Objekt fehlt")?;
         let before = self.index.clone();
@@ -2103,6 +2141,18 @@ mod tests {
         assert_ne!(entry_of(&app, b), ea, "geteilter Eintrag: eigener statt überschreiben");
         let c = app.vault.as_ref().unwrap().credential(ea).unwrap();
         assert_eq!((c.data.username.as_str(), c.data.password.as_bytes()), ("alt", b"eins".as_slice()), "Original unverändert");
+    }
+
+    #[test]
+    fn report_removes_target_names_and_addresses() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        edit::insert(&mut app.index, root, Node::Target(rj_core::Target::new("ap-flur-2", Protocol::Ssh, "198.51.100.4")), None).unwrap();
+        let r = cmd(&mut app, json!({ "op": "report_build", "kind": "bug", "title": "Inventar ap-flur-2", "text": "Fehler bei 198.51.100.4 und Version 8.10.0.23", "version": "0.1.18", "os": "Ubuntu", "diag": ["verbinde 198.51.100.4"] }));
+        let all = r.to_string();
+        assert!(!all.contains("ap-flur") && !all.contains("198.51.100.4"), "{all}");
+        assert!(all.contains("Version 8.10.0.23") && all.contains("remotejoe 0.1.18"), "{all}");
+        assert!(r["url"].as_str().unwrap().starts_with(crate::report::ISSUE_URL));
     }
 
     #[test]

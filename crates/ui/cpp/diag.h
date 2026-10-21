@@ -24,4 +24,6 @@ void attachShortcut(QWidget* mainWindow);
 void log(const QString& line);
 /// Falldatei schreiben: Grund, Momentaufnahme, Verlauf. Gibt den Pfad zurück.
 QString incident(const QString& reason);
+/// Die letzten `n` Zeilen des Verlaufs (für „Fehler melden“).
+QStringList recent(int n);
 } // namespace rjdiag

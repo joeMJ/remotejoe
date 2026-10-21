@@ -21,7 +21,7 @@ fn main() {
         .qrc("res/remotejoe.qrc")
         .include_dir("cpp")
         .file("src/bridge.rs")
-        .cpp_files(["cpp/mainwindow.h", "cpp/mainwindow.cpp", "cpp/editor.h", "cpp/editor.cpp", "cpp/views.cpp", "cpp/titlebar.h", "cpp/titlebar.cpp", "cpp/appearance.h", "cpp/appearance.cpp", "cpp/settingstab.h", "cpp/settingstab.cpp", "cpp/masstab.h", "cpp/masstab.cpp", "cpp/mergetab.h", "cpp/mergetab.cpp", "cpp/sharedtab.h", "cpp/sharedtab.cpp", "cpp/waysedit.h", "cpp/waysedit.cpp", "cpp/exporttab.h", "cpp/exporttab.cpp", "cpp/overviewtab.h", "cpp/overviewtab.cpp", "cpp/cards.h", "cpp/cards.cpp", "cpp/kbcapture.h", "cpp/kbcapture.cpp", "cpp/diag.h", "cpp/diag.cpp", "cpp/app.cpp"])
+        .cpp_files(["cpp/mainwindow.h", "cpp/mainwindow.cpp", "cpp/editor.h", "cpp/editor.cpp", "cpp/views.cpp", "cpp/titlebar.h", "cpp/titlebar.cpp", "cpp/appearance.h", "cpp/appearance.cpp", "cpp/settingstab.h", "cpp/settingstab.cpp", "cpp/masstab.h", "cpp/masstab.cpp", "cpp/mergetab.h", "cpp/mergetab.cpp", "cpp/sharedtab.h", "cpp/sharedtab.cpp", "cpp/reporttab.h", "cpp/reporttab.cpp", "cpp/waysedit.h", "cpp/waysedit.cpp", "cpp/exporttab.h", "cpp/exporttab.cpp", "cpp/overviewtab.h", "cpp/overviewtab.cpp", "cpp/cards.h", "cpp/cards.cpp", "cpp/kbcapture.h", "cpp/kbcapture.cpp", "cpp/diag.h", "cpp/diag.cpp", "cpp/app.cpp"])
         .build();
     // Windows: Programmsymbol in remotejoe.exe. Explorer, Startmenü und Taskleiste nehmen es aus der exe; ohne
     // eingebettetes Symbol zeigte die Taskleiste nach einem Update ein leeres Symbol.
