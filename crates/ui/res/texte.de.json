@@ -319,6 +319,8 @@
   "ways.own.pass": "Kennwort",
   "ways.own.pass.keep": "Kennwort (leer = unverändert)",
   "ways.cred.none": "Keine (Anmeldung von Hand)",
+  "ways.options": "&Optionen",
+  "ways.options.none": "Für dieses Protokoll gibt es keine weiteren Optionen.",
   "ways.remove": "Entfernen",
   "edit.name": "&Name",
   "edit.description": "&Beschreibung",

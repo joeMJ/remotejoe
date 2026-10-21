@@ -46,7 +46,12 @@ private:
 		QWidget* ownBox;
 		QLineEdit* user;
 		QLineEdit* pass;
+		/// Protokoll-Optionen des Wegs (aufklappbar); Felder tragen ihren Schlüssel in der Eigenschaft „optkey“.
+		QPushButton* optToggle;
+		QWidget* optBox;
 	};
+	/// Felder der Optionen für das gewählte Protokoll neu aufbauen (`o`: bisherige Werte).
+	void buildOptions(Row& r, const QJsonObject& o);
 	void addRow(const QJsonObject& w);
 	void removeRow(QWidget* box);
 	void refreshOpenWith();

@@ -2165,6 +2165,31 @@ mod tests {
     }
 
     #[test]
+    fn way_options_are_saved_merged_and_validated() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        let id = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "hyperv", "name": "HV" }))["id"].as_str().unwrap().to_string();
+        let tid = Uuid::parse_str(&id).unwrap();
+        let wid = Uuid::new_v4().to_string();
+        let save = |app: &mut App, opts: Value| cmd(app, json!({ "op": "update", "id": id, "fields": { "ways": [{ "id": wid, "protocol": "rdp", "options": opts }] } }));
+        let r = save(&mut app, json!({ "gfx": "off", "width": 1600, "height": 900, "keyboard_layout": "" }));
+        assert!(r.get("errors").is_none(), "{r}");
+        let w = &app.target(tid).unwrap().ways[0];
+        assert!(matches!(&w.options, ProtocolOptions::Rdp(o) if o.gfx == rj_core::model::GfxMode::Off && o.width == Some(1600)));
+        // Eine Tastenfolge (nicht im Formular) bleibt beim nächsten Speichern erhalten.
+        if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut app.index.root, tid) {
+            if let ProtocolOptions::Rdp(o) = &mut t.ways[0].options {
+                o.auto_keys = Some(rj_core::autokeys::AutoKeys { enabled: true, script: "Taste Enter".into(), ..Default::default() });
+            }
+        }
+        save(&mut app, json!({ "gfx": "on", "width": null }));
+        let w = &app.target(tid).unwrap().ways[0];
+        assert!(matches!(&w.options, ProtocolOptions::Rdp(o) if o.gfx == rj_core::model::GfxMode::On && o.width.is_none() && o.auto_keys.is_some()), "{:?}", w.options);
+        let e = save(&mut app, json!({ "width": "breit" }));
+        assert!(e["errors"]["ways"].as_str().is_some_and(|m| m.starts_with("Weg 1")), "{e}");
+    }
+
+    #[test]
     fn report_removes_target_names_and_addresses() {
         let mut app = App::new(false);
         let root = app.index.root.id;
@@ -2769,7 +2794,7 @@ pub(crate) fn way_json(w: &rj_core::model::AccessWay) -> Value {
         rj_core::model::WayCredential::None => json!("none"),
         rj_core::model::WayCredential::Login(id) => json!(id),
     };
-    json!({ "id": w.id, "name": w.name, "label": w.label(), "protocol": w.protocol.as_str(), "host": w.host, "port": w.port, "credential": cred })
+    json!({ "id": w.id, "name": w.name, "label": w.label(), "protocol": w.protocol.as_str(), "host": w.host, "port": w.port, "credential": cred, "options": options_value(&w.options) })
 }
 
 /// Zugangswege aus dem Eigenschaften-Tab prüfen. Optionen bekannter Wege (gleiche ID, gleiches Protokoll) bleiben.
@@ -2839,6 +2864,32 @@ fn ways_from(v: &Value, t: &rj_core::Target, index: &Index) -> Result<(Vec<rj_co
             // Kennwort byte-genau; leer = unverändert.
             let password = w.get("password").and_then(Value::as_str).filter(|p| !p.is_empty()).map(Secret::from_str_exact);
             own.push((way.id, username, password));
+        }
+        // Optionen des Wegs: Felder aus dem Formular über die bisherigen legen (z. B. eine Tastenfolge bleibt),
+        // leere Felder entfernen den Wert; danach wie beim Hauptweg prüfen.
+        if let Some(Value::Object(edit)) = w.get("options") {
+            let mut base = match options_value(&way.options) {
+                Value::Object(m) => m,
+                _ => serde_json::Map::new(),
+            };
+            for (k, v) in edit {
+                match v {
+                    Value::Null => {
+                        base.remove(k);
+                    }
+                    Value::String(s) if s.trim().is_empty() => {
+                        base.remove(k);
+                    }
+                    _ => {
+                        base.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            let errs = validate_connection(protocol, "weg.example", None, Some(&Value::Object(base.clone())));
+            if let Some(e) = errs.iter().find(|(k, _)| k.as_str() != "host" && k.as_str() != "port").map(|(_, e)| e) {
+                return Err(format!("Weg {nr}: {e}"));
+            }
+            way.options = options_from(protocol, &Value::Object(base)).map_err(|e| format!("Weg {nr}: {e}"))?;
         }
         way.name = w.get("name").and_then(Value::as_str).unwrap_or_default().trim().to_string();
         way.host = host;
