@@ -707,6 +707,8 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	auto* leftLay = new QVBoxLayout(leftInner);
 	leftLay->setContentsMargins(4, 4, 4, 4);
 	m_search = new QLineEdit(leftInner);
+	// Strg+Z im Suchfeld: ohne eigene Eingabe zum Rückgängigmachen gilt es der letzten Änderung am Baum.
+	m_search->installEventFilter(this);
 	m_search->setPlaceholderText(T(m_backend, "search.placeholder"));
 	m_search->setClearButtonEnabled(true);
 	m_search->setMinimumHeight(32);
@@ -1519,7 +1521,7 @@ void MainWindow::applyTheme(bool dark)
 	  // Tabs: der aktive Tab hat Akzentbalken, kräftige Schrift und den Hintergrund der Fläche darunter;
 	  // inaktive Tabs sind abgesetzt (Schaltflächenfarbe, Nebentext) und durch Linien klar getrennt.
 	  "QTabWidget::pane { border: 1px solid %3; border-top: 2px solid %2; top: -1px; }"
-	  "QTabBar::tab { min-height: 30px; min-width: 70px; max-width: 230px; padding: 4px 16px 4px 12px; margin-right: 2px; background: %4; color: %5; border: 1px solid %3; border-bottom: none; "
+	  "QTabBar::tab { min-height: 30px; min-width: 130px; max-width: 230px; padding: 4px 16px 4px 12px; margin-right: 2px; background: %4; color: %5; border: 1px solid %3; border-bottom: none; "
 	  "border-top-left-radius: 4px; border-top-right-radius: 4px; }"
 	  "QTabBar::close-button { subcontrol-position: right; margin-right: 8px; }"
   "QTabBar::tab:selected { background: %6; color: %7; border-top: 3px solid %2; padding-top: 3px; }"
@@ -3281,6 +3283,17 @@ bool MainWindow::closeTabKeyActive() const
 
 bool MainWindow::eventFilter(QObject* o, QEvent* e)
 {
+	if (o == m_search && (e->type() == QEvent::ShortcutOverride || e->type() == QEvent::KeyPress))
+	{
+		auto* k = static_cast<QKeyEvent*>(e);
+		if (k->matches(QKeySequence::Undo) && !m_search->isUndoAvailable())
+		{
+			if (e->type() == QEvent::KeyPress)
+				undo();
+			e->accept();
+			return e->type() == QEvent::KeyPress;
+		}
+	}
 	if (m_tabs && o == m_tabs && e->type() == QEvent::Resize)
 		updateLogo();
 	// Strg+Umschalt+W soll die Sitzung erreichen, wenn es den Tab gerade nicht schließen darf.

@@ -248,9 +248,21 @@ fn hex(der: &[u8], upper: bool) -> String {
     sha2::Sha256::digest(der).iter().map(|b| if upper { format!("{b:02X}") } else { format!("{b:02x}") }).collect::<Vec<_>>().join(":")
 }
 
+/// Netzwerkfehler auf Deutsch (wie bei SSH), sonst der Text des Systems.
+fn io_text(e: std::io::Error) -> String {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::TimedOut | K::WouldBlock => "Zeitüberschreitung".into(),
+        K::ConnectionRefused => "Verbindung abgelehnt".into(),
+        K::HostUnreachable | K::NetworkUnreachable => "nicht erreichbar".into(),
+        K::ConnectionReset | K::ConnectionAborted => "Verbindung von der Gegenstelle getrennt".into(),
+        _ => e.to_string(),
+    }
+}
+
 fn connect(host: &str, port: u16) -> Result<TcpStream, Outcome> {
-    let addr = (host, port).to_socket_addrs().map_err(fail)?.next().ok_or_else(|| fail("Adresse nicht auflösbar"))?;
-    let s = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).map_err(fail)?;
+    let addr = (host, port).to_socket_addrs().map_err(|e| fail(io_text(e)))?.next().ok_or_else(|| fail("Adresse nicht auflösbar"))?;
+    let s = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).map_err(|e| fail(io_text(e)))?;
     s.set_read_timeout(Some(PROBE_TIMEOUT)).map_err(fail)?;
     s.set_write_timeout(Some(PROBE_TIMEOUT)).map_err(fail)?;
     Ok(s)
