@@ -208,7 +208,14 @@ fn tcp(host: &str, port: u16, ctl: &Control) -> Result<TcpStream> {
 /// Tunnel durch einen HTTP-Proxy (`CONNECT`). Die Antwort wird byteweise gelesen, damit nichts vom
 /// anschließenden TLS-Austausch verloren geht.
 fn tunnel(proxy: &(String, u16), u: &Url, ctl: &Control) -> Result<TcpStream> {
-    let mut sock = tcp(&proxy.0, proxy.1, ctl).map_err(|e| UpdateError::Net(format!("Proxy {}:{} nicht erreichbar: {e}", proxy.0, proxy.1)))?;
+    let mut sock = tcp(&proxy.0, proxy.1, ctl).map_err(|e| {
+        // Ohne erneutes „Netzwerk:“ (das setzt die Fehlerart selbst davor).
+        let why = match e {
+            UpdateError::Net(m) => m,
+            other => other.to_string(),
+        };
+        UpdateError::Net(format!("Proxy {}:{} nicht erreichbar: {why}", proxy.0, proxy.1))
+    })?;
     let target = if u.host.contains(':') { format!("[{}]:{}", u.host, u.port) } else { format!("{}:{}", u.host, u.port) };
     let req = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nUser-Agent: remotejoe/{}\r\n\r\n", crate::CURRENT_VERSION);
     sock.write_all(req.as_bytes()).map_err(net)?;
