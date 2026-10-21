@@ -204,3 +204,25 @@ fn damage_union_is_clipped() {
     assert_eq!(d.take(100, 100), Some((0, 10, 15, 90)));
     assert_eq!(d.take(100, 100), None);
 }
+
+#[test]
+fn certificates_are_kept_per_host_and_port() {
+    let mut c = AcceptedCerts::default();
+    let (a, b) = (vec![1u8; 16], vec![2u8; 16]);
+    let p = vec!["unbekannte Stelle".to_string()];
+    assert_eq!(AcceptedCerts::key("ap", 443), "ap");
+    assert_eq!(AcceptedCerts::key("ap", 4343), "ap:4343");
+    assert_eq!(AcceptedCerts::key("2001:db8::1", 4343), "[2001:db8::1]:4343");
+    // Älterer Eintrag ohne Port (Zertifikat von 4343): gilt weiter für ap:4343.
+    c.accept("ap", &b);
+    assert!(matches!(c.decide("ap:4343", &b, &p), CertDecision::Accepted));
+    // 443 mit anderem Zertifikat: echte Änderung (gleicher Schlüssel „ap“).
+    assert!(matches!(c.decide("ap", &a, &p), CertDecision::Ask { previous: Some(_), .. }));
+    // Anderer Dienst auf demselben Rechner: keine „Änderung“, sondern neu.
+    c.hosts.clear();
+    c.accept("ap", &a);
+    assert!(matches!(c.decide("ap:4343", &b, &p), CertDecision::Ask { previous: None, .. }));
+    c.accept("ap:4343", &b);
+    assert!(matches!(c.decide("ap:4343", &b, &p), CertDecision::Accepted) && matches!(c.decide("ap", &a, &p), CertDecision::Accepted));
+    assert!(matches!(c.decide("ap:4343", &a, &p), CertDecision::Ask { previous: Some(_), .. }), "eigener Eintrag mit Port: Änderung");
+}

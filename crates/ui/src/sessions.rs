@@ -140,6 +140,8 @@ pub enum UiEvent {
     Unlocked { targets: usize },
     /// „Alle im Ordner verbinden“ ist abgeschlossen.
     ConnectAllDone,
+    /// „Alle verbinden“ hat weitere Verbindungen gestartet: Tabs neu aufbauen, damit sie (samt Rückfragen) sichtbar sind.
+    ConnectAllProgress,
     /// Ampeln haben sich geändert; Baum neu zeichnen.
     TreeChanged,
     UnlockFailed { reason: String },

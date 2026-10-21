@@ -497,13 +497,45 @@ impl AcceptedCerts {
         sha2::Sha256::digest(der).iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
     }
 
+    /// Schlüssel eines Dienstes: Rechner, bei einem anderen Port als 443 mit Port (`host:port`, IPv6 `[h]:port`).
+    /// Ein Ziel mit mehreren Web-Wegen (z. B. 443 und 4343) hat so je Dienst ein eigenes Zertifikat.
+    pub fn key(host: &str, port: u16) -> String {
+        match port {
+            443 => host.to_string(),
+            p if host.contains(':') => format!("[{host}]:{p}"),
+            p => format!("{host}:{p}"),
+        }
+    }
+
+    /// Rechner aus einem Schlüssel (ohne Port).
+    fn host_of(key: &str) -> &str {
+        match key.rsplit_once(':') {
+            Some((h, p)) if p.parse::<u16>().is_ok() && (h.starts_with('[') || !h.contains(':')) => h.trim_start_matches('[').trim_end_matches(']'),
+            _ => key,
+        }
+    }
+
     /// Bewertung eines Zertifikats, das die Systemprüfung nicht bestanden hat
-    /// (`problems` leer: gültig).
+    /// (`problems` leer: gültig). `host` ist der Schlüssel aus [`AcceptedCerts::key`].
     pub fn decide(&self, host: &str, der: &[u8], problems: &[String]) -> CertDecision {
         if problems.is_empty() {
             return CertDecision::Valid;
         }
         let fp = Self::fingerprint(der);
+        // Ältere Einträge stehen ohne Port: Sie gelten, wenn der Fingerabdruck passt; ein anderer Fingerabdruck
+        // gehört dann womöglich zu einem anderen Dienst desselben Rechners und ist keine Änderung.
+        let plain = Self::host_of(host);
+        if plain != host && !self.hosts.contains_key(host) {
+            return match self.hosts.get(plain) {
+                Some(known) if *known == fp => CertDecision::Accepted,
+                _ => CertDecision::Ask {
+                    text: format!("Das Zertifikat von {host} ist nicht vertrauenswürdig."),
+                    detail: format!("Probleme: {}\nFingerabdruck (SHA-256): {fp}", problems.join(", ")),
+                    fingerprint: fp.clone(),
+                    previous: None,
+                },
+            };
+        }
         match self.hosts.get(host) {
             Some(known) if *known == fp => CertDecision::Accepted,
             Some(known) => CertDecision::Ask {

@@ -494,7 +494,8 @@ impl Worker {
             me.0.loading.set(false);
             let dur = me.0.load_started.get().map(|t| format!(" nach {} ms", t.elapsed().as_millis())).unwrap_or_default();
             if !ok.as_bool() && status != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED {
-                let host = check_url(&uri).map(|u| u.host).unwrap_or_default();
+                // Schlüssel des Dienstes: Rechner, bei anderem Port als 443 mit Port.
+            let host = check_url(&uri).map(|u| AcceptedCerts::key(&u.host, u.port)).unwrap_or_default();
                 let why = web_error_text(status);
                 me.trace(&format!("Laden fehlgeschlagen: {host}: {why}"));
                 let text = format!("{host}: {why}");

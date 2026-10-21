@@ -463,12 +463,13 @@ fn probe_web(spec: &ProbeSpec, stores: &Stores, roots: Option<Arc<rustls::RootCe
     let base = stores.data_dir.clone().ok_or_else(|| fail("kein Datenordner"))?;
     let key = opts.profile.clone().unwrap_or_else(|| format!("{}-{}", url.host, url.port));
     let profile = rj_web::profile_dir(&base, &key);
-    let state = match rj_web::AcceptedCerts::load(&profile).hosts.get(&url.host) {
-        Some(o) if *o == fp => CheckState::Known,
-        Some(o) => CheckState::Changed { previous: o.clone() },
-        None => CheckState::New,
+    let key = rj_web::AcceptedCerts::key(&url.host, url.port);
+    let state = match rj_web::AcceptedCerts::load(&profile).decide(&key, &der, &["?".to_string()]) {
+        rj_web::CertDecision::Accepted => CheckState::Known,
+        rj_web::CertDecision::Ask { previous: Some(o), .. } => CheckState::Changed { previous: o },
+        _ => CheckState::New,
     };
-    Ok((fp, state, SaveData::Web { profile, host: url.host, der }))
+    Ok((fp, state, SaveData::Web { profile, host: key, der }))
 }
 
 fn proxmox_known(stores: &Stores) -> BTreeMap<String, String> {
@@ -824,7 +825,7 @@ mod tests {
         assert_eq!(accept_new(&mut rows, &s).0, 2);
         // Gespeichert genau dort, wo der Web-Worker und die Proxmox-Anbindung nachsehen.
         let saved = rj_web::AcceptedCerts::load(&rj_web::profile_dir(data.path(), "ziel-1"));
-        assert_eq!(saved.hosts.get("localhost"), Some(&fp.to_uppercase()));
+        assert_eq!(saved.hosts.get(&rj_web::AcceptedCerts::key("localhost", port)), Some(&fp.to_uppercase()), "Schlüssel mit Port");
         assert_eq!(proxmox_known(&s).get(&format!("127.0.0.1:{port}")), Some(&fp));
         let rows = run(rt.handle(), specs(), Default::default(), s.clone());
         assert_eq!((rows[0].state.clone(), rows[1].state.clone()), (CheckState::Known, CheckState::Known));

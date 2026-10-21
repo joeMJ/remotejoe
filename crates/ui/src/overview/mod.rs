@@ -89,6 +89,14 @@ impl Default for OverviewState {
 }
 
 impl OverviewState {
+    /// Zuletzt als offen erkannte TCP-Ports eines Ziels (Dienstprüfung der Übersicht; ohne Ablaufzeit).
+    pub fn open_ports(&self, key: &str) -> Vec<u16> {
+        self.services
+            .get(key)
+            .and_then(|(_, v)| v["list"].as_array().map(|l| l.iter().filter(|s| s["open"] == true).filter_map(|s| s["port"].as_u64()).map(|p| p as u16).collect()))
+            .unwrap_or_default()
+    }
+
     /// Inventar speichern und die Geräteart des Ziels nachführen.
     pub fn save_inventory(&mut self, key: &str, inv: &Inventory) -> Result<(), String> {
         let r = self.store.save_key(key, inv);

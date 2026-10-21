@@ -1041,6 +1041,8 @@ mod tls {
         view: webkit2gtk::WebView,
         cert: gio::TlsCertificate,
         host: String,
+        /// Schlüssel des Dienstes (Rechner, ggf. mit Port) für die angenommenen Zertifikate.
+        key: String,
         uri: String,
         profile: PathBuf,
     }
@@ -1093,7 +1095,8 @@ mod tls {
                 }
                 let der = cert.certificate().map(|b| b.to_vec()).unwrap_or_default();
                 let known = AcceptedCerts::load(&profile);
-                match known.decide(&host, &der, &problems(flags)) {
+                let key = rj_web::check_url(uri).map(|u| AcceptedCerts::key(&u.host, u.port)).unwrap_or_else(|_| host.clone());
+                match known.decide(&key, &der, &problems(flags)) {
                     CertDecision::Valid | CertDecision::Accepted => allow(view, cert, &host, uri),
                     CertDecision::Ask { text, detail, fingerprint, previous } => {
                         let id = {
@@ -1101,7 +1104,7 @@ mod tls {
                             *n += 1;
                             *n
                         };
-                        asks.borrow_mut().insert(id, Ask { view: view.clone(), cert: cert.clone(), host: host.clone(), uri: uri.to_string(), profile: profile.clone() });
+                        asks.borrow_mut().insert(id, Ask { view: view.clone(), cert: cert.clone(), host: host.clone(), key: key.clone(), uri: uri.to_string(), profile: profile.clone() });
                         let info = rj_ipc::msg::SecurityInfo { kind: "certificate".into(), host: host.clone(), port: 0, key_type: "X.509".into(), fingerprint, previous };
                         let _ = out.send(&FromWorker::Question { id, text, detail, info });
                         view.load_html("<html><body style='font-family:sans-serif'><h2>Zertifikat nicht vertrauenswürdig</h2><p>Bitte die Rückfrage in remotejoe beantworten.</p></body></html>", None);
@@ -1119,7 +1122,7 @@ mod tls {
             }
             let der = a.cert.certificate().map(|b| b.to_vec()).unwrap_or_default();
             let mut known = AcceptedCerts::load(&a.profile);
-            known.accept(&a.host, &der);
+            known.accept(&a.key, &der);
             let _ = known.save(&a.profile);
             allow(&a.view, &a.cert, &a.host, &a.uri);
         }
