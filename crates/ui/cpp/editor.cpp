@@ -1695,6 +1695,8 @@ void PropertiesTab::showErrors(const QJsonObject& errors)
 		selectCategory(QStringLiteral("general"));
 	else if (first == QLatin1String("clipboard_limit"))
 		selectCategory(QStringLiteral("clipboard"));
+	else if (first == QLatin1String("ways"))
+		selectCategory(QStringLiteral("ways"));
 	else if (!first.isEmpty())
 		selectCategory(QStringLiteral("connection"));
 	m_status->setText(rjText(m_backend, "edit.error").arg(errors.value(first).toString()));

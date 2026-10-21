@@ -32,7 +32,12 @@ public:
 signals:
 	void changed();
 
+protected:
+	/// Mausrad über einer nicht fokussierten Auswahlliste rollt die Seite, statt den Wert zu ändern.
+	bool eventFilter(QObject* o, QEvent* e) override;
+
 private:
+	void guardWheel(QWidget* root);
 	struct Row
 	{
 		QWidget* box;

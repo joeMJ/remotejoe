@@ -2,6 +2,8 @@
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
+#include <QtCore/QCoreApplication>
+#include <QtCore/QEvent>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QUuid>
 #include <QtWidgets/QCheckBox>
@@ -44,6 +46,7 @@ WaysEditor::WaysEditor(RjBackend* backend, const QJsonObject& data, QWidget* par
 	f->addRow(T("ways.main"), main);
 	m_openWith = new QComboBox(this);
 	f->addRow(T("ways.open"), m_openWith);
+	guardWheel(this);
 	v->addLayout(f);
 	auto* intro = new QLabel(T("ways.intro"), this);
 	intro->setObjectName(QStringLiteral("rjMuted"));
@@ -182,6 +185,7 @@ void WaysEditor::addRow(const QJsonObject& w)
 			if (x.box == box)
 				buildOptions(x, QJsonObject());
 	});
+	guardWheel(box);
 }
 
 void WaysEditor::buildOptions(Row& r, const QJsonObject& o)
@@ -249,6 +253,28 @@ void WaysEditor::buildOptions(Row& r, const QJsonObject& o)
 	}
 	if (f->rowCount() == 0)
 		f->addRow(new QLabel(T("ways.options.none"), r.optBox));
+	guardWheel(r.optBox);
+}
+
+void WaysEditor::guardWheel(QWidget* root)
+{
+	for (QComboBox* c : root->findChildren<QComboBox*>())
+	{
+		c->setFocusPolicy(Qt::StrongFocus);
+		c->removeEventFilter(this);
+		c->installEventFilter(this);
+	}
+}
+
+bool WaysEditor::eventFilter(QObject* o, QEvent* e)
+{
+	if (e->type() == QEvent::Wheel)
+		if (auto* c = qobject_cast<QComboBox*>(o); c && !c->hasFocus() && c->parentWidget())
+		{
+			QCoreApplication::sendEvent(c->parentWidget(), e);
+			return true;
+		}
+	return QWidget::eventFilter(o, e);
 }
 
 void WaysEditor::removeRow(QWidget* box)

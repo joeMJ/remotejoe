@@ -180,6 +180,15 @@ pub fn validate_connection(protocol: Protocol, host: &str, port: Option<&Value>,
 }
 
 fn options_from(protocol: Protocol, v: &Value) -> Result<ProtocolOptions, String> {
+    // Zahlenfelder vorab prüfen: die Meldung von serde nennt weder das Feld noch ist sie deutsch.
+    const NUMERIC: &[(&str, &str)] = &[("width", "Breite"), ("height", "Höhe"), ("keepalive_secs", "Keepalive"), ("clipboard_limit", "Größenlimit")];
+    for (key, label) in NUMERIC {
+        if let Some(x) = v.get(*key).filter(|x| !x.is_null()) {
+            if x.as_u64().is_none_or(|n| n > u32::MAX as u64) {
+                return Err(format!("Optionen: {label} muss eine ganze Zahl ab 0 sein (eingegeben: {})", x.as_str().map_or_else(|| x.to_string(), str::to_string)));
+            }
+        }
+    }
     let r = match protocol {
         Protocol::Rdp | Protocol::Hyperv => serde_json::from_value(v.clone()).map(ProtocolOptions::Rdp),
         Protocol::Ssh => serde_json::from_value(v.clone()).map(ProtocolOptions::Ssh),
@@ -187,7 +196,7 @@ fn options_from(protocol: Protocol, v: &Value) -> Result<ProtocolOptions, String
         Protocol::Web | Protocol::Proxmox => serde_json::from_value(v.clone()).map(ProtocolOptions::Web),
         Protocol::Psrp => return Ok(ProtocolOptions::None),
     };
-    r.map_err(|e| format!("Optionen: {e}"))
+    r.map_err(|e| format!("Optionen: ungültiger Wert ({e})"))
 }
 
 fn options_value(o: &ProtocolOptions) -> Value {
@@ -1299,14 +1308,6 @@ impl App {
                     if t.open_with.is_some_and(|o| !t.ways.iter().any(|w| w.id == o)) {
                         t.open_with = None;
                     }
-                    // Aruba-AP: Web-Weg auf 4343 ohne Adresse bekommt die URL, sobald das Ziel eine Adresse hat.
-                    let host = t.host.trim().to_string();
-                    if !host.is_empty() {
-                        let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host };
-                        for w in t.ways.iter_mut().filter(|w| w.protocol == Protocol::Web && w.host.trim().is_empty() && w.port == Some(4343)) {
-                            w.host = format!("https://{h}:4343/");
-                        }
-                    }
                     if let Some(n) = str_of(&f, "name") {
                         t.name = n.to_string();
                     }
@@ -1325,6 +1326,15 @@ impl App {
                                 t.host = h;
                                 t.port = (p != t.protocol.default_port()).then_some(p);
                             }
+                        }
+                    }
+                    // Aruba-AP: Web-Weg auf 4343 ohne Adresse bekommt die URL, sobald das Ziel eine Adresse hat
+                    // (nach der Übernahme der Adresse aus dem Formular, damit es schon beim ersten Speichern greift).
+                    let host = t.host.trim().to_string();
+                    if !host.is_empty() {
+                        let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host };
+                        for w in t.ways.iter_mut().filter(|w| w.protocol == Protocol::Web && w.host.trim().is_empty() && w.port == Some(4343)) {
+                            w.host = format!("https://{h}:4343/");
                         }
                     }
                 }
@@ -2186,7 +2196,20 @@ mod tests {
         let w = &app.target(tid).unwrap().ways[0];
         assert!(matches!(&w.options, ProtocolOptions::Rdp(o) if o.gfx == rj_core::model::GfxMode::On && o.width.is_none() && o.auto_keys.is_some()), "{:?}", w.options);
         let e = save(&mut app, json!({ "width": "breit" }));
-        assert!(e["errors"]["ways"].as_str().is_some_and(|m| m.starts_with("Weg 1")), "{e}");
+        assert!(e["errors"]["ways"].as_str().is_some_and(|m| m.starts_with("Weg 1") && m.contains("Breite muss eine ganze Zahl")), "{e}");
+    }
+
+    #[test]
+    fn aruba_web_way_gets_url_on_first_save() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        let id = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "AP" }))["id"].as_str().unwrap().to_string();
+        let wid = Uuid::new_v4().to_string();
+        // Wie „Hinzufügen → Aruba-AP“: Adresse und Web-Weg (4343, ohne Adresse) im selben Speichern.
+        let r = cmd(&mut app, json!({ "op": "update", "id": id, "fields": { "host": "192.0.2.60", "ways": [{ "id": wid, "protocol": "web", "port": "4343", "host": "" }] } }));
+        assert!(r.get("errors").is_none(), "{r}");
+        let t = app.target(Uuid::parse_str(&id).unwrap()).unwrap();
+        assert_eq!(t.ways[0].host, "https://192.0.2.60:4343/");
     }
 
     #[test]

@@ -114,7 +114,7 @@ impl CheckRow {
             "target": self.spec.target,
             "name": self.spec.name,
             "protocol": self.spec.protocol.as_str(),
-            "address": format!("{}:{}", self.spec.host, self.spec.port),
+            "address": self.spec.address(),
             "kind": self.kind,
             "fingerprint": self.fingerprint,
             "state": state,
@@ -455,6 +455,19 @@ fn probe_vnc(spec: &ProbeSpec, stores: &Stores) -> Probed {
         None => CheckState::New,
     };
     Ok((fp.clone(), state, SaveData::Vnc { id, fp }))
+}
+
+impl ProbeSpec {
+    /// Angezeigte Adresse; ein Web-Ziel nur mit URL zeigt Rechner und Port aus der URL.
+    fn address(&self) -> String {
+        if self.host.trim().is_empty() && matches!(self.protocol, Protocol::Web | Protocol::Proxmox) {
+            let opts: rj_web::WebOptions = serde_json::from_str(&self.options_json).unwrap_or_default();
+            if let Ok(u) = rj_web::start_url(&opts, &self.host, self.port) {
+                return format!("{}:{}", u.host, u.port);
+            }
+        }
+        format!("{}:{}", self.host, self.port)
+    }
 }
 
 fn probe_web(spec: &ProbeSpec, stores: &Stores, roots: Option<Arc<rustls::RootCertStore>>) -> Probed {

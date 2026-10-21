@@ -98,7 +98,7 @@ QJsonObject ReportTab::build() const
 		             { QStringLiteral("version"), m_backend->appVersion() },
 		             { QStringLiteral("os"), QSysInfo::prettyProductName() + QStringLiteral(" (") + QSysInfo::currentCpuArchitecture() + QStringLiteral(")") } };
 	if (m_diag->isChecked())
-		cmd.insert(QStringLiteral("diag"), QJsonArray::fromStringList(rjdiag::recent(40)));
+		cmd.insert(QStringLiteral("diag"), QJsonArray::fromStringList(rjdiag::recent(15)));
 	return QJsonDocument::fromJson(m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact))).toUtf8()).object();
 }
 

@@ -266,7 +266,7 @@
   "certcheck.accept.n": "Neue übernehmen (%1)",
   "certcheck.again": "Erneut prüfen",
   "certcheck.close": "Schließen",
-  "certcheck.busy": "Wird geprüft … %1 von %2 Zielen",
+  "certcheck.busy": "Wird geprüft … %1 von %2 Prüfungen (Ziele, Zugangswege und offene HTTPS-Ports)",
   "certcheck.state.new": "Neu",
   "certcheck.state.known": "Bekannt",
   "certcheck.state.changed": "GEÄNDERT – bisher %1",
