@@ -180,6 +180,15 @@ pub fn validate_connection(protocol: Protocol, host: &str, port: Option<&Value>,
 }
 
 fn options_from(protocol: Protocol, v: &Value) -> Result<ProtocolOptions, String> {
+    // Zahlenfelder vorab prüfen: die Meldung von serde nennt weder das Feld noch ist sie deutsch.
+    const NUMERIC: &[(&str, &str)] = &[("width", "Breite"), ("height", "Höhe"), ("keepalive_secs", "Keepalive"), ("clipboard_limit", "Größenlimit")];
+    for (key, label) in NUMERIC {
+        if let Some(x) = v.get(*key).filter(|x| !x.is_null()) {
+            if x.as_u64().is_none_or(|n| n > u32::MAX as u64) {
+                return Err(format!("Optionen: {label} muss eine ganze Zahl ab 0 sein (eingegeben: {})", x.as_str().map_or_else(|| x.to_string(), str::to_string)));
+            }
+        }
+    }
     let r = match protocol {
         Protocol::Rdp | Protocol::Hyperv => serde_json::from_value(v.clone()).map(ProtocolOptions::Rdp),
         Protocol::Ssh => serde_json::from_value(v.clone()).map(ProtocolOptions::Ssh),
@@ -187,7 +196,7 @@ fn options_from(protocol: Protocol, v: &Value) -> Result<ProtocolOptions, String
         Protocol::Web | Protocol::Proxmox => serde_json::from_value(v.clone()).map(ProtocolOptions::Web),
         Protocol::Psrp => return Ok(ProtocolOptions::None),
     };
-    r.map_err(|e| format!("Optionen: {e}"))
+    r.map_err(|e| format!("Optionen: ungültiger Wert ({e})"))
 }
 
 fn options_value(o: &ProtocolOptions) -> Value {
@@ -457,7 +466,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -655,6 +664,7 @@ impl App {
             "mass_start" => self.mass_start(&c),
             "merge_preview" => self.merge_preview(&c),
             "shared_list" => Ok(self.shared_list()),
+            "report_build" => Ok(self.report_build(&c)),
             "shared_split" => self.shared_split(&c),
             "shared_to_login" => self.shared_to_login(&c),
             // Gibt es das Ziel noch? (Übersicht nach einem Fehler beim Auffrischen)
@@ -668,8 +678,21 @@ impl App {
             "cert_check_rows" => Ok(json!({ "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() })),
             "cert_check_progress" => Ok(json!({ "done": self.cert_done.load(std::sync::atomic::Ordering::Relaxed), "total": self.cert_total })),
             "cert_check_accept" => {
-                let (saved, errors) = crate::certcheck::accept_new(&mut self.cert_rows, &crate::certcheck::Stores::default_location());
-                Ok(json!({ "saved": saved, "errors": errors, "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() }))
+                // Im Hintergrund: Hunderte Dateien sicher zu schreiben dauert unter Windows Minuten.
+                let mut rows = self.cert_rows.clone();
+                let n = rows.iter().filter(|r| r.state == crate::certcheck::CheckState::New).count();
+                let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                self.cert_done = done.clone();
+                self.cert_total = n;
+                let job = self.jobs.spawn(&format!("Schlüssel übernehmen ({n})"), move |job| {
+                    let (saved, errors) = crate::certcheck::accept_new_with_progress(&mut rows, &crate::certcheck::Stores::default_location(), &done);
+                    Box::new(move |app: &mut App, _cancelled: bool| {
+                        let json = json!({ "saved": saved, "errors": errors, "rows": rows.iter().map(|r| r.json()).collect::<Vec<_>>() }).to_string();
+                        app.cert_rows = rows;
+                        vec![crate::sessions::UiEvent::JobResult { job, kind: "cert_accept".into(), target: String::new(), json }]
+                    })
+                });
+                Ok(json!({ "job": job, "count": n }))
             }
             "update_task" => self.simple("Aufgabe ändern", |idx| {
                 let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
@@ -1305,6 +1328,15 @@ impl App {
                             }
                         }
                     }
+                    // Aruba-AP: Web-Weg auf 4343 ohne Adresse bekommt die URL, sobald das Ziel eine Adresse hat
+                    // (nach der Übernahme der Adresse aus dem Formular, damit es schon beim ersten Speichern greift).
+                    let host = t.host.trim().to_string();
+                    if !host.is_empty() {
+                        let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host };
+                        for w in t.ways.iter_mut().filter(|w| w.protocol == Protocol::Web && w.host.trim().is_empty() && w.port == Some(4343)) {
+                            w.host = format!("https://{h}:4343/");
+                        }
+                    }
                 }
                 Some(Node::Folder(fo)) => {
                     if let Some(n) = str_of(&f, "name") {
@@ -1645,6 +1677,43 @@ impl App {
         rj_core::inherit::sync_logins(&mut self.index);
         self.commit("In Anmeldeobjekt umwandeln", before);
         Ok(json!({ "login": lid }))
+    }
+
+    /// „Fehler melden“: Text für ein GitHub-Issue zusammenstellen und bereinigen (Rechner-, Benutzer- und Zielnamen,
+    /// Adressen, Mailadressen). Gesendet wird nichts.
+    fn report_build(&self, c: &Value) -> Value {
+        let mut words: Vec<(String, &str)> = Vec::new();
+        for k in ["USER", "USERNAME", "LOGNAME"] {
+            if let Ok(v) = std::env::var(k) {
+                words.push((v, "<Benutzer>"));
+            }
+        }
+        for k in ["HOSTNAME", "COMPUTERNAME"] {
+            if let Ok(v) = std::env::var(k) {
+                words.push((v, "<Rechner>"));
+            }
+        }
+        if let Ok(h) = std::fs::read_to_string("/etc/hostname") {
+            words.push((h.trim().to_string(), "<Rechner>"));
+        }
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            words.push((home.to_string_lossy().into_owned(), "<Benutzerordner>"));
+        }
+        self.index.for_each_target(|t| {
+            words.push((t.name.clone(), "<Ziel>"));
+            words.push((t.host.clone(), "<Ziel-Adresse>"));
+        });
+        let clean = |s: &str| crate::report::sanitize(s, &words);
+        let kind = str_of(c, "kind").unwrap_or("bug");
+        let title = clean(str_of(c, "title").unwrap_or_default().trim());
+        let text = clean(str_of(c, "text").unwrap_or_default().trim());
+        let mut body = format!("### Beschreibung\n\n{text}\n\n### Umgebung\n\n- remotejoe {}\n- {}\n", str_of(c, "version").unwrap_or("?"), clean(str_of(c, "os").unwrap_or("?")));
+        let diag: Vec<String> = c.get("diag").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(clean).collect()).unwrap_or_default();
+        if !diag.is_empty() {
+            body.push_str(&format!("\n### Diagnose (letzte Einträge, bereinigt)\n\n```\n{}\n```\n", diag.join("\n")));
+        }
+        let (url, cut) = crate::report::issue_url(&title, &body, if kind == "wish" { "enhancement" } else { "bug" });
+        json!({ "url": url, "cut": cut, "title": title, "body": body })
     }
 
     fn op_duplicate(&mut self, c: &Value) -> Result<Value, String> {
@@ -2103,6 +2172,56 @@ mod tests {
         assert_ne!(entry_of(&app, b), ea, "geteilter Eintrag: eigener statt überschreiben");
         let c = app.vault.as_ref().unwrap().credential(ea).unwrap();
         assert_eq!((c.data.username.as_str(), c.data.password.as_bytes()), ("alt", b"eins".as_slice()), "Original unverändert");
+    }
+
+    #[test]
+    fn way_options_are_saved_merged_and_validated() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        let id = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "hyperv", "name": "HV" }))["id"].as_str().unwrap().to_string();
+        let tid = Uuid::parse_str(&id).unwrap();
+        let wid = Uuid::new_v4().to_string();
+        let save = |app: &mut App, opts: Value| cmd(app, json!({ "op": "update", "id": id, "fields": { "ways": [{ "id": wid, "protocol": "rdp", "options": opts }] } }));
+        let r = save(&mut app, json!({ "gfx": "off", "width": 1600, "height": 900, "keyboard_layout": "" }));
+        assert!(r.get("errors").is_none(), "{r}");
+        let w = &app.target(tid).unwrap().ways[0];
+        assert!(matches!(&w.options, ProtocolOptions::Rdp(o) if o.gfx == rj_core::model::GfxMode::Off && o.width == Some(1600)));
+        // Eine Tastenfolge (nicht im Formular) bleibt beim nächsten Speichern erhalten.
+        if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut app.index.root, tid) {
+            if let ProtocolOptions::Rdp(o) = &mut t.ways[0].options {
+                o.auto_keys = Some(rj_core::autokeys::AutoKeys { enabled: true, script: "Taste Enter".into(), ..Default::default() });
+            }
+        }
+        save(&mut app, json!({ "gfx": "on", "width": null }));
+        let w = &app.target(tid).unwrap().ways[0];
+        assert!(matches!(&w.options, ProtocolOptions::Rdp(o) if o.gfx == rj_core::model::GfxMode::On && o.width.is_none() && o.auto_keys.is_some()), "{:?}", w.options);
+        let e = save(&mut app, json!({ "width": "breit" }));
+        assert!(e["errors"]["ways"].as_str().is_some_and(|m| m.starts_with("Weg 1") && m.contains("Breite muss eine ganze Zahl")), "{e}");
+    }
+
+    #[test]
+    fn aruba_web_way_gets_url_on_first_save() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        let id = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "AP" }))["id"].as_str().unwrap().to_string();
+        let wid = Uuid::new_v4().to_string();
+        // Wie „Hinzufügen → Aruba-AP“: Adresse und Web-Weg (4343, ohne Adresse) im selben Speichern.
+        let r = cmd(&mut app, json!({ "op": "update", "id": id, "fields": { "host": "192.0.2.60", "ways": [{ "id": wid, "protocol": "web", "port": "4343", "host": "" }] } }));
+        assert!(r.get("errors").is_none(), "{r}");
+        let t = app.target(Uuid::parse_str(&id).unwrap()).unwrap();
+        assert_eq!(t.ways[0].host, "https://192.0.2.60:4343/");
+    }
+
+    #[test]
+    fn report_removes_target_names_and_addresses() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        edit::insert(&mut app.index, root, Node::Target(rj_core::Target::new("ap-flur-2", Protocol::Ssh, "198.51.100.4")), None).unwrap();
+        let r = cmd(&mut app, json!({ "op": "report_build", "kind": "bug", "title": "Inventar ap-flur-2", "text": "Fehler bei 198.51.100.4 und Version 8.10.0.23", "version": "0.1.18", "os": "Ubuntu", "diag": ["verbinde 198.51.100.4"] }));
+        let all = r.to_string();
+        assert!(!all.contains("ap-flur") && !all.contains("198.51.100.4"), "{all}");
+        assert!(all.contains("Version 8.10.0.23") && all.contains("remotejoe 0.1.18"), "{all}");
+        assert!(r["url"].as_str().unwrap().starts_with(crate::report::ISSUE_URL));
     }
 
     #[test]
@@ -2698,7 +2817,7 @@ pub(crate) fn way_json(w: &rj_core::model::AccessWay) -> Value {
         rj_core::model::WayCredential::None => json!("none"),
         rj_core::model::WayCredential::Login(id) => json!(id),
     };
-    json!({ "id": w.id, "name": w.name, "label": w.label(), "protocol": w.protocol.as_str(), "host": w.host, "port": w.port, "credential": cred })
+    json!({ "id": w.id, "name": w.name, "label": w.label(), "protocol": w.protocol.as_str(), "host": w.host, "port": w.port, "credential": cred, "options": options_value(&w.options) })
 }
 
 /// Zugangswege aus dem Eigenschaften-Tab prüfen. Optionen bekannter Wege (gleiche ID, gleiches Protokoll) bleiben.
@@ -2768,6 +2887,32 @@ fn ways_from(v: &Value, t: &rj_core::Target, index: &Index) -> Result<(Vec<rj_co
             // Kennwort byte-genau; leer = unverändert.
             let password = w.get("password").and_then(Value::as_str).filter(|p| !p.is_empty()).map(Secret::from_str_exact);
             own.push((way.id, username, password));
+        }
+        // Optionen des Wegs: Felder aus dem Formular über die bisherigen legen (z. B. eine Tastenfolge bleibt),
+        // leere Felder entfernen den Wert; danach wie beim Hauptweg prüfen.
+        if let Some(Value::Object(edit)) = w.get("options") {
+            let mut base = match options_value(&way.options) {
+                Value::Object(m) => m,
+                _ => serde_json::Map::new(),
+            };
+            for (k, v) in edit {
+                match v {
+                    Value::Null => {
+                        base.remove(k);
+                    }
+                    Value::String(s) if s.trim().is_empty() => {
+                        base.remove(k);
+                    }
+                    _ => {
+                        base.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            let errs = validate_connection(protocol, "weg.example", None, Some(&Value::Object(base.clone())));
+            if let Some(e) = errs.iter().find(|(k, _)| k.as_str() != "host" && k.as_str() != "port").map(|(_, e)| e) {
+                return Err(format!("Weg {nr}: {e}"));
+            }
+            way.options = options_from(protocol, &Value::Object(base)).map_err(|e| format!("Weg {nr}: {e}"))?;
         }
         way.name = w.get("name").and_then(Value::as_str).unwrap_or_default().trim().to_string();
         way.host = host;

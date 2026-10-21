@@ -760,6 +760,16 @@ void log(const QString& line)
 	}
 }
 
+QStringList recent(int n)
+{
+	QMutexLocker lock(&g_mutex);
+	QStringList out;
+	const int start = qMax(0, int(g_ring.size()) - n);
+	for (int i = start; i < int(g_ring.size()); ++i)
+		out << g_ring[size_t(i)];
+	return out;
+}
+
 QString incident(const QString& reason)
 {
 	const QString snap = snapshot();

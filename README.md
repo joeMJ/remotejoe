@@ -389,7 +389,9 @@ neu aufklappen.
   Ziele mit abgeschaltetem Inventar werden übersprungen.
 - **Zugangswege:** Ein Ziel kann neben dem Hauptweg weitere Wege haben (z. B. SSH und die Web-Oberfläche auf
   4343), jeder mit eigenem Protokoll, Adresse, Port, Optionen und Zugangsdaten (die des Ziels, ein Anmeldeobjekt,
-  eigene Zugangsdaten direkt am Weg oder keine).
+  eigene Zugangsdaten direkt am Weg oder keine). Die Optionen gelten je Weg: bei RDP Grafikkanal, Größe, Tastatur,
+  Zwischenablage und Zertifikat, bei SSH Terminaltyp, Keepalive und ältere Verfahren, bei VNC Zwischenablage und
+  Nur-Ansehen, bei Web die Anmeldefelder und das Zertifikat; sie werden beim Speichern geprüft.
   Die Übersicht zeigt je Weg einen Knopf; welcher Weg beim Doppelklick öffnet, ist wählbar. „Hinzufügen → Aruba-AP“
   legt SSH und Web (4343) in einem Schritt an; „Vorschlagen“ übernimmt die in der Übersicht gefundenen Dienste.
 - **Gleiche Adressen zusammenfassen:** Rechtsklick auf einen Ordner oder eine Auswahl → **Gleiche Adressen
@@ -543,6 +545,8 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
     ändert die Schriftgröße direkt im Terminal. Kopieren und Einfügen: Rechtsklick-Menü, Strg+Einfg und
     Umschalt+Einfg (auch Strg+Umschalt+C/V), Doppelklick wählt ein Wort, Dreifachklick die Zeile; markierter
     Text geht auf Wunsch sofort in die Zwischenablage, mehrzeiliges Einfügen fragt nach (beides einstellbar).
+    Die Auswahl reicht auch über den sichtbaren Bereich hinaus: beim Ziehen über den oberen oder unteren Rand
+    rollt das Terminal mit, beim Blättern bleibt sie stehen, Umschalt+Klick erweitert sie.
 11. **Makros** (SSH): Im Baum liegt das Fach **Makros**; Makros werden Zielen oder Ordnern
     zugeordnet (vererbt). In der Kopfzeile jeder SSH-Sitzung legt **Makro anlegen** ein Makro für
     dieses Ziel an, **Makro ausführen ▾** startet eines der zugeordneten. Schritte sind „Senden“
@@ -556,8 +560,8 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
     läuft nur, wenn man sie am Ziel einschaltet, das Kennwort wird getippt (nicht kopiert) und nie
     protokolliert, **Esc** bricht sie ab.
 
-12. **Hilfe** enthält „Nach Updates suchen …“, „Hilfe“ (diese Anleitung auf GitHub) und „Über
-    remotejoe …“.
+12. **Hilfe** enthält „Nach Updates suchen …“, „Hilfe“ (diese Anleitung auf GitHub), „Fehler melden / Wunsch …“
+    (siehe [Fehler melden und Wünsche](#fehler-melden-und-wünsche)) und „Über remotejoe …“.
 13. **Einstellungen:** Alle Programmeinstellungen stehen gesammelt unter **Extras → Einstellungen**, aufgebaut
     wie die Einstellungen eines Ziels: links die Bereiche mit Kurzfassung (Sperre und Zwischenablage, Tastatur,
     Terminal, Darstellung, SNMP-Geräte), rechts der gewählte Bereich. Änderungen gelten sofort und werden
@@ -682,7 +686,8 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
   Verbindungsziele, Hostnamen oder Sitzungsinhalte werden **nicht** übertragen.
 - Die Prüfung läuft nur, wenn du sie auslöst. Beim Start prüft remotejoe nur, wenn du „Beim Start prüfen“
   einschaltest (Vorgabe: aus).
-- **Hilfe → Fehler melden / Wünsche** und **Hilfe → Hilfe** öffnen nur Seiten auf GitHub im Standardbrowser.
+- **Hilfe → Fehler melden / Wunsch …** und **Hilfe → Hilfe** öffnen nur Seiten auf GitHub im Standardbrowser; den
+  Bericht schickst du dort selbst ab, remotejoe sendet nichts.
 - **Objektübersicht:** Beim Einfachklick auf ein Ziel prüft remotejoe die gängigen Ports **dieses Ziels** (TCP-Verbindungsaufbau
   ohne Anmeldung) und fragt bei offenem RDP mit NLA den Rechnernamen ab (ohne Zugangsdaten). Ping und Traceroute laufen
   nur auf Knopfdruck, ebenso „Inventar abfragen“ und das Masseninventar mit den Zugangsdaten des Ziels (nur bei
@@ -691,8 +696,12 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
 
 ## Fehler melden und Wünsche
 
-Fehler und Wünsche bitte als [Issue auf GitHub](https://github.com/joeMJ/remotejoe/issues) melden
-(im Programm: **Hilfe → Fehler melden / Wünsche**). Es kann dauern, bis ein Issue bearbeitet wird.
+Fehler und Wünsche bitte als [Issue auf GitHub](https://github.com/joeMJ/remotejoe/issues) melden.
+Am einfachsten über **Hilfe → Fehler melden / Wunsch …**: Art, Titel und Beschreibung eintragen, auf Wunsch die
+letzten Diagnose-Einträge anhängen. Version und System trägt remotejoe selbst ein; IP- und Mailadressen, Rechner-,
+Benutzer- und Zielnamen werden vorher ersetzt, die Vorschau zeigt genau, was übergeben wird. „Im Browser öffnen“
+öffnet das ausgefüllte Issue auf GitHub, abgeschickt wird es dort von dir (GitHub-Konto nötig). Ist der Text zu lang
+für die Adresse, liegt er vollständig in der Zwischenablage. Es kann dauern, bis ein Issue bearbeitet wird.
 
 Hilfreich sind:
 

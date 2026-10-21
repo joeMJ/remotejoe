@@ -2,8 +2,11 @@
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
+#include <QtCore/QCoreApplication>
+#include <QtCore/QEvent>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QUuid>
+#include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QFrame>
@@ -43,6 +46,7 @@ WaysEditor::WaysEditor(RjBackend* backend, const QJsonObject& data, QWidget* par
 	f->addRow(T("ways.main"), main);
 	m_openWith = new QComboBox(this);
 	f->addRow(T("ways.open"), m_openWith);
+	guardWheel(this);
 	v->addLayout(f);
 	auto* intro = new QLabel(T("ways.intro"), this);
 	intro->setObjectName(QStringLiteral("rjMuted"));
@@ -133,6 +137,13 @@ void WaysEditor::addRow(const QJsonObject& w)
 	oh->addWidget(r.user, 1);
 	oh->addWidget(r.pass, 1);
 	r.ownBox->setVisible(r.credential->currentData().toString() == QLatin1String("own"));
+	// Protokoll-Optionen (wie unter „Verbindung“ beim Hauptweg), aufklappbar.
+	r.optToggle = new QPushButton(T("ways.options"), box);
+	r.optToggle->setCheckable(true);
+	r.optBox = new QWidget(box);
+	new QFormLayout(r.optBox);
+	r.optBox->setVisible(false);
+	buildOptions(r, w.value(QStringLiteral("options")).toObject());
 	auto* remove = new QPushButton(T("ways.remove"), box);
 	auto lab = [box](const QString& t) { return new QLabel(t, box); };
 	g->addWidget(lab(T("ways.protocol")), 0, 0);
@@ -146,6 +157,8 @@ void WaysEditor::addRow(const QJsonObject& w)
 	g->addWidget(lab(T("ways.cred")), 2, 0);
 	g->addWidget(r.credential, 2, 1, 1, 4);
 	g->addWidget(r.ownBox, 3, 1, 1, 4);
+	g->addWidget(r.optToggle, 4, 0);
+	g->addWidget(r.optBox, 5, 0, 1, 5);
 	g->setColumnStretch(3, 1);
 	m_rows->addWidget(box);
 	m_list.append(r);
@@ -165,6 +178,103 @@ void WaysEditor::addRow(const QJsonObject& w)
 	connect(r.host, &QLineEdit::textEdited, this, changed);
 	connect(r.port, &QLineEdit::textEdited, this, changed);
 	connect(remove, &QPushButton::clicked, this, [this, box] { removeRow(box); });
+	connect(r.optToggle, &QPushButton::toggled, r.optBox, &QWidget::setVisible);
+	// Anderes Protokoll: andere Optionen (Werte des alten Protokolls gelten dafür nicht).
+	connect(r.protocol, &QComboBox::currentIndexChanged, this, [this, box] {
+		for (Row& x : m_list)
+			if (x.box == box)
+				buildOptions(x, QJsonObject());
+	});
+	guardWheel(box);
+}
+
+void WaysEditor::buildOptions(Row& r, const QJsonObject& o)
+{
+	auto T = [this](const char* k) { return m_backend->text(QString::fromLatin1(k)); };
+	auto* f = static_cast<QFormLayout*>(r.optBox->layout());
+	while (f->rowCount() > 0)
+		f->removeRow(0);
+	const QString p = r.protocol->currentData().toString();
+	auto changed = [this] {
+		if (!m_loading)
+			emit this->changed();
+	};
+	auto text = [&](const char* key, const char* label, bool numeric) {
+		const QJsonValue v = o.value(QString::fromLatin1(key));
+		auto* e = new QLineEdit(v.isDouble() ? QString::number(v.toInteger()) : v.toString(), r.optBox);
+		e->setProperty("optkey", QString::fromLatin1(key));
+		e->setProperty("numeric", numeric);
+		connect(e, &QLineEdit::textEdited, this, changed);
+		f->addRow(T(label), e);
+	};
+	auto check = [&](const char* key, const char* label) {
+		auto* c = new QCheckBox(T(label), r.optBox);
+		c->setChecked(o.value(QString::fromLatin1(key)).toBool());
+		c->setProperty("optkey", QString::fromLatin1(key));
+		connect(c, &QCheckBox::toggled, this, changed);
+		f->addRow(QString(), c);
+	};
+	auto combo = [&](const char* key, const char* label, const QList<QPair<const char*, const char*>>& items, const char* def) {
+		auto* c = new QComboBox(r.optBox);
+		for (const auto& it : items)
+			c->addItem(T(it.second), QString::fromLatin1(it.first));
+		c->setCurrentIndex(qMax(0, c->findData(o.value(QString::fromLatin1(key)).toString(QString::fromLatin1(def)))));
+		c->setProperty("optkey", QString::fromLatin1(key));
+		connect(c, &QComboBox::currentIndexChanged, this, changed);
+		f->addRow(T(label), c);
+	};
+	const QList<QPair<const char*, const char*>> clip = { { "both", "edit.clip.both" }, { "host_to_target", "edit.clip.host_to_target" }, { "target_to_host", "edit.clip.target_to_host" }, { "off", "edit.clip.off" } };
+	if (p == QLatin1String("rdp"))
+	{
+		combo("gfx", "edit.opt.gfx", { { "on", "edit.opt.gfx.on" }, { "auto", "edit.opt.gfx.auto" }, { "off", "edit.opt.gfx.off" } }, "on");
+		text("width", "edit.opt.width", true);
+		text("height", "edit.opt.height", true);
+		text("keyboard_layout", "edit.opt.keyboard_layout", false);
+		combo("clipboard", "edit.clip.direction", clip, "both");
+		check("ignore_certificate", "edit.opt.ignore_certificate");
+	}
+	else if (p == QLatin1String("ssh"))
+	{
+		text("term", "edit.opt.term", false);
+		text("keepalive_secs", "edit.opt.keepalive_secs", true);
+		check("legacy_algorithms", "edit.opt.legacy_algorithms");
+	}
+	else if (p == QLatin1String("vnc"))
+	{
+		combo("clipboard", "edit.clip.direction", clip, "both");
+		check("view_only", "edit.opt.view_only");
+	}
+	else if (p == QLatin1String("web"))
+	{
+		text("user_selector", "edit.opt.user_selector", false);
+		text("password_selector", "edit.opt.password_selector", false);
+		text("submit_selector", "edit.opt.submit_selector", false);
+		check("ignore_certificate", "edit.opt.ignore_certificate");
+	}
+	if (f->rowCount() == 0)
+		f->addRow(new QLabel(T("ways.options.none"), r.optBox));
+	guardWheel(r.optBox);
+}
+
+void WaysEditor::guardWheel(QWidget* root)
+{
+	for (QComboBox* c : root->findChildren<QComboBox*>())
+	{
+		c->setFocusPolicy(Qt::StrongFocus);
+		c->removeEventFilter(this);
+		c->installEventFilter(this);
+	}
+}
+
+bool WaysEditor::eventFilter(QObject* o, QEvent* e)
+{
+	if (e->type() == QEvent::Wheel)
+		if (auto* c = qobject_cast<QComboBox*>(o); c && !c->hasFocus() && c->parentWidget())
+		{
+			QCoreApplication::sendEvent(c->parentWidget(), e);
+			return true;
+		}
+	return QWidget::eventFilter(o, e);
 }
 
 void WaysEditor::removeRow(QWidget* box)
@@ -208,6 +318,28 @@ QJsonArray WaysEditor::ways() const
 		w.insert(QStringLiteral("host"), r.host->text().trimmed());
 		w.insert(QStringLiteral("port"), r.port->text().trimmed());
 		w.insert(QStringLiteral("credential"), r.credential->currentData().toString());
+		// Optionen: nur die Felder des Formulars; der Rest (z. B. eine Tastenfolge) bleibt im Backend erhalten.
+		QJsonObject opts;
+		for (QWidget* x : r.optBox->findChildren<QWidget*>())
+		{
+			const QString key = x->property("optkey").toString();
+			if (key.isEmpty())
+				continue;
+			if (auto* e = qobject_cast<QLineEdit*>(x))
+			{
+				bool ok = false;
+				const qlonglong n = e->text().trimmed().toLongLong(&ok);
+				if (e->text().trimmed().isEmpty())
+					opts.insert(key, QJsonValue::Null);
+				else
+					opts.insert(key, e->property("numeric").toBool() && ok ? QJsonValue(n) : QJsonValue(e->text().trimmed()));
+			}
+			else if (auto* c = qobject_cast<QCheckBox*>(x))
+				opts.insert(key, c->isChecked());
+			else if (auto* c = qobject_cast<QComboBox*>(x))
+				opts.insert(key, c->currentData().toString());
+		}
+		w.insert(QStringLiteral("options"), opts);
 		if (r.credential->currentData().toString() == QLatin1String("own"))
 		{
 			w.insert(QStringLiteral("username"), r.user->text());

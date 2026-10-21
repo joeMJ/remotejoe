@@ -114,7 +114,7 @@ impl CheckRow {
             "target": self.spec.target,
             "name": self.spec.name,
             "protocol": self.spec.protocol.as_str(),
-            "address": format!("{}:{}", self.spec.host, self.spec.port),
+            "address": self.spec.address(),
             "kind": self.kind,
             "fingerprint": self.fingerprint,
             "state": state,
@@ -248,9 +248,21 @@ fn hex(der: &[u8], upper: bool) -> String {
     sha2::Sha256::digest(der).iter().map(|b| if upper { format!("{b:02X}") } else { format!("{b:02x}") }).collect::<Vec<_>>().join(":")
 }
 
+/// Netzwerkfehler auf Deutsch (wie bei SSH), sonst der Text des Systems.
+fn io_text(e: std::io::Error) -> String {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::TimedOut | K::WouldBlock => "Zeitüberschreitung".into(),
+        K::ConnectionRefused => "Verbindung abgelehnt".into(),
+        K::HostUnreachable | K::NetworkUnreachable => "nicht erreichbar".into(),
+        K::ConnectionReset | K::ConnectionAborted => "Verbindung von der Gegenstelle getrennt".into(),
+        _ => e.to_string(),
+    }
+}
+
 fn connect(host: &str, port: u16) -> Result<TcpStream, Outcome> {
-    let addr = (host, port).to_socket_addrs().map_err(fail)?.next().ok_or_else(|| fail("Adresse nicht auflösbar"))?;
-    let s = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).map_err(fail)?;
+    let addr = (host, port).to_socket_addrs().map_err(|e| fail(io_text(e)))?.next().ok_or_else(|| fail("Adresse nicht auflösbar"))?;
+    let s = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).map_err(|e| fail(io_text(e)))?;
     s.set_read_timeout(Some(PROBE_TIMEOUT)).map_err(fail)?;
     s.set_write_timeout(Some(PROBE_TIMEOUT)).map_err(fail)?;
     Ok(s)
@@ -445,6 +457,19 @@ fn probe_vnc(spec: &ProbeSpec, stores: &Stores) -> Probed {
     Ok((fp.clone(), state, SaveData::Vnc { id, fp }))
 }
 
+impl ProbeSpec {
+    /// Angezeigte Adresse; ein Web-Ziel nur mit URL zeigt Rechner und Port aus der URL.
+    fn address(&self) -> String {
+        if self.host.trim().is_empty() && matches!(self.protocol, Protocol::Web | Protocol::Proxmox) {
+            let opts: rj_web::WebOptions = serde_json::from_str(&self.options_json).unwrap_or_default();
+            if let Ok(u) = rj_web::start_url(&opts, &self.host, self.port) {
+                return format!("{}:{}", u.host, u.port);
+            }
+        }
+        format!("{}:{}", self.host, self.port)
+    }
+}
+
 fn probe_web(spec: &ProbeSpec, stores: &Stores, roots: Option<Arc<rustls::RootCertStore>>) -> Probed {
     let opts: rj_web::WebOptions = serde_json::from_str(&spec.options_json).unwrap_or_default();
     let url = rj_web::start_url(&opts, &spec.host, spec.port).map_err(fail)?;
@@ -494,6 +519,14 @@ fn probe_proxmox(spec: &ProbeSpec, stores: &Stores) -> Probed {
 /// Speichert alle neuen Zeilen. Gibt (gespeichert, Fehlermeldungen) zurück; gespeicherte Zeilen
 /// stehen danach auf `Saved`. Geänderte, bekannte, gültige und nicht erreichbare bleiben unberührt.
 pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>) {
+    accept_new_with_progress(rows, stores, &std::sync::atomic::AtomicUsize::new(0))
+}
+
+/// Wie `accept_new`; `progress` zählt die übernommenen Einträge (Fortschritt „n von x“).
+pub fn accept_new_with_progress(rows: &mut [CheckRow], stores: &Stores, progress: &std::sync::atomic::AtomicUsize) -> (usize, Vec<String>) {
+    let tick = |n: usize| {
+        progress.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    };
     // Je Speicherdatei sammeln und einmal schreiben: Hunderte Einträge einzeln zu schreiben (lesen,
     // sichern, auf die Platte erzwingen) dauert unter Windows Minuten und blockiert die Oberfläche.
     let mut ssh: Vec<(usize, (String, u16, String))> = Vec::new();
@@ -505,7 +538,10 @@ pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>
         match &r.save {
             SaveData::None => {}
             SaveData::Ssh(line) => ssh.push((i, (r.spec.host.clone(), r.spec.port, line.clone()))),
-            SaveData::Rdp { path, pem } => done.push((i, save_file(path, pem.as_bytes()))),
+            SaveData::Rdp { path, pem } => {
+                done.push((i, save_file(path, pem.as_bytes())));
+                tick(1);
+            }
             SaveData::Vnc { id, fp } => vnc.push((i, (id.clone(), fp.clone()))),
             SaveData::Web { profile, host, der } => web.entry(profile.clone()).or_default().push((i, host.clone(), der.clone())),
             SaveData::Proxmox { key, fp } => prox.push((i, key.clone(), fp.clone())),
@@ -517,6 +553,7 @@ pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>
             None => Err("kein Datenordner".into()),
         };
         done.extend(ssh.iter().map(|(i, _)| (*i, res.clone())));
+        tick(ssh.len());
     }
     if !vnc.is_empty() {
         let res = match stores.file("vnc_certs") {
@@ -524,6 +561,7 @@ pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>
             None => Err("kein Datenordner".into()),
         };
         done.extend(vnc.iter().map(|(i, _)| (*i, res.clone())));
+        tick(vnc.len());
     }
     for (profile, list) in web {
         let mut a = rj_web::AcceptedCerts::load(&profile);
@@ -532,6 +570,7 @@ pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>
         }
         let res = a.save(&profile).map_err(|e| e.to_string());
         done.extend(list.iter().map(|(i, ..)| (*i, res.clone())));
+        tick(list.len());
     }
     if !prox.is_empty() {
         let res = match stores.file("proxmox-zertifikate.json") {
@@ -545,6 +584,7 @@ pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>
             None => Err("kein Datenordner".into()),
         };
         done.extend(prox.iter().map(|(i, ..)| (*i, res.clone())));
+        tick(prox.len());
     }
     let mut saved = 0;
     let mut errors = Vec::new();

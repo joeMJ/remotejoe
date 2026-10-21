@@ -754,7 +754,6 @@ void TerminalView::wheelEvent(QWheelEvent* e)
 			}
 			else
 			{
-				m_selStart = m_selEnd = QPoint(-1, -1);
 				m_backend->terminalScroll(m_session, lines);
 				refresh();
 			}
@@ -797,6 +796,53 @@ void TerminalView::refresh()
 	}
 	else if (rows == want.height() && cols == want.width())
 		m_healTries = 0;
+	// Zeilen merken, damit eine Auswahl über den sichtbaren Bereich hinaus ihren Text kennt.
+	if (m_selStart.x() < 0 && m_lineChars.size() > 3000)
+		m_lineChars.clear();
+	const int t = top();
+	const int shown = m_snap.value(QStringLiteral("lines")).toArray().size();
+	for (int r = 0; r < shown; ++r)
+	{
+		// Wie rowChars, aber die zweite Zelle breiter Zeichen bleibt leer (sonst stünde das Zeichen doppelt im Text).
+		QStringList cells = rowChars(r);
+		for (int c = 1; c < cells.size(); ++c)
+			if (!cells[c].isEmpty() && cells[c] == cells[c - 1] && cellWide(r, c))
+				cells[c].clear();
+		m_lineChars.insert(t + r, cells);
+	}
+	update();
+}
+
+int TerminalView::top() const
+{
+	return m_snap.value(QStringLiteral("history")).toInt() - m_snap.value(QStringLiteral("scroll_offset")).toInt();
+}
+
+QPoint TerminalView::absAt(const QPoint& p) const
+{
+	const int rows = qMax(1, m_snap.value(QStringLiteral("rows")).toInt());
+	QPoint c = cellAt(QPoint(p.x(), qBound(0, p.y(), rows * m_ch - 1)));
+	c.ry() += top();
+	return c;
+}
+
+void TerminalView::autoScrollTick()
+{
+	if (!(QGuiApplication::mouseButtons() & Qt::LeftButton) || m_selStart.x() < 0)
+	{
+		m_autoScroll->stop();
+		return;
+	}
+	const int rows = m_snap.value(QStringLiteral("rows")).toInt();
+	const int dir = m_lastMouse.y() < 0 ? 1 : (m_lastMouse.y() >= rows * m_ch ? -1 : 0);
+	if (dir == 0)
+	{
+		m_autoScroll->stop();
+		return;
+	}
+	m_backend->terminalScroll(m_session, dir);
+	refresh();
+	m_selEnd = absAt(m_lastMouse);
 	update();
 }
 
@@ -822,6 +868,7 @@ void TerminalView::paintEvent(QPaintEvent*)
 	QPoint a = m_selStart, b = m_selEnd;
 	if (b.y() < a.y() || (b.y() == a.y() && b.x() < a.x()))
 		std::swap(a, b);
+	const int t = top();
 	for (int row = 0; row < lines.size(); ++row)
 	{
 		int col = 0;
@@ -844,8 +891,8 @@ void TerminalView::paintEvent(QPaintEvent*)
 				const QString ch = text.mid(i, len);
 				const int span = (flags & 8) ? 2 : 1;
 				const bool sel = m_selStart.x() >= 0 &&
-				                 (row > a.y() || (row == a.y() && col >= a.x())) &&
-				                 (row < b.y() || (row == b.y() && col <= b.x()));
+				                 (row + t > a.y() || (row + t == a.y() && col >= a.x())) &&
+				                 (row + t < b.y() || (row + t == b.y() && col <= b.x()));
 				QRect cell(col * m_cw, row * m_ch, m_cw * span, m_ch);
 				p.fillRect(cell, sel ? (m_selection.isValid() ? m_selection : palette().highlight().color()) : bg);
 				p.setPen(sel ? (m_selection.isValid() && fgScheme.isValid() ? fgScheme : palette().highlightedText().color()) : fg);
@@ -906,7 +953,7 @@ void TerminalView::keyPressEvent(QKeyEvent* e)
 	if ((mods & Qt::ShiftModifier) && !(mods & Qt::ControlModifier) && (e->key() == Qt::Key_PageUp || e->key() == Qt::Key_PageDown) &&
 	    !m_snap.value(QStringLiteral("alt_screen")).toBool())
 	{
-		m_selStart = m_selEnd = QPoint(-1, -1);
+		// Auswahl bleibt (sie liegt im Rücklauf, nicht auf dem Bildschirm).
 		m_backend->terminalScrollPage(m_session, e->key() == Qt::Key_PageUp);
 		refresh();
 		return;
@@ -946,7 +993,11 @@ void TerminalView::mousePressEvent(QMouseEvent* e)
 			selectLine(c.y());
 			return;
 		}
-		m_selStart = m_selEnd = c;
+		// Umschalt+Klick erweitert eine bestehende Auswahl.
+		if ((e->modifiers() & Qt::ShiftModifier) && m_selStart.x() >= 0)
+			m_selEnd = absAt(e->pos());
+		else
+			m_selStart = m_selEnd = absAt(e->pos());
 		update();
 	}
 	else if (e->button() == Qt::MiddleButton)
@@ -957,8 +1008,22 @@ void TerminalView::mouseMoveEvent(QMouseEvent* e)
 {
 	if (e->buttons() & Qt::LeftButton)
 	{
-		m_selEnd = cellAt(e->pos());
+		m_lastMouse = e->pos();
+		m_selEnd = absAt(e->pos());
 		update();
+		// Über den oberen oder unteren Rand gezogen: mitrollen, solange die Maus dort bleibt.
+		const int rows = m_snap.value(QStringLiteral("rows")).toInt();
+		if ((e->pos().y() < 0 || e->pos().y() >= rows * m_ch) && !m_snap.value(QStringLiteral("alt_screen")).toBool())
+		{
+			if (!m_autoScroll)
+			{
+				m_autoScroll = new QTimer(this);
+				m_autoScroll->setInterval(70);
+				connect(m_autoScroll, &QTimer::timeout, this, &TerminalView::autoScrollTick);
+			}
+			if (!m_autoScroll->isActive())
+				m_autoScroll->start();
+		}
 	}
 }
 
@@ -972,7 +1037,9 @@ void TerminalView::mouseReleaseEvent(QMouseEvent* e)
 		m_skipRelease = false;
 		return;
 	}
-	m_selEnd = cellAt(e->pos());
+	if (m_autoScroll)
+		m_autoScroll->stop();
+	m_selEnd = absAt(e->pos());
 	if (m_selEnd == m_selStart)
 	{
 		m_selStart = m_selEnd = QPoint(-1, -1);
@@ -989,7 +1056,26 @@ QString TerminalView::selectedText()
 	QPoint a = m_selStart, b = m_selEnd;
 	if (b.y() < a.y() || (b.y() == a.y() && b.x() < a.x()))
 		std::swap(a, b);
-	return m_backend->selectText(m_session, a.y(), a.x(), b.y(), b.x());
+	const int t = top();
+	const int rows = m_snap.value(QStringLiteral("rows")).toInt();
+	// Ganz sichtbar: der Text des Terminals selbst (berücksichtigt umbrochene Zeilen).
+	if (a.y() >= t && b.y() < t + rows)
+		return m_backend->selectText(m_session, a.y() - t, a.x(), b.y() - t, b.x());
+	// Über den Bildschirm hinaus: aus den gemerkten Zeilen.
+	QStringList out;
+	for (int y = a.y(); y <= b.y(); ++y)
+	{
+		const QStringList chars = m_lineChars.value(y);
+		const int from = y == a.y() ? a.x() : 0;
+		const int to = y == b.y() ? qMin(b.x(), int(chars.size()) - 1) : int(chars.size()) - 1;
+		QString line;
+		for (int c = from; c <= to; ++c)
+			line += chars[c];
+		while (line.endsWith(QLatin1Char(' ')))
+			line.chop(1);
+		out << line;
+	}
+	return out.join(QLatin1Char('\n'));
 }
 
 /// Auswahl abgeschlossen: in die X11-Auswahl, auf Wunsch auch in die Zwischenablage.
@@ -1055,12 +1141,39 @@ void TerminalView::selectAll()
 	const int cols = m_snap.value(QStringLiteral("cols")).toInt();
 	if (rows <= 0 || cols <= 0)
 		return;
-	m_selStart = QPoint(0, 0);
-	m_selEnd = QPoint(cols - 1, rows - 1);
+	m_selStart = QPoint(0, top());
+	m_selEnd = QPoint(cols - 1, top() + rows - 1);
 	finishSelection();
 }
 
 /// Zeichen je Spalte einer Zeile des Bildschirms (breite Zeichen belegen zwei Spalten).
+bool TerminalView::cellWide(int row, int col) const
+{
+	// Zweite Zelle eines breiten Zeichens?
+	const QJsonArray lines = m_snap.value(QStringLiteral("lines")).toArray();
+	if (row < 0 || row >= lines.size())
+		return false;
+	int at = 0;
+	for (const QJsonValue& rv : lines[row].toArray())
+	{
+		const QJsonArray run = rv.toArray();
+		const QString text = run[0].toString();
+		const bool wide = run[3].toInt() & 8;
+		int i = 0;
+		while (i < text.size())
+		{
+			const int len = text.at(i).isHighSurrogate() && i + 1 < text.size() ? 2 : 1;
+			if (wide && at + 1 == col)
+				return true;
+			at += wide ? 2 : 1;
+			if (at > col)
+				return false;
+			i += len;
+		}
+	}
+	return false;
+}
+
 QStringList TerminalView::rowChars(int row) const
 {
 	QStringList out;
@@ -1106,8 +1219,8 @@ void TerminalView::selectWordAt(const QPoint& c)
 		while (b + 1 < cols.size() && isWord(cols[b + 1]))
 			++b;
 	}
-	m_selStart = QPoint(a, c.y());
-	m_selEnd = QPoint(b, c.y());
+	m_selStart = QPoint(a, c.y() + top());
+	m_selEnd = QPoint(b, c.y() + top());
 	finishSelection();
 }
 
@@ -1117,8 +1230,8 @@ void TerminalView::selectLine(int row)
 	int last = cols.size() - 1;
 	while (last > 0 && cols[last].trimmed().isEmpty())
 		--last;
-	m_selStart = QPoint(0, row);
-	m_selEnd = QPoint(qMax(0, last), row);
+	m_selStart = QPoint(0, row + top());
+	m_selEnd = QPoint(qMax(0, last), row + top());
 	finishSelection();
 }
 

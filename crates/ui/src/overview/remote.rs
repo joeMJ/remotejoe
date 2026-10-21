@@ -115,16 +115,24 @@ pub fn parse_aruba(out: &str) -> Option<Found> {
     if let Some(l) = out.lines().find(|l| l.contains("uptime is")) {
         if let Some(rest) = l.split("uptime is").nth(1) {
             let words: Vec<&str> = rest.split_whitespace().collect();
-            let mut parts = Vec::new();
+            // Wochen zählen als Tage („10 weeks 4 days“ → „74 T“).
+            let (mut days, mut hours, mut mins) = (None::<u64>, None::<u64>, None::<u64>);
             for pair in words.chunks(2) {
                 if let [n, unit] = pair {
-                    let u = match unit.trim_end_matches(',') {
-                        "day" | "days" => "T",
-                        "hour" | "hours" => "Std",
-                        "minute" | "minutes" => "Min",
-                        _ => continue,
-                    };
-                    parts.push(format!("{n} {u}"));
+                    let Ok(n) = n.parse::<u64>() else { continue };
+                    match unit.trim_end_matches(',') {
+                        "week" | "weeks" => days = Some(days.unwrap_or(0) + 7 * n),
+                        "day" | "days" => days = Some(days.unwrap_or(0) + n),
+                        "hour" | "hours" => hours = Some(n),
+                        "minute" | "minutes" => mins = Some(n),
+                        _ => {}
+                    }
+                }
+            }
+            let mut parts = Vec::new();
+            for (v, u) in [(days, "T"), (hours, "Std"), (mins, "Min")] {
+                if let Some(v) = v {
+                    parts.push(format!("{v} {u}"));
                 }
             }
             if !parts.is_empty() {
@@ -369,7 +377,9 @@ async fn cli_show_version(conn: &SshConnection) -> Result<String, String> {
     // Breites Terminal: Die Tabelle von `show aps` ist mehrere hundert Zeichen breit.
     let mut sh = conn.open_shell("vt100", 1000, 50).await.map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    // Über langsame Verbindungen (WAN) kommen Antworten erst nach Sekunden: je Befehl bis zur Eingabeaufforderung
+    // lesen, begrenzt nur durch die Gesamtfrist.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     // Anzahl gesendeter Befehle; `mark`: Pufferstand beim letzten Senden.
     let mut sent = 0;
     let mut mark = 0;
@@ -385,7 +395,9 @@ async fn cli_show_version(conn: &SshConnection) -> Result<String, String> {
             let last = text.trim_end().rsplit(['\n', '\r']).next().unwrap_or("").trim_start();
             last.ends_with('#') && last.len() > 1 && !last.contains(char::is_whitespace)
         };
-        match tokio::time::timeout(left.min(Duration::from_millis(1500)), sh.events.recv()).await {
+        // Ohne gesendeten Befehl kurz warten (Geräte ohne erkennbare Eingabeaufforderung), danach bis zur Frist.
+        let wait = if sent == 0 { left.min(Duration::from_secs(3)) } else { left };
+        match tokio::time::timeout(wait, sh.events.recv()).await {
             Ok(Some(ShellEvent::Data(d))) => {
                 buf.extend_from_slice(&d);
                 if ended_with_prompt(&buf, mark) && buf.len() > mark {
@@ -408,7 +420,15 @@ async fn cli_show_version(conn: &SshConnection) -> Result<String, String> {
         }
     }
     sh.close().await;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    // Diagnose: Rohantwort der Aruba-Sitzung anhängen (nur mit RJ_ARUBA_DUMP=<Datei>; enthält keine Kennwörter).
+    if let Some(path) = std::env::var_os("RJ_ARUBA_DUMP") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "===== {} gesendet: {sent} Befehle, {} Bytes =====\n{text}", crate::overview::inventory::now(), buf.len());
+        }
+    }
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -452,6 +472,8 @@ mod tests {
                    ap-kueche          192.0.2.1   access  3        505   CNQXK9X999  1d:01h:02m\r\n94:64:24:cc:9b:12#";
         let f = parse_aruba(out).unwrap();
         assert!(f.contains(&("uptime", "2 T 12 Std 29 Min".to_string())), "{f:?}");
+        let w = parse_aruba("ArubaOS (MODEL: 555), Version 8.10.0.23 LSR\nAP uptime is 10 weeks 4 days 9 hours 45 minutes 14 seconds\nap#").unwrap();
+        assert!(w.contains(&("uptime", "74 T 9 Std 45 Min".to_string())), "Wochen als Tage: {w:?}");
         assert_eq!(parse_aruba_serial(out, "192.0.2.1").as_deref(), Some("CNQXK9X123"));
         // Andere APs des Schwarms stehen in der Liste.
         assert_eq!(parse_aruba_aps(out).iter().find(|a| a.ip == "192.0.2.1").and_then(|a| a.serial.as_deref()), Some("CNQXK9X999"));
