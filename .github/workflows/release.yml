@@ -88,6 +88,8 @@ jobs:
           cat pakete/*/SHA256SUMS | sort -k2 -u > dist/SHA256SUMS
           ls -l dist
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # Der Checkout holt den Tag ohne seine Notiz; erst damit steht der Änderungstext statt der letzten Commit-Nachricht da.
+          git fetch --force --no-tags origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           NOTES="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
