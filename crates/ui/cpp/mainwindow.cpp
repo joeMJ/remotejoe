@@ -1568,6 +1568,9 @@ void MainWindow::reloadTree()
 	// Offene Übersicht: Inventar-Schalter nachziehen (z. B. nach dem Speichern der Einstellungen).
 	if (auto* o = findChild<OverviewTab*>())
 		QTimer::singleShot(0, o, [o] { o->refreshInventorySwitch(); });
+	// Offene Prüfung „Geteilte Zugangsdaten“: neu laden (z. B. nach Bearbeiten → Rückgängig).
+	if (auto* sc = findChild<SharedCredTab*>())
+		QTimer::singleShot(0, sc, [sc] { sc->load(); });
 	// Offene Vorschau „Zusammenfassen“: Gruppen neu laden (z. B. nach Bearbeiten → Rückgängig).
 	if (auto* m = findChild<MergeTab*>())
 		QTimer::singleShot(0, m, [m] { m->refresh(); });
@@ -3102,7 +3105,7 @@ void MainWindow::handleEvents(const QString& json)
 					const int n = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("shared_list") } })).value(QStringLiteral("groups")).toArray().size();
 					if (n == 0)
 						return;
-					QMessageBox box(QMessageBox::Information, T(m_backend, "shared.head"), T(m_backend, "shared.unlock").arg(n), QMessageBox::NoButton, this);
+					QMessageBox box(QMessageBox::Information, T(m_backend, "shared.head"), (n == 1 ? T(m_backend, "shared.unlock.one") : T(m_backend, "shared.unlock").arg(n)), QMessageBox::NoButton, this);
 					auto* now = box.addButton(T(m_backend, "shared.unlock.check"), QMessageBox::AcceptRole);
 					box.addButton(T(m_backend, "shared.unlock.later"), QMessageBox::RejectRole);
 					box.exec();

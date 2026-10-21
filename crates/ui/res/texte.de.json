@@ -648,6 +648,7 @@
   "shared.done.split": "Eintrag getrennt: Jede Stelle hat jetzt eigene Zugangsdaten.",
   "shared.done.login": "Anmeldeobjekt angelegt; die Stellen verwenden es gemeinsam.",
   "shared.unlock": "Geteilte Zugangsdaten gefunden (%1 Einträge): Mehrere Ziele verwenden denselben KDBX-Eintrag direkt, z. B. nach dem Duplizieren. Eine Änderung an einem Ziel ändert dann auch die anderen.\n\nBitte über Extras → Geteilte Zugangsdaten prüfen trennen oder in ein Anmeldeobjekt umwandeln.",
+  "shared.unlock.one": "Geteilte Zugangsdaten gefunden (1 Eintrag): Mehrere Ziele verwenden denselben KDBX-Eintrag direkt, z. B. nach dem Duplizieren. Eine Änderung an einem Ziel ändert dann auch die anderen.\n\nBitte über Extras → Geteilte Zugangsdaten prüfen trennen oder in ein Anmeldeobjekt umwandeln.",
   "shared.unlock.check": "Jetzt prüfen",
   "shared.unlock.later": "Später",
   "snmp.new": "&Neues Gerät",
