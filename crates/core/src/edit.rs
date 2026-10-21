@@ -262,14 +262,54 @@ fn renew_ids(node: &mut Node) {
 pub fn duplicate(index: &mut Index, id: Uuid, suffix: &str) -> Result<Uuid, EditError> {
     let original = node(index, id).ok_or(EditError::NotFound)?.clone();
     let parent = parent_of(index, id).ok_or(EditError::NotFound)?;
-    let pos = folder(index, parent).and_then(|f| f.children.iter().position(|n| n.id() == id)).map(|p| p + 1);
+    let siblings: Vec<String> = folder(index, parent).map(|f| f.children.iter().map(|n| n.name().to_string()).collect()).unwrap_or_default();
+    let name = copy_name(original.name(), suffix, &siblings);
+    // Hinter das Original und hinter alle schon vorhandenen Kopien (Reihenfolge „Kopie“, „Kopie 2“, …).
+    let base = copy_base(original.name(), suffix);
+    let pos = folder(index, parent).and_then(|f| {
+        let at = f.children.iter().position(|n| n.id() == id)?;
+        let mut last = at;
+        for (i, n) in f.children.iter().enumerate().skip(at + 1) {
+            if copy_base(n.name(), suffix) == base {
+                last = i;
+            }
+        }
+        Some(last + 1)
+    });
     let mut copy = original;
     renew_ids(&mut copy);
     match &mut copy {
-        Node::Target(t) => t.name.push_str(suffix),
-        Node::Folder(f) => f.name.push_str(suffix),
+        Node::Target(t) => t.name = name,
+        Node::Folder(f) => f.name = name,
     }
     insert(index, parent, copy, pos)
+}
+
+/// Name ohne Kopie-Zusatz: „x (Kopie)“, „x (Kopie 3)“ und „x (Kopie) (Kopie)“ → „x“.
+fn copy_base<'a>(name: &'a str, suffix: &str) -> &'a str {
+    let label = suffix.trim().trim_start_matches('(').trim_end_matches(')');
+    let mut n = name;
+    loop {
+        let Some(rest) = n.strip_suffix(')') else { return n };
+        let Some(i) = rest.rfind(" (") else { return n };
+        let inner = &rest[i + 2..];
+        let ok = inner == label || inner.strip_prefix(label).and_then(|r| r.strip_prefix(' ')).is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()));
+        if !ok {
+            return n;
+        }
+        n = &rest[..i];
+    }
+}
+
+/// Freier Name für eine Kopie: „x (Kopie)“, sonst „x (Kopie 2)“, „x (Kopie 3)“ … (geprüft gegen die Geschwister).
+pub fn copy_name(name: &str, suffix: &str, siblings: &[String]) -> String {
+    let base = copy_base(name, suffix);
+    let label = suffix.trim().trim_start_matches('(').trim_end_matches(')');
+    let first = format!("{base} ({label})");
+    if !siblings.contains(&first) {
+        return first;
+    }
+    (2..).map(|n| format!("{base} ({label} {n})")).find(|c| !siblings.contains(c)).unwrap_or(first)
 }
 
 /// Benennt einen Knoten um (Name unverändert übernommen, nicht getrimmt).
@@ -587,6 +627,22 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copies_are_numbered_and_sorted_after_the_original() {
+        let mut idx = Index::default();
+        let root = idx.root.id;
+        let a = insert(&mut idx, root, Node::Target(Target::new("testap", Protocol::Ssh, "192.0.2.4")), None).unwrap();
+        insert(&mut idx, root, Node::Target(Target::new("anderes", Protocol::Ssh, "192.0.2.5")), None).unwrap();
+        let c1 = duplicate(&mut idx, a, " (Kopie)").unwrap();
+        let c2 = duplicate(&mut idx, a, " (Kopie)").unwrap();
+        let c3 = duplicate(&mut idx, c1, " (Kopie)").unwrap();
+        let names: Vec<String> = idx.root.children.iter().map(|n| n.name().to_string()).collect();
+        assert_eq!(names, ["testap", "testap (Kopie)", "testap (Kopie 2)", "testap (Kopie 3)", "anderes"]);
+        assert_eq!([c1, c2, c3].map(|c| node(&idx, c).unwrap().name().to_string()), ["testap (Kopie)", "testap (Kopie 2)", "testap (Kopie 3)"]);
+        assert_eq!(copy_name("x (Kopie) (Kopie)", " (Kopie)", &[]), "x (Kopie)");
+        assert_eq!(copy_name("Server (Halle 2)", " (Kopie)", &[]), "Server (Halle 2) (Kopie)", "fremde Klammern bleiben");
+    }
     use crate::inherit::{resolve_credential, resolve_credential_at, resolve_tunnel, set_credential_mode, CredentialMode, CredentialResolution, Origin};
 
     fn cref() -> CredentialRef {

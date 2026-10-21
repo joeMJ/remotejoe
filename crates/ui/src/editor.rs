@@ -1684,9 +1684,10 @@ impl App {
         Ok(())
     }
 
-    /// Kopie eines eigenen KDBX-Eintrags, betitelt nach dem Knoten `node`; `None` bei fremden Einträgen.
+    /// Kopie eines eigenen KDBX-Eintrags, betitelt nach dem Knoten `node` und mit Unix-Zeitstempel (Sekunden), damit
+    /// zwei Einträge in der Anzeige nie gleich heißen; `None` bei fremden Einträgen.
     fn copy_entry(&mut self, entry: Uuid, node: Uuid) -> Result<Option<CredentialRef>, String> {
-        let title = edit::node(&self.index, node).map(|n| n.name().to_string()).unwrap_or_default();
+        let title = format!("{} · {}", edit::node(&self.index, node).map(|n| n.name().to_string()).unwrap_or_default(), unique_stamp());
         let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
         if !vault.is_own_entry(entry) {
             return Ok(None);
@@ -2047,6 +2048,10 @@ mod tests {
         let b = Uuid::parse_str(cmd(&mut app, json!({ "op": "duplicate", "id": a }))["id"].as_str().unwrap()).unwrap();
         let eb = entry_of(&app, b);
         assert_ne!(ea, eb);
+        let c = Uuid::parse_str(cmd(&mut app, json!({ "op": "duplicate", "id": a }))["id"].as_str().unwrap()).unwrap();
+        let v = app.vault.as_ref().unwrap();
+        let (tb, tc) = (v.credential(eb).unwrap().data.title, v.credential(entry_of(&app, c)).unwrap().data.title);
+        assert!(tb.starts_with("A (Kopie) · ") && tc.starts_with("A (Kopie 2) · ") && tb != tc, "{tb} / {tc}");
         assert_eq!(app.vault.as_ref().unwrap().credential(eb).unwrap().data.password.as_bytes(), b"eins");
         // Altbestand: zwei Ziele teilen einen Eintrag (Duplikat aus einer früheren Version).
         if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut app.index.root, b) {
@@ -2605,6 +2610,22 @@ pub(crate) fn inventory_source_text(src: rj_core::inherit::InventorySource, on: 
 }
 
 /// Zugangsweg für die Oberfläche.
+/// Unix-Zeitstempel in Sekunden, innerhalb des Programmlaufs streng steigend (mehrere Kopien in derselben Sekunde
+/// bekommen so trotzdem verschiedene Titel).
+fn unique_stamp() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let mut prev = LAST.load(Ordering::Relaxed);
+    loop {
+        let next = now.max(prev + 1);
+        match LAST.compare_exchange(prev, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(p) => prev = p,
+        }
+    }
+}
+
 /// Zusammenfassen: angenommene Web-Zertifikate der aufgelösten Ziele (eigenes Browserprofil je Ziel) ins Profil des
 /// Hauptziels übernehmen, damit dessen Wege nicht erneut fragen. Einträge ohne Port gehörten zum Port des alten
 /// Ziels und bekommen ihn mit; vorhandene Einträge des Hauptziels bleiben.
