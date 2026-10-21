@@ -1,4 +1,6 @@
 #pragma once
+
+#include <QtCore/QHash>
 // Darstellung einer Sitzung: Bild (RDP/VNC) oder Terminal (SSH), mit Kopfzeile.
 
 #include <QtCore/QElapsedTimer>
@@ -144,9 +146,16 @@ protected:
 
 private:
 	QPoint cellAt(const QPoint& p) const;
+	/// Erste sichtbare Zeile, gezählt ab dem Anfang des Rücklaufs (stabil, solange neue Ausgabe nur unten anhängt).
+	int top() const;
+	/// Zelle unter dem Mauszeiger mit Zeile im Rücklauf (Auswahl über den sichtbaren Bereich hinaus).
+	QPoint absAt(const QPoint& p) const;
+	/// Beim Ziehen über den Rand: ein Schritt mitrollen und die Auswahl nachziehen.
+	void autoScrollTick();
 	QString selectedText();
 	void pasteText(const QString& text);
 	QStringList rowChars(int row) const;
+	bool cellWide(int row, int col) const;
 	void selectWordAt(const QPoint& c);
 	void selectLine(int row);
 	void finishSelection();
@@ -159,7 +168,12 @@ private:
 	QJsonObject m_snap;
 	QFont m_font;
 	int m_cw = 8, m_ch = 16, m_ascent = 12;
+	// Auswahl: Spalte und Zeile im Rücklauf (siehe top()).
 	QPoint m_selStart{ -1, -1 }, m_selEnd{ -1, -1 };
+	/// Zeichen je Spalte der zuletzt gesehenen Zeilen (Zeile im Rücklauf): Text einer Auswahl über den Bildschirm hinaus.
+	QHash<int, QStringList> m_lineChars;
+	QTimer* m_autoScroll = nullptr;
+	QPoint m_lastMouse;
 	QSize m_lastSize;
 	QColor m_selection;
 	int m_wheel = 0;
