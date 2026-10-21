@@ -881,6 +881,8 @@ impl Index {
         for d in &self.snmp_devices {
             out.insert(d.credential.entry);
         }
+        // Anmeldeobjekte: ihr Eintrag ist zugeordnet, auch wenn (noch) kein Ziel sie verwendet.
+        out.extend(self.logins.iter().map(|l| l.entry.entry));
         fn ways(f: &Folder, out: &mut std::collections::BTreeSet<Uuid>) {
             for n in &f.children {
                 match n {

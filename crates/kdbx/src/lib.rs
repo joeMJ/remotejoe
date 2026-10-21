@@ -212,6 +212,8 @@ enum EntryOp {
     Update { uuid: Uuid, data: CredentialData },
     Attach { uuid: Uuid, name: String, data: Secret },
     Field { uuid: Uuid, name: String, data: Secret },
+    /// In den Papierkorb der KDBX verschieben (nur eigene Einträge).
+    Recycle { uuid: Uuid },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,6 +224,16 @@ struct Fingerprint {
 
 fn fingerprint(bytes: &[u8]) -> Fingerprint {
     Fingerprint { len: bytes.len() as u64, sha256: Sha256::digest(bytes).into() }
+}
+
+fn op_uuid(op: &EntryOp) -> Uuid {
+    match op {
+        EntryOp::Create { uuid, .. } | EntryOp::Update { uuid, .. } | EntryOp::Attach { uuid, .. } | EntryOp::Field { uuid, .. } | EntryOp::Recycle { uuid } => *uuid,
+    }
+}
+
+fn db_entry_missing(db: &Database, id: EntryId) -> bool {
+    db.entry(id).is_none()
 }
 
 /// Geöffnete KDBX mit Index.
@@ -239,6 +251,8 @@ pub struct Vault {
     /// Rückgängig), gilt er nicht mehr als geändert.
     clean_index: Option<Index>,
     ops: Vec<EntryOp>,
+    /// In dieser Sitzung von remotejoe angelegte Einträge (auch nach dem Speichern).
+    created: BTreeSet<Uuid>,
     /// Abgeleiteter Schlüssel der Indexdatei (nur bei `IndexStorage::IndexFile`).
     index_file_key: Option<index_file::FileKey>,
 }
@@ -262,6 +276,7 @@ impl Vault {
             index_dirty: true,
             clean_index: None,
             ops: Vec::new(),
+            created: BTreeSet::new(),
             index_file_key: None,
         }
     }
@@ -281,6 +296,7 @@ impl Vault {
             index_dirty: false,
             clean_index: None,
             ops: Vec::new(),
+            created: BTreeSet::new(),
             index_file_key: None,
         };
         let (loaded, fk) = Self::load_index(storage, &v.path, &v.key, &v.db)?;
@@ -370,6 +386,23 @@ impl Vault {
 
     fn group_id(db: &Database) -> Option<GroupId> {
         db.root().groups().find(|g| g.name == GROUP_NAME).map(|g| g.id())
+    }
+
+    /// Papierkorb der KDBX (wie KeePass ihn anlegt), bei Bedarf neu.
+    fn ensure_recycle_bin(db: &mut Database) -> GroupId {
+        if let Some(b) = db.recycle_bin() {
+            return b.id();
+        }
+        let id = {
+            let mut root = db.root_mut();
+            let mut g = root.add_group();
+            g.name = "Papierkorb".into();
+            g.id()
+        };
+        db.meta.recyclebin_uuid = Some(id.uuid());
+        db.meta.recyclebin_enabled = Some(true);
+        db.meta.recyclebin_changed = Some(chrono::Utc::now().naive_utc());
+        id
     }
 
     fn ensure_group(db: &mut Database) -> GroupId {
@@ -538,6 +571,20 @@ impl Vault {
                 // Vorher in `record` auf UTF-8 geprüft; keine Ersetzung.
                 e.set(name, Value::protected(data.as_str().unwrap_or_default().to_string()));
             }
+            EntryOp::Recycle { uuid } => {
+                let id = EntryId::from_uuid(*uuid);
+                // Beim erneuten Anwenden auf eine neu geladene Datei: schon weg oder schon im Papierkorb.
+                if db.entry(id).is_none() || Self::in_recycle_bin(db, id) {
+                    return Ok(());
+                }
+                if !Self::in_own_group(db, id) {
+                    return Err(VaultError::ForeignEntry(*uuid));
+                }
+                let bin = Self::ensure_recycle_bin(db);
+                let mut e = db.entry_mut(id).expect("geprüft");
+                let _ = e.move_to(bin);
+                e.times.location_changed = Some(chrono::Utc::now().naive_utc());
+            }
         }
         Ok(())
     }
@@ -562,7 +609,37 @@ impl Vault {
     pub fn add_credential(&mut self, data: CredentialData) -> Result<Uuid, VaultError> {
         let uuid = Uuid::new_v4();
         self.record(EntryOp::Create { uuid, data })?;
+        self.created.insert(uuid);
         Ok(uuid)
+    }
+
+    /// Hat remotejoe diesen Eintrag in dieser Sitzung angelegt?
+    pub fn created_this_session(&self, uuid: Uuid) -> bool {
+        self.created.contains(&uuid)
+    }
+
+    /// Nimmt einen in dieser Sitzung angelegten Eintrag zurück (z. B. nach „Rückgängig“). Noch nicht gespeichert:
+    /// Er verschwindet samt seinen Änderungen, als hätte es ihn nie gegeben. Schon gespeichert: Er wandert in den
+    /// Papierkorb der KDBX (nicht endgültig gelöscht). Fremde oder ältere Einträge bleiben unberührt.
+    pub fn withdraw_created(&mut self, uuid: Uuid) -> Result<bool, VaultError> {
+        if !self.created.contains(&uuid) {
+            return Ok(false);
+        }
+        let id = EntryId::from_uuid(uuid);
+        if db_entry_missing(&self.db, id) || Self::in_recycle_bin(&self.db, id) {
+            return Ok(false);
+        }
+        let unsaved = self.ops.iter().any(|o| matches!(o, EntryOp::Create { uuid: u, .. } if *u == uuid));
+        if unsaved {
+            self.ops.retain(|o| op_uuid(o) != uuid);
+            if let Some(e) = self.db.entry_mut(id) {
+                e.remove();
+            }
+            self.created.remove(&uuid);
+            return Ok(true);
+        }
+        self.record(EntryOp::Recycle { uuid })?;
+        Ok(true)
     }
 
     /// Ändert einen Eintrag; nur innerhalb der Gruppe `remotejoe` erlaubt.
