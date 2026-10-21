@@ -1870,6 +1870,11 @@ mod tunnel_tests {
         };
         app.close_session(s);
         drop(listener);
+        // Prüfpunkt nicht erreichbar: Port 0 statt des eben freigegebenen Ports (den könnte ein parallel laufender
+        // Test inzwischen belegt haben; das war die Ursache sporadischer Fehlschläge).
+        if let TunnelKind::System { probe_port, .. } = &mut app.index.tunnels[0].kind {
+            *probe_port = 0;
+        }
         let r: serde_json::Value = serde_json::from_str(&app.connect(target, None, false, 80, 24)).unwrap();
         let job = r["pending"].as_u64().unwrap_or_else(|| panic!("{r}"));
         let start = std::time::Instant::now();
