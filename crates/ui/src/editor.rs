@@ -1521,6 +1521,12 @@ impl App {
                 let mut w = rj_core::model::AccessWay::new(Protocol::Web);
                 w.name = "Web-Oberfläche".into();
                 w.port = Some(4343);
+                // Adresse sichtbar als URL eintragen (leer wirkte der Weg unbrauchbar).
+                let host = t.host.trim();
+                if !host.is_empty() {
+                    let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
+                    w.host = format!("https://{h}:4343/");
+                }
                 t.ways.push(w);
                 Ok(json!({ "ok": true }))
             }
@@ -1796,6 +1802,40 @@ impl App {
                     options_json: self.options_json(t),
                     skip: tunnel.then(|| "Verbindung über einen Tunnel – wird nicht direkt geprüft".to_string()),
                     extra: false,
+                });
+            }
+            // HTTPS-Dienste des Geräts: offen laut Dienstprüfung der Übersicht (443, 4343, 8443), bei einem erkannten
+            // Aruba-AP immer 4343 (dorthin leitet die Web-Oberfläche weiter). Gleiches Browserprofil wie das Ziel, damit
+            // der Web-Tab das Zertifikat danach kennt; antwortet dort niemand, entfällt die Zeile.
+            let mut https: Vec<u16> = self.overview.open_ports(&id.to_string()).into_iter().filter(|p| matches!(p, 443 | 4343 | 8443)).collect();
+            if self.overview.devices.get(&id) == Some(&"aruba-ap") && !https.contains(&4343) {
+                https.push(4343);
+            }
+            let covered = |port: u16| {
+                let main = t.protocol == Protocol::Web && Self::endpoint_of(t).1 == port;
+                main || t.ways.iter().filter_map(|w| t.via(w.id)).any(|v| v.protocol == Protocol::Web && Self::endpoint_of(&v).1 == port && Self::endpoint_of(&v).0 == t.host)
+            };
+            for port in https.into_iter().filter(|p| !covered(*p)) {
+                let host = t.host.trim();
+                if host.is_empty() {
+                    continue;
+                }
+                let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
+                let url = if port == 443 { format!("https://{h}/") } else { format!("https://{h}:{port}/") };
+                let mut v = t.clone();
+                v.protocol = Protocol::Web;
+                v.port = Some(port);
+                v.options = ProtocolOptions::Web(rj_core::model::WebOptions { url: Some(url), ..Default::default() });
+                specs.push(crate::certcheck::ProbeSpec {
+                    target: id,
+                    name: format!("{} – HTTPS :{port}", t.name),
+                    protocol: Protocol::Web,
+                    host: host.to_string(),
+                    port,
+                    legacy: false,
+                    options_json: self.options_json(&v),
+                    skip: tunnel.then(|| "Verbindung über einen Tunnel – wird nicht direkt geprüft".to_string()),
+                    extra: true,
                 });
             }
             // Zugangswege: jeder Weg wie ein eigenes Ziel (gleiches Browserprofil, Adresse und Port des Wegs).
@@ -2141,6 +2181,9 @@ mod tests {
         app.overview.store.dir = Some(dir.path().join("inventar"));
         let root = app.index.root.id;
         let id = Uuid::parse_str(cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "AP" }))["id"].as_str().unwrap()).unwrap();
+        if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut app.index.root, id) {
+            t.host = "192.0.2.4".into();
+        }
         assert!(!app.aruba_web_way(id), "ohne Inventar kein Weg");
         let mut inv = app.overview.store.load(id);
         inv.offer("system", "Aruba Instant 8.10.0.23 LSR (Modell 515)", "SSH", 1);
@@ -2148,6 +2191,7 @@ mod tests {
         assert!(app.aruba_web_way(id));
         let t = app.target(id).unwrap();
         assert_eq!((t.ways.len(), t.ways[0].protocol, t.ways[0].port), (1, Protocol::Web, Some(4343)));
+        assert_eq!(t.ways[0].host, "https://192.0.2.4:4343/", "URL sichtbar eingetragen");
         // Weg gelöscht: Die nächste Inventur legt ihn nicht wieder an.
         if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut app.index.root, id) {
             t.ways.clear();
