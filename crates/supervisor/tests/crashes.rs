@@ -10,7 +10,10 @@ use rj_supervisor::*;
 fn spec(mode: &str) -> WorkerSpec {
     let mut s = WorkerSpec::new(env!("CARGO_BIN_EXE_rj-test-worker"));
     s.args = vec!["--mode".into(), mode.into(), "--after-ms".into(), "400".into()];
-    s.heartbeat_timeout = Duration::from_millis(1500);
+    // Großzügig: Unter Windows hält die Fehlerberichterstattung (WER) einen abgebrochenen Worker bei einem
+    // vollständigen Bericht bis etwa 1,45 s nach dem Abbruch am Leben (gemessen 2026-10-21); bei 1,5 s Frist
+    // galt er dann gelegentlich als „reagiert nicht mehr“ statt „abgebrochen“.
+    s.heartbeat_timeout = Duration::from_millis(3000);
     s.memory_limit = Some(200 * 1024 * 1024);
     s
 }
