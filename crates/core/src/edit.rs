@@ -123,6 +123,20 @@ fn take(f: &mut Folder, id: Uuid) -> Option<(Node, usize)> {
     None
 }
 
+/// IDs des Knotens und aller Unterknoten.
+pub fn subtree(index: &Index, id: Uuid) -> Vec<Uuid> {
+    let mut out = Vec::new();
+    if id == index.root.id {
+        for c in &index.root.children {
+            ids_in(c, &mut out);
+        }
+        out.push(id);
+    } else if let Some(n) = node(index, id) {
+        ids_in(n, &mut out);
+    }
+    out
+}
+
 fn ids_in(node: &Node, out: &mut Vec<Uuid>) {
     out.push(node.id());
     if let Node::Folder(f) = node {

@@ -7,6 +7,7 @@
 #include "settingstab.h"
 #include "masstab.h"
 #include "mergetab.h"
+#include "sharedtab.h"
 #include <algorithm>
 
 #include "editor.h"
@@ -583,6 +584,19 @@ void MainWindow::openMerge(const QStringList& ids, const QString& title, bool ma
 	auto* t = new MergeTab(m_backend, ids, title, manual, m_tabs);
 	connect(t, &MergeTab::showTarget, this, [this](const QString& id) { selectId(id); });
 	addToolTab(t, T(m_backend, "merge.tab"));
+}
+
+void MainWindow::openSharedCheck()
+{
+	if (auto* old = findChild<SharedCredTab*>())
+	{
+		old->load();
+		m_tabs->setCurrentWidget(old);
+		return;
+	}
+	auto* t = new SharedCredTab(m_backend, m_tabs);
+	connect(t, &SharedCredTab::showTarget, this, [this](const QString& id) { selectId(id); });
+	addToolTab(t, T(m_backend, "shared.tab"));
 }
 
 void MainWindow::mergeForFirstFolder()
@@ -1257,6 +1271,7 @@ void MainWindow::buildMenus()
 	extras->addAction(T(m_backend, "menu.extras.idle"), this, [this] { openSettings(QStringLiteral("lock")); });
 	extras->addAction(T(m_backend, "menu.extras.clipclear"), this, [this] { openSettings(QStringLiteral("lock")); });
 	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] { openSettings(QStringLiteral("snmp")); });
+	extras->addAction(T(m_backend, "menu.extras.shared"), this, [this] { openSharedCheck(); });
 	extras->addAction(T(m_backend, "menu.extras.terminal"), this, [this] { openTerminalSettings(); });
 	extras->addAction(T(m_backend, "menu.extras.appearance"), this, [this] { openAppearance(); });
 	extras->addSeparator();
@@ -3082,6 +3097,18 @@ void MainWindow::handleEvents(const QString& json)
 				for (auto* ed : findChildren<PropertiesTab*>())
 					ed->reload();
 				statusBar()->showMessage(T(m_backend, "status.unlocked"), 5000);
+				// Geteilte Zugangsdaten (z. B. aus früheren Duplikaten): Hinweis mit Verweis auf die Prüfroutine.
+				QTimer::singleShot(0, this, [this] {
+					const int n = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("shared_list") } })).value(QStringLiteral("groups")).toArray().size();
+					if (n == 0)
+						return;
+					QMessageBox box(QMessageBox::Information, T(m_backend, "shared.head"), T(m_backend, "shared.unlock").arg(n), QMessageBox::NoButton, this);
+					auto* now = box.addButton(T(m_backend, "shared.unlock.check"), QMessageBox::AcceptRole);
+					box.addButton(T(m_backend, "shared.unlock.later"), QMessageBox::RejectRole);
+					box.exec();
+					if (box.clickedButton() == now)
+						openSharedCheck();
+				});
 				if (const QString note = m_backend->keyringNote(); !note.isEmpty())
 					statusBar()->showMessage(note, 12000);
 #ifdef Q_OS_WIN
@@ -3102,6 +3129,8 @@ void MainWindow::handleEvents(const QString& json)
 					showUnlock(false);
 				m_overlay->setBusy(false, e.value(QStringLiteral("reason")).toString());
 			}
+			else if (t == QLatin1String("connect_all_progress"))
+				rebuildTabs(); // weitere Verbindungen gestartet: Tabs (und ihre Rückfragen) sofort zeigen
 			else if (t == QLatin1String("connect_all_done"))
 			{
 				rebuildTabs();

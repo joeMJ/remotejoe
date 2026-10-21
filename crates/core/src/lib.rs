@@ -11,6 +11,7 @@ pub mod inherit;
 pub mod merge;
 pub mod model;
 pub mod schema;
+pub mod shared;
 pub mod secret;
 pub mod termcolors;
 pub mod weburl;

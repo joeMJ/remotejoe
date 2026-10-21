@@ -69,6 +69,8 @@ public:
 	void patchdayForFirstTargets(int n);
 	/// Vorschau „Gleiche Adressen zusammenfassen“ für den ersten Ordner (Bildschirmfotos).
 	void mergeForFirstFolder();
+	/// Extras → „Geteilte Zugangsdaten prüfen“.
+	void openSharedCheck();
 	void openMerge(const QStringList& ids, const QString& title, bool manual = false);
 	/// Messwerte der Patchday-Ansicht (längstes Neuzeichnen, Anzahl).
 	QString patchdayMeasurement() const;

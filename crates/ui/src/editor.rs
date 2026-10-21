@@ -5,7 +5,7 @@
 //! weitergegeben (`Vault::set_index`); gespeichert wird über `Vault::save`
 //! mit Sicherungskopie, atomarem Schreiben, Sperre und Konfliktabfrage.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use rj_core::edit::{self, ApplyKind, EditError};
 use rj_core::inherit::{credential_mode, reachable_credential_names, resolve_credential_at, CredentialMode, CredentialResolution, Origin};
@@ -457,7 +457,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -478,10 +478,7 @@ impl App {
                 let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
                 edit::reorder(idx, id, c.get("delta").and_then(Value::as_i64).unwrap_or(0) as i32).map(|_| json!({ "ok": true }))
             }),
-            "duplicate" => self.simple("Duplizieren", |idx| {
-                let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
-                edit::duplicate(idx, id, " (Kopie)").map(|n| json!({ "id": n }))
-            }),
+            "duplicate" => self.op_duplicate(&c),
             "rename" => self.simple("Umbenennen", |idx| {
                 let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
                 edit::rename(idx, id, str_of(&c, "name").unwrap_or_default()).map(|_| json!({ "ok": true }))
@@ -657,6 +654,9 @@ impl App {
             "ways_suggest" => self.ways_suggest(&c),
             "mass_start" => self.mass_start(&c),
             "merge_preview" => self.merge_preview(&c),
+            "shared_list" => Ok(self.shared_list()),
+            "shared_split" => self.shared_split(&c),
+            "shared_to_login" => self.shared_to_login(&c),
             // Gibt es das Ziel noch? (Übersicht nach einem Fehler beim Auffrischen)
             "target_exists" => Ok(json!({ "exists": id_of(&c, "id").is_some_and(|id| self.target(id).is_some()) })),
             "merge_check" => self.merge_check(&c),
@@ -940,7 +940,13 @@ impl App {
         if groups.iter().all(|(_, o, _)| o.is_empty()) {
             return Err("Keine Gruppe gewählt".into());
         }
-        self.simple("Ziele zusammenfassen", |idx| {
+        // Angenommene Web-Zertifikate der aufgelösten Ziele: deren Port merken, solange es sie noch gibt.
+        let carry: Vec<(Uuid, Uuid, u16)> = groups
+            .iter()
+            .flat_map(|(keep, others, _)| others.iter().filter(move |o| *o != keep).map(move |o| (*keep, *o)))
+            .filter_map(|(keep, o)| self.target(o).map(|t| (keep, o, App::endpoint_of(t).1)))
+            .collect();
+        let r = self.simple("Ziele zusammenfassen", |idx| {
             let (mut targets, mut ways, mut own, mut notes) = (0, 0, 0, Vec::new());
             for (keep, others, name) in &groups {
                 if others.is_empty() {
@@ -953,7 +959,11 @@ impl App {
                 notes.extend(r.notes);
             }
             Ok(json!({ "merged": targets, "ways": ways, "own": own, "notes": notes }))
-        })
+        });
+        if r.is_ok() {
+            carry_web_certs(&carry);
+        }
+        r
     }
 
     fn simple(&mut self, label: &str, f: impl FnOnce(&mut Index) -> Result<Value, EditError>) -> Result<Value, String> {
@@ -1352,6 +1362,8 @@ impl App {
                     Some(CredentialMode::Entry { reference, .. }) => Some(reference.entry),
                     _ => None,
                 };
+                // Geteilter Eintrag (z. B. nach Duplizieren): nicht überschreiben, sondern einen eigenen anlegen.
+                let current = current.filter(|e| !rj_core::shared::is_shared(&self.index, *e));
                 let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
                 let entry = match current.filter(|e| vault.is_own_entry(*e)) {
                     Some(e) => {
@@ -1389,8 +1401,9 @@ impl App {
             Some(n) => format!("{} – {name}", n.name()),
             None => name.clone(),
         };
+        let shared = existing.as_ref().is_some_and(|r| rj_core::shared::is_shared(&self.index, r.entry));
         let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
-        let entry = match existing.as_ref().map(|r| r.entry).filter(|e| vault.is_own_entry(*e)) {
+        let entry = match existing.as_ref().map(|r| r.entry).filter(|e| !shared && vault.is_own_entry(*e)) {
             Some(e) => {
                 let old = vault.credential(e).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
                 let data = CredentialData { username: username.unwrap_or(old.data.username.clone()), password: password.unwrap_or(old.data.password.clone()), ..old.data };
@@ -1522,12 +1535,174 @@ impl App {
         true
     }
 
+    /// Geteilte Zugangsdaten: eigene KDBX-Einträge, die direkt an mehreren Stellen eingetragen sind (Benutzer, nie
+    /// Kennwörter).
+    fn shared_list(&self) -> Value {
+        let Some(vault) = self.vault.as_ref() else { return json!({ "groups": [], "locked": true }) };
+        let groups: Vec<Value> = rj_core::shared::shared(&self.index)
+            .into_iter()
+            .filter(|(e, _)| vault.is_own_entry(*e))
+            .map(|(e, uses)| {
+                let c = vault.credential(e);
+                let users: Vec<Value> = uses
+                    .iter()
+                    .map(|u| {
+                        let node = u.node();
+                        let path: Vec<String> = self.index.path_to(node).unwrap_or_default().iter().map(|n| rj_core::charset::mark_visible(n.name(), false).into_owned()).collect();
+                        let name = path.last().cloned().unwrap_or_else(|| "(Wurzel)".into());
+                        let what = match u {
+                            rj_core::shared::Use::Settings { name, .. } if name == rj_core::DEFAULT_CREDENTIAL => "Zugangsdaten".to_string(),
+                            rj_core::shared::Use::Settings { name, .. } => format!("Datensatz „{name}“"),
+                            rj_core::shared::Use::Way { way, .. } => match self.target(node).and_then(|t| t.ways.iter().find(|w| w.id == *way)) {
+                                Some(w) => format!("Weg „{}“", w.label()),
+                                None => "Weg".into(),
+                            },
+                        };
+                        json!({ "id": node, "name": name, "path": path[..path.len().saturating_sub(1)].join(" › "), "what": what })
+                    })
+                    .collect();
+                json!({ "entry": e, "title": c.as_ref().map(|c| c.data.title.clone()), "username": c.map(|c| c.data.username), "users": users })
+            })
+            .collect();
+        json!({ "groups": groups })
+    }
+
+    /// Trennen: Die erste Stelle behält den Eintrag, jede weitere bekommt eine eigene Kopie.
+    fn shared_split(&mut self, c: &Value) -> Result<Value, String> {
+        let entry = id_of(c, "entry").ok_or("Eintrag fehlt")?;
+        let uses = rj_core::shared::direct_uses(&self.index).remove(&entry).unwrap_or_default();
+        if uses.len() < 2 {
+            return Err("Der Eintrag ist nicht (mehr) geteilt".into());
+        }
+        let before = self.index.clone();
+        for u in &uses[1..] {
+            match self.copy_entry(entry, u.node()) {
+                Ok(Some(r)) => {
+                    rj_core::shared::replace(&mut self.index, u, r);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    self.index = before;
+                    return Err(e);
+                }
+            }
+        }
+        self.commit("Geteilte Zugangsdaten trennen", before);
+        Ok(json!({ "split": uses.len() - 1 }))
+    }
+
+    /// In Anmeldeobjekt umwandeln: ein Anmeldeobjekt auf den Eintrag; Ziele und Ordner sowie Wege verwenden es.
+    /// Zusätzliche Datensätze (z. B. „Sitzung“) bekommen eigene Kopien.
+    fn shared_to_login(&mut self, c: &Value) -> Result<Value, String> {
+        use rj_core::shared::Use;
+        let entry = id_of(c, "entry").ok_or("Eintrag fehlt")?;
+        let uses = rj_core::shared::direct_uses(&self.index).remove(&entry).unwrap_or_default();
+        if uses.len() < 2 {
+            return Err("Der Eintrag ist nicht (mehr) geteilt".into());
+        }
+        let title = self.vault.as_ref().and_then(|v| v.credential(entry)).map(|c| c.data.title).unwrap_or_else(|| "Gemeinsame Anmeldung".into());
+        let first = uses[0].node();
+        let folder = if edit::folder(&self.index, first).is_some() { first } else { edit::parent_of(&self.index, first).unwrap_or(self.index.root.id) };
+        let before = self.index.clone();
+        let login = rj_core::Login { id: Uuid::new_v4(), name: title.clone(), folder, entry: CredentialRef { entry, last_title: Some(title) } };
+        let lid = login.id;
+        self.index.logins.push(login);
+        for u in &uses {
+            let main_name = match edit::node(&self.index, u.node()) {
+                Some(Node::Target(t)) => t.credential_name().to_string(),
+                _ => rj_core::DEFAULT_CREDENTIAL.to_string(),
+            };
+            match u {
+                Use::Settings { node, name } if *name == main_name => {
+                    rj_core::inherit::set_credential_mode(&mut self.index, *node, rj_core::inherit::CredentialMode::Login(lid));
+                }
+                Use::Way { node, way } => {
+                    if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut self.index.root, *node) {
+                        if let Some(w) = t.ways.iter_mut().find(|w| w.id == *way) {
+                            w.own = None;
+                            w.credential = rj_core::model::WayCredential::Login(lid);
+                        }
+                    }
+                }
+                other => match self.copy_entry(entry, other.node()) {
+                    Ok(Some(r)) => {
+                        rj_core::shared::replace(&mut self.index, other, r);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        self.index = before;
+                        return Err(e);
+                    }
+                },
+            }
+        }
+        rj_core::inherit::sync_logins(&mut self.index);
+        self.commit("In Anmeldeobjekt umwandeln", before);
+        Ok(json!({ "login": lid }))
+    }
+
+    fn op_duplicate(&mut self, c: &Value) -> Result<Value, String> {
+        let id = id_of(c, "id").ok_or("Objekt fehlt")?;
+        let before = self.index.clone();
+        let r = edit::duplicate(&mut self.index, id, " (Kopie)").map_err(|e| e.to_string()).and_then(|n| self.unshare_copy(n).map(|_| n));
+        match r {
+            Ok(n) => {
+                self.commit("Duplizieren", before);
+                Ok(json!({ "id": n }))
+            }
+            Err(e) => {
+                self.index = before;
+                Err(e)
+            }
+        }
+    }
+
+    /// Nach dem Duplizieren: eigene (direkt eingetragene) KDBX-Einträge der Kopie bekommen eine eigene Kopie des
+    /// Eintrags, damit Änderungen an der Kopie das Original nicht mehr treffen. Fremde Einträge und Anmeldeobjekte
+    /// bleiben geteilt.
+    fn unshare_copy(&mut self, copy: Uuid) -> Result<(), String> {
+        let nodes = edit::subtree(&self.index, copy);
+        let uses: Vec<(Uuid, rj_core::shared::Use)> = rj_core::shared::direct_uses(&self.index)
+            .into_iter()
+            .flat_map(|(e, u)| u.into_iter().map(move |x| (e, x)))
+            .filter(|(_, u)| nodes.contains(&u.node()))
+            .collect();
+        let mut copies: HashMap<Uuid, CredentialRef> = HashMap::new();
+        for (entry, u) in uses {
+            let r = match copies.get(&entry) {
+                Some(r) => r.clone(),
+                None => match self.copy_entry(entry, u.node())? {
+                    Some(r) => {
+                        copies.insert(entry, r.clone());
+                        r
+                    }
+                    None => continue,
+                },
+            };
+            rj_core::shared::replace(&mut self.index, &u, r);
+        }
+        Ok(())
+    }
+
+    /// Kopie eines eigenen KDBX-Eintrags, betitelt nach dem Knoten `node`; `None` bei fremden Einträgen.
+    fn copy_entry(&mut self, entry: Uuid, node: Uuid) -> Result<Option<CredentialRef>, String> {
+        let title = edit::node(&self.index, node).map(|n| n.name().to_string()).unwrap_or_default();
+        let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
+        if !vault.is_own_entry(entry) {
+            return Ok(None);
+        }
+        let old = vault.credential(entry).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
+        let new = vault.add_credential(CredentialData { title: title.clone(), ..old.data }).map_err(|e| e.to_string())?;
+        Ok(Some(CredentialRef { entry: new, last_title: Some(title) }))
+    }
+
     /// Eigene Zugangsdaten der Wege: vorhandenen eigenen Eintrag ändern (leeres Kennwort = unverändert), sonst einen
     /// neuen Eintrag „Ziel – Weg“ anlegen.
     fn apply_way_credentials(&mut self, target_name: &str, list: &mut [rj_core::model::AccessWay], own: Vec<OwnInput>) -> Result<(), String> {
         if own.is_empty() {
             return Ok(());
         }
+        let shared: Vec<Uuid> = rj_core::shared::shared(&self.index).into_iter().map(|(e, _)| e).collect();
         let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
         for (wid, username, password) in own {
             let Some(w) = list.iter_mut().find(|w| w.id == wid) else { continue };
@@ -1537,7 +1712,7 @@ impl App {
                 continue;
             }
             let title = format!("{target_name} – {}", w.label());
-            let entry = match w.own.as_ref().map(|r| r.entry).filter(|e| vault.is_own_entry(*e)) {
+            let entry = match w.own.as_ref().map(|r| r.entry).filter(|e| !shared.contains(e) && vault.is_own_entry(*e)) {
                 Some(e) => {
                     let old = vault.credential(e).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
                     let data = CredentialData { title: title.clone(), username, password: password.unwrap_or(old.data.password.clone()), ..old.data };
@@ -1621,6 +1796,23 @@ impl App {
                     skip: tunnel.then(|| "Verbindung über einen Tunnel – wird nicht direkt geprüft".to_string()),
                     extra: false,
                 });
+            }
+            // Zugangswege: jeder Weg wie ein eigenes Ziel (gleiches Browserprofil, Adresse und Port des Wegs).
+            for w in &t.ways {
+                let Some(v) = t.via(w.id) else { continue };
+                if crate::certcheck::supported(v.protocol) {
+                    specs.push(crate::certcheck::ProbeSpec {
+                        target: id,
+                        name: v.name.clone(),
+                        protocol: v.protocol,
+                        host: Self::endpoint_of(&v).0,
+                        port: Self::endpoint_of(&v).1,
+                        legacy: matches!(&v.options, ProtocolOptions::Ssh(o) if o.legacy_algorithms),
+                        options_json: self.options_json(&v),
+                        skip: tunnel.then(|| "Verbindung über einen Tunnel – wird nicht direkt geprüft".to_string()),
+                        extra: false,
+                    });
+                }
             }
             // Windows-Ziele: zusätzlich der SSH-Schlüssel auf Port 22 (über ihn fragt die Übersicht das Inventar ab).
             if matches!(t.protocol, Protocol::Rdp | Protocol::Psrp) && !tunnel {
@@ -1838,6 +2030,67 @@ mod tests {
         // Kennwort steht nie im Index.
         let json = String::from_utf8(rj_core::schema::to_json(&v2.index().index).unwrap()).unwrap();
         assert!(!json.contains("Kennwo"));
+    }
+
+    #[test]
+    fn duplicate_gets_own_entry_and_shared_entries_are_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let a = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "A" }))["id"].as_str().unwrap().to_string();
+        let r = cmd(&mut app, json!({ "op": "update", "id": a, "fields": {}, "credential": { "mode": "direct", "username": "alt", "password": "eins" } }));
+        assert!(r.get("error").is_none(), "{r}");
+        let aid = Uuid::parse_str(&a).unwrap();
+        let entry_of = |app: &App, id: Uuid| app.target(id).unwrap().settings.credentials[rj_core::DEFAULT_CREDENTIAL].entry;
+        let ea = entry_of(&app, aid);
+        // Duplizieren: die Kopie bekommt einen eigenen Eintrag mit denselben Daten.
+        let b = Uuid::parse_str(cmd(&mut app, json!({ "op": "duplicate", "id": a }))["id"].as_str().unwrap()).unwrap();
+        let eb = entry_of(&app, b);
+        assert_ne!(ea, eb);
+        assert_eq!(app.vault.as_ref().unwrap().credential(eb).unwrap().data.password.as_bytes(), b"eins");
+        // Altbestand: zwei Ziele teilen einen Eintrag (Duplikat aus einer früheren Version).
+        if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut app.index.root, b) {
+            t.settings.credentials.get_mut(rj_core::DEFAULT_CREDENTIAL).unwrap().entry = ea;
+        }
+        assert!(rj_core::shared::is_shared(&app.index, ea));
+        let r = cmd(&mut app, json!({ "op": "update", "id": b.to_string(), "fields": {}, "credential": { "mode": "direct", "username": "neu", "password": "zwei" } }));
+        assert!(r.get("error").is_none(), "{r}");
+        assert_ne!(entry_of(&app, b), ea, "geteilter Eintrag: eigener statt überschreiben");
+        let c = app.vault.as_ref().unwrap().credential(ea).unwrap();
+        assert_eq!((c.data.username.as_str(), c.data.password.as_bytes()), ("alt", b"eins".as_slice()), "Original unverändert");
+    }
+
+    #[test]
+    fn shared_check_lists_splits_and_converts_to_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _path, _key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let a = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "A" }))["id"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "update", "id": a, "fields": {}, "credential": { "mode": "direct", "username": "u", "password": "p" } }));
+        let aid = Uuid::parse_str(&a).unwrap();
+        let ea = app.target(aid).unwrap().settings.credentials[rj_core::DEFAULT_CREDENTIAL].entry;
+        let share = |app: &mut App, name: &str| {
+            let mut t = rj_core::Target::new(name, Protocol::Ssh, "192.0.2.9");
+            t.settings.credentials.insert(rj_core::DEFAULT_CREDENTIAL.into(), CredentialRef { entry: ea, last_title: None });
+            edit::insert(&mut app.index, root, Node::Target(t), None).unwrap()
+        };
+        let b = share(&mut app, "B");
+        let l = cmd(&mut app, json!({ "op": "shared_list" }));
+        assert_eq!(l["groups"].as_array().unwrap().len(), 1, "{l}");
+        assert_eq!(l["groups"][0]["users"].as_array().unwrap().len(), 2);
+        assert_eq!(l["groups"][0]["username"], "u");
+        assert!(l.to_string().find("\"p\"").is_none(), "kein Kennwort");
+        let r = cmd(&mut app, json!({ "op": "shared_split", "entry": ea }));
+        assert_eq!(r["split"], 1, "{r}");
+        assert!(cmd(&mut app, json!({ "op": "shared_list" }))["groups"].as_array().unwrap().is_empty());
+        assert_eq!(app.target(aid).unwrap().settings.credentials[rj_core::DEFAULT_CREDENTIAL].entry, ea, "erste Stelle behält den Eintrag");
+        assert_eq!(cmd(&mut app, json!({ "op": "undo" }))["undone"], "Geteilte Zugangsdaten trennen");
+        let r = cmd(&mut app, json!({ "op": "shared_to_login", "entry": ea }));
+        let lid = Uuid::parse_str(r["login"].as_str().unwrap()).unwrap();
+        for id in [aid, b] {
+            assert_eq!(rj_core::inherit::credential_mode(&app.index, id), Some(rj_core::inherit::CredentialMode::Login(lid)));
+        }
+        assert!(cmd(&mut app, json!({ "op": "shared_list" }))["groups"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -2352,6 +2605,27 @@ pub(crate) fn inventory_source_text(src: rj_core::inherit::InventorySource, on: 
 }
 
 /// Zugangsweg für die Oberfläche.
+/// Zusammenfassen: angenommene Web-Zertifikate der aufgelösten Ziele (eigenes Browserprofil je Ziel) ins Profil des
+/// Hauptziels übernehmen, damit dessen Wege nicht erneut fragen. Einträge ohne Port gehörten zum Port des alten
+/// Ziels und bekommen ihn mit; vorhandene Einträge des Hauptziels bleiben.
+fn carry_web_certs(carry: &[(Uuid, Uuid, u16)]) {
+    let Some(base) = rj_core::config::data_dir() else { return };
+    for (keep, other, port) in carry {
+        let from = rj_web::AcceptedCerts::load(&rj_web::profile_dir(&base, &other.to_string()));
+        if from.hosts.is_empty() {
+            continue;
+        }
+        let dir = rj_web::profile_dir(&base, &keep.to_string());
+        let mut to = rj_web::AcceptedCerts::load(&dir);
+        for (k, fp) in from.hosts {
+            let has_port = k.rsplit_once(':').is_some_and(|(h, p)| p.parse::<u16>().is_ok() && (h.starts_with('[') || !h.contains(':')));
+            let key = if has_port { k } else { rj_web::AcceptedCerts::key(&k, *port) };
+            to.hosts.entry(key).or_insert(fp);
+        }
+        let _ = to.save(&dir);
+    }
+}
+
 pub(crate) fn way_json(w: &rj_core::model::AccessWay) -> Value {
     let cred = match w.credential {
         _ if w.own.is_some() => json!("own"),

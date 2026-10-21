@@ -1534,10 +1534,13 @@ impl App {
             crate::idle::IdleEvent::Resumed => out.extend(self.on_resume()),
             _ => {}
         }
-        if self.stagger.is_some() {
+        if let Some(before) = self.stagger.as_ref().map(|s| s.results.len()) {
             self.stagger_tick();
+            let after = self.stagger.as_ref().or(self.stagger_done.as_ref()).map(|s| s.results.len()).unwrap_or(before);
             if self.stagger.is_none() {
                 out.push(UiEvent::ConnectAllDone);
+            } else if after > before {
+                out.push(UiEvent::ConnectAllProgress);
             }
         }
         if let Some(rx) = &self.unlocking {
