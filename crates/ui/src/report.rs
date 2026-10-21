@@ -153,11 +153,11 @@ mod tests {
     #[test]
     fn internal_details_are_removed() {
         let words = vec![("werkbank".to_string(), "<Rechner>"), ("anna".to_string(), "<Benutzer>"), ("ap-flur-2".to_string(), "<Ziel>")];
-        let t = "Fehler bei 10.20.30.4:22 und 198.51.100.4 (ap-flur-2), Mail an a.b@example.org; MAC 94:64:24:cc:9b:12, v6 fe80::1%eth0, Version 8.10.0.23, Nutzer Anna auf Werkbank";
+        let t = "Fehler bei 10.20.30.4:22 und 198.51.100.4 (ap-flur-2), Mail an a.b@example.org; MAC 02:00:5e:00:53:12, v6 fe80::1%eth0, Version 8.10.0.23, Nutzer Anna auf Werkbank";
         let s = sanitize(t, &words);
         assert!(!s.contains("10.20.30") && !s.contains("198.51") && !s.contains("example.org") && !s.contains("fe80"), "{s}");
         assert!(s.contains("<IP>:22") && s.contains("<Mail>") && s.contains("<IPv6>") && s.contains("<Ziel>") && s.contains("<Benutzer>") && s.contains("<Rechner>"), "{s}");
-        assert!(s.contains("94:64:24:cc:9b:12"), "MAC bleibt: {s}");
+        assert!(s.contains("02:00:5e:00:53:12"), "MAC bleibt: {s}");
         assert!(s.contains("Version 8.10.0.23"), "Versionsnummer bleibt: {s}");
     }
 

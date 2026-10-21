@@ -463,21 +463,21 @@ mod tests {
 
     #[test]
     fn aruba_uptime_and_serial_from_show_version_and_show_aps() {
-        let out = "94:64:24:cc:9b:12# show version\r\nArubaOS (MODEL: 515), Version 8.10.0.23 LSR\r\n\
-                   AP uptime is 2 days 12 hours 29 minutes 34 seconds\r\n94:64:24:cc:9b:12# show aps\r\n\
+        let out = "02:00:5e:00:53:12# show version\r\nArubaOS (MODEL: 515), Version 8.10.0.23 LSR\r\n\
+                   AP uptime is 2 days 12 hours 29 minutes 34 seconds\r\n02:00:5e:00:53:12# show aps\r\n\
                    2 Access Points\r\n---------------\r\n\
                    Name               IP Address     Mode    Clients  Type  Serial #    Uptime\r\n\
                    ----               ----------     ----    -------  ----  --------    ------\r\n\
-                   94:64:24:cc:9b:12  192.0.2.1*  access  0        515   CNQXK9X123  2d:12h:29m\r\n\
-                   ap-kueche          192.0.2.1   access  3        505   CNQXK9X999  1d:01h:02m\r\n94:64:24:cc:9b:12#";
+                   02:00:5e:00:53:12  192.0.2.4*     access  0        515   CNQXK9X123  2d:12h:29m\r\n\
+                   ap-kueche          192.0.2.5      access  3        505   CNQXK9X999  1d:01h:02m\r\n02:00:5e:00:53:12#";
         let f = parse_aruba(out).unwrap();
         assert!(f.contains(&("uptime", "2 T 12 Std 29 Min".to_string())), "{f:?}");
         let w = parse_aruba("ArubaOS (MODEL: 555), Version 8.10.0.23 LSR\nAP uptime is 10 weeks 4 days 9 hours 45 minutes 14 seconds\nap#").unwrap();
         assert!(w.contains(&("uptime", "74 T 9 Std 45 Min".to_string())), "Wochen als Tage: {w:?}");
-        assert_eq!(parse_aruba_serial(out, "192.0.2.1").as_deref(), Some("CNQXK9X123"));
+        assert_eq!(parse_aruba_serial(out, "192.0.2.4").as_deref(), Some("CNQXK9X123"));
         // Andere APs des Schwarms stehen in der Liste.
-        assert_eq!(parse_aruba_aps(out).iter().find(|a| a.ip == "192.0.2.1").and_then(|a| a.serial.as_deref()), Some("CNQXK9X999"));
-        assert_eq!(parse_aruba_serial("keine Tabelle", "192.0.2.1"), None);
+        assert_eq!(parse_aruba_aps(out).iter().find(|a| a.ip == "192.0.2.5").and_then(|a| a.serial.as_deref()), Some("CNQXK9X999"));
+        assert_eq!(parse_aruba_serial("keine Tabelle", "192.0.2.4"), None);
     }
 
     #[test]
@@ -491,12 +491,12 @@ mod tests {
         assert_eq!(parse_aruba_serial(out, "10.80.227.239").as_deref(), Some("CNLGKD5DWX"));
         assert_eq!(parse_aruba_aps(out).iter().find(|a| a.ip == "10.80.227.225").and_then(|a| a.serial.as_deref()), Some("CNNPKPPH0Y"), "verschobene Spalten");
         // Virtuelle Controller-IP: keine Zeile mit dieser Adresse, der Name aus der Eingabeaufforderung entscheidet.
-        let vc = "94:64:24:cc:9b:12# show aps\r\n\r\n1 Access Point\r\n--------------\r\n\
+        let vc = "02:00:5e:00:53:12# show aps\r\n\r\n1 Access Point\r\n--------------\r\n\
                   Name               IP Address       Mode    Spectrum  Clients  Type         IPv6 Address  Mesh Role  Zone  Serial #    radio0 Channel\r\n\
                   ----               ----------       ----    --------  -------  ----         ------------  ---------  ----  --------    --------------\r\n\
-                  94:64:24:cc:9b:12  192.0.2.1*  access  disable   0        515(indoor)  --            N/A        -     CNMQKD58ZG  52E\r\n\
-                  94:64:24:cc:9b:12#";
-        assert_eq!(parse_aruba_serial(vc, "192.0.2.1").as_deref(), Some("CNMQKD58ZG"));
+                  02:00:5e:00:53:12  192.0.2.108*     access  disable   0        515(indoor)  --            N/A        -     CNZZQX0001  52E\r\n\
+                  02:00:5e:00:53:12#";
+        assert_eq!(parse_aruba_serial(vc, "192.0.2.4").as_deref(), Some("CNZZQX0001"));
         let aps = parse_aruba_aps(out);
         assert_eq!(aps.len(), 2);
         assert!(aps[0].conductor && !aps[1].conductor);
