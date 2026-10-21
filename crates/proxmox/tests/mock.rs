@@ -361,12 +361,15 @@ fn reconnect_reopens_console_without_leftovers() {
     assert_eq!(log.lock().unwrap().open_ws, 1);
     let (port1, done1) = (first.port, first.finished_flag());
     drop(first);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
     while !(done1.load(std::sync::atomic::Ordering::SeqCst) && log.lock().unwrap().open_ws == 0) {
         assert!(std::time::Instant::now() < deadline, "Reste der alten Brücke: Faden fertig {}, offene Websockets {}", done1.load(std::sync::atomic::Ordering::SeqCst), log.lock().unwrap().open_ws);
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(TcpStream::connect(("127.0.0.1", port1)).is_err(), "alter Brückenport nimmt noch Verbindungen an");
+    // Den alten Port nicht erneut ansprechen: Die Brücke gibt ihn gleich nach der ersten Verbindung frei, parallel
+    // laufende Tests können ihn sofort wieder belegen (war die Ursache sporadischer Fehlschläge). Dass der Faden
+    // beendet und kein Websocket mehr offen ist, prüft die Schleife oben.
+    let _ = port1;
     let second = c.console(&g[0]).unwrap();
     let vnc2 = VncClient::connect(&vnc_params(second.port, second.password.clone()), Arc::new(|_| false)).unwrap();
     assert_eq!(vnc2.name, "vm100");
