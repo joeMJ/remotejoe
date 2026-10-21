@@ -4213,7 +4213,29 @@ void CertCheckTab::fill(const QJsonArray& rows)
 
 void CertCheckTab::acceptNew()
 {
-	const QJsonObject r = parse(edit({ { QStringLiteral("op"), QStringLiteral("cert_check_accept") } }));
+	// Läuft im Hintergrund; das Ergebnis kommt als Ereignis (handleAccept).
+	const QJsonObject j = parse(edit({ { QStringLiteral("op"), QStringLiteral("cert_check_accept") } }));
+	m_accept->setEnabled(false);
+	m_again->setEnabled(false);
+	const int total = j.value(QStringLiteral("count")).toInt();
+	m_state->setText(m_backend->text(QStringLiteral("certcheck.accepting")).arg(0).arg(total));
+	if (!m_acceptProgress)
+	{
+		m_acceptProgress = new QTimer(this);
+		m_acceptProgress->setInterval(500);
+		connect(m_acceptProgress, &QTimer::timeout, this, [this] {
+			const QJsonObject p = parse(edit({ { QStringLiteral("op"), QStringLiteral("cert_check_progress") } }));
+			m_state->setText(m_backend->text(QStringLiteral("certcheck.accepting")).arg(p.value(QStringLiteral("done")).toInt()).arg(p.value(QStringLiteral("total")).toInt()));
+		});
+	}
+	m_acceptProgress->start();
+}
+
+void CertCheckTab::handleAccept(const QJsonObject& r)
+{
+	if (m_acceptProgress)
+		m_acceptProgress->stop();
+	m_again->setEnabled(true);
 	fill(r.value(QStringLiteral("rows")).toArray());
 	QString msg = m_backend->text(QStringLiteral("certcheck.saved")).arg(r.value(QStringLiteral("saved")).toInt());
 	const QJsonArray errors = r.value(QStringLiteral("errors")).toArray();

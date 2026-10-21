@@ -418,6 +418,8 @@ public:
 	void start();
 	/// Ergebnis der Hintergrundaufgabe `cert_check`.
 	void handleResult(const QJsonObject& r);
+	/// Ergebnis von „Neue übernehmen“ (Hintergrundaufgabe).
+	void handleAccept(const QJsonObject& r);
 
 private:
 	void fill(const QJsonArray& rows);
@@ -430,6 +432,7 @@ private:
 	QPushButton* m_accept;
 	QPushButton* m_again;
 	/// Fortschritt „n von x geprüft“ während der Prüfung.
+	QTimer* m_acceptProgress = nullptr;
 	QTimer* m_progress = nullptr;
 };
 

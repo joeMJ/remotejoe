@@ -3198,6 +3198,11 @@ void MainWindow::handleEvents(const QString& json)
 					if (auto* c = findChild<CertCheckTab*>())
 						c->handleResult(r);
 				}
+				else if (kind == QLatin1String("cert_accept"))
+				{
+					if (auto* c = findChild<CertCheckTab*>())
+						c->handleAccept(r);
+				}
 				else if (r.contains(QStringLiteral("error")))
 					statusBar()->showMessage(T(m_backend, "edit.error").arg(r.value(QStringLiteral("error")).toString()), 8000);
 				else if (kind == QLatin1String("guest_action"))

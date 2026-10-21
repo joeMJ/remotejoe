@@ -669,8 +669,21 @@ impl App {
             "cert_check_rows" => Ok(json!({ "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() })),
             "cert_check_progress" => Ok(json!({ "done": self.cert_done.load(std::sync::atomic::Ordering::Relaxed), "total": self.cert_total })),
             "cert_check_accept" => {
-                let (saved, errors) = crate::certcheck::accept_new(&mut self.cert_rows, &crate::certcheck::Stores::default_location());
-                Ok(json!({ "saved": saved, "errors": errors, "rows": self.cert_rows.iter().map(|r| r.json()).collect::<Vec<_>>() }))
+                // Im Hintergrund: Hunderte Dateien sicher zu schreiben dauert unter Windows Minuten.
+                let mut rows = self.cert_rows.clone();
+                let n = rows.iter().filter(|r| r.state == crate::certcheck::CheckState::New).count();
+                let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                self.cert_done = done.clone();
+                self.cert_total = n;
+                let job = self.jobs.spawn(&format!("Schlüssel übernehmen ({n})"), move |job| {
+                    let (saved, errors) = crate::certcheck::accept_new_with_progress(&mut rows, &crate::certcheck::Stores::default_location(), &done);
+                    Box::new(move |app: &mut App, _cancelled: bool| {
+                        let json = json!({ "saved": saved, "errors": errors, "rows": rows.iter().map(|r| r.json()).collect::<Vec<_>>() }).to_string();
+                        app.cert_rows = rows;
+                        vec![crate::sessions::UiEvent::JobResult { job, kind: "cert_accept".into(), target: String::new(), json }]
+                    })
+                });
+                Ok(json!({ "job": job, "count": n }))
             }
             "update_task" => self.simple("Aufgabe ändern", |idx| {
                 let id = id_of(&c, "id").ok_or(EditError::NotFound)?;

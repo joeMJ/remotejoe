@@ -494,6 +494,14 @@ fn probe_proxmox(spec: &ProbeSpec, stores: &Stores) -> Probed {
 /// Speichert alle neuen Zeilen. Gibt (gespeichert, Fehlermeldungen) zurück; gespeicherte Zeilen
 /// stehen danach auf `Saved`. Geänderte, bekannte, gültige und nicht erreichbare bleiben unberührt.
 pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>) {
+    accept_new_with_progress(rows, stores, &std::sync::atomic::AtomicUsize::new(0))
+}
+
+/// Wie `accept_new`; `progress` zählt die übernommenen Einträge (Fortschritt „n von x“).
+pub fn accept_new_with_progress(rows: &mut [CheckRow], stores: &Stores, progress: &std::sync::atomic::AtomicUsize) -> (usize, Vec<String>) {
+    let tick = |n: usize| {
+        progress.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    };
     // Je Speicherdatei sammeln und einmal schreiben: Hunderte Einträge einzeln zu schreiben (lesen,
     // sichern, auf die Platte erzwingen) dauert unter Windows Minuten und blockiert die Oberfläche.
     let mut ssh: Vec<(usize, (String, u16, String))> = Vec::new();
@@ -505,7 +513,10 @@ pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>
         match &r.save {
             SaveData::None => {}
             SaveData::Ssh(line) => ssh.push((i, (r.spec.host.clone(), r.spec.port, line.clone()))),
-            SaveData::Rdp { path, pem } => done.push((i, save_file(path, pem.as_bytes()))),
+            SaveData::Rdp { path, pem } => {
+                done.push((i, save_file(path, pem.as_bytes())));
+                tick(1);
+            }
             SaveData::Vnc { id, fp } => vnc.push((i, (id.clone(), fp.clone()))),
             SaveData::Web { profile, host, der } => web.entry(profile.clone()).or_default().push((i, host.clone(), der.clone())),
             SaveData::Proxmox { key, fp } => prox.push((i, key.clone(), fp.clone())),
@@ -517,6 +528,7 @@ pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>
             None => Err("kein Datenordner".into()),
         };
         done.extend(ssh.iter().map(|(i, _)| (*i, res.clone())));
+        tick(ssh.len());
     }
     if !vnc.is_empty() {
         let res = match stores.file("vnc_certs") {
@@ -524,6 +536,7 @@ pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>
             None => Err("kein Datenordner".into()),
         };
         done.extend(vnc.iter().map(|(i, _)| (*i, res.clone())));
+        tick(vnc.len());
     }
     for (profile, list) in web {
         let mut a = rj_web::AcceptedCerts::load(&profile);
@@ -532,6 +545,7 @@ pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>
         }
         let res = a.save(&profile).map_err(|e| e.to_string());
         done.extend(list.iter().map(|(i, ..)| (*i, res.clone())));
+        tick(list.len());
     }
     if !prox.is_empty() {
         let res = match stores.file("proxmox-zertifikate.json") {
@@ -545,6 +559,7 @@ pub fn accept_new(rows: &mut [CheckRow], stores: &Stores) -> (usize, Vec<String>
             None => Err("kein Datenordner".into()),
         };
         done.extend(prox.iter().map(|(i, ..)| (*i, res.clone())));
+        tick(prox.len());
     }
     let mut saved = 0;
     let mut errors = Vec::new();

@@ -275,6 +275,7 @@
   "certcheck.state.saved": "Gespeichert",
   "certcheck.state.valid": "Gültig (öffentlich anerkannt, keine Warnung)",
   "certcheck.summary": "%1 neu, %2 bekannt oder gültig, %3 geändert, %4 nicht geprüft oder nicht erreichbar.",
+  "certcheck.accepting": "Übernehme %1 von %2 … (remotejoe bleibt bedienbar)",
   "certcheck.saved": "%1 Einträge als vertrauenswürdig gespeichert.",
   "connect.many.title": "Mehrere Ziele öffnen",
   "connect.many.text": "Sind Sie sicher, dass Sie wirklich %1 Ziele öffnen wollen?",
