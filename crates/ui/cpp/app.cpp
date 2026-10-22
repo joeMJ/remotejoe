@@ -448,10 +448,15 @@ std::int32_t rjRunApplication()
 			icon.addFile(QStringLiteral(":/logo/remotejoe-%1.png").arg(size), QSize(size, size));
 		QApplication::setWindowIcon(icon);
 	}
-	// Deutsche Texte für Qt-Standarddialoge, falls installiert.
+	// Deutsche Texte für Qt-Standarddialoge („Ja“/„Nein“ statt „Yes“/„No“): aus der Qt-Installation bzw. unter
+	// Windows aus dem Ordner „translations“ neben dem Programm (windeployqt --translations de legt qt_de.qm dort ab).
 	static QTranslator qtDe;
-	if (qtDe.load(QStringLiteral("qtbase_de"), QLibraryInfo::path(QLibraryInfo::TranslationsPath)))
-		QApplication::installTranslator(&qtDe);
+	const QStringList dirs{ QLibraryInfo::path(QLibraryInfo::TranslationsPath), QCoreApplication::applicationDirPath() + QStringLiteral("/translations") };
+	bool translated = false;
+	for (const QString& dir : dirs)
+		for (const QString& name : { QStringLiteral("qtbase_de"), QStringLiteral("qt_de") })
+			if (!translated && qtDe.load(name, dir))
+				translated = QApplication::installTranslator(&qtDe);
 	const QString shots = qEnvironmentVariable("RJ_SCREENSHOTS");
 	const bool demo = !shots.isEmpty() || qEnvironmentVariableIsSet("RJ_DEMO");
 	// Vorführung und Bildschirmfotos dürfen parallel laufen; sie öffnen keine echte Datenbank.

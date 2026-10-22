@@ -183,5 +183,5 @@ $teile = foreach ($c in Get-ChildItem (Join-Path $inst 'share\*\copyright') -Err
 }
 if (-not $teile) { Fehler 'Keine Lizenztexte unter vcpkg\installed\x64-windows\share gefunden.' 'vcpkg install wiederholen.' }
 Set-Content -Path (Join-Path $paket 'THIRD_PARTY_LICENSES-vcpkg.txt') -Value $teile -Encoding utf8
-Ausfuehren 'windeployqt' { & (Join-Path $qtBins 'windeployqt.exe') --no-translations (Join-Path $paket 'remotejoe.exe') }
+Ausfuehren 'windeployqt' { & (Join-Path $qtBins 'windeployqt.exe') --translations de (Join-Path $paket 'remotejoe.exe') }
 Write-Host "Fertig: $paket" -ForegroundColor Green
