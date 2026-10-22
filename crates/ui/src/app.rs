@@ -77,6 +77,8 @@ pub struct App {
     deferred_releases: Vec<(Uuid, String, u16)>,
     /// Hintergrundaufgaben und deren Ergebnis (Sitzung oder Fehler).
     pub jobs: crate::jobs::Jobs,
+    /// Aruba-Werkzeuge: laufender oder letzter Lauf eines Werkzeugs (ap_check).
+    pub(crate) aptools_run: Option<crate::aptools::Run>,
     pub(crate) job_results: std::collections::HashMap<u64, Result<SessionId, String>>,
     /// Sperre nach Leerlauf und Erkennung des Aufwachens.
     pub idle: crate::idle::IdleWatch,
@@ -139,6 +141,7 @@ impl App {
             tunnels,
             deferred_releases: Vec::new(),
             jobs: Default::default(),
+            aptools_run: None,
             job_results: Default::default(),
             idle,
             locked: false,

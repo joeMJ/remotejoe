@@ -91,6 +91,11 @@ impl Default for OverviewState {
 }
 
 impl OverviewState {
+    /// Zuletzt bei der Dienstprüfung aufgelöste Adresse eines Ziels.
+    pub fn services_ip(&self, key: &str) -> Option<String> {
+        self.services.get(key).and_then(|(_, v)| v["ip"].as_str().map(str::to_string))
+    }
+
     /// Zuletzt als offen erkannte TCP-Ports eines Ziels (Dienstprüfung der Übersicht; ohne Ablaufzeit).
     pub fn open_ports(&self, key: &str) -> Vec<u16> {
         self.services

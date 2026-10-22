@@ -10,7 +10,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use windows_sys::Win32::Foundation::{CERT_E_UNTRUSTEDROOT, TRUST_E_NOSIGNATURE};
-use windows_sys::Win32::Security::Cryptography::{CertGetCertificateContextProperty, CERT_SHA1_HASH_PROP_ID};
+use windows_sys::Win32::Security::Cryptography::{CertGetCertificateContextProperty, CertGetNameStringW, CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_SHA1_HASH_PROP_ID};
 use windows_sys::Win32::Security::WinTrust::{
     WTHelperGetProvSignerFromChain, WTHelperProvDataFromStateData, WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0,
     WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
@@ -57,6 +57,72 @@ pub fn verify_file(path: &Path, thumbprint: &str) -> Result<()> {
     // SAFETY: gibt den Zustand des ersten Aufrufs frei.
     unsafe { WinVerifyTrust(std::ptr::null_mut(), &mut action, &mut data as *mut _ as _) };
     result
+}
+
+/// Prüft eine fremde Datei (z. B. den Python-Installer von python.org): Die Signatur muss Windows vollständig
+/// vertrauen (anders als bei den eigenen Paketen kein selbst ausgestelltes Zertifikat), und der Name des
+/// Unterzeichners muss `publisher` enthalten (z. B. „Python Software Foundation“).
+pub fn verify_publisher(path: &Path, publisher: &str) -> Result<()> {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut file = WINTRUST_FILE_INFO {
+        cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32,
+        pcwszFilePath: wide.as_ptr(),
+        hFile: std::ptr::null_mut(),
+        pgKnownSubject: std::ptr::null_mut(),
+    };
+    // SAFETY: wie in `verify_file`.
+    let mut data: WINTRUST_DATA = unsafe { std::mem::zeroed() };
+    data.cbStruct = std::mem::size_of::<WINTRUST_DATA>() as u32;
+    data.dwUIChoice = WTD_UI_NONE;
+    data.fdwRevocationChecks = WTD_REVOKE_NONE;
+    data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.Anonymous = WINTRUST_DATA_0 { pFile: &mut file };
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
+    let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    // SAFETY: gültige Strukturen, ohne Oberfläche.
+    let status = unsafe { WinVerifyTrust(std::ptr::null_mut(), &mut action, &mut data as *mut _ as _) };
+    let result = match status {
+        0 => signer_name(&data).and_then(|n| {
+            if n.contains(publisher) {
+                Ok(())
+            } else {
+                Err(UpdateError::Authenticode(format!("unterzeichnet von „{n}“, erwartet „{publisher}“")))
+            }
+        }),
+        TRUST_E_NOSIGNATURE => Err(UpdateError::Authenticode("die Datei ist nicht signiert".into())),
+        other => Err(UpdateError::Authenticode(format!("Signatur ungültig, nicht vertrauenswürdig oder Datei verändert (Code {:#010x})", other as u32))),
+    };
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    // SAFETY: gibt den Zustand des ersten Aufrufs frei.
+    unsafe { WinVerifyTrust(std::ptr::null_mut(), &mut action, &mut data as *mut _ as _) };
+    result
+}
+
+/// Anzeigename des ersten Unterzeichners aus dem Prüfzustand.
+fn signer_name(data: &WINTRUST_DATA) -> Result<String> {
+    let missing = || UpdateError::Authenticode("kein Unterzeichner gefunden".into());
+    // SAFETY: Zeiger aus dem gültigen Prüfzustand; jeder wird vor Gebrauch auf null geprüft.
+    unsafe {
+        let prov = WTHelperProvDataFromStateData(data.hWVTStateData);
+        if prov.is_null() {
+            return Err(missing());
+        }
+        let signer = WTHelperGetProvSignerFromChain(prov, 0, 0, 0);
+        if signer.is_null() || (*signer).csCertChain == 0 || (*signer).pasCertChain.is_null() {
+            return Err(missing());
+        }
+        let cert = (*(*signer).pasCertChain).pCert;
+        if cert.is_null() {
+            return Err(missing());
+        }
+        let mut buf = [0u16; 256];
+        let n = CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, std::ptr::null(), buf.as_mut_ptr(), buf.len() as u32);
+        if n <= 1 {
+            return Err(missing());
+        }
+        Ok(String::from_utf16_lossy(&buf[..(n - 1) as usize]))
+    }
 }
 
 /// Fingerabdruck (SHA-1, Großbuchstaben) des ersten Unterzeichners aus dem Prüfzustand.

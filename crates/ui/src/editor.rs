@@ -672,6 +672,12 @@ impl App {
             "aruba_cluster" => self.aruba_cluster(&c),
             "aruba_ap" => self.aruba_ap(&c),
             "aruba_demo" => self.aruba_demo(&c),
+            "aptools_status" => self.aptools_status(),
+            "aptools_setup" => self.aptools_setup(&c),
+            "aptools_run" => self.aptools_run(&c),
+            "aptools_output" => Ok(self.aptools_output()),
+            "aptools_stop" => Ok(self.aptools_stop()),
+            "aptools_folder" => self.aptools_folder(&c),
             "ov_field" => self.overview_field(&c),
             "ov_run" => self.overview_run(&c),
             "ov_stop" => {
