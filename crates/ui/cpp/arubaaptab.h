@@ -28,6 +28,8 @@ public:
 signals:
 	/// SSH-Sitzung zum AP: wie ein Zugangsweg des VC (`way` = `ssh:<IP>`).
 	void connectWayRequested(const QJsonObject& subject, const QString& way);
+	/// Log an diesem AP anzeigen.
+	void logRequested(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
 
 private:
 	static void fillTable(QTableWidget* t, const QJsonObject& table);

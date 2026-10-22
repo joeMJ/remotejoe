@@ -58,7 +58,12 @@ ArubaApTab::ArubaApTab(RjBackend* backend, const QJsonObject& subject, const QJs
 	auto* ssh = new QPushButton(T("aruba.ap.ssh"), head);
 	m_again = new QPushButton(T("aruba.ap.again"), head);
 	auto* close = new QPushButton(T("mass.close"), head);
+	// Logs an diesem AP: ganz oder gefiltert, nur Anzeige.
+	auto* logs = rjui::logMenuButton(T, head, [this](const QString& kind, bool filtered) {
+		emit logRequested(m_subject, m_ap.value(QStringLiteral("ip")).toString(), m_ap.value(QStringLiteral("name")).toString(), kind, filtered);
+	});
 	hh->addWidget(ssh, 0, Qt::AlignTop);
+	hh->addWidget(logs, 0, Qt::AlignTop);
 	hh->addWidget(m_again, 0, Qt::AlignTop);
 	hh->addWidget(close, 0, Qt::AlignTop);
 	hin->addLayout(hh);

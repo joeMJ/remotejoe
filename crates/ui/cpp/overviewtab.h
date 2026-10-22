@@ -55,6 +55,8 @@ signals:
 	void arubaApRequested(const QJsonObject& subject, const QJsonObject& ap);
 	/// Aruba-Werkzeug („analyse“, „inventar“, „reload“, „update“) für dieses Ziel.
 	void arubaToolsRequested(const QString& id, const QString& name, const QString& tool);
+	/// Aruba-Log anzeigen (`ip` leer: am VC).
+	void arubaLogRequested(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
 
 private:
 	QJsonObject call(const QJsonObject& cmd) const;

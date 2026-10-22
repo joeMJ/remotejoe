@@ -187,6 +187,22 @@ pub fn write_check(managed: Option<&str>, admins: &[String], user: &str) -> Resu
     }
 }
 
+/// Log-Befehl: `show log system` bzw. `show log security`, wahlweise mit `| include <Filter>`. Im Filter sind
+/// Steuerzeichen und `|` nicht erlaubt (kein zweiter Befehl), führende und folgende Leerzeichen werden entfernt.
+pub fn log_command(kind: &str, filter: Option<&str>) -> Result<String, String> {
+    let base = match kind {
+        "system" => "show log system",
+        "security" => "show log security",
+        other => return Err(format!("Unbekanntes Log „{other}“")),
+    };
+    match filter.map(str::trim).filter(|f| !f.is_empty()) {
+        None => Ok(base.to_string()),
+        Some(f) if f.chars().any(|c| c.is_control() || c == '|') => Err("Der Filterbegriff darf keine Steuerzeichen und kein „|“ enthalten".into()),
+        Some(f) if f.chars().count() > 200 => Err("Der Filterbegriff ist zu lang (höchstens 200 Zeichen)".into()),
+        Some(f) => Ok(format!("{base} | include {f}")),
+    }
+}
+
 /// Befehle für die Seite eines einzelnen APs (am AP selbst, mit den Zugangsdaten des VC).
 pub const AP_COMMANDS: [&str; 5] = ["no paging", "show version", "show interface", "show network", "show clients"];
 
@@ -374,6 +390,16 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
         assert!(write_check(Some("central"), &admins, "admin").unwrap_err().contains("Central"));
         assert!(write_check(Some("airwave"), &admins, "admin").unwrap_err().contains("AirWave"));
         assert!(write_check(None, &admins, "admin").is_err());
+    }
+
+    #[test]
+    fn log_commands_with_filter() {
+        assert_eq!(log_command("system", None).unwrap(), "show log system");
+        assert_eq!(log_command("security", Some("  198.51.100.5 ")).unwrap(), "show log security | include 198.51.100.5");
+        assert_eq!(log_command("system", Some("")).unwrap(), "show log system");
+        assert!(log_command("system", Some("a | b")).is_err());
+        assert!(log_command("system", Some("a\nreload all")).is_err());
+        assert!(log_command("debug", None).is_err());
     }
 
     #[test]
