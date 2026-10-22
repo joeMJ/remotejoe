@@ -48,6 +48,8 @@ private:
 	QPlainTextEdit* m_output;
 	QVBoxLayout* m_resultsBox;
 	QTimer* m_poll;
+	/// Zeigt während des Einrichtens den laufenden Schritt mit Sekunden.
+	QTimer* m_setupTimer;
 	int m_shownResults = -1;
 };
 

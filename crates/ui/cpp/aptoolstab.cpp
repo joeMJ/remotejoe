@@ -97,6 +97,14 @@ ApToolsTab::ApToolsTab(RjBackend* backend, const QString& id, const QString& nam
 	m_poll = new QTimer(this);
 	m_poll->setInterval(400);
 	connect(m_poll, &QTimer::timeout, this, &ApToolsTab::poll);
+	m_setupTimer = new QTimer(this);
+	m_setupTimer->setInterval(1000);
+	connect(m_setupTimer, &QTimer::timeout, this, [this] {
+		const QJsonObject s = call({ { QStringLiteral("op"), QStringLiteral("aptools_status") } }).value(QStringLiteral("setup")).toObject();
+		if (s.isEmpty())
+			return; // Ergebnis kommt über handleSetup.
+		m_state->setText(m_backend->text(QStringLiteral("aptools.setup.step")).arg(s.value(QStringLiteral("step")).toString()).arg(s.value(QStringLiteral("secs")).toInt()));
+	});
 	connect(close, &QPushButton::clicked, this, &ToolTab::closeRequested);
 	connect(m_setup, &QPushButton::clicked, this, [this] { setup(false); });
 	connect(m_start, &QPushButton::clicked, this, &ApToolsTab::start);
@@ -150,7 +158,8 @@ void ApToolsTab::refreshStatus()
 	                  : py.isEmpty() ? T("aptools.python.none")
 	                                 : T("aptools.python.found").arg(py));
 	m_setup->setText(T(installed && venv ? "aptools.update" : "aptools.setup"));
-	m_setup->setEnabled(true);
+	// Während des Einrichtens (auch aus einem anderen Tab gestartet) nicht ein zweites Mal.
+	m_setup->setEnabled(!s.contains(QStringLiteral("setup")));
 	const bool running = s.value(QStringLiteral("running")).toBool();
 	m_start->setEnabled(installed && venv && !running);
 	m_stop->setEnabled(running);
@@ -167,13 +176,22 @@ void ApToolsTab::setup(bool installPython)
 	m_setup->setEnabled(false);
 	m_start->setEnabled(false);
 	m_state->setText(m_backend->text(QString::fromLatin1(installPython ? "aptools.setup.python.busy" : "aptools.setup.busy")));
+	m_setupTimer->start();
 }
 
 void ApToolsTab::handleSetup(const QJsonObject& r)
 {
 	auto T = [this](const char* k) { return m_backend->text(QString::fromLatin1(k)); };
+	m_setupTimer->stop();
 	if (r.value(QStringLiteral("error")).isString())
-		m_state->setText(T("aptools.setup.failed").arg(r.value(QStringLiteral("error")).toString()));
+	{
+		// Immer sichtbar melden: die Zustandszeile allein wird leicht übersehen.
+		const QString msg = T("aptools.setup.failed").arg(r.value(QStringLiteral("error")).toString());
+		m_state->setText(msg);
+		refreshStatus();
+		QMessageBox::warning(this, T("aptools.setup.title"), msg);
+		return;
+	}
 	else if (r.value(QStringLiteral("need_python")).toBool())
 	{
 		const bool canInstall = call({ { QStringLiteral("op"), QStringLiteral("aptools_status") } }).value(QStringLiteral("can_install_python")).toBool();
@@ -193,7 +211,14 @@ void ApToolsTab::handleSetup(const QJsonObject& r)
 		m_state->setText(T(canInstall ? "aptools.python.missing.win" : "aptools.python.missing"));
 	}
 	else
-		m_state->setText(T("aptools.setup.done").arg(r.value(QStringLiteral("paramiko")).toString()));
+	{
+		const QString commit = r.value(QStringLiteral("commit")).toString().left(7);
+		const QString msg = T("aptools.setup.done").arg(commit.isEmpty() ? QStringLiteral("?") : commit, r.value(QStringLiteral("paramiko")).toString());
+		m_state->setText(msg);
+		refreshStatus();
+		QMessageBox::information(this, T("aptools.setup.title"), msg);
+		return;
+	}
 	refreshStatus();
 }
 

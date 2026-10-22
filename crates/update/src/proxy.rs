@@ -41,6 +41,15 @@ pub(crate) fn mode() -> ProxyMode {
 }
 
 /// Prüft eine manuelle Angabe (für die Einstellungen): `Rechner:Port`, optional mit `http://`.
+/// Weg einer Anfrage an `url` für Meldungen: „direkt“ oder „über Proxy <Rechner:Port>“ (nach der eingestellten Art).
+pub fn describe(url: &str) -> String {
+    let host = url.split("://").nth(1).unwrap_or(url).split(['/', ':']).next().unwrap_or_default();
+    match for_target(&mode(), url, host) {
+        Some((h, p)) => format!("über Proxy {h}:{p}"),
+        None => "direkt".to_string(),
+    }
+}
+
 pub fn check_manual(s: &str) -> Result<(String, u16), String> {
     parse_host_port(s).ok_or_else(|| format!("„{s}“ ist kein Proxy der Form Rechner:Port (z. B. proxy.example:8080)"))
 }

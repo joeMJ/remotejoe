@@ -502,7 +502,7 @@ der Schlüsseldatenbank.
   - **Analyse** (`ap_check`) und **Inventar** (`ap_list`, mit AP-Namen) – lesend.
   - **Cluster neustarten** (`ap_swarm_reload`) und **Cluster aktualisieren** (`ap_swarm_update` mit dem Verzeichnis
     der Firmware als URL, wahlweise mit Neustart danach). Beide sind nur möglich, wenn der Cluster weder über Central
-    noch über AirWave verwaltet wird und die Anmeldung ein Admin-Konto ist (`hash-mgmt-user` in der Konfiguration);
+    noch über AirWave verwaltet wird und die Anmeldung ein Admin-Konto ist (`mgmt-user` bzw. `hash-mgmt-user` in der Konfiguration);
     remotejoe prüft das vor dem Start bei jedem Controller und lässt nicht passende mit Grund aus. Jede dieser
     Aktionen läuft in einem eigenen Tab mit Statustafel und Protokoll.
 - **Einrichten:** Die Sammlung wird von GitHub in den Datenordner geladen (`aptools/sammlung`), dazu eine eigene
