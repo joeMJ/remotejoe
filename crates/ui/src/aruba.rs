@@ -228,6 +228,27 @@ pub fn log_command(kind: &str, filter: Option<&str>) -> Result<String, String> {
 }
 
 /// Befehle für die Seite eines einzelnen APs (am AP selbst, mit den Zugangsdaten des VC).
+/// Befehle für „Nutzer anzeigen“ bzw. „Nutzer finden“ am VC: alle Anwender des Clusters und die APs (für den Sprung
+/// vom Anwender zu seinem AP).
+pub const CLIENT_COMMANDS: [&str; 3] = ["no paging", "show clients", "show aps"];
+
+/// Anwender des Clusters (`show clients` am VC) als Tabelle; `ap_col` ist die Spalte „Access Point“, `aps` ordnet
+/// AP-Namen (klein geschrieben) die Einträge aus `show aps` zu, wie sie die AP-Seite braucht.
+pub fn clients_json(show_clients: &str, show_aps: &str, vc_ip: &str) -> Value {
+    let mut t = table_json(show_clients, &["Name", "IP Address", "MAC Address"]);
+    let ap_col = t["columns"].as_array().and_then(|c| c.iter().position(|n| n == "Access Point"));
+    let cluster = cluster_json(show_aps, "", "", vc_ip);
+    let aps: serde_json::Map<String, Value> = cluster["aps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| Some((a["name"].as_str()?.to_lowercase(), a.clone())))
+        .collect();
+    t["ap_col"] = json!(ap_col);
+    t["aps"] = Value::Object(aps);
+    t
+}
+
 pub const AP_COMMANDS: [&str; 5] = ["no paging", "show version", "show interface", "show network", "show clients"];
 
 /// MAC des APs aus `show interface`: bond0, sonst eth0 (wie `ap_list.py`).
@@ -298,12 +319,13 @@ pub fn ap_json(outputs: &[String], name: &str, ip: &str) -> Value {
 
 /// Nur Vorführung (Bildschirmfotos): erfundener Cluster mit 24 APs und eine AP-Seite.
 pub fn demo() -> (Value, Value) {
-    let mut rows = String::from("Name               IP Address       Mode    Spectrum  Clients  Type         Serial #\n----               ----------       ----    --------  -------  ----         --------\n");
-    let named = [(3, "aula"), (4, "mensa"), (7, "lehrerzimmer")];
+    // Namensspalte 30 Zeichen breit wie bei langen AP-Namen am Gerät.
+    let mut rows = String::from("Name                          IP Address       Mode    Spectrum  Clients  Type         Serial #\n----                          ----------       ----    --------  -------  ----         --------\n");
+    let named = [(3, "aula"), (4, "mensa"), (7, "lehrerzimmer-altbau-og2-AP07")];
     let off = [16, 21, 23];
     let clients = [0, 12, 5, 31, 18, 0, 3, 9, 14, 2, 0, 7, 11, 6, 0, 4, 0, 8, 1, 22, 3, 0, 5, 0];
     let mut config = String::from("version 8.10.0.0-8.10.0\n");
-    let mut summary = String::from("MAC                IP Address       Name               Clients\n---                ----------       ----               -------\n");
+    let mut summary = String::from("MAC                IP Address       Name                          Clients\n---                ----------       ----                          -------\n");
     for i in 0..24usize {
         let mac = format!("02:00:5e:00:{:02x}:{:02x}", 0x40 + i, (i * 37 + 18) % 256);
         config.push_str(&format!("allowed-ap {mac}\n"));
@@ -313,8 +335,8 @@ pub fn demo() -> (Value, Value) {
         let name = named.iter().find(|(n, _)| *n == i).map_or(mac.clone(), |(_, n)| n.to_string());
         let ip = if i == 13 { "198.51.100.7".to_string() } else { format!("192.0.2.{}", 180 + i * 2) };
         let ip = if i == 0 { format!("{ip}*") } else { ip };
-        summary.push_str(&format!("{mac:<19}{:<17}{name:<19}{}\n", ip.trim_end_matches('*'), clients[i]));
-        rows.push_str(&format!("{name:<19}{ip:<17}access  disable   {:<9}515(indoor)  CNZZQX{:04}\n", clients[i], i + 1));
+        summary.push_str(&format!("{mac:<19}{:<17}{name:<30}{}\n", ip.trim_end_matches('*'), clients[i]));
+        rows.push_str(&format!("{name:<30}{ip:<17}access  disable   {:<9}515(indoor)  CNZZQX{:04}\n", clients[i], i + 1));
     }
     let mut cluster = cluster_json(&rows, &config, &summary, "192.0.2.240");
     cluster["managed"] = json!("central");
@@ -451,6 +473,23 @@ MAC                IP Address       Name               Clients   Need Antenna Co
 02:00:5e:00:53:13  192.0.2.211      aula               12        No                   \r\n\
 02:00:5e:00:53:14  198.51.100.7     02:00:5e:00:53:14  0         No                   \r\n\
 Restricted Management Access Subnets\r\n";
+
+    #[test]
+    fn clients_of_the_cluster_with_their_ap() {
+        let clients = "\r\nClient List\r\n-----------\r\n\
+Name    IP Address    MAC Address        OS     ESSID   Access Point       Channel  Type  Role    IPv6 Address  Signal    Speed (mbps)\r\n\
+----    ----------    -----------        --     -----   ------------       -------  ----  ----    ------------  ------    ------------\r\n\
+anna    198.51.100.5  02:00:5e:00:10:01  Win10  Schule  aula               36E      AC    schule  --            46(good)  173(good)\r\n\
+bernd   198.51.100.6  02:00:5e:00:10:02  iOS    Gast    02:00:5e:00:53:12  1        GN    gast    --            27(good)  72(ok)\r\n\
+Number of Clients   :2\r\n";
+        let named = SHOW_APS.replace("02:00:5e:00:53:13  ", "aula               ");
+        let c = clients_json(clients, &named, "192.0.2.200");
+        assert_eq!(c["rows"].as_array().unwrap().len(), 2, "Summenzeile gehört nicht dazu");
+        assert_eq!(c["ap_col"], 5);
+        assert_eq!(c["rows"][0][10], "46(good)");
+        assert_eq!(c["aps"]["aula"]["ip"], "192.0.2.211");
+        assert_eq!(c["aps"]["02:00:5e:00:53:12"]["conductor"], true);
+    }
 
     #[test]
     fn renamed_aps_get_their_mac_from_show_summary() {

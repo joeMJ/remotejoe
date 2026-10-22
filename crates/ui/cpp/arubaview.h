@@ -34,6 +34,8 @@ signals:
 	void toolRequested(const QString& tool);
 	/// Log am Controller anzeigen: `kind` „system“ oder „security“, `filtered` mit Filterbegriff.
 	void logRequested(const QString& kind, bool filtered);
+	/// Anwender des Clusters anzeigen.
+	void usersRequested();
 	/// Kachel eines online-APs angeklickt (`name`, `ip`, `serial`, …).
 	void apClicked(const QJsonObject& ap);
 

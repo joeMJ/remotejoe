@@ -84,6 +84,10 @@ public:
 	void openApTools(const QString& id, const QString& name, const QString& tool);
 	/// Aruba-Log (system/security, wahlweise gefiltert) am VC oder an einem AP anzeigen.
 	void openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
+	/// Seite eines APs (je AP ein Tab; ein vorhandener wird neu abgefragt).
+	void openArubaAp(const QJsonObject& subject, const QJsonObject& ap);
+	/// Anwender eines Clusters (je VC ein Tab; ein vorhandener fragt neu ab).
+	void openArubaUsers(const QJsonObject& subject, const QString& where);
 	/// Über einen Zugangsweg verbinden (`way`: „main“, Weg-ID oder `ssh:<IP>`).
 	void connectWay(const QJsonObject& subject, const QString& way);
 	/// Objektübersicht des Ziels (ein Tab für alle, Einfachklick im Baum).

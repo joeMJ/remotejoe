@@ -478,7 +478,9 @@ der Schlüsseldatenbank.
   freigegebenen APs (`allowed-ap`) und `show summary`. Angezeigt werden die Verwaltung (nicht verwaltet, Central,
   AirWave), die Zahl der APs im Cluster, online, offline und der angemeldeten Anwender sowie je AP eine Kachel
   „.Oktett | Name bzw. MAC“ mit der Anwenderzahl; der Conductor trägt einen Stern, APs außerhalb des Segments zeigen
-  die volle Adresse.
+  die volle Adresse. Lange Namen werden in der Mitte gekürzt (der volle Name steht im Tooltip); ein Rechtsklick auf
+  eine Kachel kopiert Name, IP- oder MAC-Adresse. Umbenannte APs ordnet remotejoe über die AP-Tabelle von
+  `show summary` ihrer MAC zu.
 
   <img src="docs/screenshots/aruba-cluster.png" alt="Aruba-Cluster-Karte mit Verwaltung, Zählern und AP-Kacheln" width="760">
 
@@ -487,11 +489,16 @@ der Schlüsseldatenbank.
 
   <img src="docs/screenshots/aruba-ap.png" alt="Seite eines APs mit Kennzahlen, SSIDs und Anwendern" width="760">
 
+- **Nutzer anzeigen** in der Cluster-Karte: alle Anwender des Clusters (`show clients` am VC) mit IP, MAC, SSID, AP,
+  Signal und Geschwindigkeit. Das Suchfeld filtert sofort nach Anmeldename, IP, MAC oder jedem anderen Feld; beim
+  Roaming taucht ein Anwender an jedem AP auf, an dem er gerade angemeldet ist. Ein Klick auf den AP öffnet dessen Seite.
+- **Tabellen** (Nutzer, SSIDs, Anwender der AP-Seite) lassen sich sortieren und kopieren: Strg+C oder Kontextmenü,
+  tabulatorgetrennt mit Kopfzeile. Auf der AP-Seite teilen sich SSIDs und Anwender die Höhe über einen ziehbaren Trenner.
 - **Protokolle** in der Cluster-Karte (am VC) und auf der AP-Seite (an diesem AP): Systemlog (`show log system`) und
   Sicherheitslog (`show log security`), ganz oder gefiltert mit `| include <Begriff>`. Die Anzeige läuft in einem eigenen
   Tab, dort lässt sich der Filter ändern und neu laden; gespeichert wird nichts.
 - **Werkzeuge** aus den [Aruba Instant Python Tools](https://github.com/joeMJ/aruba-instant-python-tools), für einen
-  Controller oder alle Controller eines Ordners (Rechtsklick → **Aruba**):
+  Controller, alle Controller eines Ordners oder mehrerer markierter Ziele und Ordner (Rechtsklick → **Aruba**):
   - **Analyse** (`ap_check`) und **Inventar** (`ap_list`, mit AP-Namen) – lesend.
   - **Cluster neustarten** (`ap_swarm_reload`) und **Cluster aktualisieren** (`ap_swarm_update` mit dem Verzeichnis
     der Firmware als URL, wahlweise mit Neustart danach). Beide sind nur möglich, wenn der Cluster weder über Central

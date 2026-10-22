@@ -5,6 +5,7 @@
 #include "overviewtab.h"
 #include "arubaaptab.h"
 #include "aptoolstab.h"
+#include "arubaclientstab.h"
 #include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
@@ -2430,17 +2431,18 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		connect(t, &MassInventoryTab::finished, this, [this] { reloadTree(); });
 		addToolTab(t, T(m_backend, "mass.tab"));
 	});
-	// Aruba-Werkzeuge (zuschaltbar): ap_check für einen Controller oder alle Controller eines Ordners.
-	if (selectedIds().size() == 1 && parseObject(m_backend->edit(QStringLiteral("{\"op\":\"settings\"}"))).value(QStringLiteral("aruba_tools")).toBool())
+	// Aruba-Werkzeuge (zuschaltbar): für einen Controller, alle Controller eines Ordners oder mehrere markierte Ziele und Ordner.
+	if (!selectedIds().isEmpty() && parseObject(m_backend->edit(QStringLiteral("{\"op\":\"settings\"}"))).value(QStringLiteral("aruba_tools")).toBool())
 	{
 		QMenu* aruba = menu.addMenu(T(m_backend, "ctx.aptools"));
 		for (const char* tool : { "analyse", "inventar", "reload", "update" })
 		{
 			const QString name = QString::fromLatin1(tool);
 			aruba->addAction(T(m_backend, (QByteArray("ctx.aruba.") + tool).constData()), this, [this, name] {
+				// Mehrere markierte Ziele bzw. Ordner: alle Controller darunter in einem Lauf.
 				const QStringList ids = selectedIds();
-				if (ids.size() == 1)
-					openApTools(ids.first(), m_tree->currentIndex().data().toString(), name);
+				if (!ids.isEmpty())
+					openApTools(ids.join(QLatin1Char(',')), ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size()), name);
 			});
 		}
 	}
@@ -3219,6 +3221,12 @@ void MainWindow::handleEvents(const QString& json)
 							statusBar()->showMessage(T(m_backend, "status.backup.failed").arg(QDir::toNativeSeparators(o.value(QStringLiteral("dir")).toString()), o.value(QStringLiteral("error")).toString()), 15000);
 					for (auto* s : findChildren<SettingsTab*>())
 						s->reloadBackup();
+				}
+				else if (kind == QLatin1String("aruba_clients"))
+				{
+					for (auto* c : findChildren<ArubaClientsTab*>())
+						if (c->tag() == e.value(QStringLiteral("target")).toString())
+							c->handleResult(r);
 				}
 				else if (kind == QLatin1String("aruba_log"))
 				{
@@ -4093,6 +4101,37 @@ void MainWindow::openArubaLog(const QJsonObject& subject, const QString& ip, con
 	addToolTab(t, t->title());
 }
 
+void MainWindow::openArubaAp(const QJsonObject& s, const QJsonObject& ap)
+{
+	const QString key = s.value(QStringLiteral("id")).toString() + QLatin1Char('|') + ap.value(QStringLiteral("ip")).toString();
+	for (auto* a : findChildren<ArubaApTab*>())
+		if (a->key() == key)
+		{
+			m_tabs->setCurrentWidget(a);
+			a->query();
+			return;
+		}
+	auto* a = new ArubaApTab(m_backend, s, ap, m_tabs);
+	connect(a, &ArubaApTab::connectWayRequested, this, &MainWindow::connectWay);
+	connect(a, &ArubaApTab::logRequested, this, &MainWindow::openArubaLog);
+	addToolTab(a, a->title());
+}
+
+void MainWindow::openArubaUsers(const QJsonObject& subject, const QString& where)
+{
+	// Je VC ein Tab: ein vorhandener fragt neu ab, der Suchbegriff bleibt.
+	for (auto* c : findChildren<ArubaClientsTab*>())
+		if (c->vcId() == subject.value(QStringLiteral("id")).toString())
+		{
+			m_tabs->setCurrentWidget(c);
+			c->reload();
+			return;
+		}
+	auto* t = new ArubaClientsTab(m_backend, subject, where, m_tabs);
+	connect(t, &ArubaClientsTab::apRequested, this, &MainWindow::openArubaAp);
+	addToolTab(t, t->title());
+}
+
 void MainWindow::openApTools(const QString& id, const QString& name, const QString& tool)
 {
 	// Schreibend: Bestätigung, dann je Aktion ein eigener Tab mit dem Protokoll.
@@ -4159,20 +4198,8 @@ void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 		// Knopf eines Zugangswegs: Ziel wählen und über diesen Weg verbinden.
 		connect(t, &OverviewTab::connectWayRequested, this, &MainWindow::connectWay);
 		// Aruba-Werkzeuge: Kachel eines APs öffnet seine Seite (je AP ein Tab).
-		connect(t, &OverviewTab::arubaApRequested, this, [this](const QJsonObject& s, const QJsonObject& ap) {
-			const QString key = s.value(QStringLiteral("id")).toString() + QLatin1Char('|') + ap.value(QStringLiteral("ip")).toString();
-			for (auto* a : findChildren<ArubaApTab*>())
-				if (a->key() == key)
-				{
-					m_tabs->setCurrentWidget(a);
-					a->query();
-					return;
-				}
-			auto* a = new ArubaApTab(m_backend, s, ap, m_tabs);
-			connect(a, &ArubaApTab::connectWayRequested, this, &MainWindow::connectWay);
-			connect(a, &ArubaApTab::logRequested, this, &MainWindow::openArubaLog);
-			addToolTab(a, a->title());
-		});
+		connect(t, &OverviewTab::arubaApRequested, this, &MainWindow::openArubaAp);
+		connect(t, &OverviewTab::arubaUsersRequested, this, &MainWindow::openArubaUsers);
 		connect(t, &OverviewTab::arubaToolsRequested, this, &MainWindow::openApTools);
 		connect(t, &OverviewTab::arubaLogRequested, this, &MainWindow::openArubaLog);
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
