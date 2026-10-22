@@ -487,6 +487,9 @@ der Schlüsseldatenbank.
 
   <img src="docs/screenshots/aruba-ap.png" alt="Seite eines APs mit Kennzahlen, SSIDs und Anwendern" width="760">
 
+- **Protokolle** in der Cluster-Karte (am VC) und auf der AP-Seite (an diesem AP): Systemlog (`show log system`) und
+  Sicherheitslog (`show log security`), ganz oder gefiltert mit `| include <Begriff>`. Die Anzeige läuft in einem eigenen
+  Tab, dort lässt sich der Filter ändern und neu laden; gespeichert wird nichts.
 - **Werkzeuge** aus den [Aruba Instant Python Tools](https://github.com/joeMJ/aruba-instant-python-tools), für einen
   Controller oder alle Controller eines Ordners (Rechtsklick → **Aruba**):
   - **Analyse** (`ap_check`) und **Inventar** (`ap_list`, mit AP-Namen) – lesend.
