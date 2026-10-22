@@ -32,6 +32,8 @@ signals:
 	void queryRequested();
 	/// Werkzeug für diesen Controller: „analyse“, „inventar“, „reload“ oder „update“.
 	void toolRequested(const QString& tool);
+	/// Log am Controller anzeigen: `kind` „system“ oder „security“, `filtered` mit Filterbegriff.
+	void logRequested(const QString& kind, bool filtered);
 	/// Kachel eines online-APs angeklickt (`name`, `ip`, `serial`, …).
 	void apClicked(const QJsonObject& ap);
 

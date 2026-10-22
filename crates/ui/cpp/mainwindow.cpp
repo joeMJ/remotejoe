@@ -5,6 +5,7 @@
 #include "overviewtab.h"
 #include "arubaaptab.h"
 #include "aptoolstab.h"
+#include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
 #include "masstab.h"
@@ -3210,6 +3211,12 @@ void MainWindow::handleEvents(const QString& json)
 					if (auto* a = findChild<ApToolsTab*>())
 						a->handleSetup(r);
 				}
+				else if (kind == QLatin1String("aruba_log"))
+				{
+					for (auto* l : findChildren<ArubaLogTab*>())
+						if (l->tag() == e.value(QStringLiteral("target")).toString())
+							l->handleResult(r);
+				}
 				else if (kind == QLatin1String("aruba_ap"))
 				{
 					for (auto* a : findChildren<ArubaApTab*>())
@@ -4058,6 +4065,16 @@ bool MainWindow::isLogin(const QString& id) const
 	return hit;
 }
 
+void MainWindow::openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered)
+{
+	QString filter;
+	if (filtered && !ArubaLogTab::askFilter(m_backend, this, kind, &filter))
+		return;
+	// Je Abruf ein Tab (nichts wird gespeichert); im Tab lässt sich der Filter ändern.
+	auto* t = new ArubaLogTab(m_backend, subject, ip, where, kind, filter, m_tabs);
+	addToolTab(t, t->title());
+}
+
 void MainWindow::openApTools(const QString& id, const QString& name, const QString& tool)
 {
 	// Schreibend: Bestätigung, dann je Aktion ein eigener Tab mit dem Protokoll.
@@ -4135,9 +4152,11 @@ void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 				}
 			auto* a = new ArubaApTab(m_backend, s, ap, m_tabs);
 			connect(a, &ArubaApTab::connectWayRequested, this, &MainWindow::connectWay);
+			connect(a, &ArubaApTab::logRequested, this, &MainWindow::openArubaLog);
 			addToolTab(a, a->title());
 		});
 		connect(t, &OverviewTab::arubaToolsRequested, this, &MainWindow::openApTools);
+		connect(t, &OverviewTab::arubaLogRequested, this, &MainWindow::openArubaLog);
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
 	}
 	else

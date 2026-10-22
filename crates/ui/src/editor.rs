@@ -671,6 +671,7 @@ impl App {
             "ov_query" => self.overview_query(&c),
             "aruba_cluster" => self.aruba_cluster(&c),
             "aruba_ap" => self.aruba_ap(&c),
+            "aruba_log" => self.aruba_log(&c),
             "aruba_demo" => self.aruba_demo(&c),
             "aptools_status" => self.aptools_status(),
             "aptools_setup" => self.aptools_setup(&c),

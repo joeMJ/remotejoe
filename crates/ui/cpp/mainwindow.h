@@ -82,6 +82,8 @@ public:
 	void openLogin(const QString& id, const QString& folder);
 	/// Aruba-Werkzeuge (ap_check) für ein Ziel oder einen Ordner.
 	void openApTools(const QString& id, const QString& name, const QString& tool);
+	/// Aruba-Log (system/security, wahlweise gefiltert) am VC oder an einem AP anzeigen.
+	void openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
 	/// Über einen Zugangsweg verbinden (`way`: „main“, Weg-ID oder `ssh:<IP>`).
 	void connectWay(const QJsonObject& subject, const QString& way);
 	/// Objektübersicht des Ziels (ein Tab für alle, Einfachklick im Baum).

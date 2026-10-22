@@ -62,6 +62,19 @@ ArubaApTab::ArubaApTab(RjBackend* backend, const QJsonObject& subject, const QJs
 	hh->addWidget(m_again, 0, Qt::AlignTop);
 	hh->addWidget(close, 0, Qt::AlignTop);
 	hin->addLayout(hh);
+	// Logs an diesem AP: ganz oder gefiltert, nur Anzeige.
+	auto* lh = new QHBoxLayout;
+	for (const char* key : { "system", "system.filtered", "security", "security.filtered" })
+	{
+		auto* b = new QPushButton(T((QByteArray("aruba.log.") + key).constData()), head);
+		const QString k = QString::fromLatin1(key);
+		connect(b, &QPushButton::clicked, this, [this, k] {
+			emit logRequested(m_subject, m_ap.value(QStringLiteral("ip")).toString(), m_ap.value(QStringLiteral("name")).toString(), k.section(QLatin1Char('.'), 0, 0), k.endsWith(QLatin1String(".filtered")));
+		});
+		lh->addWidget(b);
+	}
+	lh->addStretch(1);
+	hin->addLayout(lh);
 	m_state = new QLabel(head);
 	m_state->setObjectName(QStringLiteral("rjMuted"));
 	m_state->setWordWrap(true);

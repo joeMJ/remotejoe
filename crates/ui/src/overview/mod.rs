@@ -475,6 +475,60 @@ impl App {
         Ok(json!({ "pending": job }))
     }
 
+    /// Aruba-Werkzeuge: Log anzeigen (`kind`: system oder security, `filter` optional) – am VC (`id`) oder an einem
+    /// AP (`ip`), mit den Zugangsdaten des VC. Nur Anzeige, nichts wird gespeichert. Ergebnis „aruba_log“, Ziel `tag`.
+    pub fn aruba_log(&mut self, c: &Value) -> Result<Value, String> {
+        if !self.config.features.aruba {
+            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
+        }
+        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
+        if self.demo {
+            return Err("In der Vorführung nicht verfügbar".into());
+        }
+        let cmd = crate::aruba::log_command(c.get("kind").and_then(Value::as_str).unwrap_or("system"), c.get("filter").and_then(Value::as_str))?;
+        let tag = c.get("tag").and_then(Value::as_str).unwrap_or_default().to_string();
+        let ap: Option<std::net::IpAddr> = c.get("ip").and_then(Value::as_str).filter(|s| !s.is_empty()).map(|s| s.parse().map_err(|_| "IP-Adresse ungültig")).transpose()?;
+        let (t, r) = self.inventory_view(&t)?;
+        let key = t.id.to_string();
+        let host = match ap {
+            Some(ip) => ip.to_string(),
+            None => self.overview.services_ip(&key).unwrap_or_else(|| t.host.clone()),
+        };
+        let port = if ap.is_none() && t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
+        let spec = crate::patch::JobSpec {
+            protocol: Protocol::Ssh,
+            host: host.clone(),
+            port,
+            credentials: self.credential_payload(&r, Protocol::Ssh)?,
+            transport: None,
+            legacy: self.target_legacy_of(t.id),
+        };
+        let known = self.known_hosts_ref();
+        let shown = cmd.clone();
+        let job = self.jobs.spawn(&format!("Log von {host}"), move |job| {
+            let res = (|| {
+                let (rt, conn, note, _, _) = remote::ssh_open(&spec, port, known)?;
+                let r = rt.block_on(remote::cli_session(&conn, &["no paging", &cmd]));
+                rt.block_on(conn.disconnect());
+                let r = r?;
+                let complete = r.outputs.len() == 2;
+                Ok::<_, String>(json!({ "text": r.outputs.get(1).cloned().unwrap_or_default(), "complete": complete, "note": note }))
+            })();
+            drop(spec);
+            Box::new(move |_app: &mut App, cancelled| {
+                if cancelled {
+                    return Vec::new();
+                }
+                let mut json = res.unwrap_or_else(|e| json!({ "error": e }));
+                json["command"] = json!(shown);
+                json["host"] = json!(host);
+                json["at"] = json!(now());
+                vec![UiEvent::JobResult { job, kind: "aruba_log".into(), target: tag, json: json.to_string() }]
+            })
+        });
+        Ok(json!({ "pending": job }))
+    }
+
     /// Nur Vorführung (Bildschirmfotos): Aruba-Werkzeuge einschalten und dem Ziel `id` einen erfundenen Cluster geben.
     /// Liefert die erfundene AP-Seite (`ap`) und den zugehörigen Eintrag aus dem Cluster (`entry`).
     pub fn aruba_demo(&mut self, c: &Value) -> Result<Value, String> {

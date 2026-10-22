@@ -238,6 +238,11 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 			m_cluster->setBusy(true);
 	});
 	connect(m_cluster, &ArubaClusterView::toolRequested, this, [this](const QString& tool) { emit arubaToolsRequested(m_subject.value(QStringLiteral("id")).toString(), m_name, tool); });
+	connect(m_cluster, &ArubaClusterView::logRequested, this, [this](const QString& kind, bool filtered) {
+		QJsonObject s = m_subject;
+		s.insert(QStringLiteral("vc_name"), m_name);
+		emit arubaLogRequested(s, QString(), m_name, kind, filtered);
+	});
 	connect(m_cluster, &ArubaClusterView::apClicked, this, [this](const QJsonObject& ap) {
 		QJsonObject s = m_subject;
 		s.insert(QStringLiteral("vc_name"), m_name);
