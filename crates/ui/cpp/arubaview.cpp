@@ -103,8 +103,6 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 			m_update = b;
 	}
 	th->addStretch(1);
-	// Logs am Controller: ganz oder gefiltert (show log … | include …), nur Anzeige.
-	th->addWidget(rjui::logMenuButton(T, this, [this](const QString& kind, bool filtered) { emit logRequested(kind, filtered); }));
 	v->addLayout(th);
 
 	auto* tiles = new QHBoxLayout;
@@ -126,6 +124,9 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 		fh->addWidget(b);
 	}
 	fh->addStretch(1);
+	// Logs am Controller: ganz oder gefiltert (show log … | include …), nur Anzeige. Rechts in der Filterzeile,
+	// damit er nicht unter „Cluster abfragen“ steht.
+	fh->addWidget(rjui::logMenuButton(T, this, [this](const QString& kind, bool filtered) { emit logRequested(kind, filtered); }));
 	v->addLayout(fh);
 
 	m_box = new rjui::FlowBox(this, 6);
