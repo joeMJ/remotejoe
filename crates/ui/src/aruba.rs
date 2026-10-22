@@ -447,20 +447,20 @@ MAC  Name  IP Address  ESSID  Access Point  \r\n\
 ---------------\r\n\
 MAC                IP Address       Name               Clients   Need Antenna Config  \r\n\
 ---                ----------       ----               -------   -------------------  \r\n\
-02:00:5e:00:53:12  192.0.2.210      MASTER-testhaus    7         No                   \r\n\
+02:00:5e:00:53:12  192.0.2.210      MASTER-demo        7         No                   \r\n\
 02:00:5e:00:53:13  192.0.2.211      aula               12        No                   \r\n\
 02:00:5e:00:53:14  198.51.100.7     02:00:5e:00:53:14  0         No                   \r\n\
 Restricted Management Access Subnets\r\n";
 
     #[test]
     fn renamed_aps_get_their_mac_from_show_summary() {
-        let named = SHOW_APS.replace("02:00:5e:00:53:12  192.0.2.210*", "MASTER-testhaus    192.0.2.210*").replace("02:00:5e:00:53:13  ", "aula               ");
+        let named = SHOW_APS.replace("02:00:5e:00:53:12  192.0.2.210*", "MASTER-demo        192.0.2.210*").replace("02:00:5e:00:53:13  ", "aula               ");
         assert_eq!(summary_aps(SUMMARY).len(), 3);
         let c = cluster_json(&named, CONFIG, SUMMARY, "192.0.2.200");
         assert_eq!(c["offline_uncertain"], false);
         assert_eq!(c["offline"], 1);
         let aps = c["aps"].as_array().unwrap();
-        assert_eq!((aps[0]["name"].as_str(), aps[0]["mac"].as_str()), (Some("MASTER-testhaus"), Some("02:00:5e:00:53:12")));
+        assert_eq!((aps[0]["name"].as_str(), aps[0]["mac"].as_str()), (Some("MASTER-demo"), Some("02:00:5e:00:53:12")));
         assert_eq!(aps.len(), 4, "die MAC des umbenannten Masters erscheint nicht als Offline-Kachel");
         assert_eq!((aps[3]["name"].as_str(), aps[3]["online"].as_bool(), aps[3]["uncertain"].as_bool()), (Some("02:00:5e:00:53:15"), Some(false), Some(false)));
         // Ohne AP-Tabelle in show summary: unsicher wie bisher.
