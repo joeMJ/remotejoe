@@ -599,7 +599,20 @@ impl App {
 
     /// Aruba-VCs für einen Lauf: das Ziel selbst oder alle als Aruba-AP erkannten Ziele im Ordner (je Cluster steht
     /// nur der VC-Eintrag im Baum).
-    fn aptools_targets(&self, id: Uuid) -> Vec<Uuid> {
+    /// Aruba-Controller unter mehreren markierten Zielen bzw. Ordnern, ohne doppelte.
+    fn aptools_targets(&self, ids: &[Uuid]) -> Vec<Uuid> {
+        let mut out: Vec<Uuid> = Vec::new();
+        for id in ids {
+            for t in self.aptools_targets_of(*id) {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        out
+    }
+
+    fn aptools_targets_of(&self, id: Uuid) -> Vec<Uuid> {
         fn walk(n: &rj_core::Node, devices: &std::collections::HashMap<Uuid, &'static str>, out: &mut Vec<Uuid>) {
             match n {
                 rj_core::Node::Target(t) if devices.get(&t.id) == Some(&"aruba-ap") => out.push(t.id),
@@ -618,15 +631,28 @@ impl App {
     }
 
     fn tree_dest(&self, root: &Path, id: Uuid) -> PathBuf {
-        let path: Vec<String> = self.index.path_to(id).unwrap_or_default().iter().map(|n| file_name(n.name())).collect();
-        path.iter().fold(root.to_path_buf(), |p, n| p.join(n))
+        self.tree_dest_many(root, &[id])
+    }
+
+    /// Ablage für mehrere markierte Ziele bzw. Ordner: der gemeinsame Teil ihrer Baumpfade.
+    fn tree_dest_many(&self, root: &Path, ids: &[Uuid]) -> PathBuf {
+        let paths: Vec<Vec<String>> = ids.iter().map(|id| self.index.path_to(*id).unwrap_or_default().iter().map(|n| file_name(n.name())).collect()).collect();
+        let mut common: Vec<String> = paths.first().cloned().unwrap_or_default();
+        if paths.len() > 1 {
+            // Bei mehreren gehört das letzte Glied (das Ziel bzw. der Ordner selbst) nur dann dazu, wenn alle gleich sind.
+            for p in &paths[1..] {
+                let n = common.iter().zip(p).take_while(|(a, b)| a == b).count();
+                common.truncate(n);
+            }
+        }
+        common.iter().fold(root.to_path_buf(), |p, n| p.join(n))
     }
 
     /// Controller eines Ziels bzw. Ordners mit Zugangsdaten (Fehler: Name und Grund).
-    fn aptools_vcs(&self, id: Uuid) -> (Vec<(Uuid, Vc)>, Vec<String>) {
+    fn aptools_vcs(&self, ids: &[Uuid]) -> (Vec<(Uuid, Vc)>, Vec<String>) {
         let mut ok = Vec::new();
         let mut problems = Vec::new();
-        for tid in self.aptools_targets(id) {
+        for tid in self.aptools_targets(ids) {
             let Some(t) = self.target(tid).cloned() else { continue };
             let creds = self.inventory_view(&t).and_then(|(_, r)| self.credential_payload(&r, Protocol::Ssh));
             match creds {
@@ -656,8 +682,8 @@ impl App {
         if !venv_python(&root).is_file() || !collection_dir(&root).join(tool.script).is_file() {
             return Err("Die Aruba-Werkzeuge sind noch nicht eingerichtet".into());
         }
-        let id = c.get("id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok()).ok_or("Ziel oder Ordner fehlt")?;
-        let (vcs, problems) = self.aptools_vcs(id);
+        let (spec, ids) = target_ids(c)?;
+        let (vcs, problems) = self.aptools_vcs(&ids);
         if vcs.is_empty() {
             return Err(if problems.is_empty() {
                 "Keine Aruba-Controller gefunden (Ziele mit Aruba-Symbol, erkannt über „Inventar abfragen“)".to_string()
@@ -669,7 +695,7 @@ impl App {
         let title = if started == 1 { vcs[0].1.name.clone() } else { format!("{started} Controller") };
         let tasks: Vec<Task> = if tool.write {
             // Gleiche Zugangsdaten → ein Lauf (das Werkzeug arbeitet die Cluster parallel ab).
-            let dest = self.tree_dest(&root, id);
+            let dest = self.tree_dest_many(&root, &ids);
             let mut groups: Vec<Task> = Vec::new();
             for (_, vc) in vcs {
                 match groups.iter_mut().find(|g| g.vcs[0].user == vc.user && g.vcs[0].password.as_bytes() == vc.password.as_bytes()) {
@@ -681,7 +707,7 @@ impl App {
         } else {
             vcs.into_iter().map(|(tid, vc)| Task { dest: self.tree_dest(&root, tid), vcs: vec![vc] }).collect()
         };
-        let run = Run { id: id.to_string(), tool: c.get("tool").and_then(Value::as_str).unwrap_or("analyse").to_string(), title: title.clone(), ..Default::default() };
+        let run = Run { id: spec, tool: c.get("tool").and_then(Value::as_str).unwrap_or("analyse").to_string(), title: title.clone(), ..Default::default() };
         for p in &problems {
             append(&run.out, &format!("Übersprungen – {p}\n"));
         }
@@ -731,9 +757,9 @@ impl App {
     /// für schreibende Werkzeuge (aus „Cluster abfragen“; sonst unbekannt).
     pub fn aptools_targets_json(&self, c: &Value) -> Result<Value, String> {
         self.aptools_root()?;
-        let id = c.get("id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok()).ok_or("Ziel oder Ordner fehlt")?;
+        let (_, ids) = target_ids(c)?;
         let list: Vec<Value> = self
-            .aptools_targets(id)
+            .aptools_targets(&ids)
             .into_iter()
             .filter_map(|tid| {
                 let t = self.target(tid)?;
@@ -747,16 +773,34 @@ impl App {
     /// Ablageordner der Protokolle eines Ziels oder Ordners (`aptools/<Baumpfad>`), für „Ordner öffnen“.
     pub fn aptools_folder(&self, c: &Value) -> Result<Value, String> {
         let root = self.aptools_root()?;
-        let id = c.get("id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok()).ok_or("Ziel oder Ordner fehlt")?;
-        let path: Vec<String> = self.index.path_to(id).unwrap_or_default().iter().map(|n| file_name(n.name())).collect();
-        let dir = path.iter().fold(root, |p, n| p.join(n));
+        let (_, ids) = target_ids(c)?;
+        let dir = self.tree_dest_many(&root, &ids);
         Ok(json!({ "path": dir, "exists": dir.is_dir() }))
     }
+}
+
+/// Markierte Ziele bzw. Ordner aus `id` (eine Kennung oder mehrere, durch Komma getrennt); dazu der Text selbst als
+/// Kennung des Laufs.
+fn target_ids(c: &Value) -> Result<(String, Vec<Uuid>), String> {
+    let spec = c.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+    let ids: Vec<Uuid> = spec.split(',').filter_map(|s| Uuid::parse_str(s.trim()).ok()).collect();
+    if ids.is_empty() {
+        return Err("Ziel oder Ordner fehlt".into());
+    }
+    Ok((spec, ids))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn several_marked_ids() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (spec, ids) = target_ids(&json!({ "id": format!("{a},{b}") })).unwrap();
+        assert_eq!((spec, ids), (format!("{a},{b}"), vec![a, b]));
+        assert!(target_ids(&json!({ "id": "" })).is_err());
+    }
 
     /// Echter Ablauf (Netz nötig): `RJ_APTOOLS_LIVE=<Ordner> cargo test -- --ignored aptools_live`.
     #[test]

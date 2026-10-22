@@ -6,10 +6,13 @@
 
 #include <QtCore/QDateTime>
 #include <QtCore/QJsonArray>
+#include <QtGui/QClipboard>
 #include <QtGui/QFontDatabase>
+#include <QtGui/QGuiApplication>
 #include <QtWidgets/QButtonGroup>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
+#include <QtWidgets/QMenu>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QVBoxLayout>
@@ -20,7 +23,7 @@ namespace
 class ApTile : public rjui::ClickRow
 {
 public:
-	ApTile(const QJsonObject& ap, QWidget* parent)
+	ApTile(const QJsonObject& ap, const std::function<QString(const char*)>& T, QWidget* parent)
 	  : rjui::ClickRow(parent)
 	{
 		setObjectName(QStringLiteral("rjApTile"));
@@ -48,10 +51,13 @@ public:
 		h->addWidget(sep);
 		if (ap.value(QStringLiteral("conductor")).toBool())
 			h->addWidget(new QLabel(QStringLiteral("★"), this));
-		auto* name = new QLabel(ap.value(QStringLiteral("name")).toString(), this);
+		// Platz für eine ganze MAC (17 Zeichen) in der tatsächlichen Festbreitenschrift; längere Namen werden in der Mitte
+		// gekürzt (das Ende mit der AP-Kennung bleibt sichtbar), der volle Name steht im Tooltip.
+		const int nameWidth = QFontMetrics(mono).horizontalAdvance(QString(17, QLatin1Char('0')));
+		const QString full = ap.value(QStringLiteral("name")).toString();
+		auto* name = new QLabel(QFontMetrics(mono).elidedText(full, Qt::ElideMiddle, nameWidth), this);
 		name->setFont(mono);
-		// Platz für eine ganze MAC (17 Zeichen) in der tatsächlichen Festbreitenschrift.
-		name->setMinimumWidth(QFontMetrics(mono).horizontalAdvance(QString(17, QLatin1Char('0'))));
+		name->setMinimumWidth(nameWidth);
 		h->addWidget(name, 1);
 		if (ap.value(QStringLiteral("clients")).isDouble())
 		{
@@ -62,6 +68,19 @@ public:
 			h->addSpacing(4);
 			h->addWidget(badge);
 		}
+		// Rechtsklick: Name, Adresse bzw. MAC kopieren.
+		setContextMenuPolicy(Qt::CustomContextMenu);
+		const QString mac = ap.value(QStringLiteral("mac")).isString() ? ap.value(QStringLiteral("mac")).toString() : QString();
+		const QStringList copy = { T("aruba.copy.name"), T("aruba.copy.ip"), T("aruba.copy.mac") };
+		connect(this, &QWidget::customContextMenuRequested, this, [this, full, ip, mac, copy](const QPoint& pos) {
+			QMenu menu(this);
+			menu.addAction(copy[0], [full] { QGuiApplication::clipboard()->setText(full); });
+			if (!ip.isEmpty())
+				menu.addAction(copy[1], [ip] { QGuiApplication::clipboard()->setText(ip); });
+			if (!mac.isEmpty() && mac != full)
+				menu.addAction(copy[2], [mac] { QGuiApplication::clipboard()->setText(mac); });
+			menu.exec(mapToGlobal(pos));
+		});
 		// Einheitliche Breite (Raster) aus dem Bedarf der Inhalte: Oktett, Stern, MAC, dreistellige Zahl.
 		setFixedWidth(qMax(300, h->sizeHint().width() + (ap.value(QStringLiteral("conductor")).toBool() ? 0 : fontMetrics().horizontalAdvance(QStringLiteral("★ ")))
 		                            + (ap.value(QStringLiteral("clients")).isDouble() ? 0 : fontMetrics().horizontalAdvance(QStringLiteral("888")) + 30)));
@@ -129,6 +148,10 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 		fh->addWidget(b);
 	}
 	fh->addStretch(1);
+	// Anwender des Clusters (show clients am VC); gesucht wird im Tab.
+	auto* users = new QPushButton(rjui::glyphIcon(rjui::Glyph::Person), T("aruba.users.show"), this);
+	connect(users, &QPushButton::clicked, this, &ArubaClusterView::usersRequested);
+	fh->addWidget(users);
 	// Logs am Controller: ganz oder gefiltert (show log … | include …), nur Anzeige. Rechts in der Filterzeile,
 	// damit er nicht unter „Cluster abfragen“ steht.
 	fh->addWidget(rjui::logMenuButton(T, this, [this](const QString& kind, bool filtered) { emit logRequested(kind, filtered); }));
@@ -213,7 +236,7 @@ void ArubaClusterView::render()
 		const bool online = ap.value(QStringLiteral("online")).toBool();
 		if ((f == 1 && !online) || (f == 2 && online) || (f == 3 && ap.value(QStringLiteral("in_segment")).toBool(true)))
 			continue;
-		auto* tile = new ApTile(ap, m_box);
+		auto* tile = new ApTile(ap, T, m_box);
 		const QString ip = ap.value(QStringLiteral("ip")).toString();
 		QString tip = ap.value(QStringLiteral("name")).toString() + QStringLiteral(" · ") + (ip.isEmpty() ? T("aruba.ip.unknown") : ip);
 		if (ap.value(QStringLiteral("clients")).isDouble())

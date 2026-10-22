@@ -16,6 +16,7 @@ pub mod hyper;
 pub mod icons;
 pub mod idle;
 pub mod jobs;
+pub mod kdbxbackup;
 pub mod keys;
 pub mod macro_run;
 pub mod overview;

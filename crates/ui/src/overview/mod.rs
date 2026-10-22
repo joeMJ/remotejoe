@@ -529,6 +529,59 @@ impl App {
         Ok(json!({ "pending": job }))
     }
 
+    /// „Nutzer anzeigen“ bzw. „Nutzer finden“: `show clients` und `show aps` am VC (Ergebnis `aruba_clients` mit `tag`).
+    /// Gefiltert wird in der Oberfläche, damit sich der Suchbegriff ohne neue Abfrage ändern lässt.
+    pub fn aruba_clients(&mut self, c: &Value) -> Result<Value, String> {
+        if !self.config.features.aruba {
+            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
+        }
+        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
+        if self.demo {
+            return Err("In der Vorführung nicht verfügbar".into());
+        }
+        let tag = c.get("tag").and_then(Value::as_str).unwrap_or_default().to_string();
+        let (t, r) = self.inventory_view(&t)?;
+        let key = t.id.to_string();
+        let host = self.overview.services_ip(&key).unwrap_or_else(|| t.host.clone());
+        let port = if t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
+        let spec = crate::patch::JobSpec {
+            protocol: Protocol::Ssh,
+            host: host.clone(),
+            port,
+            credentials: self.credential_payload(&r, Protocol::Ssh)?,
+            transport: None,
+            legacy: self.target_legacy_of(t.id),
+        };
+        let known = self.known_hosts_ref();
+        let vc = host.clone();
+        let job = self.jobs.spawn(&format!("Nutzer von {host}"), move |job| {
+            let res = (|| {
+                let (rt, conn, note, _, _) = remote::ssh_open(&spec, port, known)?;
+                let r = rt.block_on(remote::cli_session(&conn, &crate::aruba::CLIENT_COMMANDS));
+                rt.block_on(conn.disconnect());
+                let r = r?;
+                if r.outputs.len() < 2 {
+                    return Err("Keine vollständige Antwort des Controllers (Zeitlimit 30 s)".to_string());
+                }
+                let mut v = crate::aruba::clients_json(&r.outputs[1], r.outputs.get(2).map_or("", String::as_str), &vc);
+                v["complete"] = json!(r.outputs.len() == 3);
+                v["note"] = json!(note);
+                Ok(v)
+            })();
+            drop(spec);
+            Box::new(move |_app: &mut App, cancelled| {
+                if cancelled {
+                    return Vec::new();
+                }
+                let mut json = res.unwrap_or_else(|e| json!({ "error": e }));
+                json["host"] = json!(host);
+                json["at"] = json!(now());
+                vec![UiEvent::JobResult { job, kind: "aruba_clients".into(), target: tag, json: json.to_string() }]
+            })
+        });
+        Ok(json!({ "pending": job }))
+    }
+
     /// Nur Vorführung (Bildschirmfotos): Aruba-Werkzeuge einschalten und dem Ziel `id` einen erfundenen Cluster geben.
     /// Liefert die erfundene AP-Seite (`ap`) und den zugehörigen Eintrag aus dem Cluster (`entry`).
     pub fn aruba_demo(&mut self, c: &Value) -> Result<Value, String> {

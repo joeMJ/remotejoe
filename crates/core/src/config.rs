@@ -48,6 +48,37 @@ pub struct Config {
     pub appearance: AppearanceSettings,
     /// Zuschaltbare Zusatzfunktionen.
     pub features: FeatureSettings,
+    /// Sicherungen der KDBX.
+    pub backup: BackupSettings,
+}
+
+/// Sicherungen der KDBX (siehe [`crate::backup`]): nach jedem Speichern und vor jedem Update, im Ordner
+/// `Sicherungen` neben der KDBX und wahlweise an einem zweiten Ort.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackupSettings {
+    pub enabled: bool,
+    /// Neueste Sicherungen, die bleiben.
+    pub keep_last: u32,
+    /// Dazu die erste Sicherung jedes der letzten so vielen Tage.
+    pub keep_days: u32,
+    /// Sicherungen vor einem Update, die bleiben.
+    pub keep_update: u32,
+    /// Zusätzlich an einen zweiten Ort sichern (z. B. NAS).
+    pub second_enabled: bool,
+    pub second_dir: String,
+}
+
+impl Default for BackupSettings {
+    fn default() -> Self {
+        BackupSettings { enabled: true, keep_last: 10, keep_days: 7, keep_update: 3, second_enabled: false, second_dir: String::new() }
+    }
+}
+
+impl BackupSettings {
+    pub fn retention(&self) -> crate::backup::Retention {
+        crate::backup::Retention { keep_last: self.keep_last as usize, keep_days: self.keep_days as usize, keep_update: self.keep_update as usize }
+    }
 }
 
 /// Zuschaltbare Zusatzfunktionen (Vorgabe: alle aus).
@@ -116,6 +147,7 @@ impl Default for Config {
             update: UpdateSettings::default(),
             appearance: AppearanceSettings::default(),
             features: FeatureSettings::default(),
+            backup: BackupSettings::default(),
         }
     }
 }

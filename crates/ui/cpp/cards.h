@@ -13,6 +13,7 @@
 
 class QLabel;
 class QPushButton;
+class QTableWidget;
 class QVBoxLayout;
 
 namespace rjui
@@ -28,7 +29,7 @@ QLabel* pill(const QString& text, const QString& kind, QWidget* parent);
 void setPill(QLabel* pill, const QString& text, const QString& kind);
 /// Gezeichnete Symbole für Knöpfe, in der Textfarbe der aktuellen Palette (ausgegraut bei gesperrten Knöpfen):
 /// Zettel (Protokolle), Funkwellen (abfragen), Lupe (Analyse), Bücher im Regal (Inventar), Pfeilkreis (Neustart),
-/// Zahnrad (Aktualisieren).
+/// Zahnrad (Aktualisieren), Person (Nutzer anzeigen).
 enum class Glyph
 {
 	Note,
@@ -37,10 +38,14 @@ enum class Glyph
 	Library,
 	Refresh,
 	Gear,
+	Person,
 };
 QIcon glyphIcon(Glyph g);
 /// Knopf „Protokolle“ (Aruba) mit Zettel-Symbol und Menü: Systemlog und Sicherheitslog, ganz oder gefiltert.
 /// `text` liefert die Beschriftungen, `pick` erhält „system“ bzw. „security“ und ob gefiltert.
+/// Tabelle zum Kopieren einrichten: Zeilen markierbar (auch mehrere), Strg+C und Kontextmenü „Kopieren“ bzw.
+/// „Alles kopieren“ geben tabulatorgetrennten Text mit Kopfzeile in die Zwischenablage.
+void makeCopyable(QTableWidget* t, const std::function<QString(const char*)>& text);
 QPushButton* logMenuButton(const std::function<QString(const char*)>& text, QWidget* parent, const std::function<void(const QString& kind, bool filtered)>& pick);
 
 /// Zeile, die auf Klick reagiert (Bereichsliste); `selected` hebt sie hervor.

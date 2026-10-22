@@ -13,6 +13,7 @@
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
+#include <QtWidgets/QSplitter>
 #include <QtWidgets/QTableWidget>
 #include <QtWidgets/QVBoxLayout>
 
@@ -92,9 +93,12 @@ ArubaApTab::ArubaApTab(RjBackend* backend, const QJsonObject& subject, const QJs
 	m_serial->setText(ap.value(QStringLiteral("serial")).toString(QStringLiteral("–")));
 	lay->addWidget(kc);
 
+	// Die beiden Tabellen teilen sich die Höhe über einen ziehbaren Trenner.
+	auto* split = new QSplitter(Qt::Vertical, page);
+	split->setChildrenCollapsible(false);
 	auto table = [&](const char* title, QLabel** info, QTableWidget** t) {
 		QVBoxLayout* in = nullptr;
-		auto* c = rjui::card(page, &in);
+		auto* c = rjui::card(split, &in);
 		in->addWidget(rjui::section(T(title), c));
 		*info = new QLabel(c);
 		(*info)->setObjectName(QStringLiteral("rjMuted"));
@@ -104,13 +108,18 @@ ArubaApTab::ArubaApTab(RjBackend* backend, const QJsonObject& subject, const QJs
 		(*t)->setSelectionBehavior(QAbstractItemView::SelectRows);
 		(*t)->verticalHeader()->hide();
 		(*t)->horizontalHeader()->setStretchLastSection(true);
-		(*t)->setMinimumHeight(140);
-		in->addWidget(*t);
-		lay->addWidget(c);
+		// Linksbündig: der Titel der gestreckten letzten Spalte steht sonst weit rechts.
+		(*t)->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+		(*t)->setMinimumHeight(110);
+		rjui::makeCopyable(*t, T);
+		in->addWidget(*t, 1);
+		split->addWidget(c);
 	};
 	table("aruba.ap.networks", &m_netsInfo, &m_nets);
 	table("aruba.ap.clients", &m_clientsInfo, &m_clients);
-	lay->addStretch(1);
+	split->setStretchFactor(0, 1);
+	split->setStretchFactor(1, 2);
+	lay->addWidget(split, 1);
 
 	connect(close, &QPushButton::clicked, this, &ToolTab::closeRequested);
 	connect(m_again, &QPushButton::clicked, this, &ArubaApTab::query);

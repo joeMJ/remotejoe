@@ -9,7 +9,11 @@
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtGui/QResizeEvent>
+#include <QtGui/QClipboard>
+#include <QtGui/QShortcut>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QHeaderView>
+#include <QtWidgets/QTableWidget>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QPushButton>
@@ -192,6 +196,20 @@ public:
 			p->drawPolygon(head);
 			break;
 		}
+		case Glyph::Person:
+		{
+			// Kopf und Schultern.
+			const QPointF head = P(0.5, 0.31);
+			p->drawEllipse(head, s * 0.17, s * 0.17);
+			const QPointF base = P(0.5, 0.94);
+			const qreal r = 0.34 * s;
+			QPainterPath body;
+			body.moveTo(base + QPointF(-r, 0));
+			body.arcTo(QRectF(base.x() - r, base.y() - r, 2 * r, 2 * r), 180, -180);
+			body.closeSubpath();
+			p->drawPath(body);
+			break;
+		}
 		case Glyph::Gear:
 		{
 			const QPointF m = P(0.5, 0.5);
@@ -228,6 +246,40 @@ private:
 QIcon glyphIcon(Glyph g)
 {
 	return QIcon(new GlyphEngine(g));
+}
+
+void makeCopyable(QTableWidget* t, const std::function<QString(const char*)>& text)
+{
+	t->setSelectionBehavior(QAbstractItemView::SelectRows);
+	t->setSelectionMode(QAbstractItemView::ExtendedSelection);
+	auto rows = [t](bool all) {
+		QStringList head;
+		for (int c = 0; c < t->columnCount(); ++c)
+			head << (t->horizontalHeaderItem(c) ? t->horizontalHeaderItem(c)->text() : QString());
+		QStringList out = { head.join(QLatin1Char('\t')) };
+		for (int r = 0; r < t->rowCount(); ++r)
+		{
+			// Ausgefilterte Zeilen gehören nicht dazu.
+			if (t->isRowHidden(r) || (!all && !t->selectionModel()->isRowSelected(r, QModelIndex())))
+				continue;
+			QStringList cells;
+			for (int c = 0; c < t->columnCount(); ++c)
+				cells << (t->item(r, c) ? t->item(r, c)->text() : QString());
+			out << cells.join(QLatin1Char('\t'));
+		}
+		QGuiApplication::clipboard()->setText(out.join(QLatin1Char('\n')) + QLatin1Char('\n'));
+	};
+	auto* sc = new QShortcut(QKeySequence::Copy, t);
+	sc->setContext(Qt::WidgetShortcut);
+	QObject::connect(sc, &QShortcut::activated, t, [rows] { rows(false); });
+	t->setContextMenuPolicy(Qt::CustomContextMenu);
+	const QString one = text("table.copy"), all = text("table.copy.all");
+	QObject::connect(t, &QWidget::customContextMenuRequested, t, [t, rows, one, all](const QPoint& pos) {
+		QMenu menu(t);
+		menu.addAction(one, [rows] { rows(false); })->setEnabled(t->selectionModel()->hasSelection());
+		menu.addAction(all, [rows] { rows(true); });
+		menu.exec(t->viewport()->mapToGlobal(pos));
+	});
 }
 
 QPushButton* logMenuButton(const std::function<QString(const char*)>& text, QWidget* parent, const std::function<void(const QString& kind, bool filtered)>& pick)

@@ -800,10 +800,15 @@ impl App {
     }
 
     pub fn save(&mut self) -> Result<bool, String> {
-        match self.vault.as_mut() {
-            Some(v) => v.save(None).map_err(|e| e.to_string()),
-            None => Ok(false),
+        let saved = match self.vault.as_mut() {
+            Some(v) => v.save(None).map_err(|e| e.to_string())?,
+            None => false,
+        };
+        if saved {
+            // Eine fehlgeschlagene Sicherung hält das Speichern nicht auf; die Oberfläche meldet sie.
+            let _ = self.backup_start(None, false);
         }
+        Ok(saved)
     }
 
     pub fn tree_json(&self, filter: &str) -> String {
