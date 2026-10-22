@@ -477,13 +477,28 @@ pub fn run_tool(root: &Path, tool: &Tool, tasks: Vec<Task>, known: rj_ssh::known
         });
         if let Some(o) = stdout {
             let mut board = String::new();
+            // Nach der Statustafel kommt die Zusammenfassung (gleiche Zeilenform „IP | Status“): ins Protokoll.
+            let mut summary = false;
+            let mut blank = false;
             for l in std::io::BufReader::new(o).lines().map_while(Result::ok) {
+                if l.contains("FINALE ZUSAMMENFASSUNG") {
+                    summary = true;
+                }
+                // Mehrere Leerzeilen hintereinander (Reste der Werkzeugausgabe) als eine.
+                if l.trim().is_empty() {
+                    if blank {
+                        continue;
+                    }
+                    blank = true;
+                } else {
+                    blank = false;
+                }
                 if l.trim() == "\u{1e}" {
                     // Neue Statustafel: die bisherige ist vollständig.
                     if !board.is_empty() {
                         *run.board.lock().unwrap_or_else(|e| e.into_inner()) = std::mem::take(&mut board);
                     }
-                } else if board_line(&l) && tool.write {
+                } else if board_line(&l) && tool.write && !summary {
                     board.push_str(&l);
                     board.push('\n');
                     *run.board.lock().unwrap_or_else(|e| e.into_inner()) = board.clone();
