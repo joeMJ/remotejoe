@@ -638,6 +638,7 @@ impl App {
                 "connect_all_parallel": self.config.connection.connect_all_parallel,
                 "keyboard_capture": self.config.connection.keyboard_capture,
                 "close_tab_key": self.config.connection.close_tab_key,
+                "aruba_tools": self.config.features.aruba,
             })),
             "set_settings" => {
                 if let Some(m) = c.get("lock_after_idle_mins").and_then(Value::as_u64) {
@@ -655,6 +656,9 @@ impl App {
                 }
                 if let Some(k) = c.get("close_tab_key").and_then(Value::as_str).filter(|k| matches!(*k, "outside" | "always" | "never")) {
                     self.config.connection.close_tab_key = k.to_string();
+                }
+                if let Some(b) = c.get("aruba_tools").and_then(Value::as_bool) {
+                    self.config.features.aruba = b;
                 }
                 match &self.config_path {
                     Some(p) => self.config.save(p).map(|_| json!({ "ok": true })).map_err(|e| e.to_string()),

@@ -205,6 +205,7 @@ impl App {
             "key": key,
             "inventory": inventory_json(&inv),
             "aruba": inv.value("system").is_some_and(|s| s.starts_with("Aruba")),
+            "aruba_tools": self.config.features.aruba,
             "services": services,
             "busy": self.overview.busy.contains_key(&key),
             "run": self.overview_output_key(&key),

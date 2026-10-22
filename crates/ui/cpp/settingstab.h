@@ -41,6 +41,8 @@ signals:
 	void appearanceChanged();
 	/// Strg+Umschalt+W: neuer Modus (outside, always, never).
 	void closeTabKeyChanged(const QString& mode);
+	/// Zusatzfunktionen ein- oder ausgeschaltet (z. B. Aruba-Werkzeuge).
+	void featuresChanged();
 
 private:
 	struct Area
@@ -52,6 +54,7 @@ private:
 	void addArea(const QString& key, const QString& title, QWidget* page, bool scroll);
 	QWidget* pageLock();
 	QWidget* pageKeys();
+	QWidget* pageFeatures();
 	void refreshSummaries();
 	QString edit(const QJsonObject& cmd);
 
@@ -70,6 +73,7 @@ private:
 	// Tastatur
 	QCheckBox* m_keyCapture = nullptr;
 	QComboBox* m_closeTab = nullptr;
+	QCheckBox* m_aruba = nullptr;
 	// Eingebettete Bereiche
 	AppearanceTab* m_appearance = nullptr;
 	SnmpTab* m_snmp = nullptr;

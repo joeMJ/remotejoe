@@ -2859,6 +2859,10 @@ void MainWindow::openSettings(const QString& section)
 		t = new SettingsTab(m_backend, m_tabs);
 		connect(t, &SettingsTab::appearanceChanged, this, [this] { applyAppearance(); });
 		connect(t, &SettingsTab::closeTabKeyChanged, this, [this](const QString& mode) { m_closeTabKey = mode; });
+		connect(t, &SettingsTab::featuresChanged, this, [this] {
+			if (auto* o = findChild<OverviewTab*>())
+				o->refreshInventorySwitch();
+		});
 		connect(t, &ToolTab::status, this, [this](const QString& text) { statusBar()->showMessage(text, 6000); });
 		m_tabs->addTab(t, T(m_backend, "settings.title"));
 	}
