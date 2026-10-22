@@ -4,6 +4,7 @@
 #include "exporttab.h"
 #include "overviewtab.h"
 #include "arubaaptab.h"
+#include "aptoolstab.h"
 #include "appearance.h"
 #include "settingstab.h"
 #include "masstab.h"
@@ -2427,6 +2428,13 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		connect(t, &MassInventoryTab::finished, this, [this] { reloadTree(); });
 		addToolTab(t, T(m_backend, "mass.tab"));
 	});
+	// Aruba-Werkzeuge (zuschaltbar): ap_check für einen Controller oder alle Controller eines Ordners.
+	if (selectedIds().size() == 1 && parseObject(m_backend->edit(QStringLiteral("{\"op\":\"settings\"}"))).value(QStringLiteral("aruba_tools")).toBool())
+		menu.addAction(T(m_backend, "ctx.aptools"), this, [this] {
+			const QStringList ids = selectedIds();
+			if (ids.size() == 1)
+				openApTools(ids.first(), m_tree->currentIndex().data().toString());
+		});
 	menu.addAction(T(m_backend, "ctx.merge"), this, [this] {
 		const QStringList ids = selectedIds();
 		if (!ids.isEmpty())
@@ -3188,6 +3196,11 @@ void MainWindow::handleEvents(const QString& json)
 					else if (kind == QLatin1String("update_check") && r.value(QStringLiteral("state")).toString() == QLatin1String("newer"))
 						// Prüfung beim Start: nur ein Hinweis in der Fußzeile.
 						statusBar()->showMessage(T(m_backend, "update.available").arg(r.value(QStringLiteral("found")).toObject().value(QStringLiteral("version")).toString()), 15000);
+				}
+				else if (kind == QLatin1String("aptools_setup"))
+				{
+					if (auto* a = findChild<ApToolsTab*>())
+						a->handleSetup(r);
 				}
 				else if (kind == QLatin1String("aruba_ap"))
 				{
@@ -4037,6 +4050,21 @@ bool MainWindow::isLogin(const QString& id) const
 	return hit;
 }
 
+void MainWindow::openApTools(const QString& id, const QString& name)
+{
+	// Ein Tab für die Werkzeuge (ein Lauf zur Zeit); für ein anderes Ziel wird er ersetzt.
+	if (auto* old = findChild<ApToolsTab*>())
+	{
+		if (old->id() == id)
+		{
+			m_tabs->setCurrentWidget(old);
+			return;
+		}
+		closeToolTab(old);
+	}
+	addToolTab(new ApToolsTab(m_backend, id, name, m_tabs), T(m_backend, "aptools.tab").arg(name));
+}
+
 void MainWindow::connectWay(const QJsonObject& s, const QString& way)
 {
 	const QString id = s.value(QStringLiteral("id")).toString();
@@ -4089,6 +4117,7 @@ void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 			connect(a, &ArubaApTab::connectWayRequested, this, &MainWindow::connectWay);
 			addToolTab(a, a->title());
 		});
+		connect(t, &OverviewTab::arubaToolsRequested, this, &MainWindow::openApTools);
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
 	}
 	else

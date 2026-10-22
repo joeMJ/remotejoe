@@ -237,6 +237,7 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 		else
 			m_cluster->setBusy(true);
 	});
+	connect(m_cluster, &ArubaClusterView::toolsRequested, this, [this] { emit arubaToolsRequested(m_subject.value(QStringLiteral("id")).toString(), m_name); });
 	connect(m_cluster, &ArubaClusterView::apClicked, this, [this](const QJsonObject& ap) {
 		QJsonObject s = m_subject;
 		s.insert(QStringLiteral("vc_name"), m_name);

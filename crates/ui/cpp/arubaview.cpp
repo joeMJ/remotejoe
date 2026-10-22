@@ -73,7 +73,10 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 	m_head->setWordWrap(true);
 	hh->addWidget(m_head, 1);
 	m_query = new QPushButton(T("aruba.query"), this);
+	auto* tools = new QPushButton(T("aruba.tools"), this);
 	hh->addWidget(m_query, 0, Qt::AlignTop);
+	hh->addWidget(tools, 0, Qt::AlignTop);
+	connect(tools, &QPushButton::clicked, this, &ArubaClusterView::toolsRequested);
 	v->addLayout(hh);
 
 	auto* tiles = new QHBoxLayout;

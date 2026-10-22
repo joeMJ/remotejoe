@@ -30,6 +30,8 @@ public:
 
 signals:
 	void queryRequested();
+	/// „ap_check …“: Aruba-Werkzeuge für diesen Controller.
+	void toolsRequested();
 	/// Kachel eines online-APs angeklickt (`name`, `ip`, `serial`, …).
 	void apClicked(const QJsonObject& ap);
 
