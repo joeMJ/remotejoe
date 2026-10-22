@@ -926,6 +926,7 @@
   "ov.stop": "Abbrechen",
   "ov.aruba": "Aruba",
   "aruba.query": "Cluster abfragen",
+  "aruba.log.menu": "Protokolle",
   "aruba.log.system": "Systemlog",
   "aruba.log.system.filtered": "Systemlog gefiltert …",
   "aruba.log.security": "Sicherheitslog",

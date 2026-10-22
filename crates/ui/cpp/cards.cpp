@@ -1,9 +1,15 @@
 #include "cards.h"
 
+#include <QtGui/QIconEngine>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
+#include <QtGui/QPainter>
+#include <QtGui/QPainterPath>
 #include <QtGui/QResizeEvent>
+#include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
+#include <QtWidgets/QMenu>
+#include <QtWidgets/QPushButton>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
@@ -73,6 +79,82 @@ void setPill(QLabel* l, const QString& text, const QString& kind)
 		l->style()->unpolish(l);
 		l->style()->polish(l);
 	}
+}
+
+namespace
+{
+// Zeichnet bei jedem Aufruf neu, damit das Symbol einem Wechsel zwischen Hell und Dunkel folgt.
+class NoteIconEngine : public QIconEngine
+{
+public:
+	void paint(QPainter* p, const QRect& rect, QIcon::Mode mode, QIcon::State) override
+	{
+		const QColor c = QApplication::palette().color(mode == QIcon::Disabled ? QPalette::Disabled : QPalette::Active, QPalette::ButtonText);
+		const qreal s = qMin(rect.width(), rect.height());
+		const qreal w = s * 0.72, h = s * 0.9, fold = s * 0.26;
+		const QPointF o(rect.x() + (rect.width() - w) / 2.0, rect.y() + (rect.height() - h) / 2.0);
+		p->save();
+		p->setRenderHint(QPainter::Antialiasing);
+		QPen pen(c, qMax<qreal>(1.0, s / 14.0));
+		pen.setJoinStyle(Qt::RoundJoin);
+		pen.setCapStyle(Qt::RoundCap);
+		p->setPen(pen);
+		QPainterPath page;
+		page.moveTo(o);
+		page.lineTo(o + QPointF(w - fold, 0));
+		page.lineTo(o + QPointF(w, fold));
+		page.lineTo(o + QPointF(w, h));
+		page.lineTo(o + QPointF(0, h));
+		page.closeSubpath();
+		p->drawPath(page);
+		QPainterPath ear;
+		ear.moveTo(o + QPointF(w - fold, 0));
+		ear.lineTo(o + QPointF(w - fold, fold));
+		ear.lineTo(o + QPointF(w, fold));
+		p->drawPath(ear);
+		for (int i = 0; i < 3; ++i)
+		{
+			const qreal y = o.y() + h * (0.45 + 0.17 * i);
+			const qreal end = i == 2 ? w * 0.55 : w * 0.78;
+			p->drawLine(QPointF(o.x() + w * 0.22, y), QPointF(o.x() + end, y));
+		}
+		p->restore();
+	}
+	QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override { return scaledPixmap(size, mode, state, 1.0); }
+	QPixmap scaledPixmap(const QSize& size, QIcon::Mode mode, QIcon::State state, qreal scale) override
+	{
+		QPixmap pm(size * scale);
+		pm.setDevicePixelRatio(scale);
+		pm.fill(Qt::transparent);
+		QPainter p(&pm);
+		paint(&p, QRect(QPoint(0, 0), size), mode, state);
+		return pm;
+	}
+	QIconEngine* clone() const override { return new NoteIconEngine; }
+};
+} // namespace
+
+QIcon noteIcon()
+{
+	return QIcon(new NoteIconEngine);
+}
+
+QPushButton* logMenuButton(const std::function<QString(const char*)>& text, QWidget* parent, const std::function<void(const QString& kind, bool filtered)>& pick)
+{
+	auto* b = new QPushButton(noteIcon(), text("aruba.log.menu"), parent);
+	auto* menu = new QMenu(b);
+	for (const char* key : { "system", "system.filtered", static_cast<const char*>(nullptr), "security", "security.filtered" })
+	{
+		if (!key)
+		{
+			menu->addSeparator();
+			continue;
+		}
+		const QString k = QString::fromLatin1(key);
+		menu->addAction(text((QByteArray("aruba.log.") + key).constData()), b, [pick, k] { pick(k.section(QLatin1Char('.'), 0, 0), k.endsWith(QLatin1String(".filtered"))); });
+	}
+	b->setMenu(menu);
+	return b;
 }
 
 ClickRow::ClickRow(QWidget* parent)

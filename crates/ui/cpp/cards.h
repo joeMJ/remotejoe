@@ -7,8 +7,12 @@
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QLayout>
 #include <QtCore/QList>
+#include <QtGui/QIcon>
+
+#include <functional>
 
 class QLabel;
+class QPushButton;
 class QVBoxLayout;
 
 namespace rjui
@@ -22,6 +26,11 @@ QFrame* tile(const QString& label, QLabel** value, QWidget* parent);
 /// Plakette; `kind`: ok, warn, err, off, accent.
 QLabel* pill(const QString& text, const QString& kind, QWidget* parent);
 void setPill(QLabel* pill, const QString& text, const QString& kind);
+/// Zettel-Symbol (Blatt mit Eselsohr und Textzeilen), gezeichnet in der Textfarbe der aktuellen Palette.
+QIcon noteIcon();
+/// Knopf „Protokolle“ (Aruba) mit Zettel-Symbol und Menü: Systemlog und Sicherheitslog, ganz oder gefiltert.
+/// `text` liefert die Beschriftungen, `pick` erhält „system“ bzw. „security“ und ob gefiltert.
+QPushButton* logMenuButton(const std::function<QString(const char*)>& text, QWidget* parent, const std::function<void(const QString& kind, bool filtered)>& pick);
 
 /// Zeile, die auf Klick reagiert (Bereichsliste); `selected` hebt sie hervor.
 class ClickRow : public QFrame

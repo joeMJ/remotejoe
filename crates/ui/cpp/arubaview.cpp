@@ -103,18 +103,9 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 			m_update = b;
 	}
 	th->addStretch(1);
-	// Logs am Controller (eigene Zeile): ganz oder gefiltert (show log … | include …), nur Anzeige.
-	auto* lh = new QHBoxLayout;
-	for (const char* key : { "system", "system.filtered", "security", "security.filtered" })
-	{
-		auto* b = new QPushButton(T((QByteArray("aruba.log.") + key).constData()), this);
-		const QString k = QString::fromLatin1(key);
-		connect(b, &QPushButton::clicked, this, [this, k] { emit logRequested(k.section(QLatin1Char('.'), 0, 0), k.endsWith(QLatin1String(".filtered"))); });
-		lh->addWidget(b);
-	}
-	lh->addStretch(1);
+	// Logs am Controller: ganz oder gefiltert (show log … | include …), nur Anzeige.
+	th->addWidget(rjui::logMenuButton(T, this, [this](const QString& kind, bool filtered) { emit logRequested(kind, filtered); }));
 	v->addLayout(th);
-	v->addLayout(lh);
 
 	auto* tiles = new QHBoxLayout;
 	tiles->addWidget(rjui::tile(T("aruba.total"), &m_total, this));
