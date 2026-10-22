@@ -77,6 +77,10 @@ pub struct App {
     deferred_releases: Vec<(Uuid, String, u16)>,
     /// Hintergrundaufgaben und deren Ergebnis (Sitzung oder Fehler).
     pub jobs: crate::jobs::Jobs,
+    /// Aruba-Werkzeuge: laufender oder letzter Lauf eines Werkzeugs (ap_check).
+    pub(crate) aptools_run: Option<crate::aptools::Run>,
+    /// Aruba-Werkzeuge: laufender oder letzter schreibender Lauf (Neustart, Update).
+    pub(crate) aptools_write: Option<crate::aptools::Run>,
     pub(crate) job_results: std::collections::HashMap<u64, Result<SessionId, String>>,
     /// Sperre nach Leerlauf und Erkennung des Aufwachens.
     pub idle: crate::idle::IdleWatch,
@@ -139,6 +143,8 @@ impl App {
             tunnels,
             deferred_releases: Vec::new(),
             jobs: Default::default(),
+            aptools_run: None,
+            aptools_write: None,
             job_results: Default::default(),
             idle,
             locked: false,
@@ -1048,11 +1054,11 @@ impl App {
     pub fn connect_way(&mut self, target: Uuid, sel: WaySel, credential: Option<&str>, remember: bool, width: u32, height: u32) -> String {
         let Some(base) = self.target(target).cloned() else { return json!({ "error": "Ziel nicht gefunden" }).to_string() };
         let way = match sel {
-            WaySel::Main => None,
+            WaySel::Main | WaySel::SshHost(_) => None,
             WaySel::Default => base.open_with,
             WaySel::Way(w) => Some(w),
         };
-        let (t, way_cred, way_own) = match way {
+        let (mut t, way_cred, way_own) = match way {
             None => (base, None, None),
             Some(w) => match (base.via(w), base.ways.iter().find(|x| x.id == w)) {
                 (Some(v), Some(x)) => (v, Some(x.credential), x.own.clone().map(|r| (x.label(), r))),
@@ -1061,6 +1067,16 @@ impl App {
                 _ => return json!({ "error": "Zugangsweg nicht gefunden" }).to_string(),
             },
         };
+        // SSH zu einer anderen Adresse (einzelner AP): Zugangsdaten und Einstellungen des Ziels, Titel mit der Adresse.
+        if let WaySel::SshHost(ip) = sel {
+            if t.protocol != Protocol::Ssh {
+                t.options = ProtocolOptions::Ssh(Default::default());
+            }
+            t.protocol = Protocol::Ssh;
+            t.host = ip.to_string();
+            t.port = None;
+            t.name = format!("{} – {ip}", t.name);
+        }
         let resolved = match (way_cred, credential) {
             // Eigene Zugangsdaten des Wegs (eigener KDBX-Eintrag) gehen vor.
             _ if way_own.is_some() => way_own.map(|(name, reference)| ResolvedCredential { name, reference, origin: rj_core::inherit::Origin::Target, overrides: Default::default() }),
@@ -1773,6 +1789,8 @@ pub enum WaySel {
     Main,
     /// Ein bestimmter weiterer Weg.
     Way(Uuid),
+    /// SSH zu einer anderen Adresse mit den Zugangsdaten des Ziels (Aruba: einzelner AP eines Clusters).
+    SshHost(std::net::IpAddr),
 }
 
 impl WaySel {
@@ -1780,6 +1798,7 @@ impl WaySel {
     pub fn split(id: &str) -> (&str, WaySel) {
         match id.split_once('#') {
             Some((t, "main")) => (t, WaySel::Main),
+            Some((t, w)) if w.starts_with("ssh:") => (t, w[4..].parse().map(WaySel::SshHost).unwrap_or(WaySel::Default)),
             Some((t, w)) => (t, Uuid::parse_str(w).map(WaySel::Way).unwrap_or(WaySel::Default)),
             None => (id, WaySel::Default),
         }
@@ -1790,6 +1809,15 @@ impl WaySel {
 mod tests {
     use super::*;
     use rj_core::CredentialRef;
+
+    #[test]
+    fn way_selection_from_ui_ids() {
+        let id = Uuid::new_v4().to_string();
+        assert_eq!(WaySel::split(&format!("{id}#ssh:192.0.2.211")).1, WaySel::SshHost("192.0.2.211".parse().unwrap()));
+        assert_eq!(WaySel::split(&format!("{id}#ssh:kein-ip")).1, WaySel::Default);
+        assert_eq!(WaySel::split(&format!("{id}#main")).1, WaySel::Main);
+        assert_eq!(WaySel::split(&id).1, WaySel::Default);
+    }
 
     #[test]
     fn connect_reports_ambiguity_and_missing() {

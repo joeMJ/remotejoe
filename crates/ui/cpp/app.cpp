@@ -9,6 +9,8 @@
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
 #include <QtCore/QCryptographicHash>
+#include <QtWidgets/QScrollArea>
+#include <QtWidgets/QScrollBar>
 #include <QtCore/QDir>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QFile>
@@ -143,6 +145,22 @@ void screenshots(MainWindow& w, const QString& dir)
 		save(&w, dir, QStringLiteral("zusammenfassen.png"));
 		w.tabs()->removeTab(w.tabs()->indexOf(t));
 		t->deleteLater();
+	}
+	// Aruba-Werkzeuge: Cluster-Karte (Übersicht, ans Ende gerollt) und Seite eines APs.
+	if (QWidget* o = w.arubaForScreenshot(false))
+	{
+		pump(500);
+		if (auto* sa = o->findChild<QScrollArea*>())
+			sa->verticalScrollBar()->setValue(sa->verticalScrollBar()->maximum());
+		pump(200);
+		save(&w, dir, QStringLiteral("aruba-cluster.png"));
+	}
+	if (QWidget* a = w.arubaForScreenshot(true))
+	{
+		pump(400);
+		save(&w, dir, QStringLiteral("aruba-ap.png"));
+		w.tabs()->removeTab(w.tabs()->indexOf(a));
+		a->deleteLater();
 	}
 	w.patchdayForFirstTargets(25);
 	pump(1500);
@@ -430,10 +448,15 @@ std::int32_t rjRunApplication()
 			icon.addFile(QStringLiteral(":/logo/remotejoe-%1.png").arg(size), QSize(size, size));
 		QApplication::setWindowIcon(icon);
 	}
-	// Deutsche Texte für Qt-Standarddialoge, falls installiert.
+	// Deutsche Texte für Qt-Standarddialoge („Ja“/„Nein“ statt „Yes“/„No“): aus der Qt-Installation bzw. unter
+	// Windows aus dem Ordner „translations“ neben dem Programm (windeployqt --translations de legt qt_de.qm dort ab).
 	static QTranslator qtDe;
-	if (qtDe.load(QStringLiteral("qtbase_de"), QLibraryInfo::path(QLibraryInfo::TranslationsPath)))
-		QApplication::installTranslator(&qtDe);
+	const QStringList dirs{ QLibraryInfo::path(QLibraryInfo::TranslationsPath), QCoreApplication::applicationDirPath() + QStringLiteral("/translations") };
+	bool translated = false;
+	for (const QString& dir : dirs)
+		for (const QString& name : { QStringLiteral("qtbase_de"), QStringLiteral("qt_de") })
+			if (!translated && qtDe.load(name, dir))
+				translated = QApplication::installTranslator(&qtDe);
 	const QString shots = qEnvironmentVariable("RJ_SCREENSHOTS");
 	const bool demo = !shots.isEmpty() || qEnvironmentVariableIsSet("RJ_DEMO");
 	// Vorführung und Bildschirmfotos dürfen parallel laufen; sie öffnen keine echte Datenbank.

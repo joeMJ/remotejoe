@@ -14,7 +14,9 @@ use uuid::Uuid;
 pub const FIELDS: [&str; 8] = ["name", "ip", "mac", "vcpu", "memory", "system", "uptime", "serial"];
 
 /// Momentwerte: jede Abfrage überschreibt sie (kein Vorschlag „abweichender Wert“), außer von Hand gesetzt.
-const VOLATILE: [&str; 1] = ["uptime"];
+/// Das System (Betriebssystem bzw. Firmware-Version) ändert sich mit jedem Update und kommt nur aus Abfragen mit
+/// Anmeldung; darum ebenfalls ohne Rückfrage.
+const VOLATILE: [&str; 2] = ["uptime", "system"];
 
 /// Quelle eines von Hand gesetzten Werts.
 pub const MANUAL: &str = "von Hand";
@@ -234,6 +236,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn firmware_version_updates_without_question() {
+        let mut inv = Inventory::default();
+        inv.offer("system", "Aruba Instant 8.10.0.23 LSR (Modell 515)", "SSH (show version)", 1);
+        inv.offer("system", "Aruba Instant 8.10.0.21 LSR (Modell 515)", "SSH (show version)", 2);
+        assert_eq!(inv.value("system"), Some("Aruba Instant 8.10.0.21 LSR (Modell 515)"));
+        assert!(inv.fields["system"].pending.is_none());
+        // Von Hand gesetzt bleibt es (mit Vorschlag).
+        inv.set_manual("system", "eigene Angabe", 3).unwrap();
+        inv.offer("system", "Aruba Instant 8.10.0.23 LSR (Modell 515)", "SSH (show version)", 4);
+        assert_eq!(inv.value("system"), Some("eigene Angabe"));
+    }
 
     #[test]
     fn offers_fill_confirm_or_wait_and_manual_values_stay() {

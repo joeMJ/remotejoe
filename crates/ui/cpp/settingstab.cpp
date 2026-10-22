@@ -107,6 +107,7 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 		emit status(s);
 	});
 	addArea(QStringLiteral("snmp"), T("snmp.title"), m_snmp, false);
+	addArea(QStringLiteral("features"), T("settings.features"), pageFeatures(), true);
 	ain->addStretch(1);
 	m_loading = false;
 	reload();
@@ -246,6 +247,27 @@ QWidget* SettingsTab::pageKeys()
 	return w;
 }
 
+QWidget* SettingsTab::pageFeatures()
+{
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	auto* w = new QWidget;
+	auto* v = new QVBoxLayout(w);
+	auto* f = new QFormLayout;
+	m_aruba = new QCheckBox(T("settings.features.aruba"), w);
+	f->addRow(QString(), m_aruba);
+	f->addRow(QString(), hint(T("settings.features.aruba.hint"), w));
+	v->addLayout(f);
+	v->addStretch(1);
+	connect(m_aruba, &QCheckBox::toggled, this, [this](bool on) {
+		if (m_loading)
+			return;
+		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("aruba_tools"), on } });
+		emit featuresChanged();
+		refreshSummaries();
+	});
+	return w;
+}
+
 void SettingsTab::reload()
 {
 	m_loading = true;
@@ -257,6 +279,7 @@ void SettingsTab::reload()
 	m_keyCapture->setChecked(FrameView::s_keyCapture);
 	if (const int i = m_closeTab->findData(s.value(QStringLiteral("close_tab_key")).toString(QStringLiteral("outside"))); i >= 0)
 		m_closeTab->setCurrentIndex(i);
+	m_aruba->setChecked(s.value(QStringLiteral("aruba_tools")).toBool());
 	if (m_appearance)
 		m_appearance->reload();
 	if (m_snmp)
@@ -282,6 +305,7 @@ void SettingsTab::refreshSummaries()
 	set("appearance", T("settings.appearance.sum"));
 	const int devices = int(QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("snmp_list") } }).toUtf8()).array().size());
 	set("snmp", T("settings.snmp.sum").arg(devices));
+	set("features", T(m_aruba->isChecked() ? "settings.features.sum.aruba" : "settings.features.sum.none"));
 }
 
 void SettingsTab::wipeSecrets()

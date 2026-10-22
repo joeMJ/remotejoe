@@ -254,6 +254,17 @@ fn windows_command() -> String {
 /// SSH mit den Zugangsdaten aus der KDBX: Linux-Befehl und Windows-PowerShell (über OpenSSH), Reihenfolge nach
 /// `prefer_windows`; liefert beides nichts, `show version` in einer Shell (Aruba).
 pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHosts, prefer_windows: bool) -> Result<(Found, &'static str, Option<String>), String> {
+    let (rt, conn, note, params, ask) = ssh_open(spec, port, known.clone())?;
+    ssh_inventory_on(spec, port, rt, conn, note, params, ask, known, ip, prefer_windows)
+}
+
+type AskSender = tokio::sync::mpsc::UnboundedSender<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>;
+
+/// SSH-Verbindung für lesende Abfragen mit den Zugangsdaten des Ziels: unbekannter Host-Schlüssel wird übernommen und
+/// gemeldet, ein geänderter nie; ältere Verfahren nur, wenn das Gerät nichts anderes anbietet. Liefert die Laufzeit,
+/// die Verbindung und einen Hinweis (übernommener Schlüssel, ältere Verfahren).
+#[allow(clippy::type_complexity)]
+pub fn ssh_open(spec: &JobSpec, port: u16, known: KnownHosts) -> Result<(tokio::runtime::Runtime, SshConnection, Option<String>, rj_ssh::client::SshParams, AskSender), String> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     // Unbekannter Host-Schlüssel: sofort übernehmen und melden. Geänderter: nie automatisch.
     let (ask, mut q) = tokio::sync::mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>();
@@ -301,6 +312,22 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
             None => msg,
         }
     })?;
+    Ok((rt, conn, note, params, ask))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ssh_inventory_on(
+    spec: &JobSpec,
+    port: u16,
+    rt: tokio::runtime::Runtime,
+    conn: SshConnection,
+    note: Option<String>,
+    params: rj_ssh::client::SshParams,
+    ask: AskSender,
+    known: KnownHosts,
+    ip: Option<&str>,
+    prefer_windows: bool,
+) -> Result<(Found, &'static str, Option<String>), String> {
     // Windows mit OpenSSH zuerst, wenn es danach aussieht; sonst Linux zuerst.
     let order: [bool; 2] = if prefer_windows { [true, false] } else { [false, true] };
     for windows in order {
@@ -369,66 +396,105 @@ pub fn ps_inventory(spec: &JobSpec, ip: Option<&str>) -> Result<(Found, &'static
     lines.iter().find_map(|l| parse_windows(l, ip)).map(|f| (f, "PowerShell", None)).ok_or_else(|| errors.first().cloned().unwrap_or_else(|| "Keine Antwort des Inventarskripts".into()))
 }
 
-/// Interaktive Shell: auf die Eingabeaufforderung warten, `no paging`, `show version` und `show aps` senden, jeweils
-/// bis zur nächsten Eingabeaufforderung lesen (wie die Aruba-Instant-Werkzeuge mit `invoke_shell`). Nur lesende
-/// Befehle.
+/// Lesende Befehle für das Aruba-Inventar.
+const SHOW_VERSION_COMMANDS: [&str; 3] = ["no paging", "show version", "show aps"];
+
 async fn cli_show_version(conn: &SshConnection) -> Result<String, String> {
-    const COMMANDS: [&[u8]; 3] = [b"no paging\r\n", b"show version\r\n", b"show aps\r\n"];
-    // Breites Terminal: Die Tabelle von `show aps` ist mehrere hundert Zeichen breit.
+    cli_session(conn, &SHOW_VERSION_COMMANDS).await.map(|r| r.raw)
+}
+
+/// Ergebnis einer CLI-Sitzung: Rohtext (mit Eingabeaufforderungen und Echos) und je gesendetem Befehl dessen Ausgabe
+/// ohne Echo und Eingabeaufforderung.
+pub struct CliResult {
+    pub raw: String,
+    pub outputs: Vec<String>,
+}
+
+/// Letzte nicht leere Zeile ist eine Eingabeaufforderung wie `name#` (ohne Leerzeichen; „Serial #“ in der Kopfzeile
+/// von `show aps` endet ebenfalls auf „#“, enthält aber ein Leerzeichen).
+fn is_prompt(line: &str) -> bool {
+    let l = line.trim();
+    l.ends_with('#') && l.len() > 1 && !l.contains(char::is_whitespace)
+}
+
+fn seg_lines(seg: &str) -> Vec<&str> {
+    seg.split('\n').map(|l| l.trim_end_matches('\r')).collect()
+}
+
+/// Ausgabe eines Befehls fertig? Erst das Echo des Befehls, danach eine Eingabeaufforderung als letzte Zeile.
+/// Eine Eingabeaufforderung vor dem Echo (z. B. eine verirrte leere Zeile) zählt nicht.
+fn command_done(seg: &str, cmd: &str) -> Option<String> {
+    let lines = seg_lines(seg);
+    let echo = lines.iter().position(|l| l.contains(cmd))?;
+    let last = lines.iter().rposition(|l| !l.trim().is_empty())?;
+    (last > echo && is_prompt(lines[last])).then(|| lines[echo + 1..last].join("\n"))
+}
+
+/// Interaktive Shell wie in den Aruba-Instant-Werkzeugen (`ap_show.py`): auf die Eingabeaufforderung warten, dann
+/// je Befehl senden (nur `\n` – `\r\n` wertet die CLI als zwei Eingaben) und lesen, bis nach seinem Echo die nächste
+/// Eingabeaufforderung kommt. Breites Terminal, weil die Tabelle von `show aps` mehrere hundert Zeichen breit ist.
+/// Nur lesende Befehle; Gesamtfrist 30 s.
+pub async fn cli_session(conn: &SshConnection, cmds: &[&str]) -> Result<CliResult, String> {
     let mut sh = conn.open_shell("vt100", 1000, 50).await.map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
-    // Über langsame Verbindungen (WAN) kommen Antworten erst nach Sekunden: je Befehl bis zur Eingabeaufforderung
-    // lesen, begrenzt nur durch die Gesamtfrist.
+    let mut outputs = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    // Anzahl gesendeter Befehle; `mark`: Pufferstand beim letzten Senden.
-    let mut sent = 0;
+    // Ohne erkennbare Eingabeaufforderung nach 3 s trotzdem senden (Gerät ohne Prompt-Zeile).
+    let mut waiting = true;
+    let first_wait = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut idx = 0;
     let mut mark = 0;
-    loop {
-        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if left.is_zero() {
+    while idx < cmds.len() {
+        let now = tokio::time::Instant::now();
+        let until = if waiting { first_wait.min(deadline) } else { deadline };
+        if now >= deadline {
             break;
         }
-        // Eingabeaufforderung: letzte Zeile wie `name#` (ohne Leerzeichen). „Serial #“ in der Kopfzeile von
-        // `show aps` endet ebenfalls auf „#“ und darf das Lesen nicht vorzeitig beenden.
-        let ended_with_prompt = |b: &[u8], from: usize| {
-            let text = String::from_utf8_lossy(&b[from.min(b.len())..]);
-            let last = text.trim_end().rsplit(['\n', '\r']).next().unwrap_or("").trim_start();
-            last.ends_with('#') && last.len() > 1 && !last.contains(char::is_whitespace)
-        };
-        // Ohne gesendeten Befehl kurz warten (Geräte ohne erkennbare Eingabeaufforderung), danach bis zur Frist.
-        let wait = if sent == 0 { left.min(Duration::from_secs(3)) } else { left };
-        match tokio::time::timeout(wait, sh.events.recv()).await {
+        match tokio::time::timeout(until.saturating_duration_since(now), sh.events.recv()).await {
             Ok(Some(ShellEvent::Data(d))) => {
                 buf.extend_from_slice(&d);
-                if ended_with_prompt(&buf, mark) && buf.len() > mark {
-                    if sent == COMMANDS.len() {
-                        break;
+                let text = String::from_utf8_lossy(&buf[mark..]).into_owned();
+                if waiting {
+                    if seg_lines(&text).iter().rev().find(|l| !l.trim().is_empty()).is_some_and(|l| is_prompt(l)) {
+                        waiting = false;
+                        sh.write(format!("{}\n", cmds[0]).as_bytes()).await.map_err(|e| e.to_string())?;
+                        mark = buf.len();
                     }
-                    sh.write(COMMANDS[sent]).await.map_err(|e| e.to_string())?;
-                    sent += 1;
+                } else if let Some(out) = command_done(&text, cmds[idx]) {
+                    outputs.push(out);
+                    idx += 1;
+                    if idx < cmds.len() {
+                        sh.write(format!("{}\n", cmds[idx]).as_bytes()).await.map_err(|e| e.to_string())?;
+                    }
                     mark = buf.len();
                 }
             }
             Ok(Some(_)) | Ok(None) => break,
-            // Ruhe ohne erkannte Eingabeaufforderung (anderes Gerät): nur noch „show version“ senden.
-            Err(_) if sent == 0 => {
-                sh.write(COMMANDS[1]).await.map_err(|e| e.to_string())?;
-                sent = COMMANDS.len();
+            Err(_) if waiting => {
+                waiting = false;
+                sh.write(format!("{}\n", cmds[0]).as_bytes()).await.map_err(|e| e.to_string())?;
                 mark = buf.len();
             }
             Err(_) => break,
         }
     }
     sh.close().await;
-    let text = String::from_utf8_lossy(&buf).into_owned();
+    // Unvollständig gelesene Befehle: was da ist, ohne Echo.
+    if idx < cmds.len() && !waiting {
+        let text = String::from_utf8_lossy(&buf[mark..]).into_owned();
+        let lines = seg_lines(&text);
+        let start = lines.iter().position(|l| l.contains(cmds[idx])).map_or(0, |i| i + 1);
+        outputs.push(lines[start..].join("\n"));
+    }
+    let raw = String::from_utf8_lossy(&buf).into_owned();
     // Diagnose: Rohantwort der Aruba-Sitzung anhängen (nur mit RJ_ARUBA_DUMP=<Datei>; enthält keine Kennwörter).
     if let Some(path) = std::env::var_os("RJ_ARUBA_DUMP") {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(f, "===== {} gesendet: {sent} Befehle, {} Bytes =====\n{text}", crate::overview::inventory::now(), buf.len());
+            let _ = writeln!(f, "===== {} {} von {} Befehlen fertig, {} Bytes =====\n{raw}", crate::overview::inventory::now(), outputs.len().min(idx), cmds.len(), buf.len());
         }
     }
-    Ok(text)
+    Ok(CliResult { raw, outputs })
 }
 
 #[cfg(test)]
@@ -459,6 +525,25 @@ mod tests {
     fn windows_command_fits_on_a_command_line() {
         let c = windows_command();
         assert!(c.starts_with("powershell -NoProfile -NonInteractive -EncodedCommand ") && c.len() < 8000, "{}", c.len());
+    }
+
+    #[test]
+    fn cli_command_ends_only_with_prompt_after_its_echo() {
+        // Ablauf wie am Test-AP: „no paging“ ist dort ein Parse error; danach kam eine leere Eingabeaufforderung.
+        let p = "02:00:5e:00:53:12#";
+        let seg = format!("no paging\r\n                       ^\r\n% Parse error\r\n{p} ");
+        assert_eq!(command_done(&seg, "no paging").as_deref(), Some("                       ^\n% Parse error"));
+        // Verirrte leere Eingabeaufforderung vor dem Echo: noch nicht fertig.
+        let early = format!("\r\n{p} ");
+        assert!(command_done(&early, "show version").is_none());
+        let partial = format!("\r\n{p} show version\r\nArubaOS (MODEL: 515), Version 8.10.0.23 LSR\r\n");
+        assert!(command_done(&partial, "show version").is_none(), "Ausgabe noch ohne Eingabeaufforderung");
+        let full = format!("{partial}AP uptime is 3 hours 56 minutes 26 seconds\r\n{p}");
+        let out = command_done(&full, "show version").unwrap();
+        assert!(out.contains("MODEL: 515") && out.contains("uptime") && !out.contains('#'), "{out}");
+        // „Serial #“ in der Kopfzeile von show aps ist keine Eingabeaufforderung.
+        assert!(command_done("show aps\r\nName  IP Address  Serial #\r\n", "show aps").is_none());
+        assert!(!is_prompt("Name  IP Address  Serial #") && is_prompt("ap-flur-1#") && !is_prompt("#"));
     }
 
     #[test]

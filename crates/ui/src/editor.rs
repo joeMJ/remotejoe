@@ -638,6 +638,7 @@ impl App {
                 "connect_all_parallel": self.config.connection.connect_all_parallel,
                 "keyboard_capture": self.config.connection.keyboard_capture,
                 "close_tab_key": self.config.connection.close_tab_key,
+                "aruba_tools": self.config.features.aruba,
             })),
             "set_settings" => {
                 if let Some(m) = c.get("lock_after_idle_mins").and_then(Value::as_u64) {
@@ -656,6 +657,9 @@ impl App {
                 if let Some(k) = c.get("close_tab_key").and_then(Value::as_str).filter(|k| matches!(*k, "outside" | "always" | "never")) {
                     self.config.connection.close_tab_key = k.to_string();
                 }
+                if let Some(b) = c.get("aruba_tools").and_then(Value::as_bool) {
+                    self.config.features.aruba = b;
+                }
                 match &self.config_path {
                     Some(p) => self.config.save(p).map(|_| json!({ "ok": true })).map_err(|e| e.to_string()),
                     None => Ok(json!({ "ok": true })),
@@ -665,6 +669,16 @@ impl App {
             "overview" => self.overview_json(&c),
             "ov_probe" => self.overview_probe(&c),
             "ov_query" => self.overview_query(&c),
+            "aruba_cluster" => self.aruba_cluster(&c),
+            "aruba_ap" => self.aruba_ap(&c),
+            "aruba_demo" => self.aruba_demo(&c),
+            "aptools_status" => self.aptools_status(),
+            "aptools_setup" => self.aptools_setup(&c),
+            "aptools_run" => self.aptools_run(&c),
+            "aptools_output" => Ok(self.aptools_output(&c)),
+            "aptools_stop" => Ok(self.aptools_stop(&c)),
+            "aptools_targets" => self.aptools_targets_json(&c),
+            "aptools_folder" => self.aptools_folder(&c),
             "ov_field" => self.overview_field(&c),
             "ov_run" => self.overview_run(&c),
             "ov_stop" => {

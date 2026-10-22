@@ -5,6 +5,8 @@
 pub mod alloc;
 pub mod autokeys;
 pub mod appearance;
+pub mod aptools;
+pub mod aruba;
 pub mod keyring;
 pub mod app;
 pub mod bridge;

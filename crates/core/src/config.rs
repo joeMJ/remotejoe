@@ -46,6 +46,16 @@ pub struct Config {
     pub update: UpdateSettings,
     /// Farbschema und Fokusrahmen.
     pub appearance: AppearanceSettings,
+    /// Zuschaltbare Zusatzfunktionen.
+    pub features: FeatureSettings,
+}
+
+/// Zuschaltbare Zusatzfunktionen (Vorgabe: alle aus).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FeatureSettings {
+    /// Aruba-Werkzeuge: Cluster-Übersicht am virtuellen Controller, AP-Seiten, ap_check.
+    pub aruba: bool,
 }
 
 /// Darstellung: Farbschema (`system`, `hell`, `dunkel`, `eingebaut:<Name>` oder `datei:<Name>` für eine eigene Palette)
@@ -105,6 +115,7 @@ impl Default for Config {
             terminal: Default::default(),
             update: UpdateSettings::default(),
             appearance: AppearanceSettings::default(),
+            features: FeatureSettings::default(),
         }
     }
 }

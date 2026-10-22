@@ -19,7 +19,7 @@ QFrame* card(QWidget* parent, QVBoxLayout** inner);
 QLabel* section(const QString& text, QWidget* parent);
 /// Kennzahl-Kachel: kleine Beschriftung, darunter der Wert (`value`).
 QFrame* tile(const QString& label, QLabel** value, QWidget* parent);
-/// Plakette; `kind`: ok, warn, off, accent.
+/// Plakette; `kind`: ok, warn, err, off, accent.
 QLabel* pill(const QString& text, const QString& kind, QWidget* parent);
 void setPill(QLabel* pill, const QString& text, const QString& kind);
 
