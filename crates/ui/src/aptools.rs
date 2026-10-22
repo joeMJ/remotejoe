@@ -116,17 +116,38 @@ fn copy_tree(src: &Path, dst: &Path, keep: &[&str]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Laufender Schritt beim Einrichten (für die Anzeige im Tab) und seit wann.
+static SETUP_STEP: std::sync::Mutex<Option<(String, std::time::Instant)>> = std::sync::Mutex::new(None);
+
+fn setup_step(name: Option<&str>) {
+    *SETUP_STEP.lock().unwrap_or_else(|e| e.into_inner()) = name.map(|n| (n.to_string(), std::time::Instant::now()));
+}
+
+/// Läuft gerade ein Einrichten: Schritt und Sekunden seit seinem Beginn.
+fn setup_running() -> Option<(String, u64)> {
+    SETUP_STEP.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(n, t)| (n.clone(), t.elapsed().as_secs()))
+}
+
+/// Fehler eines Downloads mit Schritt und Weg (direkt oder über welchen Proxy), damit die Ursache erkennbar ist.
+fn download_error(step: &str, url: &str, e: impl std::fmt::Display) -> String {
+    let host = url.split("://").nth(1).unwrap_or(url).split('/').next().unwrap_or_default();
+    format!("{step}: keine Verbindung zu {host} ({}): {e}", rj_update::proxy::describe(url))
+}
+
 /// Sammlung von GitHub laden (Zweig `main`) und nach `aptools/sammlung` legen; eine vorhandene `config.json` bleibt
 /// (die neue Vorlage als `config.json.neu`). Liefert den Commit-Stand (falls GitHub ihn nennt).
 pub fn install_collection(root: &Path, cancel: &AtomicBool) -> Result<Option<String>, String> {
     use rj_update::http::{self, Control};
     use rj_update::Limits;
     let ctl = |max: u64, secs: u64| Control::new(Limits { max_bytes: max, timeout: Duration::from_secs(secs) }, Some(cancel));
-    let commit = http::get(REPO_MAIN_COMMIT, &[("Accept".into(), "application/vnd.github+json".into())], "den Stand der Sammlung", &ctl(2 << 20, 30))
+    // Der Stand ist eine Zugabe; ohne ihn wird trotzdem geladen.
+    setup_step(Some("Stand der Sammlung prüfen"));
+    let commit = http::get(REPO_MAIN_COMMIT, &[("Accept".into(), "application/vnd.github+json".into())], "den Stand der Sammlung", &ctl(2 << 20, 20))
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|v| v["sha"].as_str().map(str::to_string));
-    let data = http::get(REPO_ZIP, &[], "die Aruba Instant Python Tools", &ctl(64 << 20, 300)).map_err(|e| e.to_string())?;
+    setup_step(Some("Sammlung laden"));
+    let data = http::get(REPO_ZIP, &[], "die Aruba Instant Python Tools", &ctl(64 << 20, 90)).map_err(|e| download_error("Sammlung laden", REPO_ZIP, e))?;
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let tmp = root.join(".neu");
     let _ = std::fs::remove_dir_all(&tmp);
@@ -166,6 +187,7 @@ pub fn setup_python(root: &Path, proxy: Option<&str>) -> Result<String, String> 
     let py = venv_python(root);
     if !py.is_file() {
         let (prog, pre, _) = find_python().ok_or("NO_PYTHON")?;
+        setup_step(Some("Python-Umgebung anlegen"));
         run(command(&prog).args(&pre).arg("-m").arg("venv").arg(venv_dir(root)), "Python-Umgebung anlegen").map_err(|e| {
             if cfg!(unix) {
                 format!("{e}. Unter Ubuntu fehlt dafür oft das Paket python3-venv (sudo apt install python3-venv).")
@@ -174,8 +196,10 @@ pub fn setup_python(root: &Path, proxy: Option<&str>) -> Result<String, String> 
             }
         })?;
     }
+    setup_step(Some("Bibliotheken installieren (pip)"));
     let mut pip = command(&py);
-    pip.args(["-m", "pip", "install", "--disable-pip-version-check", "-r"]).arg(&req);
+    // Kurze Fristen: ohne Netz soll pip nach Sekunden statt Minuten mit einer Meldung enden.
+    pip.args(["-m", "pip", "install", "--disable-pip-version-check", "--timeout", "20", "--retries", "1", "-r"]).arg(&req);
     if let Some(p) = proxy {
         pip.env("HTTPS_PROXY", format!("http://{p}")).env("HTTP_PROXY", format!("http://{p}"));
     }
@@ -197,7 +221,8 @@ pub fn install_python(root: &Path, cancel: &AtomicBool) -> Result<String, String
     };
     let url = format!("https://www.python.org/ftp/python/{PY_VERSION}/{file}");
     let ctl = Control::new(Limits { max_bytes: 100 << 20, timeout: Duration::from_secs(900) }, Some(cancel));
-    let data = http::get(&url, &[], "den Python-Installer", &ctl).map_err(|e| e.to_string())?;
+    setup_step(Some("Python laden und installieren"));
+    let data = http::get(&url, &[], "den Python-Installer", &ctl).map_err(|e| download_error("Python laden", &url, e))?;
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let exe = root.join(&file);
     std::fs::write(&exe, data).map_err(|e| e.to_string())?;
@@ -554,6 +579,9 @@ impl App {
         s["can_install_python"] = json!(cfg!(windows));
         s["running"] = json!(self.aptools_run.as_ref().is_some_and(|r| !r.done.load(std::sync::atomic::Ordering::SeqCst)));
         s["write_running"] = json!(self.aptools_write.as_ref().is_some_and(|r| !r.done.load(std::sync::atomic::Ordering::SeqCst)));
+        if let Some((step, secs)) = setup_running() {
+            s["setup"] = json!({ "step": step, "secs": secs });
+        }
         Ok(s)
     }
 
@@ -568,6 +596,10 @@ impl App {
     /// nur Windows, nach Zustimmung). Ergebnis „aptools_setup“; fehlt Python: `need_python`.
     pub fn aptools_setup(&mut self, c: &Value) -> Result<Value, String> {
         let root = self.aptools_root()?;
+        if let Some((step, _)) = setup_running() {
+            return Err(format!("Einrichten läuft bereits ({step})"));
+        }
+        setup_step(Some("Start"));
         let install_py = c.get("python").and_then(Value::as_bool).unwrap_or(false);
         let proxy = self.proxy_for_pip();
         rj_update::proxy::set_mode(rj_update::proxy::ProxyMode::from_setting(&self.config.update.proxy));
@@ -586,6 +618,7 @@ impl App {
                     Err(e) => Err(e),
                 }
             })();
+            setup_step(None);
             Box::new(move |_app: &mut App, cancelled| {
                 if cancelled {
                     return Vec::new();

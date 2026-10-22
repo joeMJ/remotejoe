@@ -184,13 +184,16 @@ pub fn cluster_json(show_aps: &str, running_config: &str, summary: &str, vc_ip: 
     })
 }
 
-/// Admin-Konten aus der laufenden Konfiguration: `hash-mgmt-user <Name> …` ohne `usertype` (eine Zeile mit
-/// `usertype read-only` oder `usertype guest-provisioning` ist kein Admin).
+/// Admin-Konten aus der laufenden Konfiguration: `hash-mgmt-user <Name> …` bzw. `mgmt-user <Name> <Hash>` (je nach
+/// Firmware). Eine Zeile mit `usertype`, `read-only` oder `guest-provisioning` ist kein Admin.
 pub fn admin_users(running_config: &str) -> Vec<String> {
     running_config
         .lines()
-        .filter_map(|l| l.trim().strip_prefix("hash-mgmt-user "))
-        .filter(|rest| !rest.contains("usertype"))
+        .filter_map(|l| {
+            let l = l.trim();
+            l.strip_prefix("hash-mgmt-user ").or_else(|| l.strip_prefix("mgmt-user "))
+        })
+        .filter(|rest| !rest.split_whitespace().any(|w| matches!(w, "usertype" | "read-only" | "guest-provisioning")))
         .filter_map(|rest| rest.split_whitespace().next().map(str::to_string))
         .collect()
 }
@@ -207,7 +210,7 @@ pub fn write_check(managed: Option<&str>, admins: &[String], user: &str) -> Resu
     if admins.iter().any(|a| a == user) {
         Ok(())
     } else {
-        Err(format!("„{user}“ ist kein Admin-Konto (hash-mgmt-user) in der Konfiguration"))
+        Err(format!("„{user}“ ist kein Admin-Konto (mgmt-user bzw. hash-mgmt-user) in der Konfiguration"))
     }
 }
 
@@ -438,6 +441,9 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
         assert!(write_check(Some("central"), &admins, "admin").unwrap_err().contains("Central"));
         assert!(write_check(Some("airwave"), &admins, "admin").unwrap_err().contains("AirWave"));
         assert!(write_check(None, &admins, "admin").is_err());
+        // Andere Firmware: mgmt-user mit Hash, Nur-Lesen mit „read-only“ am Ende.
+        let cfg = "mgmt-user admin 0123456789abcdef0123456789abcdef\nmgmt-user operator fedcba9876543210fedcba9876543210 read-only\nmgmt-user gast 00ff00ff guest-provisioning\n";
+        assert_eq!(admin_users(cfg), vec!["admin".to_string()]);
     }
 
     #[test]
