@@ -447,7 +447,7 @@ impl App {
                 if r.outputs.len() < 3 {
                     return Err("Keine vollständige Antwort des Controllers (Zeitlimit 30 s)".to_string());
                 }
-                let mut v = crate::aruba::cluster_json(&r.outputs[1], &r.outputs[2], &vc);
+                let mut v = crate::aruba::cluster_json(&r.outputs[1], &r.outputs[2], r.outputs.get(3).map_or("", String::as_str), &vc);
                 let managed = r.outputs.get(3).and_then(|s| crate::aruba::management(s));
                 v["managed"] = json!(managed);
                 // Schreibende Werkzeuge (Neustart, Update): nur unverwaltet und mit Admin-Konto.

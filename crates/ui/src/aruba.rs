@@ -100,10 +100,27 @@ fn segment_of(ip: &str) -> Option<String> {
     (p.len() == 4 && p.iter().all(|x| x.parse::<u8>().is_ok())).then(|| format!("{}.{}.{}", p[0], p[1], p[2]))
 }
 
+/// MAC, IP und Name der APs aus der AP-Tabelle von `show summary` („MAC  IP Address  Name  Clients …“, wie
+/// `ap_quick_inventory.py`). Die Tabelle der Anwender darüber („MAC  Name  IP Address  ESSID …“) hat keine Spalte
+/// „Clients“ und wird so nicht verwechselt.
+pub fn summary_aps(summary: &str) -> Vec<(String, String, String)> {
+    let Some((cols, rows)) = table(summary, &["MAC", "IP Address", "Name", "Clients"]) else { return Vec::new() };
+    rows.iter()
+        .filter_map(|row| {
+            let mac = cell(row, &cols, "MAC")?.to_ascii_lowercase();
+            let ip = cell(row, &cols, "IP Address")?.trim_end_matches('*').to_string();
+            let name = cell(row, &cols, "Name").unwrap_or_default().to_string();
+            is_mac(&mac).then_some((mac, ip, name))
+        })
+        .collect()
+}
+
 /// Cluster-Karte: APs aus `show aps` (online) und aus `allowed-ap` ohne Eintrag in `show aps` (offline).
-/// Offline-APs kennt nur ihre MAC; heißen online-APs anders als ihre MAC, ist die Zuordnung nicht sicher
-/// (`offline_uncertain`).
-pub fn cluster_json(show_aps: &str, running_config: &str, vc_ip: &str) -> Value {
+/// Offline-APs kennt nur ihre MAC. Die MAC der online-APs kommt aus `show summary` (über die IP, sonst den Namen)
+/// oder aus dem Namen, wenn der AP wie seine MAC heißt. Bleibt ein online-AP ohne MAC, ist die Zuordnung nicht
+/// sicher (`offline_uncertain`).
+pub fn cluster_json(show_aps: &str, running_config: &str, summary: &str, vc_ip: &str) -> Value {
+    let known = summary_aps(summary);
     let mut aps = Vec::new();
     if let Some((cols, rows)) = table(show_aps, &["Name", "IP Address"]) {
         for row in rows {
@@ -113,8 +130,15 @@ pub fn cluster_json(show_aps: &str, running_config: &str, vc_ip: &str) -> Value 
             if segment_of(ip).is_none() {
                 continue;
             }
+            let mac = known
+                .iter()
+                .find(|(_, kip, _)| kip == ip)
+                .or_else(|| known.iter().find(|(_, _, kname)| kname == name))
+                .map(|(m, _, _)| m.clone())
+                .or_else(|| is_mac(name).then(|| name.to_ascii_lowercase()));
             aps.push(json!({
                 "name": name,
+                "mac": mac,
                 "ip": ip,
                 "conductor": ip_raw.ends_with('*'),
                 "clients": cell(row, &cols, "Clients").and_then(|c| c.parse::<u32>().ok()),
@@ -125,10 +149,10 @@ pub fn cluster_json(show_aps: &str, running_config: &str, vc_ip: &str) -> Value 
             }));
         }
     }
-    let online_names: Vec<String> = aps.iter().filter_map(|a| a["name"].as_str()).map(str::to_ascii_lowercase).collect();
-    let all_macs = online_names.iter().all(|n| is_mac(n));
+    let online_macs: Vec<String> = aps.iter().filter_map(|a| a["mac"].as_str()).map(str::to_string).collect();
+    let all_macs = online_macs.len() == aps.len();
     let allowed = allowed_aps(running_config);
-    let offline: Vec<String> = allowed.iter().filter(|m| !online_names.contains(m)).cloned().collect();
+    let offline: Vec<String> = allowed.iter().filter(|m| !online_macs.contains(m)).cloned().collect();
     let offline_count = if allowed.is_empty() {
         0
     } else if all_macs {
@@ -143,7 +167,7 @@ pub fn cluster_json(show_aps: &str, running_config: &str, vc_ip: &str) -> Value 
     }
     let mut list = aps.clone();
     for m in &offline {
-        // Heißen online-APs anders als ihre MAC, kann eine nicht gefundene MAC auch zu einem von ihnen gehören.
+        // Fehlt einem online-AP die MAC, kann eine nicht gefundene MAC auch zu ihm gehören.
         list.push(json!({ "name": m, "ip": null, "online": false, "uncertain": !all_macs, "conductor": false, "clients": null, "in_segment": true }));
     }
     let clients: u64 = aps.iter().filter_map(|a| a["clients"].as_u64()).sum();
@@ -279,6 +303,7 @@ pub fn demo() -> (Value, Value) {
     let off = [16, 21, 23];
     let clients = [0, 12, 5, 31, 18, 0, 3, 9, 14, 2, 0, 7, 11, 6, 0, 4, 0, 8, 1, 22, 3, 0, 5, 0];
     let mut config = String::from("version 8.10.0.0-8.10.0\n");
+    let mut summary = String::from("MAC                IP Address       Name               Clients\n---                ----------       ----               -------\n");
     for i in 0..24usize {
         let mac = format!("02:00:5e:00:{:02x}:{:02x}", 0x40 + i, (i * 37 + 18) % 256);
         config.push_str(&format!("allowed-ap {mac}\n"));
@@ -288,9 +313,10 @@ pub fn demo() -> (Value, Value) {
         let name = named.iter().find(|(n, _)| *n == i).map_or(mac.clone(), |(_, n)| n.to_string());
         let ip = if i == 13 { "198.51.100.7".to_string() } else { format!("192.0.2.{}", 180 + i * 2) };
         let ip = if i == 0 { format!("{ip}*") } else { ip };
+        summary.push_str(&format!("{mac:<19}{:<17}{name:<19}{}\n", ip.trim_end_matches('*'), clients[i]));
         rows.push_str(&format!("{name:<19}{ip:<17}access  disable   {:<9}515(indoor)  CNZZQX{:04}\n", clients[i], i + 1));
     }
-    let mut cluster = cluster_json(&rows, &config, "192.0.2.240");
+    let mut cluster = cluster_json(&rows, &config, &summary, "192.0.2.240");
     cluster["managed"] = json!("central");
     cluster["write"] = json!({ "ok": false, "reason": "wird über Central verwaltet" });
     cluster["at"] = json!(crate::overview::inventory::now());
@@ -323,7 +349,7 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
 
     #[test]
     fn cluster_from_show_aps_and_allowed_aps() {
-        let c = cluster_json(SHOW_APS, CONFIG, "192.0.2.200");
+        let c = cluster_json(SHOW_APS, CONFIG, "", "192.0.2.200");
         assert_eq!((c["total"].as_u64(), c["online"].as_u64(), c["offline"].as_u64(), c["clients"].as_u64()), (Some(4), Some(3), Some(1), Some(19)));
         assert_eq!(c["segment"], "192.0.2.0/24");
         let aps = c["aps"].as_array().unwrap();
@@ -405,10 +431,39 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
     #[test]
     fn named_aps_make_offline_assignment_uncertain_and_no_allowed_list_means_unknown() {
         let named = SHOW_APS.replace("02:00:5e:00:53:13  ", "aula               ");
-        let c = cluster_json(&named, CONFIG, "192.0.2.200");
+        let c = cluster_json(&named, CONFIG, "", "192.0.2.200");
         assert_eq!(c["offline_uncertain"], true);
         assert_eq!(c["offline"], 1, "4 freigegeben, 3 online");
-        let none = cluster_json(SHOW_APS, "version 8.10\r\n", "192.0.2.200");
+        let none = cluster_json(SHOW_APS, "version 8.10\r\n", "", "192.0.2.200");
         assert_eq!((none["total"].as_u64(), none["offline"].as_u64(), none["allowed_known"].as_bool()), (Some(3), Some(0), Some(false)));
+    }
+
+    // Aufbau wie show summary am Test-AP: erst die Anwender (ohne Spalte „Clients“), dann die APs.
+    const SUMMARY: &str = "Name                    :TEST-IVC\r\n\
+MAC  Name  IP Address  ESSID  Access Point  \r\n\
+---  ----  ----------  -----  ------------  \r\n\
+\r\n\
+3 Access Points\r\n\
+---------------\r\n\
+MAC                IP Address       Name               Clients   Need Antenna Config  \r\n\
+---                ----------       ----               -------   -------------------  \r\n\
+02:00:5e:00:53:12  192.0.2.210      MASTER-testhaus    7         No                   \r\n\
+02:00:5e:00:53:13  192.0.2.211      aula               12        No                   \r\n\
+02:00:5e:00:53:14  198.51.100.7     02:00:5e:00:53:14  0         No                   \r\n\
+Restricted Management Access Subnets\r\n";
+
+    #[test]
+    fn renamed_aps_get_their_mac_from_show_summary() {
+        let named = SHOW_APS.replace("02:00:5e:00:53:12  192.0.2.210*", "MASTER-testhaus    192.0.2.210*").replace("02:00:5e:00:53:13  ", "aula               ");
+        assert_eq!(summary_aps(SUMMARY).len(), 3);
+        let c = cluster_json(&named, CONFIG, SUMMARY, "192.0.2.200");
+        assert_eq!(c["offline_uncertain"], false);
+        assert_eq!(c["offline"], 1);
+        let aps = c["aps"].as_array().unwrap();
+        assert_eq!((aps[0]["name"].as_str(), aps[0]["mac"].as_str()), (Some("MASTER-testhaus"), Some("02:00:5e:00:53:12")));
+        assert_eq!(aps.len(), 4, "die MAC des umbenannten Masters erscheint nicht als Offline-Kachel");
+        assert_eq!((aps[3]["name"].as_str(), aps[3]["online"].as_bool(), aps[3]["uncertain"].as_bool()), (Some("02:00:5e:00:53:15"), Some(false), Some(false)));
+        // Ohne AP-Tabelle in show summary: unsicher wie bisher.
+        assert_eq!(cluster_json(&named, CONFIG, "Name :x\r\n", "192.0.2.200")["offline_uncertain"], true);
     }
 }
