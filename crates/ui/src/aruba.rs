@@ -5,7 +5,32 @@
 use serde_json::{json, Value};
 
 /// Befehle für die Cluster-Karte am VC.
-pub const CLUSTER_COMMANDS: [&str; 3] = ["no paging", "show aps", "show running-config"];
+pub const CLUSTER_COMMANDS: [&str; 4] = ["no paging", "show aps", "show running-config", "show summary"];
+
+/// Verwaltung des Clusters aus `show summary` (wie `ap_quick_inventory.py`): `central` (auch On-Premises),
+/// `airwave` oder `none`; `None`, wenn die Ausgabe nichts dazu enthält.
+pub fn management(summary: &str) -> Option<&'static str> {
+    let field = |name: &str| {
+        summary.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            (k.trim().eq_ignore_ascii_case(name)).then(|| v.trim().to_ascii_lowercase())
+        })
+    };
+    let via = field("Managed Via");
+    let central = field("Aruba Central");
+    let airwave = field("Airwave");
+    if via.is_none() && central.is_none() && airwave.is_none() {
+        return None;
+    }
+    let via = via.unwrap_or_default();
+    Some(if via.contains("central") || central.as_deref() == Some("connected") {
+        "central"
+    } else if via.contains("airwave") || airwave.as_deref() == Some("connected") {
+        "airwave"
+    } else {
+        "none"
+    })
+}
 
 /// Spalten einer CLI-Tabelle: Kopfzeile mit Titeln (durch mindestens zwei Leerzeichen getrennt), darunter eine
 /// Zeile aus Strichen, dann die Daten. Liefert je Spalte Titel und Startposition sowie die Datenzeilen.
@@ -223,6 +248,7 @@ pub fn demo() -> (Value, Value) {
         rows.push_str(&format!("{name:<19}{ip:<17}access  disable   {:<9}515(indoor)  CNZZQX{:04}\n", clients[i], i + 1));
     }
     let mut cluster = cluster_json(&rows, &config, "192.0.2.240");
+    cluster["managed"] = json!("central");
     cluster["at"] = json!(crate::overview::inventory::now());
     let outputs = vec![
         String::new(),
@@ -298,6 +324,15 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
         let c = table_json(cl, &["IP Address", "MAC Address"]);
         assert_eq!(c["rows"].as_array().unwrap().len(), 0, "{c}");
         assert_eq!(c["columns"][11], "Speed (mbps)");
+    }
+
+    #[test]
+    fn management_from_show_summary() {
+        assert_eq!(management("Name             :probe\nManaged Via      :Local\nAruba Central    :Not Set Up\nAirwave          :Not Set Up"), Some("none"));
+        assert_eq!(management("Managed Via      :Aruba Central\nAruba Central    :Connected"), Some("central"));
+        assert_eq!(management("Aruba Central    :connected"), Some("central"));
+        assert_eq!(management("Managed Via      :AirWave\nAirwave          :Connected"), Some("airwave"));
+        assert_eq!(management("Name :probe"), None);
     }
 
     #[test]

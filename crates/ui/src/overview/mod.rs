@@ -440,10 +440,13 @@ impl App {
                 let r = rt.block_on(remote::cli_session(&conn, &crate::aruba::CLUSTER_COMMANDS));
                 rt.block_on(conn.disconnect());
                 let r = r?;
-                if r.outputs.len() < crate::aruba::CLUSTER_COMMANDS.len() {
+                // show summary (Verwaltung) ist eine Zugabe; show aps und die Konfiguration sind Pflicht.
+                if r.outputs.len() < 3 {
                     return Err("Keine vollständige Antwort des Controllers (Zeitlimit 30 s)".to_string());
                 }
-                Ok((crate::aruba::cluster_json(&r.outputs[1], &r.outputs[2], &vc), note))
+                let mut v = crate::aruba::cluster_json(&r.outputs[1], &r.outputs[2], &vc);
+                v["managed"] = json!(r.outputs.get(3).and_then(|s| crate::aruba::management(s)));
+                Ok((v, note))
             })();
             drop(spec);
             Box::new(move |app: &mut App, cancelled| {

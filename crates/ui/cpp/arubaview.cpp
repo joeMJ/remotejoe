@@ -157,7 +157,11 @@ void ArubaClusterView::render()
 		m_box->relayout();
 		return;
 	}
-	m_head->setText(T("aruba.head").arg(c.value(QStringLiteral("vc")).toString(), c.value(QStringLiteral("segment")).toString(QStringLiteral("–"))));
+	QString head = T("aruba.head").arg(c.value(QStringLiteral("vc")).toString(), c.value(QStringLiteral("segment")).toString(QStringLiteral("–")));
+	const QString managed = c.value(QStringLiteral("managed")).toString();
+	if (!managed.isEmpty())
+		head += QStringLiteral(" · ") + m_backend->text(QStringLiteral("aruba.managed.") + managed);
+	m_head->setText(head);
 	m_total->setText(QString::number(c.value(QStringLiteral("total")).toInt()));
 	m_online->setText(QString::number(c.value(QStringLiteral("online")).toInt()));
 	m_offline->setText(c.value(QStringLiteral("allowed_known")).toBool() ? QString::number(c.value(QStringLiteral("offline")).toInt()) : QStringLiteral("?"));
