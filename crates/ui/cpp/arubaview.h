@@ -30,8 +30,8 @@ public:
 
 signals:
 	void queryRequested();
-	/// „ap_check …“: Aruba-Werkzeuge für diesen Controller.
-	void toolsRequested();
+	/// Werkzeug für diesen Controller: „analyse“, „inventar“, „reload“ oder „update“.
+	void toolRequested(const QString& tool);
 	/// Kachel eines online-APs angeklickt (`name`, `ip`, `serial`, …).
 	void apClicked(const QJsonObject& ap);
 
@@ -42,6 +42,8 @@ private:
 	QLabel* m_head;
 	QLabel* m_managed;
 	QPushButton* m_query;
+	QPushButton* m_reload = nullptr;
+	QPushButton* m_update = nullptr;
 	QLabel* m_total;
 	QLabel* m_online;
 	QLabel* m_offline;

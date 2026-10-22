@@ -53,8 +53,8 @@ signals:
 	void inventoryChanged();
 	/// Aruba-Werkzeuge: Kachel eines APs im Cluster angeklickt (`subject` = der VC, `ap` aus der Cluster-Abfrage).
 	void arubaApRequested(const QJsonObject& subject, const QJsonObject& ap);
-	/// Aruba-Werkzeuge (ap_check) für dieses Ziel.
-	void arubaToolsRequested(const QString& id, const QString& name);
+	/// Aruba-Werkzeug („analyse“, „inventar“, „reload“, „update“) für dieses Ziel.
+	void arubaToolsRequested(const QString& id, const QString& name, const QString& tool);
 
 private:
 	QJsonObject call(const QJsonObject& cmd) const;

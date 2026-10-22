@@ -87,11 +87,23 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 	hh->addWidget(m_managed, 0, Qt::AlignVCenter);
 	hh->addWidget(m_head, 1);
 	m_query = new QPushButton(T("aruba.query"), this);
-	auto* tools = new QPushButton(T("aruba.tools"), this);
 	hh->addWidget(m_query, 0, Qt::AlignTop);
-	hh->addWidget(tools, 0, Qt::AlignTop);
-	connect(tools, &QPushButton::clicked, this, &ArubaClusterView::toolsRequested);
 	v->addLayout(hh);
+	// Werkzeuge: lesend (Analyse, Inventar) und schreibend (Neustart, Update; nur unverwaltet und mit Admin-Konto).
+	auto* th = new QHBoxLayout;
+	for (const char* tool : { "analyse", "inventar", "reload", "update" })
+	{
+		auto* b = new QPushButton(T((QByteArray("aruba.") + tool).constData()), this);
+		const QString name = QString::fromLatin1(tool);
+		connect(b, &QPushButton::clicked, this, [this, name] { emit toolRequested(name); });
+		th->addWidget(b);
+		if (name == QLatin1String("reload"))
+			m_reload = b;
+		else if (name == QLatin1String("update"))
+			m_update = b;
+	}
+	th->addStretch(1);
+	v->addLayout(th);
 
 	auto* tiles = new QHBoxLayout;
 	tiles->addWidget(rjui::tile(T("aruba.total"), &m_total, this));
@@ -162,6 +174,11 @@ void ArubaClusterView::render()
 		for (QLabel* l : { m_total, m_online, m_offline, m_clients })
 			l->setText(QStringLiteral("–"));
 		m_foot->setText(T("aruba.hint"));
+		for (QPushButton* b : { m_reload, m_update })
+		{
+			b->setEnabled(false);
+			b->setToolTip(T("aruba.write.query.first"));
+		}
 		m_box->relayout();
 		return;
 	}
@@ -171,6 +188,12 @@ void ArubaClusterView::render()
 	if (!managed.isEmpty())
 		rjui::setPill(m_managed, m_backend->text(QStringLiteral("aruba.managed.") + managed),
 		              managed == QLatin1String("none") ? QStringLiteral("ok") : managed == QLatin1String("airwave") ? QStringLiteral("warn") : QStringLiteral("err"));
+	const QJsonObject w = c.value(QStringLiteral("write")).toObject();
+	for (QPushButton* b : { m_reload, m_update })
+	{
+		b->setEnabled(w.value(QStringLiteral("ok")).toBool());
+		b->setToolTip(w.value(QStringLiteral("ok")).toBool() ? QString() : T("aruba.write.blocked").arg(w.value(QStringLiteral("reason")).toString(T("aruba.write.query.first"))));
+	}
 	m_total->setText(QString::number(c.value(QStringLiteral("total")).toInt()));
 	m_online->setText(QString::number(c.value(QStringLiteral("online")).toInt()));
 	m_offline->setText(c.value(QStringLiteral("allowed_known")).toBool() ? QString::number(c.value(QStringLiteral("offline")).toInt()) : QStringLiteral("?"));

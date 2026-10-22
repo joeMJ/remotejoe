@@ -2431,11 +2431,18 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 	});
 	// Aruba-Werkzeuge (zuschaltbar): ap_check für einen Controller oder alle Controller eines Ordners.
 	if (selectedIds().size() == 1 && parseObject(m_backend->edit(QStringLiteral("{\"op\":\"settings\"}"))).value(QStringLiteral("aruba_tools")).toBool())
-		menu.addAction(T(m_backend, "ctx.aptools"), this, [this] {
-			const QStringList ids = selectedIds();
-			if (ids.size() == 1)
-				openApTools(ids.first(), m_tree->currentIndex().data().toString());
-		});
+	{
+		QMenu* aruba = menu.addMenu(T(m_backend, "ctx.aptools"));
+		for (const char* tool : { "analyse", "inventar", "reload", "update" })
+		{
+			const QString name = QString::fromLatin1(tool);
+			aruba->addAction(T(m_backend, (QByteArray("ctx.aruba.") + tool).constData()), this, [this, name] {
+				const QStringList ids = selectedIds();
+				if (ids.size() == 1)
+					openApTools(ids.first(), m_tree->currentIndex().data().toString(), name);
+			});
+		}
+	}
 	menu.addAction(T(m_backend, "ctx.merge"), this, [this] {
 		const QStringList ids = selectedIds();
 		if (!ids.isEmpty())
@@ -4051,19 +4058,31 @@ bool MainWindow::isLogin(const QString& id) const
 	return hit;
 }
 
-void MainWindow::openApTools(const QString& id, const QString& name)
+void MainWindow::openApTools(const QString& id, const QString& name, const QString& tool)
 {
-	// Ein Tab für die Werkzeuge (ein Lauf zur Zeit); für ein anderes Ziel wird er ersetzt.
+	// Schreibend: Bestätigung, dann je Aktion ein eigener Tab mit dem Protokoll.
+	if (tool == QLatin1String("reload") || tool == QLatin1String("update"))
+	{
+		QString url;
+		bool reboot = false;
+		if (!ArubaWriteTab::confirm(m_backend, this, id, name, tool, &url, &reboot))
+			return;
+		auto* w = new ArubaWriteTab(m_backend, id, name, tool, url, reboot, m_tabs);
+		addToolTab(w, w->title());
+		return;
+	}
+	// Lesend: ein Tab (ein Lauf zur Zeit); für ein anderes Ziel oder Werkzeug wird er ersetzt.
 	if (auto* old = findChild<ApToolsTab*>())
 	{
-		if (old->id() == id)
+		if (old->id() == id && old->tool() == tool)
 		{
 			m_tabs->setCurrentWidget(old);
 			return;
 		}
 		closeToolTab(old);
 	}
-	addToolTab(new ApToolsTab(m_backend, id, name, m_tabs), T(m_backend, "aptools.tab").arg(name));
+	auto* t = new ApToolsTab(m_backend, id, name, tool, m_tabs);
+	addToolTab(t, t->title());
 }
 
 void MainWindow::connectWay(const QJsonObject& s, const QString& way)

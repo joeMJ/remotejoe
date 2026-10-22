@@ -276,6 +276,7 @@ pub fn demo() -> (Value, Value) {
     }
     let mut cluster = cluster_json(&rows, &config, "192.0.2.240");
     cluster["managed"] = json!("central");
+    cluster["write"] = json!({ "ok": false, "reason": "wird über Central verwaltet" });
     cluster["at"] = json!(crate::overview::inventory::now());
     let outputs = vec![
         String::new(),
