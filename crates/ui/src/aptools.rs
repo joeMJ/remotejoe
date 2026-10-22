@@ -260,6 +260,8 @@ runpy.run_path(tool, run_name="__main__")
 pub fn common_answers() -> Vec<(String, String)> {
     [
         ("Anmeldespeicher des Betriebssystems", "3"),
+        // ap_list fragt mit eigenem Text: „[1] Windows Credential Manager … [3] Manuelle Eingabe … Ihre Wahl:“.
+        ("[3] Manuelle Eingabe", "3"),
         ("credentials.bin", "n"),
         ("zu pr\u{fc}fenden SSH-Benutzernamen", "@user"),
         ("SSH-Benutzername", "@user"),
@@ -806,6 +808,12 @@ mod tests {
         assert_eq!(u.args, vec!["-f", "http://192.0.2.9/aruba/8.10.0.24/", "--log"]);
         assert!(u.answers.iter().any(|(k, v)| k.contains("automatisch neu gestartet") && v == "j"));
         assert!(u.write && !Tool::by_name("analyse", None, false).unwrap().write);
+    }
+
+    #[test]
+    fn ap_list_choice_prompt_is_answered() {
+        let prompt = "[1] Windows Credential Manager\n[2] Lokal verschlüsselte Datei\n[3] Manuelle Eingabe\nIhre Wahl: ";
+        assert!(common_answers().iter().any(|(k, v)| prompt.contains(k.as_str()) && v == "3"));
     }
 
     #[test]

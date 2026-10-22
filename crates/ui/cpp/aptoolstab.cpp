@@ -333,6 +333,7 @@ bool ArubaWriteTab::confirm(RjBackend* backend, QWidget* parent, const QString& 
 		return false;
 	}
 	QDialog dlg(parent);
+	dlg.setMinimumWidth(560);
 	dlg.setWindowTitle(T(update ? "aruba.update" : "aruba.reload") + QStringLiteral(" · ") + name);
 	auto* v = new QVBoxLayout(&dlg);
 	auto* intro = new QLabel(T(update ? "aruba.update.intro" : "aruba.reload.intro"), &dlg);
@@ -392,7 +393,8 @@ bool ArubaWriteTab::confirm(RjBackend* backend, QWidget* parent, const QString& 
 				return;
 			}
 			// Ohne Versionsnummer in der URL entfällt die Prüfung „schon installiert“; einmal darauf hinweisen.
-			if (!QRegularExpression(QStringLiteral("\\d+\\.\\d+\\.\\d+\\.\\d+")).match(u).hasMatch() && err->text() != T("aruba.update.url.noversion"))
+			// Nur im Pfad suchen: eine IPv4-Adresse als Rechner sähe sonst wie eine Version aus.
+			if (!QRegularExpression(QStringLiteral("\\d+\\.\\d+\\.\\d+\\.\\d+")).match(QUrl(u).path()).hasMatch() && err->text() != T("aruba.update.url.noversion"))
 			{
 				err->setText(T("aruba.update.url.noversion"));
 				return;
