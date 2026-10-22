@@ -160,6 +160,33 @@ pub fn cluster_json(show_aps: &str, running_config: &str, vc_ip: &str) -> Value 
     })
 }
 
+/// Admin-Konten aus der laufenden Konfiguration: `hash-mgmt-user <Name> …` ohne `usertype` (eine Zeile mit
+/// `usertype read-only` oder `usertype guest-provisioning` ist kein Admin).
+pub fn admin_users(running_config: &str) -> Vec<String> {
+    running_config
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("hash-mgmt-user "))
+        .filter(|rest| !rest.contains("usertype"))
+        .filter_map(|rest| rest.split_whitespace().next().map(str::to_string))
+        .collect()
+}
+
+/// Dürfen schreibende Werkzeuge (Neustart, Update) an diesem Cluster laufen? Nicht bei Verwaltung über Central oder
+/// AirWave (oder unbekannter Verwaltung) und nur, wenn der Benutzer aus der KDBX ein Admin-Konto ist.
+pub fn write_check(managed: Option<&str>, admins: &[String], user: &str) -> Result<(), String> {
+    match managed {
+        Some("none") => {}
+        Some("central") => return Err("wird über Central verwaltet".into()),
+        Some("airwave") => return Err("wird über AirWave verwaltet".into()),
+        _ => return Err("Verwaltung unbekannt (show summary ohne Antwort)".into()),
+    }
+    if admins.iter().any(|a| a == user) {
+        Ok(())
+    } else {
+        Err(format!("„{user}“ ist kein Admin-Konto (hash-mgmt-user) in der Konfiguration"))
+    }
+}
+
 /// Befehle für die Seite eines einzelnen APs (am AP selbst, mit den Zugangsdaten des VC).
 pub const AP_COMMANDS: [&str; 5] = ["no paging", "show version", "show interface", "show network", "show clients"];
 
@@ -333,6 +360,19 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
         assert_eq!(management("Aruba Central    :connected"), Some("central"));
         assert_eq!(management("Managed Via      :AirWave\nAirwave          :Connected"), Some("airwave"));
         assert_eq!(management("Name :probe"), None);
+    }
+
+    #[test]
+    fn write_actions_need_unmanaged_cluster_and_admin_account() {
+        let cfg = "hash-mgmt-password\nhash-mgmt-user admin password hash 0123abcd\nhash-mgmt-user leser password hash 4567ef usertype read-only\n";
+        let admins = admin_users(cfg);
+        assert_eq!(admins, vec!["admin".to_string()]);
+        assert!(write_check(Some("none"), &admins, "admin").is_ok());
+        assert!(write_check(Some("none"), &admins, "leser").unwrap_err().contains("kein Admin-Konto"));
+        assert!(write_check(Some("none"), &admins, "operator").is_err());
+        assert!(write_check(Some("central"), &admins, "admin").unwrap_err().contains("Central"));
+        assert!(write_check(Some("airwave"), &admins, "admin").unwrap_err().contains("AirWave"));
+        assert!(write_check(None, &admins, "admin").is_err());
     }
 
     #[test]

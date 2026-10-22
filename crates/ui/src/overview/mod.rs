@@ -435,6 +435,7 @@ impl App {
         let port = if t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
         let known = self.known_hosts_ref();
         let vc = self.overview.services.get(&key).and_then(|(_, v)| v["ip"].as_str().map(str::to_string)).unwrap_or_else(|| t.host.clone());
+        let user = spec.credentials.username.clone();
         let job_key = key.clone();
         let job = self.jobs.spawn("Aruba-Cluster abfragen", move |job| {
             let res = (|| {
@@ -447,7 +448,11 @@ impl App {
                     return Err("Keine vollständige Antwort des Controllers (Zeitlimit 30 s)".to_string());
                 }
                 let mut v = crate::aruba::cluster_json(&r.outputs[1], &r.outputs[2], &vc);
-                v["managed"] = json!(r.outputs.get(3).and_then(|s| crate::aruba::management(s)));
+                let managed = r.outputs.get(3).and_then(|s| crate::aruba::management(s));
+                v["managed"] = json!(managed);
+                // Schreibende Werkzeuge (Neustart, Update): nur unverwaltet und mit Admin-Konto.
+                let check = crate::aruba::write_check(managed, &crate::aruba::admin_users(&r.outputs[2]), &user);
+                v["write"] = json!({ "ok": check.is_ok(), "reason": check.err() });
                 Ok((v, note))
             })();
             drop(spec);

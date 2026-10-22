@@ -79,6 +79,8 @@ pub struct App {
     pub jobs: crate::jobs::Jobs,
     /// Aruba-Werkzeuge: laufender oder letzter Lauf eines Werkzeugs (ap_check).
     pub(crate) aptools_run: Option<crate::aptools::Run>,
+    /// Aruba-Werkzeuge: laufender oder letzter schreibender Lauf (Neustart, Update).
+    pub(crate) aptools_write: Option<crate::aptools::Run>,
     pub(crate) job_results: std::collections::HashMap<u64, Result<SessionId, String>>,
     /// Sperre nach Leerlauf und Erkennung des Aufwachens.
     pub idle: crate::idle::IdleWatch,
@@ -142,6 +144,7 @@ impl App {
             deferred_releases: Vec::new(),
             jobs: Default::default(),
             aptools_run: None,
+            aptools_write: None,
             job_results: Default::default(),
             idle,
             locked: false,

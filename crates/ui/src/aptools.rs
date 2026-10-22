@@ -214,29 +214,20 @@ pub fn install_python(root: &Path, cancel: &AtomicBool) -> Result<String, String
     find_python().map(|(_, _, v)| v).ok_or_else(|| "Python wurde installiert, aber nicht gefunden".to_string())
 }
 
-/// Starter für die Werkzeuge: liest Benutzer und Kennwort von stdin (zwei Zeilen) und beantwortet die Rückfragen der
-/// Werkzeuge anhand ihres Textes (manuelle Eingabe, nichts speichern). Eine unbekannte Rückfrage beendet den Lauf mit
-/// Code 3, statt zu raten. Danach läuft das Werkzeug unverändert (`runpy`) im Ordner der Sammlung.
-pub const STARTER: &str = r#"import builtins, getpass, os, runpy, sys
-user = sys.stdin.readline().rstrip("\r\n")
-password = sys.stdin.readline().rstrip("\r\n")
-ANSWERS = [
-    ("Anmeldespeicher des Betriebssystems", "3"),
-    ("credentials.bin", "n"),
-    ("zu pr\u00fcfenden SSH-Benutzernamen", user),
-    ("SSH-Benutzername", user),
-    ("Anmeldedaten f\u00fcr alle diese Ziele identisch", "j"),
-    ("gespeichert werden", "n"),
-    ("Erneut versuchen", "n"),
-    ("Down'-Conductor", "n"),
-    ("veralteten Anmeldedaten", "n"),
-]
+/// Starter für die Werkzeuge. Erste Zeile auf stdin: JSON mit Benutzer, Kennwort und den Antworten auf die
+/// Rückfragen (Textstück → Antwort). Eine unbekannte Rückfrage beendet den Lauf mit Code 3, statt zu raten.
+/// Bildschirmlöschen (`cls`/`clear`) wird zu einer Markierungszeile (Statustafel neu), Unterprozesse starten unter
+/// Windows ohne Konsolenfenster. Danach läuft das Werkzeug unverändert (`runpy`) im Ordner der Sammlung.
+pub const STARTER: &str = r#"import builtins, getpass, json, os, runpy, subprocess, sys
+cfg = json.loads(sys.stdin.readline())
+user = cfg["user"]
+password = cfg["password"]
+ANSWERS = [(k, user if v == "@user" else v) for k, v in cfg["answers"]]
 def answer(prompt=""):
     text = str(prompt)
     for key, value in ANSWERS:
         if key in text:
-            shown = value if value != password else "***"
-            print(text + shown, flush=True)
+            print(text + value, flush=True)
             return value
     print(text, flush=True)
     print("remotejoe: unbekannte Rueckfrage - Lauf abgebrochen.", flush=True)
@@ -244,21 +235,92 @@ def answer(prompt=""):
 def secret(prompt=""):
     print(str(prompt) + "***", flush=True)
     return password
+def system(cmd):
+    if str(cmd).strip() in ("cls", "clear"):
+        print("\x1e", flush=True)
+        return 0
+    return real_system(cmd)
 builtins.input = answer
 getpass.getpass = secret
+real_system = os.system
+os.system = system
+if os.name == "nt":
+    real_init = subprocess.Popen.__init__
+    def quiet_init(self, *a, **k):
+        k["creationflags"] = k.get("creationflags", 0) | 0x08000000
+        real_init(self, *a, **k)
+    subprocess.Popen.__init__ = quiet_init
 tool = sys.argv[1]
 sys.argv = sys.argv[1:]
 sys.path.insert(0, os.getcwd())
 runpy.run_path(tool, run_name="__main__")
 "#;
 
-/// Laufender oder beendeter Werkzeuglauf (ein Lauf zur Zeit).
+/// Antworten auf die Rückfragen, die alle Werkzeuge stellen (manuelle Eingabe, nichts speichern).
+pub fn common_answers() -> Vec<(String, String)> {
+    [
+        ("Anmeldespeicher des Betriebssystems", "3"),
+        ("credentials.bin", "n"),
+        ("zu pr\u{fc}fenden SSH-Benutzernamen", "@user"),
+        ("SSH-Benutzername", "@user"),
+        ("Anmeldedaten f\u{fc}r alle diese Ziele identisch", "j"),
+        ("gespeichert werden", "n"),
+        ("Erneut versuchen", "n"),
+        ("Down'-Conductor", "n"),
+        ("veralteten Anmeldedaten", "n"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
+}
+
+/// Ein Werkzeug der Sammlung mit seinen Parametern.
+#[derive(Clone)]
+pub struct Tool {
+    pub script: &'static str,
+    /// Anfang des Ergebnisordners, den das Werkzeug im Ordner der Sammlung anlegt.
+    pub prefix: &'static str,
+    pub args: Vec<String>,
+    pub answers: Vec<(String, String)>,
+    /// Schreibend (Neustart, Update): Vorprüfung je Controller, mehrere Controller in einem Lauf.
+    pub write: bool,
+}
+
+impl Tool {
+    pub fn by_name(name: &str, url: Option<&str>, reboot: bool) -> Result<Tool, String> {
+        let mut answers = common_answers();
+        Ok(match name {
+            "analyse" => Tool { script: "ap_check.py", prefix: "ap_check_", args: vec!["--log".into()], answers, write: false },
+            "inventar" => Tool { script: "ap_list.py", prefix: "ap_list_", args: vec!["--apname".into(), "--log".into()], answers, write: false },
+            "reload" => {
+                answers.push(("Reload-Versuch ber\u{fc}cksichtigt".into(), "n".into()));
+                Tool { script: "ap_swarm_reload.py", prefix: "logs_", args: vec!["--log".into()], answers, write: true }
+            }
+            "update" => {
+                let url = url.map(str::trim).filter(|u| !u.is_empty()).ok_or("Firmware-URL fehlt")?;
+                if !(url.starts_with("http://") || url.starts_with("https://")) || url.contains(char::is_whitespace) {
+                    return Err("Die Firmware-URL muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten".into());
+                }
+                answers.push(("Wollen Sie wirklich fortfahren".into(), "j".into()));
+                answers.push(("automatisch neu gestartet".into(), if reboot { "j" } else { "n" }.into()));
+                answers.push(("Conductor als 'Down'".into(), "n".into()));
+                Tool { script: "ap_swarm_update.py", prefix: "update_", args: vec!["-f".into(), url.to_string(), "--log".into()], answers, write: true }
+            }
+            other => return Err(format!("Unbekanntes Werkzeug „{other}“")),
+        })
+    }
+}
+
+/// Laufender oder beendeter Werkzeuglauf.
 #[derive(Default)]
 pub struct Run {
     /// Ziel oder Ordner, für den der Lauf gestartet wurde.
     pub id: String,
+    pub tool: String,
     pub title: String,
     pub out: std::sync::Arc<std::sync::Mutex<String>>,
+    /// Zuletzt gezeichnete Statustafel (Update: Zustand je Cluster).
+    pub board: std::sync::Arc<std::sync::Mutex<String>>,
     pub done: std::sync::Arc<AtomicBool>,
     pub stop: std::sync::Arc<AtomicBool>,
     pub child: std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>,
@@ -266,12 +328,36 @@ pub struct Run {
     pub results: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
 }
 
-/// Ein Ziel (VC) für einen Lauf: Name für die Ausgabe, Adresse, Zugangsdaten, Ablageordner der Ergebnisse.
-pub struct Task {
+impl Run {
+    fn handle(&self) -> Run {
+        Run {
+            id: self.id.clone(),
+            tool: self.tool.clone(),
+            title: self.title.clone(),
+            out: self.out.clone(),
+            board: self.board.clone(),
+            done: self.done.clone(),
+            stop: self.stop.clone(),
+            child: self.child.clone(),
+            results: self.results.clone(),
+        }
+    }
+}
+
+/// Ein Controller (VC): Name, Adresse, Zugangsdaten und – für die Vorprüfung schreibender Werkzeuge – die
+/// Verbindungsdaten.
+pub struct Vc {
     pub name: String,
     pub host: String,
     pub user: String,
     pub password: rj_core::Secret,
+    pub spec: crate::patch::JobSpec,
+    pub port: u16,
+}
+
+/// Ein Aufruf des Werkzeugs: ein oder mehrere Controller mit gleichen Zugangsdaten, Ablageordner der Ergebnisse.
+pub struct Task {
+    pub vcs: Vec<Vc>,
     pub dest: PathBuf,
 }
 
@@ -293,13 +379,34 @@ fn append(out: &std::sync::Mutex<String>, s: &str) {
     }
 }
 
-/// `tool` (z. B. `ap_check.py`) für jede Aufgabe nacheinander starten; Ausgabe in `run.out`, Ergebnisordner
-/// (`<tool>_<Zeit>` im Ordner der Sammlung) danach nach `task.dest` verschieben. Läuft im Hintergrund.
-pub fn run_tool(root: &Path, tool: &str, tasks: Vec<Task>, run: &Run) {
+/// Zeile der Statustafel von `ap_swarm_update.py` (Kopf, Trennlinie, „IP | Status“)?
+fn board_line(l: &str) -> bool {
+    let t = l.trim_start();
+    t.starts_with("--- Echtzeit-Monitoring")
+        || t.starts_with("Zielversion:")
+        || t.starts_with("Updatequelle:")
+        || t.starts_with("IP-ADRESSE")
+        || (t.len() > 20 && t.chars().all(|c| c == '-'))
+        || t.split_once(" | ").is_some_and(|(ip, _)| ip.trim().parse::<std::net::Ipv4Addr>().is_ok())
+}
+
+/// Schreibende Werkzeuge: Verwaltung (`show summary`) und Admin-Konto (`hash-mgmt-user`) am Controller prüfen.
+fn precheck(vc: &Vc, known: rj_ssh::known_hosts::KnownHosts) -> Result<(), String> {
+    let (rt, conn, _, _, _) = crate::overview::remote::ssh_open(&vc.spec, vc.port, known)?;
+    let r = rt.block_on(crate::overview::remote::cli_session(&conn, &["no paging", "show summary", "show running-config"]));
+    rt.block_on(conn.disconnect());
+    let r = r?;
+    let get = |i: usize| r.outputs.get(i).map(String::as_str).unwrap_or("");
+    crate::aruba::write_check(crate::aruba::management(get(1)), &crate::aruba::admin_users(get(2)), &vc.user)
+}
+
+/// Werkzeug für jede Aufgabe nacheinander starten; Ausgabe in `run.out` (Statustafel in `run.board`), Ergebnisordner
+/// danach nach `task.dest` verschieben. Schreibende Werkzeuge prüfen vorher jeden Controller und lassen nicht
+/// passende mit Grund aus. Läuft im Hintergrund.
+pub fn run_tool(root: &Path, tool: &Tool, tasks: Vec<Task>, known: rj_ssh::known_hosts::KnownHosts, run: &Run) {
     use std::io::{BufRead, Write};
     let coll = collection_dir(root);
     let py = venv_python(root);
-    let prefix = format!("{}_", tool.trim_end_matches(".py"));
     let starter = root.join("remotejoe_start.py");
     if let Err(e) = std::fs::write(&starter, STARTER) {
         append(&run.out, &format!("Starter konnte nicht angelegt werden: {e}\n"));
@@ -307,7 +414,7 @@ pub fn run_tool(root: &Path, tool: &str, tasks: Vec<Task>, run: &Run) {
         return;
     }
     let dirs = |p: &Path| -> Vec<PathBuf> {
-        std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| e.path()).filter(|x| x.is_dir() && x.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix))).collect()).unwrap_or_default()
+        std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| e.path()).filter(|x| x.is_dir() && x.file_name().is_some_and(|n| n.to_string_lossy().starts_with(tool.prefix))).collect()).unwrap_or_default()
     };
     let n = tasks.len();
     for (i, task) in tasks.into_iter().enumerate() {
@@ -315,10 +422,30 @@ pub fn run_tool(root: &Path, tool: &str, tasks: Vec<Task>, run: &Run) {
             append(&run.out, "\nAbgebrochen.\n");
             break;
         }
-        append(&run.out, &format!("\n===== {} ({}) – {} von {n} =====\n", task.name, task.host, i + 1));
+        let mut vcs = task.vcs;
+        if tool.write {
+            append(&run.out, "\n===== Vorprüfung: Verwaltung und Admin-Konto =====\n");
+            vcs.retain(|vc| match precheck(vc, known.clone()) {
+                Ok(()) => {
+                    append(&run.out, &format!("{} ({}): ok\n", vc.name, vc.host));
+                    true
+                }
+                Err(e) => {
+                    append(&run.out, &format!("{} ({}): übersprungen – {e}\n", vc.name, vc.host));
+                    false
+                }
+            });
+            if vcs.is_empty() {
+                append(&run.out, "Kein Controller übrig.\n");
+                continue;
+            }
+        }
+        let names: Vec<String> = vcs.iter().map(|v| format!("{} ({})", v.name, v.host)).collect();
+        append(&run.out, &format!("\n===== {} – {} von {n} =====\n", names.join(", "), i + 1));
         let before = dirs(&coll);
+        let hosts: Vec<&str> = vcs.iter().map(|v| v.host.as_str()).collect();
         let mut cmd = command(&py);
-        cmd.arg("-u").arg(&starter).arg(tool).arg(&task.host).arg("--log").current_dir(&coll).env("PYTHONIOENCODING", "utf-8").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.arg("-u").arg(&starter).arg(tool.script).arg(hosts.join(",")).args(&tool.args).current_dir(&coll).env("PYTHONIOENCODING", "utf-8").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -327,9 +454,12 @@ pub fn run_tool(root: &Path, tool: &str, tasks: Vec<Task>, run: &Run) {
             }
         };
         if let Some(mut stdin) = child.stdin.take() {
-            let mut line = task.user.clone().into_bytes();
-            line.push(b'\n');
-            line.extend_from_slice(task.password.as_bytes());
+            let cfg = json!({
+                "user": vcs[0].user,
+                "password": String::from_utf8_lossy(vcs[0].password.as_bytes()),
+                "answers": tool.answers,
+            });
+            let mut line = cfg.to_string().into_bytes();
             line.push(b'\n');
             let _ = stdin.write_all(&line);
             zeroize::Zeroize::zeroize(&mut line);
@@ -346,8 +476,20 @@ pub fn run_tool(root: &Path, tool: &str, tasks: Vec<Task>, run: &Run) {
             })
         });
         if let Some(o) = stdout {
+            let mut board = String::new();
             for l in std::io::BufReader::new(o).lines().map_while(Result::ok) {
-                append(&run.out, &format!("{l}\n"));
+                if l.trim() == "\u{1e}" {
+                    // Neue Statustafel: die bisherige ist vollständig.
+                    if !board.is_empty() {
+                        *run.board.lock().unwrap_or_else(|e| e.into_inner()) = std::mem::take(&mut board);
+                    }
+                } else if board_line(&l) && tool.write {
+                    board.push_str(&l);
+                    board.push('\n');
+                    *run.board.lock().unwrap_or_else(|e| e.into_inner()) = board.clone();
+                } else {
+                    append(&run.out, &format!("{l}\n"));
+                }
             }
         }
         if let Some(t) = err_thread {
@@ -394,6 +536,7 @@ impl App {
         s["python"] = json!(find_python().map(|(_, _, v)| v));
         s["can_install_python"] = json!(cfg!(windows));
         s["running"] = json!(self.aptools_run.as_ref().is_some_and(|r| !r.done.load(std::sync::atomic::Ordering::SeqCst)));
+        s["write_running"] = json!(self.aptools_write.as_ref().is_some_and(|r| !r.done.load(std::sync::atomic::Ordering::SeqCst)));
         Ok(s)
     }
 
@@ -457,65 +600,98 @@ impl App {
         out
     }
 
-    /// `ap_check` für ein Ziel oder einen Ordner starten (`id`). Ergebnisse unter `aptools/<Baumpfad>/<Ziel>/`.
-    pub fn aptools_run(&mut self, c: &Value) -> Result<Value, String> {
-        let root = self.aptools_root()?;
-        if self.aptools_run.as_ref().is_some_and(|r| !r.done.load(std::sync::atomic::Ordering::SeqCst)) {
-            return Err("Es läuft bereits ein Werkzeug".into());
-        }
-        if !venv_python(&root).is_file() || !collection_dir(&root).join("ap_check.py").is_file() {
-            return Err("Die Aruba-Werkzeuge sind noch nicht eingerichtet".into());
-        }
-        let id = c.get("id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok()).ok_or("Ziel oder Ordner fehlt")?;
-        let ids = self.aptools_targets(id);
-        if ids.is_empty() {
-            return Err("Keine Aruba-Controller gefunden (Ziele mit Aruba-Symbol, erkannt über „Inventar abfragen“)".into());
-        }
-        let mut tasks = Vec::new();
+    fn tree_dest(&self, root: &Path, id: Uuid) -> PathBuf {
+        let path: Vec<String> = self.index.path_to(id).unwrap_or_default().iter().map(|n| file_name(n.name())).collect();
+        path.iter().fold(root.to_path_buf(), |p, n| p.join(n))
+    }
+
+    /// Controller eines Ziels bzw. Ordners mit Zugangsdaten (Fehler: Name und Grund).
+    fn aptools_vcs(&self, id: Uuid) -> (Vec<(Uuid, Vc)>, Vec<String>) {
+        let mut ok = Vec::new();
         let mut problems = Vec::new();
-        for tid in ids {
+        for tid in self.aptools_targets(id) {
             let Some(t) = self.target(tid).cloned() else { continue };
-            let path: Vec<String> = self.index.path_to(tid).unwrap_or_default().iter().map(|n| file_name(n.name())).collect();
-            let dest = path.iter().fold(root.clone(), |p, n| p.join(n));
             let creds = self.inventory_view(&t).and_then(|(_, r)| self.credential_payload(&r, Protocol::Ssh));
             match creds {
-                Ok(p) => tasks.push(Task {
-                    name: t.name.clone(),
-                    host: self.overview.services_ip(&tid.to_string()).unwrap_or_else(|| t.host.clone()),
-                    user: p.username.clone(),
-                    password: rj_core::Secret::from_bytes(p.password.0.clone()),
-                    dest,
-                }),
+                Ok(p) => {
+                    let host = self.overview.services_ip(&tid.to_string()).unwrap_or_else(|| t.host.clone());
+                    let port = if t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
+                    let spec = crate::patch::JobSpec { protocol: Protocol::Ssh, host: host.clone(), port, credentials: p.clone(), transport: None, legacy: self.target_legacy_of(tid) };
+                    ok.push((tid, Vc { name: t.name.clone(), host, user: p.username.clone(), password: rj_core::Secret::from_bytes(p.password.0.clone()), spec, port }));
+                }
                 Err(e) => problems.push(format!("{}: {e}", t.name)),
             }
         }
-        if tasks.is_empty() {
-            return Err(format!("Keine Zugangsdaten: {}", problems.join("; ")));
+        (ok, problems)
+    }
+
+    /// Werkzeug für ein Ziel oder einen Ordner starten (`id`, `tool`: analyse, inventar, reload, update; bei update
+    /// `url` und `reboot`). Lesende Werkzeuge laufen je Controller nacheinander (Ergebnis je Ziel), schreibende in
+    /// einem Lauf je Satz gleicher Zugangsdaten (Ergebnis im Ordner bzw. beim Ziel). Je ein lesender und ein
+    /// schreibender Lauf zur Zeit.
+    pub fn aptools_run(&mut self, c: &Value) -> Result<Value, String> {
+        let root = self.aptools_root()?;
+        let tool = Tool::by_name(c.get("tool").and_then(Value::as_str).unwrap_or("analyse"), c.get("url").and_then(Value::as_str), c.get("reboot").and_then(Value::as_bool).unwrap_or(false))?;
+        let slot = if tool.write { &self.aptools_write } else { &self.aptools_run };
+        if slot.as_ref().is_some_and(|r| !r.done.load(std::sync::atomic::Ordering::SeqCst)) {
+            return Err(if tool.write { "Es läuft bereits ein Neustart oder Update" } else { "Es läuft bereits eine Analyse oder ein Inventar" }.into());
         }
-        let title = if tasks.len() == 1 { tasks[0].name.clone() } else { format!("{} Controller", tasks.len()) };
-        let run = Run { id: id.to_string(), title: title.clone(), ..Default::default() };
+        if !venv_python(&root).is_file() || !collection_dir(&root).join(tool.script).is_file() {
+            return Err("Die Aruba-Werkzeuge sind noch nicht eingerichtet".into());
+        }
+        let id = c.get("id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok()).ok_or("Ziel oder Ordner fehlt")?;
+        let (vcs, problems) = self.aptools_vcs(id);
+        if vcs.is_empty() {
+            return Err(if problems.is_empty() {
+                "Keine Aruba-Controller gefunden (Ziele mit Aruba-Symbol, erkannt über „Inventar abfragen“)".to_string()
+            } else {
+                format!("Keine Zugangsdaten: {}", problems.join("; "))
+            });
+        }
+        let started = vcs.len();
+        let title = if started == 1 { vcs[0].1.name.clone() } else { format!("{started} Controller") };
+        let tasks: Vec<Task> = if tool.write {
+            // Gleiche Zugangsdaten → ein Lauf (das Werkzeug arbeitet die Cluster parallel ab).
+            let dest = self.tree_dest(&root, id);
+            let mut groups: Vec<Task> = Vec::new();
+            for (_, vc) in vcs {
+                match groups.iter_mut().find(|g| g.vcs[0].user == vc.user && g.vcs[0].password.as_bytes() == vc.password.as_bytes()) {
+                    Some(g) => g.vcs.push(vc),
+                    None => groups.push(Task { vcs: vec![vc], dest: dest.clone() }),
+                }
+            }
+            groups
+        } else {
+            vcs.into_iter().map(|(tid, vc)| Task { dest: self.tree_dest(&root, tid), vcs: vec![vc] }).collect()
+        };
+        let run = Run { id: id.to_string(), tool: c.get("tool").and_then(Value::as_str).unwrap_or("analyse").to_string(), title: title.clone(), ..Default::default() };
         for p in &problems {
             append(&run.out, &format!("Übersprungen – {p}\n"));
         }
-        let (out, done, stop, child, results) = (run.out.clone(), run.done.clone(), run.stop.clone(), run.child.clone(), run.results.clone());
-        let n = tasks.len();
-        std::thread::spawn(move || {
-            let r = Run { id: String::new(), title: String::new(), out, done, stop, child, results };
-            run_tool(&root, "ap_check.py", tasks, &r);
-        });
-        self.aptools_run = Some(run);
-        Ok(json!({ "started": n, "title": title, "skipped": problems }))
+        let handle = run.handle();
+        let known = self.known_hosts_ref();
+        let t2 = tool.clone();
+        std::thread::spawn(move || run_tool(&root, &t2, tasks, known, &handle));
+        if tool.write {
+            self.aptools_write = Some(run);
+        } else {
+            self.aptools_run = Some(run);
+        }
+        Ok(json!({ "started": started, "title": title, "skipped": problems }))
     }
 
-    /// Ausgabe und Ergebnisse des aktuellen Laufs.
-    pub fn aptools_output(&self) -> Value {
-        match &self.aptools_run {
+    /// Ausgabe, Statustafel und Ergebnisse des lesenden (`write` = false) bzw. schreibenden Laufs.
+    pub fn aptools_output(&self, c: &Value) -> Value {
+        let slot = if c.get("write").and_then(Value::as_bool).unwrap_or(false) { &self.aptools_write } else { &self.aptools_run };
+        match slot {
             None => json!({ "run": null }),
             Some(r) => json!({ "run": {
                 "id": r.id,
+                "tool": r.tool,
                 "title": r.title,
                 "stopped": r.stop.load(std::sync::atomic::Ordering::SeqCst),
                 "text": r.out.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+                "board": r.board.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "done": r.done.load(std::sync::atomic::Ordering::SeqCst),
                 "results": r.results.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|p| json!({ "path": p, "files": std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| e.path()).filter(|x| x.is_file()).collect::<Vec<_>>()).unwrap_or_default() })).collect::<Vec<_>>(),
             }}),
@@ -523,14 +699,32 @@ impl App {
     }
 
     /// Lauf abbrechen: keine weiteren Ziele, laufendes Werkzeug beenden.
-    pub fn aptools_stop(&mut self) -> Value {
-        if let Some(r) = &self.aptools_run {
+    pub fn aptools_stop(&mut self, c: &Value) -> Value {
+        let slot = if c.get("write").and_then(Value::as_bool).unwrap_or(false) { &self.aptools_write } else { &self.aptools_run };
+        if let Some(r) = slot {
             r.stop.store(true, std::sync::atomic::Ordering::SeqCst);
             if let Some(c) = r.child.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
                 let _ = c.kill();
             }
         }
         json!({ "ok": true })
+    }
+
+    /// Controller eines Ziels bzw. Ordners für den Bestätigungsdialog: Name, Adresse und der zuletzt bekannte Stand
+    /// für schreibende Werkzeuge (aus „Cluster abfragen“; sonst unbekannt).
+    pub fn aptools_targets_json(&self, c: &Value) -> Result<Value, String> {
+        self.aptools_root()?;
+        let id = c.get("id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok()).ok_or("Ziel oder Ordner fehlt")?;
+        let list: Vec<Value> = self
+            .aptools_targets(id)
+            .into_iter()
+            .filter_map(|tid| {
+                let t = self.target(tid)?;
+                let cluster = self.overview.aruba.get(&tid.to_string());
+                Some(json!({ "name": t.name, "host": t.host, "write": cluster.map(|c| c["write"].clone()) }))
+            })
+            .collect();
+        Ok(json!({ "targets": list, "write_running": self.aptools_write.as_ref().is_some_and(|r| !r.done.load(std::sync::atomic::Ordering::SeqCst)) }))
     }
 
     /// Ablageordner der Protokolle eines Ziels oder Ordners (`aptools/<Baumpfad>`), für „Ordner öffnen“.
@@ -558,19 +752,54 @@ mod tests {
         assert!(status(&root)["venv"].as_bool().unwrap());
     }
 
+    fn probe_vc() -> Vc {
+        let creds = rj_ipc::msg::CredentialPayload { username: "probe".into(), domain: None, password: rj_ipc::msg::SecretBytes(b"geheim-123".to_vec()), private_key: None };
+        let spec = crate::patch::JobSpec { protocol: Protocol::Ssh, host: "192.0.2.1".into(), port: 22, credentials: creds, transport: None, legacy: false };
+        Vc { name: "vc".into(), host: "192.0.2.1".into(), user: "probe".into(), password: rj_core::Secret::from_str_exact("geheim-123"), spec, port: 22 }
+    }
+
     /// Starter gegen eine nicht erreichbare Beispieladresse (`RJ_APTOOLS_LIVE` mit eingerichteter Sammlung).
     #[test]
     #[ignore]
     fn aptools_live_run() {
         let root = PathBuf::from(std::env::var("RJ_APTOOLS_LIVE").expect("RJ_APTOOLS_LIVE"));
+        let known = rj_ssh::known_hosts::KnownHosts::new(root.join("known_hosts"));
+        for name in ["analyse", "inventar"] {
+            let run = Run::default();
+            let tool = Tool::by_name(name, None, false).unwrap();
+            run_tool(&root, &tool, vec![Task { vcs: vec![probe_vc()], dest: root.join("Probe").join("vc") }], known.clone(), &run);
+            let out = run.out.lock().unwrap().clone();
+            eprintln!("{out}");
+            assert!(!out.contains("unbekannte Rueckfrage"), "{name}: {out}");
+            assert!(!out.contains("geheim-123"), "Kennwort nie in der Ausgabe");
+            assert!(!run.results.lock().unwrap().is_empty(), "{name}: Ergebnisordner verschoben");
+        }
+        // Schreibend: Die Vorprüfung lässt den nicht erreichbaren Controller aus, das Werkzeug startet nicht.
         let run = Run::default();
-        let dest = root.join("Probe").join("vc");
-        run_tool(&root, "ap_check.py", vec![Task { name: "vc".into(), host: "192.0.2.1".into(), user: "probe".into(), password: rj_core::Secret::from_str_exact("geheim-123"), dest: dest.clone() }], &run);
+        run_tool(&root, &Tool::by_name("reload", None, false).unwrap(), vec![Task { vcs: vec![probe_vc()], dest: root.join("Probe") }], known, &run);
         let out = run.out.lock().unwrap().clone();
         eprintln!("{out}");
-        assert!(!out.contains("unbekannte Rueckfrage"), "{out}");
-        assert!(!out.contains("geheim-123"), "Kennwort nie in der Ausgabe");
-        assert!(!run.results.lock().unwrap().is_empty(), "Ergebnisordner verschoben");
+        assert!(out.contains("übersprungen") && out.contains("Kein Controller übrig"), "{out}");
+    }
+
+    #[test]
+    fn tools_and_update_url() {
+        assert_eq!(Tool::by_name("inventar", None, false).unwrap().args, vec!["--apname", "--log"]);
+        assert!(Tool::by_name("update", None, false).is_err());
+        assert!(Tool::by_name("update", Some("ftp://x/8.10.0.24/"), false).is_err());
+        let u = Tool::by_name("update", Some(" http://192.0.2.9/aruba/8.10.0.24/ "), true).unwrap();
+        assert_eq!(u.args, vec!["-f", "http://192.0.2.9/aruba/8.10.0.24/", "--log"]);
+        assert!(u.answers.iter().any(|(k, v)| k.contains("automatisch neu gestartet") && v == "j"));
+        assert!(u.write && !Tool::by_name("analyse", None, false).unwrap().write);
+    }
+
+    #[test]
+    fn status_board_lines() {
+        assert!(board_line("--- Echtzeit-Monitoring der Cluster-Upgrades (Version 4.1.0) ---"));
+        assert!(board_line("192.0.2.4        | Phase 4: Monitoring (3/12 fertig)"));
+        assert!(board_line(&"-".repeat(90)));
+        assert!(!board_line("[10:01:02] Starte Bearbeitung für Conductor 192.0.2.4."));
+        assert!(!board_line("INFO: Ziel-Version: 8.10.0.24 | Installierte Version: 8.10.0.23"));
     }
 
     #[test]
