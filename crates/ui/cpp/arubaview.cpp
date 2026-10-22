@@ -53,8 +53,15 @@ public:
 		name->setMinimumWidth(40);
 		h->addWidget(name, 1);
 		if (ap.value(QStringLiteral("clients")).isDouble())
-			h->addWidget(rjui::pill(QString::number(ap.value(QStringLiteral("clients")).toInt()), QStringLiteral("accent"), this));
-		setFixedWidth(280);
+		{
+			// Platz für dreistellige Zahlen, rechts abgesetzt vom Namen.
+			auto* badge = rjui::pill(QString::number(ap.value(QStringLiteral("clients")).toInt()), QStringLiteral("accent"), this);
+			badge->setAlignment(Qt::AlignCenter);
+			badge->setMinimumWidth(badge->fontMetrics().horizontalAdvance(QStringLiteral("888")) + 18);
+			h->addSpacing(4);
+			h->addWidget(badge);
+		}
+		setFixedWidth(310);
 	}
 };
 } // namespace
