@@ -225,6 +225,8 @@ impl App {
         if open > 0 && !confirm {
             return Ok(json!({ "state": "confirm", "sessions": open }));
         }
+        // Vor dem Update die KDBX sichern (läuft neben dem Herunterladen; die Daten berührt das Update nicht).
+        let _ = self.backup_start(Some(&found.version.to_string()), false);
         let src = self.update_source();
         let key_text = self.update.key_override.clone().unwrap_or_else(|| UPDATE_KEY.to_string());
         let key = rj_update::sign::public_key_from_text(&key_text).map_err(|e| e.to_string())?;
@@ -261,6 +263,10 @@ impl App {
             if !path.is_file() {
                 self.update.ready = None;
                 return Err("Die geladene MSI ist nicht mehr vorhanden; bitte erneut herunterladen.".into());
+            }
+            // Vor dem Update die KDBX sichern; das Fenster ist schon zu, remotejoe beendet sich gleich danach.
+            if let Ok(Some(_)) = self.backup_start(Some(&version.to_string()), false) {
+                crate::kdbxbackup::wait(std::time::Duration::from_secs(10));
             }
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             rj_update::msi::install_after_exit(&path, &exe, std::process::id()).map_err(|e| e.to_string())?;

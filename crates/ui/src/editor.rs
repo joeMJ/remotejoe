@@ -639,6 +639,7 @@ impl App {
                 "keyboard_capture": self.config.connection.keyboard_capture,
                 "close_tab_key": self.config.connection.close_tab_key,
                 "aruba_tools": self.config.features.aruba,
+                "backup": self.backup_settings_json(),
             })),
             "set_settings" => {
                 if let Some(m) = c.get("lock_after_idle_mins").and_then(Value::as_u64) {
@@ -660,12 +661,17 @@ impl App {
                 if let Some(b) = c.get("aruba_tools").and_then(Value::as_bool) {
                     self.config.features.aruba = b;
                 }
+                self.backup_apply_settings(&c);
                 match &self.config_path {
                     Some(p) => self.config.save(p).map(|_| json!({ "ok": true })).map_err(|e| e.to_string()),
                     None => Ok(json!({ "ok": true })),
                 }
             }
             "save" => return self.save_with(str_of(&c, "choice")),
+            "backup_status" => Ok(self.backup_settings_json()),
+            "backup_now" => self.backup_start(None, true).and_then(|j| j.map(|job| json!({ "pending": job })).ok_or_else(|| "Keine gespeicherte KDBX geöffnet".to_string())),
+            // Beim Beenden: höchstens `ms` auf eine laufende Sicherung warten.
+            "backup_wait" => Ok(json!({ "done": crate::kdbxbackup::wait(std::time::Duration::from_millis(c.get("ms").and_then(Value::as_u64).unwrap_or(10_000).min(30_000))) })),
             "overview" => self.overview_json(&c),
             "ov_probe" => self.overview_probe(&c),
             "ov_query" => self.overview_query(&c),
@@ -1866,6 +1872,9 @@ impl App {
         match v.save(choice) {
             Ok(saved) => {
                 self.index = v.index().index.clone();
+                if saved {
+                    let _ = self.backup_start(None, false);
+                }
                 json!({ "saved": saved }).to_string()
             }
             Err(rj_kdbx::VaultError::Conflict { mine, theirs }) => json!({ "conflict": { "mine": mine, "theirs": theirs } }).to_string(),
@@ -2137,6 +2146,39 @@ mod tests {
 
     fn cmd(app: &mut App, v: Value) -> Value {
         j(app.edit(&v.to_string()))
+    }
+
+    #[test]
+    fn saving_backs_up_to_local_and_second_folder_and_backup_opens_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let nas = tempfile::tempdir().unwrap();
+        let (mut app, path, key) = app_with_vault(dir.path());
+        app.config_path = None;
+        app.config.key_file = None;
+        app.config.backup = rj_core::config::BackupSettings { second_enabled: true, second_dir: nas.path().display().to_string(), ..Default::default() };
+        let root = app.index.root.id;
+        cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "Standort Nord" }));
+        assert_eq!(cmd(&mut app, json!({ "op": "save" }))["saved"], true);
+        assert!(crate::kdbxbackup::wait(std::time::Duration::from_secs(10)));
+        let local = dir.path().join("Sicherungen");
+        let copies = |d: &std::path::Path| std::fs::read_dir(d).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "kdbx")).collect::<Vec<_>>();
+        let l = copies(&local);
+        assert_eq!(l.len(), 1, "{l:?}");
+        assert_eq!(copies(nas.path()).len(), 1);
+        assert_eq!(std::fs::read(&l[0]).unwrap(), std::fs::read(&path).unwrap(), "Kopie byte-gleich mit der gespeicherten KDBX");
+        // Die Sicherung lässt sich mit demselben Kennwort öffnen und enthält den Ordner.
+        let v = rj_kdbx::Vault::open(&l[0], key, rj_core::config::IndexStorage::KdbxCustomData).unwrap();
+        assert!(v.index().index.root.children.iter().any(|n| matches!(n, rj_core::Node::Folder(f) if f.name == "Standort Nord")));
+        // Ohne Änderung entsteht keine weitere Sicherung; „Jetzt sichern“ geht auch bei ausgeschalteter Sicherung.
+        assert_eq!(cmd(&mut app, json!({ "op": "save" }))["saved"], false);
+        app.config.backup.enabled = false;
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert!(cmd(&mut app, json!({ "op": "backup_now" }))["pending"].is_u64());
+        assert!(crate::kdbxbackup::wait(std::time::Duration::from_secs(10)));
+        assert_eq!(copies(&local).len(), 2);
+        let s = cmd(&mut app, json!({ "op": "backup_status" }));
+        assert_eq!(s["last"]["ok"], true);
+        assert_eq!(s["last"]["targets"].as_array().unwrap().len(), 2);
     }
 
     #[test]

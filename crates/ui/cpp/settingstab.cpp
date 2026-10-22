@@ -7,14 +7,20 @@
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
+#include <QtCore/QDir>
 #include <QtCore/QJsonArray>
+#include <QtCore/QUrl>
+#include <QtGui/QDesktopServices>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
+#include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
+#include <QtWidgets/QLineEdit>
+#include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QSpinBox>
 #include <QtWidgets/QStackedWidget>
@@ -107,6 +113,7 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 		emit status(s);
 	});
 	addArea(QStringLiteral("snmp"), T("snmp.title"), m_snmp, false);
+	addArea(QStringLiteral("backup"), T("settings.backup"), pageBackup(), true);
 	addArea(QStringLiteral("features"), T("settings.features"), pageFeatures(), true);
 	ain->addStretch(1);
 	m_loading = false;
@@ -268,6 +275,146 @@ QWidget* SettingsTab::pageFeatures()
 	return w;
 }
 
+QWidget* SettingsTab::pageBackup()
+{
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	auto* w = new QWidget;
+	auto* v = new QVBoxLayout(w);
+	auto* f = new QFormLayout;
+	m_bkEnabled = new QCheckBox(T("settings.backup.enabled"), w);
+	f->addRow(QString(), m_bkEnabled);
+	m_bkLocal = new QLabel(w);
+	m_bkLocal->setWordWrap(true);
+	m_bkLocal->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	f->addRow(T("settings.backup.local"), m_bkLocal);
+	auto spin = [w](int lo, int hi, const QString& suffix) {
+		auto* s = new QSpinBox(w);
+		s->setRange(lo, hi);
+		s->setSuffix(suffix);
+		return s;
+	};
+	m_bkLast = spin(1, 100, T("settings.backup.files"));
+	f->addRow(T("settings.backup.last"), m_bkLast);
+	m_bkDays = spin(0, 90, T("settings.backup.daysuffix"));
+	f->addRow(T("settings.backup.days"), m_bkDays);
+	m_bkUpdate = spin(1, 20, T("settings.backup.files"));
+	f->addRow(T("settings.backup.update"), m_bkUpdate);
+	m_bkSecond = new QCheckBox(T("settings.backup.second"), w);
+	f->addRow(QString(), m_bkSecond);
+	auto* dirRow = new QHBoxLayout;
+	m_bkDir = new QLineEdit(w);
+	m_bkDir->setPlaceholderText(T("settings.backup.second.ph"));
+	auto* browse = new QPushButton(T("settings.backup.browse"), w);
+	dirRow->addWidget(m_bkDir, 1);
+	dirRow->addWidget(browse);
+	f->addRow(T("settings.backup.second.dir"), dirRow);
+	f->addRow(QString(), hint(T("settings.backup.hint"), w));
+	m_bkKeyFile = hint(T("settings.backup.keyfile"), w);
+	f->addRow(QString(), m_bkKeyFile);
+	m_bkState = new QLabel(w);
+	m_bkState->setWordWrap(true);
+	m_bkState->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	f->addRow(T("settings.backup.state"), m_bkState);
+	auto* buttons = new QHBoxLayout;
+	m_bkNow = new QPushButton(T("settings.backup.now"), w);
+	auto* openLocal = new QPushButton(T("settings.backup.open"), w);
+	auto* openSecond = new QPushButton(T("settings.backup.open2"), w);
+	buttons->addWidget(m_bkNow);
+	buttons->addWidget(openLocal);
+	buttons->addWidget(openSecond);
+	buttons->addStretch(1);
+	f->addRow(QString(), buttons);
+	v->addLayout(f);
+	v->addStretch(1);
+
+	connect(m_bkEnabled, &QCheckBox::toggled, this, &SettingsTab::saveBackup);
+	connect(m_bkSecond, &QCheckBox::toggled, this, &SettingsTab::saveBackup);
+	for (auto* s : { m_bkLast, m_bkDays, m_bkUpdate })
+		connect(s, &QSpinBox::valueChanged, this, &SettingsTab::saveBackup);
+	connect(m_bkDir, &QLineEdit::editingFinished, this, &SettingsTab::saveBackup);
+	connect(browse, &QPushButton::clicked, this, [this] {
+		const QString d = QFileDialog::getExistingDirectory(this, rjText(m_backend, "settings.backup.second.dir"), m_bkDir->text());
+		if (d.isEmpty())
+			return;
+		m_bkDir->setText(QDir::toNativeSeparators(d));
+		m_bkSecond->setChecked(true);
+		saveBackup();
+	});
+	connect(m_bkNow, &QPushButton::clicked, this, [this] {
+		const QJsonObject r = parseObj(edit({ { QStringLiteral("op"), QStringLiteral("backup_now") } }));
+		if (r.contains(QStringLiteral("error")))
+		{
+			emit status(r.value(QStringLiteral("error")).toString());
+			return;
+		}
+		m_bkNow->setEnabled(false);
+		m_bkState->setText(rjText(m_backend, "settings.backup.busy"));
+	});
+	connect(openLocal, &QPushButton::clicked, this, [this] {
+		if (!m_bkLocalDir.isEmpty() && QDir().mkpath(m_bkLocalDir))
+			QDesktopServices::openUrl(QUrl::fromLocalFile(m_bkLocalDir));
+	});
+	connect(openSecond, &QPushButton::clicked, this, [this] {
+		if (!m_bkDir->text().trimmed().isEmpty())
+			QDesktopServices::openUrl(QUrl::fromLocalFile(m_bkDir->text().trimmed()));
+	});
+	return w;
+}
+
+void SettingsTab::saveBackup()
+{
+	if (m_loading)
+		return;
+	m_bkDir->setEnabled(m_bkSecond->isChecked());
+	edit({ { QStringLiteral("op"), QStringLiteral("set_settings") },
+	       { QStringLiteral("backup_enabled"), m_bkEnabled->isChecked() },
+	       { QStringLiteral("backup_keep_last"), m_bkLast->value() },
+	       { QStringLiteral("backup_keep_days"), m_bkDays->value() },
+	       { QStringLiteral("backup_keep_update"), m_bkUpdate->value() },
+	       { QStringLiteral("backup_second_enabled"), m_bkSecond->isChecked() },
+	       { QStringLiteral("backup_second_dir"), m_bkDir->text().trimmed() } });
+	refreshSummaries();
+}
+
+void SettingsTab::reloadBackup()
+{
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	const bool was = m_loading;
+	m_loading = true;
+	const QJsonObject b = parseObj(edit({ { QStringLiteral("op"), QStringLiteral("backup_status") } }));
+	m_bkEnabled->setChecked(b.value(QStringLiteral("enabled")).toBool(true));
+	m_bkLast->setValue(b.value(QStringLiteral("keep_last")).toInt(10));
+	m_bkDays->setValue(b.value(QStringLiteral("keep_days")).toInt(7));
+	m_bkUpdate->setValue(b.value(QStringLiteral("keep_update")).toInt(3));
+	m_bkSecond->setChecked(b.value(QStringLiteral("second_enabled")).toBool());
+	m_bkDir->setText(b.value(QStringLiteral("second_dir")).toString());
+	m_bkDir->setEnabled(m_bkSecond->isChecked());
+	m_bkLocalDir = b.value(QStringLiteral("local_dir")).toString();
+	m_bkLocal->setText(m_bkLocalDir.isEmpty() ? T("settings.backup.nokdbx") : QDir::toNativeSeparators(m_bkLocalDir));
+	m_bkKeyFile->setVisible(b.value(QStringLiteral("key_file")).toBool());
+	const bool busy = b.value(QStringLiteral("busy")).toBool();
+	m_bkNow->setEnabled(!busy);
+	const QJsonObject last = b.value(QStringLiteral("last")).toObject();
+	if (busy)
+		m_bkState->setText(T("settings.backup.busy"));
+	else if (last.isEmpty())
+		m_bkState->setText(T("settings.backup.never"));
+	else
+	{
+		QStringList lines;
+		for (const auto& t : last.value(QStringLiteral("targets")).toArray())
+		{
+			const QJsonObject o = t.toObject();
+			const QString dir = QDir::toNativeSeparators(o.value(QStringLiteral("dir")).toString());
+			lines << (o.value(QStringLiteral("ok")).toBool() ? T("settings.backup.target.ok").arg(dir)
+			                                                  : T("settings.backup.target.err").arg(dir, o.value(QStringLiteral("error")).toString()));
+		}
+		m_bkState->setText(T("settings.backup.at").arg(last.value(QStringLiteral("at")).toString()) + QLatin1Char('\n') + lines.join(QLatin1Char('\n')));
+	}
+	m_loading = was;
+	refreshSummaries();
+}
+
 void SettingsTab::reload()
 {
 	m_loading = true;
@@ -280,6 +427,7 @@ void SettingsTab::reload()
 	if (const int i = m_closeTab->findData(s.value(QStringLiteral("close_tab_key")).toString(QStringLiteral("outside"))); i >= 0)
 		m_closeTab->setCurrentIndex(i);
 	m_aruba->setChecked(s.value(QStringLiteral("aruba_tools")).toBool());
+	reloadBackup();
 	if (m_appearance)
 		m_appearance->reload();
 	if (m_snmp)
@@ -305,6 +453,9 @@ void SettingsTab::refreshSummaries()
 	set("appearance", T("settings.appearance.sum"));
 	const int devices = int(QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("snmp_list") } }).toUtf8()).array().size());
 	set("snmp", T("settings.snmp.sum").arg(devices));
+	set("backup", m_bkEnabled->isChecked() ? T("settings.backup.sum.on").arg(m_bkLast->value()).arg(m_bkDays->value())
+	                                       + (m_bkSecond->isChecked() && !m_bkDir->text().trimmed().isEmpty() ? T("settings.backup.sum.second") : QString())
+	                                       : T("settings.backup.sum.off"));
 	set("features", T(m_aruba->isChecked() ? "settings.features.sum.aruba" : "settings.features.sum.none"));
 }
 

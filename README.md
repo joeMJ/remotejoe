@@ -524,6 +524,19 @@ Es gibt also nur eine Datei zum Sichern und Synchronisieren. Wird die KDBX gleic
 anderer Stelle geändert, führt remotejoe beim Speichern zusammen und fragt nur, wenn beide
 Seiten den Index geändert haben. Einzelheiten: [`docs/DATENMODELL.md`](docs/DATENMODELL.md).
 
+### Sicherungen der KDBX
+
+Nach jedem Speichern legt remotejoe eine Kopie der KDBX im Ordner `Sicherungen` neben der Datei ab
+(`<name>-JJJJMMTT-HHMMSS.kdbx`, dazu ein eigener Index `.rjindex`, falls vorhanden). Es bleiben die neuesten 10 und
+zusätzlich die erste Sicherung jedes der letzten 7 Tage. Vor jedem Update entsteht eine eigene Sicherung
+`<name>-vor-update-<Version>-…`; davon bleiben die letzten 3. Wahlweise sichert remotejoe zusätzlich an einen zweiten Ort,
+z. B. auf ein NAS. Ist er nicht erreichbar, wird trotzdem gespeichert, und die Statuszeile meldet es. Alles lässt sich
+unter **Extras → Einstellungen → Sicherung** einstellen, dort gibt es auch „Jetzt sichern“. Ab Werk ist die Sicherung an.
+
+Gesichert wird die verschlüsselte Datei, wie sie auf der Platte liegt: Kennwort und Schlüsseldatei bleiben dieselben, eine
+Sicherung öffnet man wie die KDBX selbst (auch mit KeePassXC). Eine Schlüsseldatei wird bewusst nicht mitgesichert; sie
+gehört an einen anderen Ort als die Sicherungen. Aufgeräumt werden nur Dateien nach dem eigenen Namensmuster.
+
 Kennwörter werden byte-genau verwendet (nie normalisiert, getrimmt oder umkodiert) und nie über
 die Zwischenablage in ein Ziel gebracht. Protokolle enthalten nur Fehler und
 Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenablage.

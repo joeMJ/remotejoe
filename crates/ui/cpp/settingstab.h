@@ -14,6 +14,8 @@ class AppearanceTab;
 class QCheckBox;
 class QComboBox;
 class QLabel;
+class QLineEdit;
+class QPushButton;
 class QSpinBox;
 class QStackedWidget;
 class QVBoxLayout;
@@ -35,6 +37,8 @@ public:
 	void wipeSecrets() override;
 	/// Werte neu lesen (nach Entsperren oder Änderungen von außen).
 	void reload();
+	/// Stand der Sicherung neu zeigen (nach einer Sicherung im Hintergrund).
+	void reloadBackup();
 
 signals:
 	/// Farbschema oder Fokusrahmen geändert (Oberfläche neu einfärben).
@@ -55,6 +59,8 @@ private:
 	QWidget* pageLock();
 	QWidget* pageKeys();
 	QWidget* pageFeatures();
+	QWidget* pageBackup();
+	void saveBackup();
 	void refreshSummaries();
 	QString edit(const QJsonObject& cmd);
 
@@ -74,6 +80,18 @@ private:
 	QCheckBox* m_keyCapture = nullptr;
 	QComboBox* m_closeTab = nullptr;
 	QCheckBox* m_aruba = nullptr;
+	// Sicherung
+	QCheckBox* m_bkEnabled = nullptr;
+	QSpinBox* m_bkLast = nullptr;
+	QSpinBox* m_bkDays = nullptr;
+	QSpinBox* m_bkUpdate = nullptr;
+	QCheckBox* m_bkSecond = nullptr;
+	QLineEdit* m_bkDir = nullptr;
+	QLabel* m_bkLocal = nullptr;
+	QLabel* m_bkState = nullptr;
+	QLabel* m_bkKeyFile = nullptr;
+	QPushButton* m_bkNow = nullptr;
+	QString m_bkLocalDir;
 	// Eingebettete Bereiche
 	AppearanceTab* m_appearance = nullptr;
 	SnmpTab* m_snmp = nullptr;

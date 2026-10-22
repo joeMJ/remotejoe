@@ -3211,6 +3211,15 @@ void MainWindow::handleEvents(const QString& json)
 					if (auto* a = findChild<ApToolsTab*>())
 						a->handleSetup(r);
 				}
+				else if (kind == QLatin1String("backup"))
+				{
+					// Sicherung der KDBX: nur Fehler melden; die Einstellungen zeigen den Stand.
+					for (const auto& t : r.value(QStringLiteral("targets")).toArray())
+						if (const QJsonObject o = t.toObject(); !o.value(QStringLiteral("ok")).toBool())
+							statusBar()->showMessage(T(m_backend, "status.backup.failed").arg(QDir::toNativeSeparators(o.value(QStringLiteral("dir")).toString()), o.value(QStringLiteral("error")).toString()), 15000);
+					for (auto* s : findChildren<SettingsTab*>())
+						s->reloadBackup();
+				}
 				else if (kind == QLatin1String("aruba_log"))
 				{
 					for (auto* l : findChildren<ArubaLogTab*>())
@@ -3906,6 +3915,15 @@ void MainWindow::closeEvent(QCloseEvent* e)
 			e->ignore();
 			return;
 		}
+	}
+	// Eine Sicherung im Hintergrund (z. B. auf ein NAS) nicht abschneiden: höchstens 10 s warten.
+	if (parseObject(edit({ { QStringLiteral("op"), QStringLiteral("backup_status") } })).value(QStringLiteral("busy")).toBool())
+	{
+		statusBar()->showMessage(T(m_backend, "backup.exit.wait"));
+		statusBar()->repaint();
+		QApplication::setOverrideCursor(Qt::WaitCursor);
+		edit({ { QStringLiteral("op"), QStringLiteral("backup_wait") }, { QStringLiteral("ms"), 10000 } });
+		QApplication::restoreOverrideCursor();
 	}
 	saveWindowState();
 	for (auto& w : m_windows)

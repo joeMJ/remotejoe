@@ -2,6 +2,7 @@
 //! Konfiguration und sicheres Schreiben von Dateien.
 
 pub mod autokeys;
+pub mod backup;
 pub mod bulk;
 pub mod charset;
 pub mod config;
