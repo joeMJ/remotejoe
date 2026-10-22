@@ -454,7 +454,9 @@ ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QStrin
 	QVBoxLayout* oin = nullptr;
 	auto* oc = rjui::card(this, &oin);
 	const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	oin->addWidget(rjui::section(T("aruba.write.board"), oc));
+	// Statustafel nur beim Update (ap_swarm_reload zeichnet keine).
+	auto* boardTitle = rjui::section(T("aruba.write.board"), oc);
+	oin->addWidget(boardTitle);
 	m_board = new QPlainTextEdit(oc);
 	m_board->setReadOnly(true);
 	m_board->setFont(mono);
@@ -462,6 +464,8 @@ ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QStrin
 	m_board->setMaximumHeight(220);
 	m_board->setPlaceholderText(T("aruba.write.board.none"));
 	oin->addWidget(m_board);
+	boardTitle->setVisible(update);
+	m_board->setVisible(update);
 	oin->addWidget(rjui::section(T("aptools.output"), oc));
 	m_output = new QPlainTextEdit(oc);
 	m_output->setReadOnly(true);
