@@ -14,19 +14,39 @@ pub fn table<'a>(out: &'a str, must: &[&str]) -> Option<(Vec<(String, usize)>, V
     let h = lines.iter().position(|l| must.iter().all(|m| l.contains(m)))?;
     let header = lines[h];
     let mut cols = Vec::new();
-    let b = header.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] != b' ' && (i == 0 || (i >= 2 && b[i - 1] == b' ' && b[i - 2] == b' ')) {
-            let end = header[i..].find("  ").map_or(header.len(), |e| i + e);
-            cols.push((header[i..end].trim().to_string(), i));
-            i = end;
-        } else {
-            i += 1;
+    let dashes = lines.get(h + 1).filter(|l| l.trim_start().starts_with("--"));
+    if let Some(d) = dashes {
+        // Spaltengrenzen aus der Strichzeile (wie in den Aruba-Werkzeugen); Titel aus der Kopfzeile darüber.
+        let b = d.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'-' && (i == 0 || b[i - 1] == b' ') {
+                let end = d[i..].find(' ').map_or(d.len(), |e| i + e);
+                let next = d[end..].find('-').map_or(header.len().max(d.len()), |e| end + e);
+                let title = header.get(i..next.min(header.len())).unwrap_or("").trim().to_string();
+                cols.push((title, i));
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+    } else {
+        let b = header.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] != b' ' && (i == 0 || (i >= 2 && b[i - 1] == b' ' && b[i - 2] == b' ')) {
+                let end = header[i..].find("  ").map_or(header.len(), |e| i + e);
+                cols.push((header[i..end].trim().to_string(), i));
+                i = end;
+            } else {
+                i += 1;
+            }
         }
     }
-    let start = if lines.get(h + 1).is_some_and(|l| l.trim_start().starts_with("--")) { h + 2 } else { h + 1 };
-    let rows = lines[start..].iter().copied().take_while(|l| !l.trim().is_empty()).collect();
+    let start = if dashes.is_some() { h + 2 } else { h + 1 };
+    // Datenzeilen bis zur Leerzeile; Summenzeilen wie „Number of Clients   :0“ gehören nicht dazu.
+    let summary = |l: &str| l.split_once(':').is_some_and(|(k, v)| k.ends_with(' ') && !v.starts_with(' ') && k.trim().chars().all(|c| c.is_alphanumeric() || c == ' '));
+    let rows = lines[start..].iter().copied().take_while(|l| !l.trim().is_empty()).filter(|l| !summary(l)).collect();
     Some((cols, rows))
 }
 
@@ -116,7 +136,7 @@ pub fn cluster_json(show_aps: &str, running_config: &str, vc_ip: &str) -> Value 
 }
 
 /// Befehle für die Seite eines einzelnen APs (am AP selbst, mit den Zugangsdaten des VC).
-pub const AP_COMMANDS: [&str; 5] = ["no paging", "show version", "show interface", "show networks", "show clients"];
+pub const AP_COMMANDS: [&str; 5] = ["no paging", "show version", "show interface", "show network", "show clients"];
 
 /// MAC des APs aus `show interface`: bond0, sonst eth0 (wie `ap_list.py`).
 pub fn interface_mac(out: &str) -> Option<String> {
@@ -264,6 +284,20 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
         let rows = a["clients"]["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 1, "nur Anwender dieses APs");
         assert_eq!(rows[0][0], "anna");
+    }
+
+    #[test]
+    fn show_network_and_empty_client_list_as_on_the_test_ap() {
+        let net = "Networks\r\n--------\r\nProfile Name     ESSID            Clients  Type      Band          Authentication Method  Key Management  IP Assignment  Status   Zone  Coding   Active  Max IPv4 Users\r\n------------     -----            -------  ----      ----          ---------------------  --------------  -------------  ------   ----  ------   ------  -------------\r\nPROBESCHULE      PROBESCHULE      0        employee  2.4ghz,5ghz   None                   WPA2-AES        Default VLAN   Enabled  -     Default  Yes     N/A\r\nson-selfservice  son-selfservice  0        employee  2.4ghz        None                   none            VLAN 23        Enabled  -     Default  Yes     N/A";
+        let t = table_json(net, &["Profile Name"]);
+        assert_eq!(t["columns"][7], "IP Assignment");
+        assert_eq!(t["rows"][0][7], "Default VLAN", "Wert mit Leerzeichen bleibt ganz");
+        assert_eq!(t["rows"][1][1], "son-selfservice");
+        assert_eq!(t["rows"].as_array().unwrap().len(), 2);
+        let cl = "\r\nClient List\r\n-----------\r\nName  IP Address  MAC Address  OS  ESSID  Access Point  Channel  Type  Role  IPv6 Address  Signal  Speed (mbps)  \r\n----  ----------  -----------  --  -----  ------------  -------  ----  ----  ------------  ------  ------------  \r\nNumber of Clients   :0\r\nInfo timestamp      :72853";
+        let c = table_json(cl, &["IP Address", "MAC Address"]);
+        assert_eq!(c["rows"].as_array().unwrap().len(), 0, "{c}");
+        assert_eq!(c["columns"][11], "Speed (mbps)");
     }
 
     #[test]

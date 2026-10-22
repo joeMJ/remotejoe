@@ -959,7 +959,7 @@
   "aruba.ap.mac": "MAC-Adresse",
   "aruba.ap.uptime": "Laufzeit",
   "aruba.ap.system": "System",
-  "aruba.ap.networks": "SSIDs (show networks)",
+  "aruba.ap.networks": "SSIDs (show network)",
   "aruba.ap.clients": "Anwender (show clients)",
   "aruba.ap.networks.count": "%1 Netze",
   "aruba.ap.clients.count": "%1 Anwender an diesem AP",

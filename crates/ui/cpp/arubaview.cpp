@@ -54,7 +54,7 @@ public:
 		h->addWidget(name, 1);
 		if (ap.value(QStringLiteral("clients")).isDouble())
 			h->addWidget(rjui::pill(QString::number(ap.value(QStringLiteral("clients")).toInt()), QStringLiteral("accent"), this));
-		setFixedWidth(250);
+		setFixedWidth(280);
 	}
 };
 } // namespace
