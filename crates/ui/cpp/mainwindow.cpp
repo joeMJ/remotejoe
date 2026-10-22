@@ -3,6 +3,7 @@
 #include "titlebar.h"
 #include "exporttab.h"
 #include "overviewtab.h"
+#include "arubaaptab.h"
 #include "appearance.h"
 #include "settingstab.h"
 #include "masstab.h"
@@ -1415,6 +1416,7 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	                      "QFrame#rjApTile:hover { background: %3; }"
 	                      "QLabel[rjDot=\"ok\"] { color: %6; }"
 	                      "QLabel[rjDot=\"err\"] { color: %15; }"
+	                      "QLabel[rjDot=\"warn\"] { color: %8; }"
 	                      "QLabel[rjWarnText=\"true\"] { color: %8; }"
 	                      "QFrame#rjRow:hover { background: %3; }"
 	                      "QFrame#rjRow[selected=\"true\"] { background: %11; }"
@@ -3187,6 +3189,12 @@ void MainWindow::handleEvents(const QString& json)
 						// Prüfung beim Start: nur ein Hinweis in der Fußzeile.
 						statusBar()->showMessage(T(m_backend, "update.available").arg(r.value(QStringLiteral("found")).toObject().value(QStringLiteral("version")).toString()), 15000);
 				}
+				else if (kind == QLatin1String("aruba_ap"))
+				{
+					for (auto* a : findChildren<ArubaApTab*>())
+						if (a->key() == e.value(QStringLiteral("target")).toString())
+							a->handleResult(r);
+				}
 				else if (kind.startsWith(QLatin1String("ov_")))
 				{
 					if (auto* o = findChild<OverviewTab*>())
@@ -4029,6 +4037,17 @@ bool MainWindow::isLogin(const QString& id) const
 	return hit;
 }
 
+void MainWindow::connectWay(const QJsonObject& s, const QString& way)
+{
+	const QString id = s.value(QStringLiteral("id")).toString();
+	if (id.isEmpty())
+		return;
+	selectId(id);
+	const QString full = id + QLatin1Char('#') + way;
+	const QSize px = contentSize(false);
+	handleConnectResult(full, m_backend->connectTarget(full, QString(), false, px.width(), px.height()));
+}
+
 void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 {
 	auto* t = findChild<OverviewTab*>();
@@ -4055,14 +4074,20 @@ void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 		// Nach einer Inventarabfrage: Symbol im Baum nachziehen (z. B. Aruba-AP erkannt).
 		connect(t, &OverviewTab::inventoryChanged, this, [this] { QTimer::singleShot(0, this, [this] { reloadTree(); }); });
 		// Knopf eines Zugangswegs: Ziel wählen und über diesen Weg verbinden.
-		connect(t, &OverviewTab::connectWayRequested, this, [this](const QJsonObject& s, const QString& way) {
-			const QString id = s.value(QStringLiteral("id")).toString();
-			if (id.isEmpty())
-				return;
-			selectId(id);
-			const QString full = id + QLatin1Char('#') + way;
-			const QSize px = contentSize(false);
-			handleConnectResult(full, m_backend->connectTarget(full, QString(), false, px.width(), px.height()));
+		connect(t, &OverviewTab::connectWayRequested, this, &MainWindow::connectWay);
+		// Aruba-Werkzeuge: Kachel eines APs öffnet seine Seite (je AP ein Tab).
+		connect(t, &OverviewTab::arubaApRequested, this, [this](const QJsonObject& s, const QJsonObject& ap) {
+			const QString key = s.value(QStringLiteral("id")).toString() + QLatin1Char('|') + ap.value(QStringLiteral("ip")).toString();
+			for (auto* a : findChildren<ArubaApTab*>())
+				if (a->key() == key)
+				{
+					m_tabs->setCurrentWidget(a);
+					a->query();
+					return;
+				}
+			auto* a = new ArubaApTab(m_backend, s, ap, m_tabs);
+			connect(a, &ArubaApTab::connectWayRequested, this, &MainWindow::connectWay);
+			addToolTab(a, a->title());
 		});
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
 	}
@@ -4169,6 +4194,43 @@ BulkAddTab* MainWindow::openBulkAdd(const QString& parentId)
 	addToolTab(t, T(m_backend, "bulk.title"));
 	t->hosts()->setFocus();
 	return t;
+}
+
+QWidget* MainWindow::arubaForScreenshot(bool apPage)
+{
+	std::function<QString(const QModelIndex&)> walk = [&](const QModelIndex& parent) -> QString {
+		for (int r = 0; r < m_model->rowCount(parent); ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			if (!i.data(RoleFolder).toBool() && i.data(RoleProtocol).toString() == QLatin1String("ssh"))
+				return i.data(RoleId).toString();
+			const QString f = walk(i);
+			if (!f.isEmpty())
+				return f;
+		}
+		return QString();
+	};
+	const QString id = walk(QModelIndex());
+	if (id.isEmpty())
+		return nullptr;
+	const QJsonObject subject{ { QStringLiteral("id"), id } };
+	QJsonObject cmd = subject;
+	cmd.insert(QStringLiteral("op"), QStringLiteral("aruba_demo"));
+	const QJsonObject r = parseObject(m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact))));
+	if (r.contains(QStringLiteral("error")))
+		return nullptr;
+	selectId(id);
+	openOverview(subject);
+	auto* o = findChild<OverviewTab*>();
+	if (!apPage)
+		return o;
+	QJsonObject s = subject;
+	s.insert(QStringLiteral("vc_name"), o ? o->targetName() : QString());
+	auto* a = new ArubaApTab(m_backend, s, r.value(QStringLiteral("entry")).toObject(), m_tabs);
+	a->setObjectName(QStringLiteral("arubaApTab"));
+	addToolTab(a, a->title());
+	a->handleResult(r.value(QStringLiteral("ap")).toObject());
+	return a;
 }
 
 PropertiesTab* MainWindow::openFirstTargetProperties(const QString& protocol)

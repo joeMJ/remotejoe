@@ -670,6 +670,8 @@ impl App {
             "ov_probe" => self.overview_probe(&c),
             "ov_query" => self.overview_query(&c),
             "aruba_cluster" => self.aruba_cluster(&c),
+            "aruba_ap" => self.aruba_ap(&c),
+            "aruba_demo" => self.aruba_demo(&c),
             "ov_field" => self.overview_field(&c),
             "ov_run" => self.overview_run(&c),
             "ov_stop" => {

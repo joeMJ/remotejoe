@@ -80,11 +80,15 @@ public:
 	PropertiesTab* openProperties(const QString& id, const QString& category = QString());
 	/// Anmeldeobjekt öffnen (`id` leer: neu im Ordner `folder` bzw. im Ordner des Ziels `folder`).
 	void openLogin(const QString& id, const QString& folder);
+	/// Über einen Zugangsweg verbinden (`way`: „main“, Weg-ID oder `ssh:<IP>`).
+	void connectWay(const QJsonObject& subject, const QString& way);
 	/// Objektübersicht des Ziels (ein Tab für alle, Einfachklick im Baum).
 	void openOverview(const QJsonObject& subject, const QIcon& icon = QIcon());
 	/// Ist `id` ein Anmeldeobjekt im Baum?
 	bool isLogin(const QString& id) const;
 	/// Für Bildschirmfotos: Eigenschaften des ersten Ziels, Hinzufügen-Menü, Entsperren.
+	/// Bildschirmfotos: Aruba-Werkzeuge mit erfundenem Cluster am ersten SSH-Ziel; Übersicht oder AP-Seite.
+	QWidget* arubaForScreenshot(bool apPage);
 	PropertiesTab* openFirstTargetProperties(const QString& protocol = QStringLiteral("rdp"));
 	QMenu* popupAddMenu();
 	BulkAddTab* openBulkAdd(const QString& parentId);

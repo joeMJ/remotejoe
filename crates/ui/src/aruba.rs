@@ -98,7 +98,8 @@ pub fn cluster_json(show_aps: &str, running_config: &str, vc_ip: &str) -> Value 
     }
     let mut list = aps.clone();
     for m in &offline {
-        list.push(json!({ "name": m, "ip": null, "online": false, "conductor": false, "clients": null, "in_segment": true }));
+        // Heißen online-APs anders als ihre MAC, kann eine nicht gefundene MAC auch zu einem von ihnen gehören.
+        list.push(json!({ "name": m, "ip": null, "online": false, "uncertain": !all_macs, "conductor": false, "clients": null, "in_segment": true }));
     }
     let clients: u64 = aps.iter().filter_map(|a| a["clients"].as_u64()).sum();
     json!({
@@ -112,6 +113,108 @@ pub fn cluster_json(show_aps: &str, running_config: &str, vc_ip: &str) -> Value 
         "clients": clients,
         "aps": list,
     })
+}
+
+/// Befehle für die Seite eines einzelnen APs (am AP selbst, mit den Zugangsdaten des VC).
+pub const AP_COMMANDS: [&str; 5] = ["no paging", "show version", "show interface", "show networks", "show clients"];
+
+/// MAC des APs aus `show interface`: bond0, sonst eth0 (wie `ap_list.py`).
+pub fn interface_mac(out: &str) -> Option<String> {
+    let mut eth0 = None;
+    let mut current = "";
+    for line in out.lines() {
+        let t = line.trim();
+        if let Some(name) = ["bond0", "eth0", "eth1", "bond1"].iter().find(|n| t.starts_with(&format!("{n} is "))) {
+            current = name;
+        }
+        if let Some(rest) = t.split("address is ").nth(1) {
+            let mac = rest.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+            if is_mac(&mac) {
+                match current {
+                    "bond0" => return Some(mac),
+                    "eth0" if eth0.is_none() => eth0 = Some(mac),
+                    _ => {}
+                }
+            }
+        }
+    }
+    eth0
+}
+
+/// Tabelle allgemein (Spalten wie in der Kopfzeile, Werte zwischen den Spaltenanfängen), für die Anzeige.
+pub fn table_json(out: &str, must: &[&str]) -> Value {
+    let Some((cols, rows)) = table(out, must) else { return json!({ "columns": [], "rows": [] }) };
+    let rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            cols.iter()
+                .enumerate()
+                .map(|(i, (_, start))| {
+                    let end = cols.get(i + 1).map_or(row.len(), |(_, e)| *e).min(row.len());
+                    row.get((*start).min(row.len())..end).unwrap_or("").trim().to_string()
+                })
+                .collect()
+        })
+        .filter(|r: &Vec<String>| r.iter().any(|c| !c.is_empty()))
+        .collect();
+    json!({ "columns": cols.iter().map(|(n, _)| n).collect::<Vec<_>>(), "rows": rows })
+}
+
+/// Seite eines APs aus den Ausgaben von [`AP_COMMANDS`]. Anwender nur dieses APs, wenn die Tabelle eine Spalte
+/// „Access Point“ hat (am Conductor listet `show clients` den ganzen Cluster).
+pub fn ap_json(outputs: &[String], name: &str, ip: &str) -> Value {
+    let get = |i: usize| outputs.get(i).map(String::as_str).unwrap_or("");
+    let version = crate::overview::remote::parse_aruba(get(1)).unwrap_or_default();
+    let field = |k: &str| version.iter().find(|(f, _)| *f == k).map(|(_, v)| v.clone());
+    let networks = table_json(get(3), &["Profile Name"]);
+    let mut clients = table_json(get(4), &["IP Address", "MAC Address"]);
+    if let Some(col) = clients["columns"].as_array().and_then(|c| c.iter().position(|x| x == "Access Point")) {
+        if let Some(rows) = clients["rows"].as_array_mut() {
+            rows.retain(|r| r[col] == name || r[col] == ip);
+        }
+    }
+    json!({
+        "name": name,
+        "ip": ip,
+        "system": field("system"),
+        "uptime": field("uptime"),
+        "mac": interface_mac(get(2)),
+        "networks": networks,
+        "clients": clients,
+    })
+}
+
+/// Nur Vorführung (Bildschirmfotos): erfundener Cluster mit 24 APs und eine AP-Seite.
+pub fn demo() -> (Value, Value) {
+    let mut rows = String::from("Name               IP Address       Mode    Spectrum  Clients  Type         Serial #\n----               ----------       ----    --------  -------  ----         --------\n");
+    let named = [(3, "aula"), (4, "mensa"), (7, "lehrerzimmer")];
+    let off = [16, 21, 23];
+    let clients = [0, 12, 5, 31, 18, 0, 3, 9, 14, 2, 0, 7, 11, 6, 0, 4, 0, 8, 1, 22, 3, 0, 5, 0];
+    let mut config = String::from("version 8.10.0.0-8.10.0\n");
+    for i in 0..24usize {
+        let mac = format!("02:00:5e:00:{:02x}:{:02x}", 0x40 + i, (i * 37 + 18) % 256);
+        config.push_str(&format!("allowed-ap {mac}\n"));
+        if off.contains(&i) {
+            continue;
+        }
+        let name = named.iter().find(|(n, _)| *n == i).map_or(mac.clone(), |(_, n)| n.to_string());
+        let ip = if i == 13 { "198.51.100.7".to_string() } else { format!("192.0.2.{}", 180 + i * 2) };
+        let ip = if i == 0 { format!("{ip}*") } else { ip };
+        rows.push_str(&format!("{name:<19}{ip:<17}access  disable   {:<9}515(indoor)  CNZZQX{:04}\n", clients[i], i + 1));
+    }
+    let mut cluster = cluster_json(&rows, &config, "192.0.2.240");
+    cluster["at"] = json!(crate::overview::inventory::now());
+    let outputs = vec![
+        String::new(),
+        "ArubaOS (MODEL: 515), Version 8.10.0.23 LSR\nAP uptime is 3 days 4 hours 12 minutes 2 seconds".to_string(),
+        "bond0 is up\nHardware is Ethernet, address is 02:00:5e:00:41:37".to_string(),
+        "Profile Name  ESSID       Clients  Type      Band  Authentication Method\n------------  -----       -------  ----      ----  ---------------------\nschule-1x     Schule      9        employee  all   802.1x\ngast          Gast-WLAN   3        guest     all   None".to_string(),
+        "Name        IP Address    MAC Address        OS     ESSID      Access Point       Channel\n----        ----------    -----------        --     -----      ------------       -------\nanna        198.51.100.5  02:00:5e:00:10:01  Win10  Schule     02:00:5e:00:41:37  36E\nbernd       198.51.100.6  02:00:5e:00:10:02  iOS    Gast-WLAN  02:00:5e:00:41:37  1\nclara       198.51.100.9  02:00:5e:00:10:03  Win11  Schule     02:00:5e:00:41:37  36E".to_string(),
+    ];
+    let mut ap = ap_json(&outputs, "02:00:5e:00:41:37", "192.0.2.182");
+    ap["at"] = json!(crate::overview::inventory::now());
+    ap["complete"] = json!(true);
+    (cluster, ap)
 }
 
 #[cfg(test)]
@@ -142,6 +245,25 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
         assert_eq!(aps[3]["name"], "02:00:5e:00:53:15");
         assert_eq!(aps[3]["online"], false);
         assert_eq!(c["offline_uncertain"], false);
+    }
+
+    #[test]
+    fn ap_page_from_version_interface_networks_and_clients() {
+        let outputs = vec![
+            String::new(),
+            "ArubaOS (MODEL: 515), Version 8.10.0.23 LSR\nAP uptime is 3 hours 56 minutes 26 seconds".to_string(),
+            "eth0 is up, line protocol is up\nHardware is Gigabit Ethernet, address is 02:00:5E:00:53:12\nbond0 is up\nHardware is Ethernet, address is 02:00:5e:00:53:99".to_string(),
+            "Networks\n--------\nProfile Name  ESSID       Clients  Type      Band  Authentication Method\n------------  -----       -------  ----      ----  ---------------------\nschule-1x     Schule      7        employee  all   802.1x\ngast          Gast-WLAN   2        guest     all   None".to_string(),
+            "Client List\n-----------\nName        IP Address    MAC Address        OS     ESSID   Access Point       Channel\n----        ----------    -----------        --     -----   ------------       -------\nanna        198.51.100.5  02:00:5e:00:10:01  Win10  Schule  02:00:5e:00:53:12  36E\nbernd       198.51.100.6  02:00:5e:00:10:02  iOS    Gast    andere-ap          1".to_string(),
+        ];
+        let a = ap_json(&outputs, "02:00:5e:00:53:12", "192.0.2.210");
+        assert_eq!(a["mac"], "02:00:5e:00:53:99", "bond0 vor eth0");
+        assert!(a["uptime"].as_str().is_some_and(|u| u.contains("3 Std")), "{a}");
+        assert_eq!(a["networks"]["rows"][1][1], "Gast-WLAN");
+        assert_eq!(a["networks"]["rows"][0][5], "802.1x");
+        let rows = a["clients"]["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "nur Anwender dieses APs");
+        assert_eq!(rows[0][0], "anna");
     }
 
     #[test]

@@ -32,7 +32,7 @@ public:
 		h->setContentsMargins(8, 4, 8, 4);
 		h->setSpacing(6);
 		auto* dot = new QLabel(QStringLiteral("●"), this);
-		dot->setProperty("rjDot", online ? QStringLiteral("ok") : QStringLiteral("err"));
+		dot->setProperty("rjDot", online ? QStringLiteral("ok") : ap.value(QStringLiteral("uncertain")).toBool() ? QStringLiteral("warn") : QStringLiteral("err"));
 		h->addWidget(dot);
 		auto* oct = new QLabel(ip.isEmpty() ? QStringLiteral("–") : inside ? QLatin1Char('.') + ip.section(QLatin1Char('.'), 3) : ip, this);
 		oct->setFont(mono);
@@ -168,10 +168,14 @@ void ArubaClusterView::render()
 			tip += QStringLiteral(" · ") + ap.value(QStringLiteral("serial")).toString();
 		if (ap.value(QStringLiteral("conductor")).toBool())
 			tip += QStringLiteral(" · ") + T("aruba.tip.conductor").arg(c.value(QStringLiteral("vc")).toString());
+		if (ap.value(QStringLiteral("uncertain")).toBool())
+			tip += QStringLiteral(" · ") + T("aruba.tip.uncertain");
 		tile->setToolTip(tip);
 		if (online && !ip.isEmpty())
 			connect(tile, &rjui::ClickRow::clicked, this, [this, ap] { emit apClicked(ap); });
 		m_box->flow()->addWidget(tile);
+		// Sofort sichtbar: das Layout überspringt noch verborgene Kacheln, Qt zeigt neue Kinder sonst erst später.
+		tile->show();
 	}
 	m_box->relayout();
 	QStringList foot;

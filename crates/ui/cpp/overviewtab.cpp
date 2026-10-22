@@ -237,7 +237,11 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 		else
 			m_cluster->setBusy(true);
 	});
-	connect(m_cluster, &ArubaClusterView::apClicked, this, [this](const QJsonObject& ap) { emit arubaApRequested(m_subject, ap); });
+	connect(m_cluster, &ArubaClusterView::apClicked, this, [this](const QJsonObject& ap) {
+		QJsonObject s = m_subject;
+		s.insert(QStringLiteral("vc_name"), m_name);
+		emit arubaApRequested(s, ap);
+	});
 	m_arubaCard->hide();
 	lay->addWidget(m_arubaCard);
 	lay->addStretch(1);

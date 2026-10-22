@@ -9,6 +9,8 @@
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
 #include <QtCore/QCryptographicHash>
+#include <QtWidgets/QScrollArea>
+#include <QtWidgets/QScrollBar>
 #include <QtCore/QDir>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QFile>
@@ -143,6 +145,22 @@ void screenshots(MainWindow& w, const QString& dir)
 		save(&w, dir, QStringLiteral("zusammenfassen.png"));
 		w.tabs()->removeTab(w.tabs()->indexOf(t));
 		t->deleteLater();
+	}
+	// Aruba-Werkzeuge: Cluster-Karte (Übersicht, ans Ende gerollt) und Seite eines APs.
+	if (QWidget* o = w.arubaForScreenshot(false))
+	{
+		pump(500);
+		if (auto* sa = o->findChild<QScrollArea*>())
+			sa->verticalScrollBar()->setValue(sa->verticalScrollBar()->maximum());
+		pump(200);
+		save(&w, dir, QStringLiteral("aruba-cluster.png"));
+	}
+	if (QWidget* a = w.arubaForScreenshot(true))
+	{
+		pump(400);
+		save(&w, dir, QStringLiteral("aruba-ap.png"));
+		w.tabs()->removeTab(w.tabs()->indexOf(a));
+		a->deleteLater();
 	}
 	w.patchdayForFirstTargets(25);
 	pump(1500);
