@@ -468,6 +468,40 @@ neu aufklappen.
 - Jede Verbindung läuft in einem eigenen Prozess: Absturz oder Hänger einer Sitzung betrifft
   die anderen nicht.
 
+## Aruba-Werkzeuge (zuschaltbar)
+
+Für Aruba-Instant-Cluster gibt es eine Zusatzfunktion, standardmäßig aus: **Extras → Einstellungen →
+Zusatzfunktionen → Aruba-Werkzeuge**. Abgefragt wird per SSH am virtuellen Controller (VC) mit dessen Zugangsdaten aus
+der Schlüsseldatenbank.
+
+- **Cluster-Karte** in der Übersicht eines als Aruba-AP erkannten Ziels: „Cluster abfragen“ liest `show aps`, die
+  freigegebenen APs (`allowed-ap`) und `show summary`. Angezeigt werden die Verwaltung (nicht verwaltet, Central,
+  AirWave), die Zahl der APs im Cluster, online, offline und der angemeldeten Anwender sowie je AP eine Kachel
+  „.Oktett | Name bzw. MAC“ mit der Anwenderzahl; der Conductor trägt einen Stern, APs außerhalb des Segments zeigen
+  die volle Adresse.
+
+  <img src="docs/screenshots/aruba-cluster.png" alt="Aruba-Cluster-Karte mit Verwaltung, Zählern und AP-Kacheln" width="760">
+
+- **AP-Seite:** Ein Klick auf eine Kachel zeigt Seriennummer, MAC, Laufzeit, die SSIDs (`show network`) und die
+  Anwender (`show clients`) dieses APs; „SSH-Sitzung“ öffnet eine Sitzung zum AP mit den Zugangsdaten des VC.
+
+  <img src="docs/screenshots/aruba-ap.png" alt="Seite eines APs mit Kennzahlen, SSIDs und Anwendern" width="760">
+
+- **Werkzeuge** aus den [Aruba Instant Python Tools](https://github.com/joeMJ/aruba-instant-python-tools), für einen
+  Controller oder alle Controller eines Ordners (Rechtsklick → **Aruba**):
+  - **Analyse** (`ap_check`) und **Inventar** (`ap_list`, mit AP-Namen) – lesend.
+  - **Cluster neustarten** (`ap_swarm_reload`) und **Cluster aktualisieren** (`ap_swarm_update` mit dem Verzeichnis
+    der Firmware als URL, wahlweise mit Neustart danach). Beide sind nur möglich, wenn der Cluster weder über Central
+    noch über AirWave verwaltet wird und die Anmeldung ein Admin-Konto ist (`hash-mgmt-user` in der Konfiguration);
+    remotejoe prüft das vor dem Start bei jedem Controller und lässt nicht passende mit Grund aus. Jede dieser
+    Aktionen läuft in einem eigenen Tab mit Statustafel und Protokoll.
+- **Einrichten:** Die Sammlung wird von GitHub in den Datenordner geladen (`aptools/sammlung`), dazu eine eigene
+  Python-Umgebung (`aptools/python`). Fehlt Python unter Windows, bietet remotejoe die Installation von python.org an
+  (nur für den Benutzer, Signatur der Python Software Foundation geprüft); unter Ubuntu werden `python3` und
+  `python3-venv` gebraucht. Zugangsdaten gibt remotejoe den Werkzeugen nur über die Eingabe mit; sie werden nirgends
+  gespeichert. Die Ergebnisse liegen dem Baum folgend unter `aptools/<Ordner>/<Ziel>/` und öffnen sich mit dem
+  Standardprogramm.
+
 ## Das Hybridmodell: KDBX und Index
 
 remotejoe trennt Zugangsdaten und Struktur:
@@ -696,6 +730,9 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
   ohne Anmeldung) und fragt bei offenem RDP mit NLA den Rechnernamen ab (ohne Zugangsdaten). Ping und Traceroute laufen
   nur auf Knopfdruck, ebenso „Inventar abfragen“ und das Masseninventar mit den Zugangsdaten des Ziels (nur bei
   Zielen, deren Inventar erlaubt ist). Es geht nichts an Dritte.
+- **Aruba-Werkzeuge** (nur wenn eingeschaltet): „Einrichten“ lädt die Aruba Instant Python Tools von GitHub und die
+  Python-Bibliotheken über pip, unter Windows bei Bedarf Python von python.org. Abfragen und Werkzeuge verbinden sich
+  nur mit den Aruba-Controllern bzw. APs; beim Firmware-Update lädt der AP die Firmware selbst von der angegebenen URL.
 - Es gibt keine Telemetrie und keine Nutzungsstatistik.
 
 ## Fehler melden und Wünsche
