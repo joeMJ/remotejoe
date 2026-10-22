@@ -166,11 +166,18 @@ void ApToolsTab::handleSetup(const QJsonObject& r)
 	else if (r.value(QStringLiteral("need_python")).toBool())
 	{
 		const bool canInstall = call({ { QStringLiteral("op"), QStringLiteral("aptools_status") } }).value(QStringLiteral("can_install_python")).toBool();
-		if (canInstall
-		    && QMessageBox::question(this, T("aptools.python.ask.title"), T("aptools.python.ask"), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes)
+		if (canInstall)
 		{
-			setup(true);
-			return;
+			// Eigene Knopftexte: ohne Qt-Übersetzungen stünde dort „Yes“/„No“.
+			QMessageBox box(QMessageBox::Question, T("aptools.python.ask.title"), T("aptools.python.ask"), QMessageBox::NoButton, this);
+			auto* yes = box.addButton(T("aptools.python.ask.yes"), QMessageBox::AcceptRole);
+			box.setDefaultButton(box.addButton(T("aptools.python.ask.no"), QMessageBox::RejectRole));
+			box.exec();
+			if (box.clickedButton() == yes)
+			{
+				setup(true);
+				return;
+			}
 		}
 		m_state->setText(T(canInstall ? "aptools.python.missing.win" : "aptools.python.missing"));
 	}
@@ -198,7 +205,8 @@ void ApToolsTab::start()
 void ApToolsTab::poll()
 {
 	const QJsonObject run = call({ { QStringLiteral("op"), QStringLiteral("aptools_output") } }).value(QStringLiteral("run")).toObject();
-	if (run.isEmpty())
+	// Nur den Lauf dieses Ziels bzw. Ordners zeigen (ein früherer Lauf für ein anderes gehört nicht hierher).
+	if (run.isEmpty() || run.value(QStringLiteral("id")).toString() != m_id)
 	{
 		m_poll->stop();
 		return;
@@ -218,7 +226,8 @@ void ApToolsTab::poll()
 	if (run.value(QStringLiteral("done")).toBool())
 	{
 		if (m_poll->isActive())
-			m_state->setText(m_backend->text(QStringLiteral("aptools.done")).arg(results.size()));
+			m_state->setText(run.value(QStringLiteral("stopped")).toBool() ? m_backend->text(QStringLiteral("aptools.stopped"))
+			                                                               : m_backend->text(QStringLiteral("aptools.done")).arg(results.size()));
 		m_poll->stop();
 		refreshStatus();
 	}
@@ -249,9 +258,14 @@ void ApToolsTab::showResults(const QJsonArray& results)
 		const QJsonObject r = v.toObject();
 		auto* row = new QHBoxLayout;
 		const QString dir = r.value(QStringLiteral("path")).toString();
+		// Langer Pfad: umbrechen statt das Fenster zu verbreitern; vollständig im Tooltip.
 		auto* l = new QLabel(QDir::toNativeSeparators(dir), this);
 		l->setObjectName(QStringLiteral("rjMuted"));
 		l->setTextInteractionFlags(Qt::TextSelectableByMouse);
+		l->setWordWrap(true);
+		l->setMinimumWidth(0);
+		l->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+		l->setToolTip(QDir::toNativeSeparators(dir));
 		row->addWidget(l, 1);
 		auto* openDir = new QPushButton(m_backend->text(QStringLiteral("aptools.folder")), this);
 		connect(openDir, &QPushButton::clicked, this, [dir] { QDesktopServices::openUrl(QUrl::fromLocalFile(dir)); });

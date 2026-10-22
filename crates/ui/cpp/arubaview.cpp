@@ -50,18 +50,21 @@ public:
 			h->addWidget(new QLabel(QStringLiteral("★"), this));
 		auto* name = new QLabel(ap.value(QStringLiteral("name")).toString(), this);
 		name->setFont(mono);
-		name->setMinimumWidth(40);
+		// Platz für eine ganze MAC (17 Zeichen) in der tatsächlichen Festbreitenschrift.
+		name->setMinimumWidth(QFontMetrics(mono).horizontalAdvance(QString(17, QLatin1Char('0'))));
 		h->addWidget(name, 1);
 		if (ap.value(QStringLiteral("clients")).isDouble())
 		{
 			// Platz für dreistellige Zahlen, rechts abgesetzt vom Namen.
 			auto* badge = rjui::pill(QString::number(ap.value(QStringLiteral("clients")).toInt()), QStringLiteral("accent"), this);
 			badge->setAlignment(Qt::AlignCenter);
-			badge->setMinimumWidth(badge->fontMetrics().horizontalAdvance(QStringLiteral("888")) + 18);
+			badge->setMinimumWidth(badge->fontMetrics().horizontalAdvance(QStringLiteral("888")) + 12);
 			h->addSpacing(4);
 			h->addWidget(badge);
 		}
-		setFixedWidth(310);
+		// Einheitliche Breite (Raster) aus dem Bedarf der Inhalte: Oktett, Stern, MAC, dreistellige Zahl.
+		setFixedWidth(qMax(300, h->sizeHint().width() + (ap.value(QStringLiteral("conductor")).toBool() ? 0 : fontMetrics().horizontalAdvance(QStringLiteral("★ ")))
+		                            + (ap.value(QStringLiteral("clients")).isDouble() ? 0 : fontMetrics().horizontalAdvance(QStringLiteral("888")) + 30)));
 	}
 };
 } // namespace
@@ -78,6 +81,10 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 	m_head = new QLabel(this);
 	m_head->setObjectName(QStringLiteral("rjMuted"));
 	m_head->setWordWrap(true);
+	// Verwaltung als eigene Plakette: nicht verwaltet grün, AirWave orange, Central rot.
+	m_managed = rjui::pill(QString(), QStringLiteral("off"), this);
+	m_managed->hide();
+	hh->addWidget(m_managed, 0, Qt::AlignVCenter);
 	hh->addWidget(m_head, 1);
 	m_query = new QPushButton(T("aruba.query"), this);
 	auto* tools = new QPushButton(T("aruba.tools"), this);
@@ -150,6 +157,7 @@ void ArubaClusterView::render()
 	const QJsonObject& c = m_cluster;
 	if (c.isEmpty())
 	{
+		m_managed->hide();
 		m_head->setText(T("aruba.head.none"));
 		for (QLabel* l : { m_total, m_online, m_offline, m_clients })
 			l->setText(QStringLiteral("–"));
@@ -157,11 +165,12 @@ void ArubaClusterView::render()
 		m_box->relayout();
 		return;
 	}
-	QString head = T("aruba.head").arg(c.value(QStringLiteral("vc")).toString(), c.value(QStringLiteral("segment")).toString(QStringLiteral("–")));
+	m_head->setText(T("aruba.head").arg(c.value(QStringLiteral("vc")).toString(), c.value(QStringLiteral("segment")).toString(QStringLiteral("–"))));
 	const QString managed = c.value(QStringLiteral("managed")).toString();
+	m_managed->setVisible(!managed.isEmpty());
 	if (!managed.isEmpty())
-		head += QStringLiteral(" · ") + m_backend->text(QStringLiteral("aruba.managed.") + managed);
-	m_head->setText(head);
+		rjui::setPill(m_managed, m_backend->text(QStringLiteral("aruba.managed.") + managed),
+		              managed == QLatin1String("none") ? QStringLiteral("ok") : managed == QLatin1String("airwave") ? QStringLiteral("warn") : QStringLiteral("err"));
 	m_total->setText(QString::number(c.value(QStringLiteral("total")).toInt()));
 	m_online->setText(QString::number(c.value(QStringLiteral("online")).toInt()));
 	m_offline->setText(c.value(QStringLiteral("allowed_known")).toBool() ? QString::number(c.value(QStringLiteral("offline")).toInt()) : QStringLiteral("?"));

@@ -1418,6 +1418,7 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	                      "QLabel[rjDot=\"ok\"] { color: %6; }"
 	                      "QLabel[rjDot=\"err\"] { color: %15; }"
 	                      "QLabel[rjDot=\"warn\"] { color: %8; }"
+	                      "QLabel[rjPill=\"err\"] { background: %16; color: %15; border-radius: 9px; padding: 1px 9px; }"
 	                      "QLabel[rjWarnText=\"true\"] { color: %8; }"
 	                      "QFrame#rjRow:hover { background: %3; }"
 	                      "QFrame#rjRow[selected=\"true\"] { background: %11; }"
@@ -1439,7 +1440,7 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	                      "QFrame#rjCard *[rjDirty=\"true\"]:enabled { border: 2px solid %14; }")
 	  .arg(base.name(), border.name(), tileBg.name(), muted.name(), okBg.name(), okText.name(), warnBg.name(), warnText.name(), accentBg.name())
 	  .arg(dark ? accent.lighter(140).name() : accent.darker(120).name(), rowSel.name(), fieldBg.name(), fieldBorder.name(), accent.name())
-	  .arg(dark ? QStringLiteral("#f28b82") : QStringLiteral("#b3261e"));
+	  .arg(dark ? QStringLiteral("#f28b82") : QStringLiteral("#b3261e"), mix(QColor("#d93025"), base, dark ? 30 : 16).name());
 }
 
 void MainWindow::applyTheme(bool dark)

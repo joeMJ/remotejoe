@@ -255,6 +255,8 @@ runpy.run_path(tool, run_name="__main__")
 /// Laufender oder beendeter Werkzeuglauf (ein Lauf zur Zeit).
 #[derive(Default)]
 pub struct Run {
+    /// Ziel oder Ordner, für den der Lauf gestartet wurde.
+    pub id: String,
     pub title: String,
     pub out: std::sync::Arc<std::sync::Mutex<String>>,
     pub done: std::sync::Arc<AtomicBool>,
@@ -491,14 +493,14 @@ impl App {
             return Err(format!("Keine Zugangsdaten: {}", problems.join("; ")));
         }
         let title = if tasks.len() == 1 { tasks[0].name.clone() } else { format!("{} Controller", tasks.len()) };
-        let run = Run { title: title.clone(), ..Default::default() };
+        let run = Run { id: id.to_string(), title: title.clone(), ..Default::default() };
         for p in &problems {
             append(&run.out, &format!("Übersprungen – {p}\n"));
         }
         let (out, done, stop, child, results) = (run.out.clone(), run.done.clone(), run.stop.clone(), run.child.clone(), run.results.clone());
         let n = tasks.len();
         std::thread::spawn(move || {
-            let r = Run { title: String::new(), out, done, stop, child, results };
+            let r = Run { id: String::new(), title: String::new(), out, done, stop, child, results };
             run_tool(&root, "ap_check.py", tasks, &r);
         });
         self.aptools_run = Some(run);
@@ -510,7 +512,9 @@ impl App {
         match &self.aptools_run {
             None => json!({ "run": null }),
             Some(r) => json!({ "run": {
+                "id": r.id,
                 "title": r.title,
+                "stopped": r.stop.load(std::sync::atomic::Ordering::SeqCst),
                 "text": r.out.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "done": r.done.load(std::sync::atomic::Ordering::SeqCst),
                 "results": r.results.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|p| json!({ "path": p, "files": std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| e.path()).filter(|x| x.is_file()).collect::<Vec<_>>()).unwrap_or_default() })).collect::<Vec<_>>(),

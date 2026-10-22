@@ -80,13 +80,15 @@ pub struct OverviewState {
     pub devices: HashMap<Uuid, &'static str>,
     /// Zuletzt abgefragter Aruba-Cluster je Ziel (VC).
     pub aruba: HashMap<String, Value>,
+    /// Nur Vorführung: Inventar im Speicher statt im Datenordner.
+    pub demo_inventory: HashMap<String, inventory::Inventory>,
 }
 
 impl Default for OverviewState {
     fn default() -> Self {
         let store = Store::default_location();
         let devices = store.scan_devices();
-        OverviewState { store, services: HashMap::new(), run: None, busy: HashMap::new(), devices, aruba: HashMap::new() }
+        OverviewState { store, services: HashMap::new(), run: None, busy: HashMap::new(), devices, aruba: HashMap::new(), demo_inventory: HashMap::new() }
     }
 }
 
@@ -205,7 +207,7 @@ impl App {
     pub fn overview_json(&self, c: &Value) -> Result<Value, String> {
         let s = self.ov_subject(c)?;
         let key = s.key();
-        let inv = self.overview.store.load_key(&key);
+        let inv = self.overview.demo_inventory.get(&key).cloned().unwrap_or_else(|| self.overview.store.load_key(&key));
         let services = self.overview.services.get(&key).filter(|(at, _)| at.elapsed() < SERVICES_TTL).map(|(_, v)| v.clone());
         let read_only = self.vault.as_ref().is_some_and(|v| v.index().read_only);
         let mut v = json!({
@@ -482,7 +484,8 @@ impl App {
         inv.offer("system", "Aruba Instant 8.10.0.23 LSR (Modell 515)", "SSH (show version)", at);
         inv.offer("uptime", "3 T 4 Std 12 Min", "SSH (show version)", at);
         inv.offer("serial", "CNZZQX0001", "SSH (show version)", at);
-        let _ = self.overview.save_inventory(&key, &inv);
+        // Nur im Speicher: die Vorführung schreibt nichts in den Datenordner.
+        self.overview.demo_inventory.insert(key.clone(), inv);
         let entry = cluster["aps"].as_array().and_then(|a| a.iter().find(|x| x["ip"] == "192.0.2.182").cloned());
         self.overview.aruba.insert(key, cluster);
         Ok(json!({ "ap": ap, "entry": entry }))

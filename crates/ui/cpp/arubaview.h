@@ -40,6 +40,7 @@ private:
 	RjBackend* m_backend;
 	QJsonObject m_cluster;
 	QLabel* m_head;
+	QLabel* m_managed;
 	QPushButton* m_query;
 	QLabel* m_total;
 	QLabel* m_online;
