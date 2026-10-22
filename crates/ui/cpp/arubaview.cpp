@@ -86,15 +86,20 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 	m_managed->hide();
 	hh->addWidget(m_managed, 0, Qt::AlignVCenter);
 	hh->addWidget(m_head, 1);
-	m_query = new QPushButton(T("aruba.query"), this);
-	hh->addWidget(m_query, 0, Qt::AlignTop);
 	v->addLayout(hh);
 	// Werkzeuge: lesend (Analyse, Inventar) und schreibend (Neustart, Update; nur unverwaltet und mit Admin-Konto).
 	auto* th = new QHBoxLayout;
+	// Zuerst die Abfrage, dann die Werkzeuge, alle in einer Zeile.
+	m_query = new QPushButton(rjui::glyphIcon(rjui::Glyph::Signal), T("aruba.query"), this);
+	th->addWidget(m_query);
 	for (const char* tool : { "analyse", "inventar", "reload", "update" })
 	{
-		auto* b = new QPushButton(T((QByteArray("aruba.") + tool).constData()), this);
 		const QString name = QString::fromLatin1(tool);
+		const rjui::Glyph g = name == QLatin1String("analyse") ? rjui::Glyph::Search
+		  : name == QLatin1String("inventar")                ? rjui::Glyph::Library
+		  : name == QLatin1String("reload")                  ? rjui::Glyph::Refresh
+		                                                     : rjui::Glyph::Gear;
+		auto* b = new QPushButton(rjui::glyphIcon(g), T((QByteArray("aruba.") + tool).constData()), this);
 		connect(b, &QPushButton::clicked, this, [this, name] { emit toolRequested(name); });
 		th->addWidget(b);
 		if (name == QLatin1String("reload"))

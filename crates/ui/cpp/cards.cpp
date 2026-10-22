@@ -1,5 +1,8 @@
 #include "cards.h"
 
+#include <cmath>
+
+#include <QtCore/QtMath>
 #include <QtGui/QIconEngine>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
@@ -83,40 +86,125 @@ void setPill(QLabel* l, const QString& text, const QString& kind)
 
 namespace
 {
-// Zeichnet bei jedem Aufruf neu, damit das Symbol einem Wechsel zwischen Hell und Dunkel folgt.
-class NoteIconEngine : public QIconEngine
+// Zeichnet bei jedem Aufruf neu, damit die Symbole einem Wechsel zwischen Hell und Dunkel folgen.
+// Die Formen sind in Anteilen eines Quadrats der Kantenlänge s beschrieben.
+class GlyphEngine : public QIconEngine
 {
 public:
+	explicit GlyphEngine(Glyph g)
+	  : m_glyph(g)
+	{
+	}
 	void paint(QPainter* p, const QRect& rect, QIcon::Mode mode, QIcon::State) override
 	{
 		const QColor c = QApplication::palette().color(mode == QIcon::Disabled ? QPalette::Disabled : QPalette::Active, QPalette::ButtonText);
 		const qreal s = qMin(rect.width(), rect.height());
-		const qreal w = s * 0.72, h = s * 0.9, fold = s * 0.26;
-		const QPointF o(rect.x() + (rect.width() - w) / 2.0, rect.y() + (rect.height() - h) / 2.0);
+		const QPointF o(rect.x() + (rect.width() - s) / 2.0, rect.y() + (rect.height() - s) / 2.0);
+		auto P = [&](qreal x, qreal y) { return o + QPointF(x * s, y * s); };
+		auto onCircle = [&](QPointF m, qreal r, qreal deg) {
+			const qreal a = qDegreesToRadians(deg);
+			return QPointF(m.x() + r * s * std::cos(a), m.y() - r * s * std::sin(a));
+		};
 		p->save();
 		p->setRenderHint(QPainter::Antialiasing);
 		QPen pen(c, qMax<qreal>(1.0, s / 14.0));
 		pen.setJoinStyle(Qt::RoundJoin);
 		pen.setCapStyle(Qt::RoundCap);
 		p->setPen(pen);
-		QPainterPath page;
-		page.moveTo(o);
-		page.lineTo(o + QPointF(w - fold, 0));
-		page.lineTo(o + QPointF(w, fold));
-		page.lineTo(o + QPointF(w, h));
-		page.lineTo(o + QPointF(0, h));
-		page.closeSubpath();
-		p->drawPath(page);
-		QPainterPath ear;
-		ear.moveTo(o + QPointF(w - fold, 0));
-		ear.lineTo(o + QPointF(w - fold, fold));
-		ear.lineTo(o + QPointF(w, fold));
-		p->drawPath(ear);
-		for (int i = 0; i < 3; ++i)
+		switch (m_glyph)
 		{
-			const qreal y = o.y() + h * (0.45 + 0.17 * i);
-			const qreal end = i == 2 ? w * 0.55 : w * 0.78;
-			p->drawLine(QPointF(o.x() + w * 0.22, y), QPointF(o.x() + end, y));
+		case Glyph::Note:
+		{
+			const qreal x0 = 0.14, y0 = 0.05, x1 = 0.86, y1 = 0.95, fold = 0.26;
+			QPainterPath page;
+			page.moveTo(P(x0, y0));
+			page.lineTo(P(x1 - fold, y0));
+			page.lineTo(P(x1, y0 + fold));
+			page.lineTo(P(x1, y1));
+			page.lineTo(P(x0, y1));
+			page.closeSubpath();
+			p->drawPath(page);
+			QPainterPath ear;
+			ear.moveTo(P(x1 - fold, y0));
+			ear.lineTo(P(x1 - fold, y0 + fold));
+			ear.lineTo(P(x1, y0 + fold));
+			p->drawPath(ear);
+			for (int i = 0; i < 3; ++i)
+			{
+				const qreal y = y0 + 0.9 * (0.45 + 0.17 * i);
+				p->drawLine(P(x0 + 0.16, y), P(i == 2 ? 0.54 : 0.70, y));
+			}
+			break;
+		}
+		case Glyph::Signal:
+		{
+			// Mast mit Funkwellen nach links und rechts.
+			const QPointF m = P(0.5, 0.38);
+			p->drawLine(P(0.36, 0.94), m);
+			p->drawLine(P(0.64, 0.94), m);
+			for (qreal r : { 0.17, 0.33 })
+			{
+				const QRectF box(m.x() - r * s, m.y() - r * s, 2 * r * s, 2 * r * s);
+				p->drawArc(box, -40 * 16, 80 * 16);
+				p->drawArc(box, 140 * 16, 80 * 16);
+			}
+			p->setBrush(c);
+			p->drawEllipse(m, s * 0.05, s * 0.05);
+			break;
+		}
+		case Glyph::Search:
+		{
+			const QPointF m = P(0.42, 0.42);
+			p->drawEllipse(m, s * 0.27, s * 0.27);
+			QPen thick = pen;
+			thick.setWidthF(pen.widthF() * 1.8);
+			p->setPen(thick);
+			p->drawLine(onCircle(m, 0.29, -45), P(0.88, 0.88));
+			break;
+		}
+		case Glyph::Library:
+		{
+			// Zwei stehende Bücher, ein angelehntes, darunter das Regalbrett.
+			p->drawRect(QRectF(P(0.10, 0.22), P(0.30, 0.86)));
+			p->drawRect(QRectF(P(0.34, 0.12), P(0.54, 0.86)));
+			p->drawLine(P(0.10, 0.34), P(0.30, 0.34));
+			p->drawLine(P(0.34, 0.26), P(0.54, 0.26));
+			QPolygonF lean;
+			lean << P(0.60, 0.86) << P(0.76, 0.86) << P(0.92, 0.28) << P(0.76, 0.24);
+			p->drawPolygon(lean);
+			p->drawLine(P(0.04, 0.94), P(0.96, 0.94));
+			break;
+		}
+		case Glyph::Refresh:
+		{
+			// Kreisbogen gegen den Uhrzeigersinn mit Pfeilspitze am Ende.
+			const QPointF m = P(0.5, 0.52);
+			const qreal r = 0.32, start = 40, span = 290;
+			const QRectF box(m.x() - r * s, m.y() - r * s, 2 * r * s, 2 * r * s);
+			p->drawArc(box, int(start * 16), int(span * 16));
+			const qreal a = qDegreesToRadians(start + span);
+			const QPointF end = onCircle(m, r, start + span);
+			const QPointF tangent(-std::sin(a), -std::cos(a));
+			const QPointF radial(std::cos(a), -std::sin(a));
+			QPolygonF head;
+			head << end + tangent * (s * 0.16) << end + radial * (s * 0.13) << end - radial * (s * 0.13);
+			p->setBrush(c);
+			p->drawPolygon(head);
+			break;
+		}
+		case Glyph::Gear:
+		{
+			const QPointF m = P(0.5, 0.5);
+			QPolygonF gear;
+			for (int i = 0; i < 8; ++i)
+			{
+				const qreal t = i * 45.0;
+				gear << onCircle(m, 0.31, t - 17) << onCircle(m, 0.45, t - 9) << onCircle(m, 0.45, t + 9) << onCircle(m, 0.31, t + 17);
+			}
+			p->drawPolygon(gear);
+			p->drawEllipse(m, s * 0.12, s * 0.12);
+			break;
+		}
 		}
 		p->restore();
 	}
@@ -130,18 +218,21 @@ public:
 		paint(&p, QRect(QPoint(0, 0), size), mode, state);
 		return pm;
 	}
-	QIconEngine* clone() const override { return new NoteIconEngine; }
+	QIconEngine* clone() const override { return new GlyphEngine(m_glyph); }
+
+private:
+	Glyph m_glyph;
 };
 } // namespace
 
-QIcon noteIcon()
+QIcon glyphIcon(Glyph g)
 {
-	return QIcon(new NoteIconEngine);
+	return QIcon(new GlyphEngine(g));
 }
 
 QPushButton* logMenuButton(const std::function<QString(const char*)>& text, QWidget* parent, const std::function<void(const QString& kind, bool filtered)>& pick)
 {
-	auto* b = new QPushButton(noteIcon(), text("aruba.log.menu"), parent);
+	auto* b = new QPushButton(glyphIcon(Glyph::Note), text("aruba.log.menu"), parent);
 	auto* menu = new QMenu(b);
 	for (const char* key : { "system", "system.filtered", static_cast<const char*>(nullptr), "security", "security.filtered" })
 	{
