@@ -254,6 +254,17 @@ fn windows_command() -> String {
 /// SSH mit den Zugangsdaten aus der KDBX: Linux-Befehl und Windows-PowerShell (über OpenSSH), Reihenfolge nach
 /// `prefer_windows`; liefert beides nichts, `show version` in einer Shell (Aruba).
 pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHosts, prefer_windows: bool) -> Result<(Found, &'static str, Option<String>), String> {
+    let (rt, conn, note, params, ask) = ssh_open(spec, port, known.clone())?;
+    ssh_inventory_on(spec, port, rt, conn, note, params, ask, known, ip, prefer_windows)
+}
+
+type AskSender = tokio::sync::mpsc::UnboundedSender<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>;
+
+/// SSH-Verbindung für lesende Abfragen mit den Zugangsdaten des Ziels: unbekannter Host-Schlüssel wird übernommen und
+/// gemeldet, ein geänderter nie; ältere Verfahren nur, wenn das Gerät nichts anderes anbietet. Liefert die Laufzeit,
+/// die Verbindung und einen Hinweis (übernommener Schlüssel, ältere Verfahren).
+#[allow(clippy::type_complexity)]
+pub fn ssh_open(spec: &JobSpec, port: u16, known: KnownHosts) -> Result<(tokio::runtime::Runtime, SshConnection, Option<String>, rj_ssh::client::SshParams, AskSender), String> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     // Unbekannter Host-Schlüssel: sofort übernehmen und melden. Geänderter: nie automatisch.
     let (ask, mut q) = tokio::sync::mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>();
@@ -301,6 +312,22 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
             None => msg,
         }
     })?;
+    Ok((rt, conn, note, params, ask))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ssh_inventory_on(
+    spec: &JobSpec,
+    port: u16,
+    rt: tokio::runtime::Runtime,
+    conn: SshConnection,
+    note: Option<String>,
+    params: rj_ssh::client::SshParams,
+    ask: AskSender,
+    known: KnownHosts,
+    ip: Option<&str>,
+    prefer_windows: bool,
+) -> Result<(Found, &'static str, Option<String>), String> {
     // Windows mit OpenSSH zuerst, wenn es danach aussieht; sonst Linux zuerst.
     let order: [bool; 2] = if prefer_windows { [true, false] } else { [false, true] };
     for windows in order {

@@ -78,13 +78,15 @@ pub struct OverviewState {
     busy: HashMap<String, u64>,
     /// Geräteart je Ziel aus dem Inventar (eigenes Symbol im Baum, z. B. Aruba-AP).
     pub devices: HashMap<Uuid, &'static str>,
+    /// Zuletzt abgefragter Aruba-Cluster je Ziel (VC).
+    pub aruba: HashMap<String, Value>,
 }
 
 impl Default for OverviewState {
     fn default() -> Self {
         let store = Store::default_location();
         let devices = store.scan_devices();
-        OverviewState { store, services: HashMap::new(), run: None, busy: HashMap::new(), devices }
+        OverviewState { store, services: HashMap::new(), run: None, busy: HashMap::new(), devices, aruba: HashMap::new() }
     }
 }
 
@@ -206,6 +208,7 @@ impl App {
             "inventory": inventory_json(&inv),
             "aruba": inv.value("system").is_some_and(|s| s.starts_with("Aruba")),
             "aruba_tools": self.config.features.aruba,
+            "aruba_cluster": self.overview.aruba.get(&key),
             "services": services,
             "busy": self.overview.busy.contains_key(&key),
             "run": self.overview_output_key(&key),
@@ -399,6 +402,61 @@ impl App {
             })
         });
         self.overview.busy.insert(key, job);
+        Ok(json!({ "pending": job }))
+    }
+
+    /// Aruba-Werkzeuge: Cluster am virtuellen Controller abfragen (`show aps`, `allowed-ap` aus der Konfiguration),
+    /// per SSH mit den Zugangsdaten des Ziels. Ergebnis „ov_aruba_cluster“.
+    pub fn aruba_cluster(&mut self, c: &Value) -> Result<Value, String> {
+        if !self.config.features.aruba {
+            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
+        }
+        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
+        if self.demo {
+            return Err("In der Vorführung nicht verfügbar".into());
+        }
+        let (t, r) = self.inventory_view(&t)?;
+        let key = t.id.to_string();
+        let spec = crate::patch::JobSpec {
+            protocol: Protocol::Ssh,
+            host: t.host.clone(),
+            port: t.effective_port(),
+            credentials: self.credential_payload(&r, Protocol::Ssh)?,
+            transport: None,
+            legacy: self.target_legacy_of(t.id),
+        };
+        let port = if t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
+        let known = self.known_hosts_ref();
+        let vc = self.overview.services.get(&key).and_then(|(_, v)| v["ip"].as_str().map(str::to_string)).unwrap_or_else(|| t.host.clone());
+        let job_key = key.clone();
+        let job = self.jobs.spawn("Aruba-Cluster abfragen", move |job| {
+            let res = (|| {
+                let (rt, conn, note, _, _) = remote::ssh_open(&spec, port, known)?;
+                let r = rt.block_on(remote::cli_session(&conn, &crate::aruba::CLUSTER_COMMANDS));
+                rt.block_on(conn.disconnect());
+                let r = r?;
+                if r.outputs.len() < crate::aruba::CLUSTER_COMMANDS.len() {
+                    return Err("Keine vollständige Antwort des Controllers (Zeitlimit 30 s)".to_string());
+                }
+                Ok((crate::aruba::cluster_json(&r.outputs[1], &r.outputs[2], &vc), note))
+            })();
+            drop(spec);
+            Box::new(move |app: &mut App, cancelled| {
+                if cancelled {
+                    return Vec::new();
+                }
+                let json = match res {
+                    Ok((mut v, note)) => {
+                        v["at"] = json!(now());
+                        v["note"] = json!(note);
+                        app.overview.aruba.insert(job_key.clone(), v.clone());
+                        v
+                    }
+                    Err(e) => json!({ "error": e }),
+                };
+                vec![UiEvent::JobResult { job, kind: "ov_aruba_cluster".into(), target: job_key, json: json.to_string() }]
+            })
+        });
         Ok(json!({ "pending": job }))
     }
 

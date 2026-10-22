@@ -1,5 +1,7 @@
 #include "overviewtab.h"
 
+#include "arubaview.h"
+
 #include "cards.h"
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
@@ -223,12 +225,19 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 		pollRun();
 	});
 
-	// Aruba (Schritt 2: AP-Check)
+	// Aruba-Werkzeuge: Cluster am virtuellen Controller
 	m_arubaCard = rjui::card(page, &in);
 	in->addWidget(rjui::section(T("ov.aruba"), m_arubaCard));
-	auto* al = new QLabel(T("ov.aruba.later"), m_arubaCard);
-	al->setWordWrap(true);
-	in->addWidget(al);
+	m_cluster = new ArubaClusterView(m_backend, m_arubaCard);
+	in->addWidget(m_cluster);
+	connect(m_cluster, &ArubaClusterView::queryRequested, this, [this] {
+		const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("aruba_cluster") } });
+		if (r.contains(QStringLiteral("error")))
+			m_cluster->setError(r.value(QStringLiteral("error")).toString());
+		else
+			m_cluster->setBusy(true);
+	});
+	connect(m_cluster, &ArubaClusterView::apClicked, this, [this](const QJsonObject& ap) { emit arubaApRequested(m_subject, ap); });
 	m_arubaCard->hide();
 	lay->addWidget(m_arubaCard);
 	lay->addStretch(1);
@@ -310,6 +319,7 @@ void OverviewTab::refreshInventorySwitch()
 	{
 		applyInventorySwitch(r);
 		renderWays(r);
+		updateAruba(r);
 	}
 	else if (!m_subject.contains(QStringLiteral("hv")))
 	{
@@ -370,7 +380,7 @@ void OverviewTab::load()
 	m_notes->setReadOnly(!m_notesEditable);
 	m_notesSave->setEnabled(false);
 	m_notesState->clear();
-	m_arubaCard->setVisible(r.value(QStringLiteral("aruba")).toBool());
+	updateAruba(r);
 	if (r.value(QStringLiteral("run")).isObject())
 	{
 		m_output->show();
@@ -404,10 +414,26 @@ void OverviewTab::query()
 	setQueryState(m_backend->text(QStringLiteral("ov.inventory.running")).toHtmlEscaped());
 }
 
+void OverviewTab::updateAruba(const QJsonObject& r)
+{
+	const bool on = r.value(QStringLiteral("aruba")).toBool() && r.value(QStringLiteral("aruba_tools")).toBool();
+	m_arubaCard->setVisible(on);
+	if (on)
+		m_cluster->setCluster(r.value(QStringLiteral("aruba_cluster")).toObject());
+}
+
 void OverviewTab::handleResult(const QString& kind, const QString& target, const QJsonObject& r)
 {
 	if (target != m_key)
 		return;
+	if (kind == QLatin1String("ov_aruba_cluster"))
+	{
+		if (r.value(QStringLiteral("error")).isString())
+			m_cluster->setError(r.value(QStringLiteral("error")).toString());
+		else
+			m_cluster->setCluster(r);
+		return;
+	}
 	if (kind == QLatin1String("ov_probe"))
 	{
 		m_servicesAgain->setEnabled(true);
@@ -426,7 +452,7 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 				done += QStringLiteral("<br><b>%1</b>").arg(r.value(QStringLiteral("note")).toString().toHtmlEscaped());
 			setQueryState(done);
 			// Aruba erst nach der Abfrage bekannt.
-			m_arubaCard->setVisible(call({ { QStringLiteral("op"), QStringLiteral("overview") } }).value(QStringLiteral("aruba")).toBool());
+			updateAruba(call({ { QStringLiteral("op"), QStringLiteral("overview") } }));
 			emit inventoryChanged();
 		}
 		if (r.value(QStringLiteral("error")).isString())

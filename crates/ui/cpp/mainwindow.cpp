@@ -1411,6 +1411,11 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	                      "QLabel[rjPill=\"off\"] { background: %3; color: %4; border-radius: 9px; padding: 1px 9px; }"
 	                      "QLabel[rjPill=\"accent\"] { background: %9; color: %10; border-radius: 9px; padding: 1px 9px; }"
 	                      "QFrame#rjRow { border-radius: 6px; }"
+	                      "QFrame#rjApTile { border: 1px solid %2; border-radius: 6px; }"
+	                      "QFrame#rjApTile:hover { background: %3; }"
+	                      "QLabel[rjDot=\"ok\"] { color: %6; }"
+	                      "QLabel[rjDot=\"err\"] { color: %15; }"
+	                      "QLabel[rjWarnText=\"true\"] { color: %8; }"
 	                      "QFrame#rjRow:hover { background: %3; }"
 	                      "QFrame#rjRow[selected=\"true\"] { background: %11; }"
 	                      // Eingabefelder in Karten: eigener Rand und leicht abgesetzter Hintergrund (bei dunklen
@@ -1430,7 +1435,8 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	                      "QFrame#rjCard QSpinBox::up-button:hover, QFrame#rjCard QSpinBox::down-button:hover { background: %3; }"
 	                      "QFrame#rjCard *[rjDirty=\"true\"]:enabled { border: 2px solid %14; }")
 	  .arg(base.name(), border.name(), tileBg.name(), muted.name(), okBg.name(), okText.name(), warnBg.name(), warnText.name(), accentBg.name())
-	  .arg(dark ? accent.lighter(140).name() : accent.darker(120).name(), rowSel.name(), fieldBg.name(), fieldBorder.name(), accent.name());
+	  .arg(dark ? accent.lighter(140).name() : accent.darker(120).name(), rowSel.name(), fieldBg.name(), fieldBorder.name(), accent.name())
+	  .arg(dark ? QStringLiteral("#f28b82") : QStringLiteral("#b3261e"));
 }
 
 void MainWindow::applyTheme(bool dark)
