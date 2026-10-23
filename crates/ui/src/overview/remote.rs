@@ -566,15 +566,15 @@ mod tests {
     }
 
     #[test]
-    fn aruba_serial_from_real_show_aps_table() {
+    fn aruba_serial_from_show_aps_table() {
         // Aufbau wie Aruba Instant 8.10 (`show aps`, gekürzt um hintere Spalten); zweite Zeile mit verschobenen Spalten.
         let out = "MASTER# show aps\r\n\r\n2 Access Points\r\n----------------\r\n\
                    Name                  IP Address      Mode    Spectrum  Clients  Type         IPv6 Address  Mesh Role  Zone  Serial #    radio0 Channel\r\n\
                    ----                  ----------      ----    --------  -------  ----         ------------  ---------  ----  --------    --------------\r\n\
-                   MASTER                10.80.227.239*  access  enable    3        515(indoor)  --            N/A        -     CNLGKD5DWX  36\r\n\
-                   48:2f:6b:ca:25:fe-lang-ap  10.80.227.225   access  enable    0        505(indoor)  --            N/A        -     CNNPKPPH0Y  40\r\nMASTER#";
-        assert_eq!(parse_aruba_serial(out, "10.80.227.239").as_deref(), Some("CNLGKD5DWX"));
-        assert_eq!(parse_aruba_aps(out).iter().find(|a| a.ip == "10.80.227.225").and_then(|a| a.serial.as_deref()), Some("CNNPKPPH0Y"), "verschobene Spalten");
+                   MASTER                192.0.2.239*    access  enable    3        515(indoor)  --            N/A        -     CNZZQX0101  36\r\n\
+                   02:00:5e:00:53:fe-lang-ap  192.0.2.225     access  enable    0        505(indoor)  --            N/A        -     CNZZQX0102  40\r\nMASTER#";
+        assert_eq!(parse_aruba_serial(out, "192.0.2.239").as_deref(), Some("CNZZQX0101"));
+        assert_eq!(parse_aruba_aps(out).iter().find(|a| a.ip == "192.0.2.225").and_then(|a| a.serial.as_deref()), Some("CNZZQX0102"), "verschobene Spalten");
         // Virtuelle Controller-IP: keine Zeile mit dieser Adresse, der Name aus der Eingabeaufforderung entscheidet.
         let vc = "02:00:5e:00:53:12# show aps\r\n\r\n1 Access Point\r\n--------------\r\n\
                   Name               IP Address       Mode    Spectrum  Clients  Type         IPv6 Address  Mesh Role  Zone  Serial #    radio0 Channel\r\n\
