@@ -26,6 +26,17 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 - **Kompakt:** Die Tabs stehen in der Titelzeile, das Menü hinter einem Knopf, und der Baum lässt sich
   einklappen (F9) – fast die ganze Fensterfläche gehört der Sitzung. Beim Start ist der Baum ausgeklappt.
 
+## Dokumentation
+
+- [`docs/UPDATE.md`](docs/UPDATE.md) – Updates: Quelle einstellen, Pakete packen, signieren und veröffentlichen
+- [`docs/ARCHITEKTUR.md`](docs/ARCHITEKTUR.md) – Aufbau: Bausteine, Prozessmodell, Zusammenspiel der Prozesse, Oberfläche
+- [`docs/DATENMODELL.md`](docs/DATENMODELL.md) – Datenmodell: Index, Verweise auf Zugangsdaten, Vererbung, Ablage in der KDBX
+- [`docs/INSTALLATION.md`](docs/INSTALLATION.md) – Installation unter Ubuntu und Windows, Zertifikat des Herausgebers
+- [`docs/BAUEN.md`](docs/BAUEN.md) – remotejoe unter Ubuntu und Windows bauen
+- [`docs/DATENSCHUTZ.md`](docs/DATENSCHUTZ.md) – Datenschutz und Netzwerkzugriffe
+- [`docs/ZIELE-EINRICHTEN.md`](docs/ZIELE-EINRICHTEN.md) – Windows-Ziele für RDP und PowerShell-Remoting einrichten (mit Skripten unter [`tools/ziel-einrichten/`](tools/ziel-einrichten/))
+- [`THIRD_PARTY.md`](THIRD_PARTY.md) – verwendete Bibliotheken Dritter mit Lizenzen
+
 > [!WARNING]
 > **Privates Hobbyprojekt – nicht gepflegt / unmaintained.**
 > Dieses Repository ist für meinen eigenen Gebrauch gedacht und wird nur aus Bequemlichkeit öffentlich bereitgestellt.
@@ -507,17 +518,6 @@ focus_frame = true
 
 Wie man remotejoe unter Ubuntu und Windows selbst baut (Abhängigkeiten, Skripte, MSI, Tests), steht in
 [`docs/BAUEN.md`](docs/BAUEN.md).
-
-## Dokumentation
-
-- [`docs/UPDATE.md`](docs/UPDATE.md) – Updates: Quelle einstellen, Pakete packen, signieren und veröffentlichen
-- [`docs/ARCHITEKTUR.md`](docs/ARCHITEKTUR.md) – Aufbau: Bausteine, Prozessmodell, Zusammenspiel der Prozesse, Oberfläche
-- [`docs/DATENMODELL.md`](docs/DATENMODELL.md) – Datenmodell: Index, Verweise auf Zugangsdaten, Vererbung, Ablage in der KDBX
-- [`docs/INSTALLATION.md`](docs/INSTALLATION.md) – Installation unter Ubuntu und Windows, Zertifikat des Herausgebers
-- [`docs/BAUEN.md`](docs/BAUEN.md) – remotejoe unter Ubuntu und Windows bauen
-- [`docs/DATENSCHUTZ.md`](docs/DATENSCHUTZ.md) – Datenschutz und Netzwerkzugriffe
-- [`docs/ZIELE-EINRICHTEN.md`](docs/ZIELE-EINRICHTEN.md) – Windows-Ziele für RDP und PowerShell-Remoting einrichten (mit Skripten unter [`tools/ziel-einrichten/`](tools/ziel-einrichten/))
-- [`THIRD_PARTY.md`](THIRD_PARTY.md) – verwendete Bibliotheken Dritter mit Lizenzen
 
 ## Datenschutz und Netzwerkzugriffe
 
