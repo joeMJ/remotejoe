@@ -3371,11 +3371,11 @@ void MainWindow::handleEvents(const QString& json)
 				else if (kind == QLatin1String("backup"))
 				{
 					// Sicherung der KDBX: nur Fehler melden; die Einstellungen zeigen den Stand.
-					for (const auto& t : r.value(QStringLiteral("targets")).toArray())
-						if (const QJsonObject o = t.toObject(); !o.value(QStringLiteral("ok")).toBool())
+					for (const auto& bt : r.value(QStringLiteral("targets")).toArray())
+						if (const QJsonObject o = bt.toObject(); !o.value(QStringLiteral("ok")).toBool())
 							statusBar()->showMessage(T(m_backend, "status.backup.failed").arg(QDir::toNativeSeparators(o.value(QStringLiteral("dir")).toString()), o.value(QStringLiteral("error")).toString()), 15000);
-					for (auto* s : findChildren<SettingsTab*>())
-						s->reloadBackup();
+					for (auto* st : findChildren<SettingsTab*>())
+						st->reloadBackup();
 				}
 				else if (kind == QLatin1String("aruba_clients"))
 				{

@@ -395,13 +395,12 @@ void SettingsTab::reloadMcp()
 	fill(m_mcpFolders, s.value(QStringLiteral("folders")).toArray(), s.value(QStringLiteral("allowed")).toArray(), "path");
 	fill(m_mcpLogins, s.value(QStringLiteral("all_logins")).toArray(), s.value(QStringLiteral("logins")).toArray(), "name");
 	// Eintrag für Claude Desktop (claude_desktop_config.json): rj-mcp liegt neben remotejoe.
-	const QString exe = QDir::toNativeSeparators(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral(
 #ifdef Q_OS_WIN
-		"rj-mcp.exe"
+	const QString mcpName = QStringLiteral("rj-mcp.exe");
 #else
-		"rj-mcp"
+	const QString mcpName = QStringLiteral("rj-mcp");
 #endif
-		)));
+	const QString exe = QDir::toNativeSeparators(QDir(QCoreApplication::applicationDirPath()).filePath(mcpName));
 	QJsonObject server{ { QStringLiteral("command"), exe } };
 	const QString home = qEnvironmentVariable("REMOTEJOE_HOME");
 	if (!home.isEmpty())

@@ -463,8 +463,8 @@ std::int32_t rjRunApplication()
 	const QStringList dirs{ QLibraryInfo::path(QLibraryInfo::TranslationsPath), QCoreApplication::applicationDirPath() + QStringLiteral("/translations") };
 	bool translated = false;
 	for (const QString& dir : dirs)
-		for (const QString& name : { QStringLiteral("qtbase_de"), QStringLiteral("qt_de") })
-			if (!translated && qtDe.load(name, dir))
+		for (const QString& qm : { QStringLiteral("qtbase_de"), QStringLiteral("qt_de") })
+			if (!translated && qtDe.load(qm, dir))
 				translated = QApplication::installTranslator(&qtDe);
 	const QString shots = qEnvironmentVariable("RJ_SCREENSHOTS");
 	const bool demo = !shots.isEmpty() || qEnvironmentVariableIsSet("RJ_DEMO");
