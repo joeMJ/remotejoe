@@ -783,11 +783,12 @@ impl App {
         let mut problems = Vec::new();
         for tid in self.aptools_targets(ids) {
             let Some(t) = self.target(tid).cloned() else { continue };
-            let creds = self.inventory_view(&t).and_then(|(_, r)| self.credential_payload(&r, Protocol::Ssh));
+            // Bei Web als Hauptweg: Port des SSH-Wegs.
+            let creds = self.inventory_view(&t).and_then(|(v, r)| self.credential_payload(&r, Protocol::Ssh).map(|p| (v, p)));
             match creds {
-                Ok(p) => {
+                Ok((view, p)) => {
                     let host = self.overview.services_ip(&tid.to_string()).unwrap_or_else(|| t.host.clone());
-                    let port = if t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
+                    let port = if view.protocol == Protocol::Ssh { view.effective_port() } else { 22 };
                     let spec = crate::patch::JobSpec { protocol: Protocol::Ssh, host: host.clone(), port, credentials: p.clone(), transport: None, legacy: self.target_legacy_of(tid) };
                     ok.push((tid, Vc { name: t.name.clone(), host, user: p.username.clone(), password: rj_core::Secret::from_bytes(p.password.0.clone()), spec, port }));
                 }

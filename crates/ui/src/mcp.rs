@@ -86,7 +86,10 @@ impl App {
                 }
             }
             v["inventar"] = Value::Object(fields);
-            v["zugangswege"] = json!(t.ways.iter().map(|w| json!({ "name": w.label(), "protokoll": w.protocol.label() })).collect::<Vec<_>>());
+            // Hauptweg zuerst, dann die weiteren Wege.
+            let mut ways = vec![json!({ "name": "Hauptweg", "protokoll": t.protocol.label(), "hauptweg": true })];
+            ways.extend(t.ways.iter().map(|w| json!({ "name": w.label(), "protokoll": w.protocol.label() })));
+            v["zugangswege"] = json!(ways);
         } else if !s.mcp_hide_serials {
             if let Some(serial) = inv.value("serial") {
                 v["seriennummer"] = json!(serial);

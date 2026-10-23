@@ -1097,15 +1097,13 @@ impl App {
                 self.index.tasks.push(t);
                 link(&mut self.index, parent, |m| m.tasks.push(tid)).map(|_| json!({ "task": tid }))
             }
-            // Aruba-AP: SSH als Hauptweg (Inventar), dazu die Web-Oberfläche auf 4343 mit denselben Zugangsdaten.
-            // Leere Adresse am Weg: https://<Adresse des Ziels>:4343/ – folgt also der Adresse des Ziels.
+            // Aruba-AP: die Web-Oberfläche auf 4343 als Hauptweg, dazu SSH mit denselben Zugangsdaten (Inventar,
+            // Cluster, Aruba-Werkzeuge suchen sich diesen Weg). Der SSH-Weg ohne eigene Adresse folgt der des Ziels.
             "aruba" => {
                 let name = str_of(c, "name").filter(|n| !n.is_empty()).unwrap_or("Neuer Aruba-AP");
-                let mut t = edit::new_target(&self.index, parent, Protocol::Ssh, name, None);
-                let mut w = rj_core::model::AccessWay::new(Protocol::Web);
-                w.name = "Web-Oberfläche".into();
-                w.port = Some(4343);
-                t.ways.push(w);
+                let mut t = edit::new_target(&self.index, parent, Protocol::Web, name, None);
+                t.port = Some(4343);
+                t.ways.push(rj_core::model::AccessWay::new(Protocol::Ssh));
                 edit::insert(&mut self.index, parent, Node::Target(t), None).map(|id| json!({ "id": id }))
             }
             "macro" => {
@@ -2637,6 +2635,21 @@ mod tests {
         assert!(matches!(&w.options, ProtocolOptions::Rdp(o) if o.gfx == rj_core::model::GfxMode::On && o.width.is_none() && o.auto_keys.is_some()), "{:?}", w.options);
         let e = save(&mut app, json!({ "width": "breit" }));
         assert!(e["errors"]["ways"].as_str().is_some_and(|m| m.starts_with("Weg 1") && m.contains("Breite muss eine ganze Zahl")), "{e}");
+    }
+
+    #[test]
+    fn aruba_ap_has_web_main_way_and_ssh_way() {
+        let mut app = App::new(false);
+        let root = app.index.root.id;
+        let id = Uuid::parse_str(cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "aruba" }))["id"].as_str().unwrap()).unwrap();
+        let r = cmd(&mut app, json!({ "op": "update", "id": id, "fields": { "options": { "url": "https://192.0.2.4:4343/" } } }));
+        assert!(r.get("error").is_none(), "{r}");
+        let t = app.target(id).unwrap().clone();
+        assert_eq!((t.protocol, t.host.as_str(), t.effective_port()), (Protocol::Web, "192.0.2.4", 4343));
+        assert_eq!((t.ways.len(), t.ways[0].protocol), (1, Protocol::Ssh));
+        // Inventar und Aruba-Werkzeuge gehen über den SSH-Weg zur Adresse des Ziels.
+        let view = t.via(t.ways[0].id).unwrap();
+        assert_eq!((view.protocol, view.host.as_str(), view.effective_port()), (Protocol::Ssh, "192.0.2.4", 22));
     }
 
     #[test]
