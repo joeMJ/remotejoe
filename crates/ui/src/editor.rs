@@ -466,7 +466,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build") | Some("credcheck_start") | Some("credcheck_rows") | Some("credcheck_cancel") | Some("orphans_list") | Some("mcp_call") | Some("mcp_denied") | Some("data_dir") | Some("mcp_settings") | Some("set_mcp_settings") | Some("mcp_log")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -677,6 +677,23 @@ impl App {
             }
             "save" => return self.save_with(str_of(&c, "choice")),
             "backup_status" => Ok(self.backup_settings_json()),
+            // Aufklappzustand des Baums beim Start (je Schlüsseldatenbank); `ids` = null setzt auf die Vorgabe zurück.
+            "tree_start" => Ok(json!({ "ids": self.kdbx_path().and_then(|k| self.config.window.tree_start.get(&k).cloned()) })),
+            "set_tree_start" => {
+                let Some(key) = self.kdbx_path() else { return err("Keine Schlüsseldatenbank geöffnet") };
+                match c.get("ids").and_then(Value::as_array) {
+                    Some(ids) => {
+                        self.config.window.tree_start.insert(key, ids.iter().filter_map(Value::as_str).map(str::to_string).collect());
+                    }
+                    None => {
+                        self.config.window.tree_start.remove(&key);
+                    }
+                }
+                match &self.config_path {
+                    Some(p) => self.config.save(p).map(|_| json!({ "ok": true })).map_err(|e| e.to_string()),
+                    None => Ok(json!({ "ok": true })),
+                }
+            }
             "backup_now" => self.backup_start(None, true).and_then(|j| j.map(|job| json!({ "pending": job })).ok_or_else(|| "Keine gespeicherte KDBX geöffnet".to_string())),
             // Beim Beenden: höchstens `ms` auf eine laufende Sicherung warten.
             "backup_wait" => Ok(json!({ "done": crate::kdbxbackup::wait(std::time::Duration::from_millis(c.get("ms").and_then(Value::as_u64).unwrap_or(10_000).min(30_000))) })),
@@ -709,6 +726,20 @@ impl App {
             "mass_start" => self.mass_start(&c),
             "merge_preview" => self.merge_preview(&c),
             "shared_list" => Ok(self.shared_list()),
+            "orphans_list" => Ok(self.orphans_list()),
+            "credcheck_start" => self.credcheck_start(&c),
+            "mcp_call" => self.mcp_call(&c),
+            "mcp_denied" => Ok(self.mcp_denied(&c)),
+            "data_dir" => Ok(json!({ "path": rj_core::config::data_dir() })),
+            "mcp_settings" => Ok(self.mcp_settings_json()),
+            "set_mcp_settings" => self.mcp_apply_settings(&c),
+            "mcp_log" => Ok(self.mcp_log_json()),
+            "credcheck_rows" => Ok(self.credcheck_rows()),
+            "credcheck_cancel" => Ok(self.credcheck_cancel()),
+            "credmerge_list" => Ok(self.credmerge_list(&c)),
+            "credmerge_apply" => self.credmerge_apply(&c),
+            "orphans_recycle" => self.orphans_move(&c, true),
+            "orphans_restore" => self.orphans_move(&c, false),
             "report_build" => Ok(self.report_build(&c)),
             "shared_split" => self.shared_split(&c),
             "shared_to_login" => self.shared_to_login(&c),
@@ -1618,6 +1649,196 @@ impl App {
         true
     }
 
+    /// Gleiche Zugangsdaten zusammenführen: direkt hinterlegte Zugangsdaten (Hauptdatensatz von Zielen und Ordnern,
+    /// eigene Zugangsdaten an Wegen) mit gleichem Benutzer und Kennwort, dazu ein vorhandenes Anmeldeobjekt mit
+    /// denselben Daten. Kennwörter werden nur im Speicher verglichen. `scope`: nur unter diesen Knoten (leer: alles).
+    fn credmerge_groups(&self, scope: &[Uuid]) -> Vec<(String, Vec<Uuid>, Vec<rj_core::shared::Use>, Option<(Uuid, String)>)> {
+        use rj_core::shared::Use;
+        let Some(vault) = self.vault.as_ref() else { return Vec::new() };
+        let key_of = |e: Uuid| vault.credential(e).map(|c| (c.data.username.clone(), c.data.password.as_bytes().to_vec()));
+        let in_scope = |node: Uuid| scope.is_empty() || scope.iter().any(|s| *s == node || self.index.path_to(node).is_some_and(|p| p.iter().any(|n| n.id() == *s)));
+        let mut groups: Vec<((String, Vec<u8>), Vec<Uuid>, Vec<Use>)> = Vec::new();
+        for (entry, uses) in rj_core::shared::direct_uses(&self.index) {
+            // Nur der Hauptdatensatz eines Knotens und eigene Zugangsdaten an Wegen; weitere Datensätze bleiben.
+            let uses: Vec<Use> = uses
+                .into_iter()
+                .filter(|u| in_scope(u.node()))
+                .filter(|u| match u {
+                    Use::Settings { node, name } => match edit::node(&self.index, *node) {
+                        Some(Node::Target(t)) => name == t.credential_name(),
+                        _ => name == rj_core::DEFAULT_CREDENTIAL,
+                    },
+                    Use::Way { .. } => true,
+                })
+                .collect();
+            if uses.is_empty() {
+                continue;
+            }
+            let Some(key) = key_of(entry) else { continue };
+            if key.0.is_empty() && key.1.is_empty() {
+                continue;
+            }
+            match groups.iter_mut().find(|g| g.0 == key) {
+                Some(g) => {
+                    g.1.push(entry);
+                    g.2.extend(uses);
+                }
+                None => groups.push((key, vec![entry], uses)),
+            }
+        }
+        let logins: Vec<((String, Vec<u8>), Uuid, String)> = self.index.logins.iter().filter_map(|l| key_of(l.entry.entry).map(|k| (k, l.id, l.name.clone()))).collect();
+        let mut out: Vec<_> = groups
+            .into_iter()
+            .filter_map(|(key, entries, uses)| {
+                let login = logins.iter().find(|l| l.0 == key).map(|l| (l.1, l.2.clone()));
+                (uses.len() >= 2 || login.is_some()).then_some((key.0, entries, uses, login))
+            })
+            .collect();
+        out.sort_by(|a, b| b.2.len().cmp(&a.2.len()).then(a.0.cmp(&b.0)));
+        out
+    }
+
+    /// Ordner für ein neues Anmeldeobjekt: der gemeinsame Ordner aller Stellen.
+    fn common_folder(&self, nodes: &[Uuid]) -> Uuid {
+        let folder_of = |n: Uuid| if edit::folder(&self.index, n).is_some() { n } else { edit::parent_of(&self.index, n).unwrap_or(self.index.root.id) };
+        let paths: Vec<Vec<Uuid>> = nodes.iter().map(|n| self.index.path_to(folder_of(*n)).unwrap_or_default().iter().map(|x| x.id()).collect()).collect();
+        let mut common = paths.first().cloned().unwrap_or_default();
+        for p in &paths[1.min(paths.len())..] {
+            let k = common.iter().zip(p).take_while(|(a, b)| a == b).count();
+            common.truncate(k);
+        }
+        common.last().copied().unwrap_or(self.index.root.id)
+    }
+
+    fn credmerge_list(&self, c: &Value) -> Value {
+        use rj_core::shared::Use;
+        if self.vault.is_none() {
+            return json!({ "groups": [], "locked": true });
+        }
+        let scope = ids_of(c, "ids");
+        let groups: Vec<Value> = self
+            .credmerge_groups(&scope)
+            .into_iter()
+            .map(|(user, entries, uses, login)| {
+                let list: Vec<Value> = uses
+                    .iter()
+                    .map(|u| {
+                        let node = u.node();
+                        let path: Vec<String> = self.index.path_to(node).unwrap_or_default().iter().map(|n| rj_core::charset::mark_visible(n.name(), false).into_owned()).collect();
+                        let what = match u {
+                            Use::Settings { .. } => "Zugangsdaten".to_string(),
+                            Use::Way { way, .. } => match self.target(node).and_then(|t| t.ways.iter().find(|w| w.id == *way)) {
+                                Some(w) => format!("Weg „{}“", w.label()),
+                                None => "Weg".into(),
+                            },
+                        };
+                        json!({ "id": node, "name": path.last().cloned().unwrap_or_default(), "path": path[..path.len().saturating_sub(1)].join(" › "), "what": what })
+                    })
+                    .collect();
+                let folder = self.common_folder(&uses.iter().map(|u| u.node()).collect::<Vec<_>>());
+                let folder_path: Vec<String> = self.index.path_to(folder).unwrap_or_default().iter().map(|n| n.name().to_string()).collect();
+                json!({
+                    "username": user,
+                    "entries": entries,
+                    "count": uses.len(),
+                    "login": login.map(|(id, name)| json!({ "id": id, "name": name })),
+                    "suggestion": format!("Anmeldung {user}"),
+                    "folder": folder_path.join(" › "),
+                    "uses": list,
+                })
+            })
+            .collect();
+        json!({ "groups": groups })
+    }
+
+    /// Eine Gruppe (erkannt an einem ihrer Einträge) auf ein Anmeldeobjekt umstellen: vorhandenes verwenden oder neu
+    /// anlegen (`name`). Die bisherigen KDBX-Einträge bleiben liegen und lassen sich danach über „Verwaiste
+    /// KDBX-Einträge prüfen“ in den Papierkorb legen; so bleibt „Rückgängig“ vollständig.
+    fn credmerge_apply(&mut self, c: &Value) -> Result<Value, String> {
+        use rj_core::shared::Use;
+        let scope = ids_of(c, "ids");
+        let want = ids_of(c, "entries");
+        let first = *want.first().ok_or("Gruppe fehlt")?;
+        let (user, entries, uses, login) = self.credmerge_groups(&scope).into_iter().find(|g| g.1.contains(&first)).ok_or("Die Gruppe gibt es nicht mehr; bitte neu prüfen")?;
+        let before = self.index.clone();
+        let lid = match login {
+            Some((id, _)) => id,
+            None => {
+                let mut name = c.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| format!("Anmeldung {user}"));
+                let base = name.clone();
+                let mut n = 2;
+                while self.index.logins.iter().any(|l| l.name == name) {
+                    name = format!("{base} {n}");
+                    n += 1;
+                }
+                let folder = self.common_folder(&uses.iter().map(|u| u.node()).collect::<Vec<_>>());
+                let title = self.vault.as_ref().and_then(|v| v.credential(entries[0])).map(|c| c.data.title);
+                let login = rj_core::Login { id: Uuid::new_v4(), name, folder, entry: CredentialRef { entry: entries[0], last_title: title } };
+                let id = login.id;
+                self.index.logins.push(login);
+                id
+            }
+        };
+        for u in &uses {
+            match u {
+                Use::Settings { node, .. } => {
+                    rj_core::inherit::set_credential_mode(&mut self.index, *node, CredentialMode::Login(lid));
+                }
+                Use::Way { node, way } => {
+                    if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut self.index.root, *node) {
+                        if let Some(w) = t.ways.iter_mut().find(|w| w.id == *way) {
+                            w.own = None;
+                            w.credential = rj_core::model::WayCredential::Login(lid);
+                        }
+                    }
+                }
+            }
+        }
+        self.commit("Gleiche Zugangsdaten zusammenführen", before);
+        Ok(json!({ "login": lid, "changed": uses.len() }))
+    }
+
+    /// Verwaiste Einträge: eigene KDBX-Einträge (Gruppe `remotejoe`), auf die nichts im Index verweist – kein Ziel,
+    /// Ordner, Weg, Anmeldeobjekt, Tunnel oder SNMP-Gerät. Einträge außerhalb der Gruppe zählen nie. Ohne Kennwörter.
+    fn orphans_list(&self) -> Value {
+        let Some(vault) = self.vault.as_ref() else { return json!({ "entries": [], "locked": true }) };
+        let used = self.index.referenced_entries();
+        let entries: Vec<Value> = vault
+            .entries()
+            .into_iter()
+            .filter(|e| vault.is_own_entry(e.uuid) && !used.contains(&e.uuid))
+            .map(|e| {
+                let (created, modified) = vault.entry_times(e.uuid);
+                json!({ "entry": e.uuid, "title": e.title, "username": e.username, "path": e.group_path.join(" › "), "created": created, "modified": modified })
+            })
+            .collect();
+        json!({ "entries": entries })
+    }
+
+    /// Markierte verwaiste Einträge in den Papierkorb der KDBX (`recycle`) bzw. zurück (Rückgängig) und speichern.
+    /// Ein Eintrag, auf den inzwischen wieder etwas verweist, bleibt unberührt.
+    fn orphans_move(&mut self, c: &Value, recycle: bool) -> Result<Value, String> {
+        let used = self.index.referenced_entries();
+        let vault = self.vault.as_mut().ok_or("Keine Schlüsseldatenbank geöffnet")?;
+        let mut moved = Vec::new();
+        for e in ids_of(c, "entries") {
+            let done = if recycle {
+                if used.contains(&e) {
+                    continue;
+                }
+                vault.recycle_own(e)
+            } else {
+                vault.restore_own(e)
+            }
+            .map_err(|e| e.to_string())?;
+            if done {
+                moved.push(e);
+            }
+        }
+        let saved: Value = serde_json::from_str(&self.save_with(None)).unwrap_or_default();
+        Ok(json!({ "moved": moved, "save": saved }))
+    }
+
     /// Geteilte Zugangsdaten: eigene KDBX-Einträge, die direkt an mehreren Stellen eingetragen sind (Benutzer, nie
     /// Kennwörter).
     fn shared_list(&self) -> Value {
@@ -2156,6 +2377,144 @@ mod tests {
 
     fn cmd(app: &mut App, v: Value) -> Value {
         j(app.edit(&v.to_string()))
+    }
+
+    #[test]
+    fn mcp_sees_only_released_folders_and_acts_only_with_released_logins() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, path, _) = app_with_vault(dir.path());
+        app.config_path = None;
+        app.config.kdbx_path = Some(path);
+        let root = app.index.root.id;
+        let open = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "Freigegeben" }))["id"].as_str().unwrap().to_string();
+        let closed = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "Geheim" }))["id"].as_str().unwrap().to_string();
+        let a = cmd(&mut app, json!({ "op": "add", "parent": open, "kind": "ssh", "name": "ap-1" }))["id"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "update", "id": a, "fields": { "host": "192.0.2.10" }, "credential": { "mode": "direct", "username": "admin", "password": "geheim" } }));
+        cmd(&mut app, json!({ "op": "add", "parent": closed, "kind": "ssh", "name": "intern-1" }));
+        let call = |app: &mut App, tool: &str, args: Value| serde_json::from_str::<Value>(&app.edit(&json!({ "op": "mcp_call", "tool": tool, "args": args }).to_string())).unwrap();
+        assert!(call(&mut app, "ziele_suchen", json!({})).get("error").is_some(), "ab Werk aus");
+        cmd(&mut app, json!({ "op": "set_mcp_settings", "enabled": true, "allowed": [open] }));
+        let r = call(&mut app, "ziele_suchen", json!({}));
+        assert_eq!(r["anzahl"], 1, "{r}");
+        assert_eq!(r["ziele"][0]["name"], "ap-1");
+        assert_eq!(r["ziele"][0]["adresse"], "192.0.2.10");
+        assert!(!r.to_string().contains("geheim") && !r.to_string().contains("admin"), "nie Zugangsdaten: {r}");
+        assert!(call(&mut app, "ziele_abgleichen", json!({ "werte": ["192.0.2.10", "192.0.2.99"] }))["nicht_gefunden"] == 1);
+        cmd(&mut app, json!({ "op": "set_mcp_settings", "hide_addresses": true }));
+        assert!(call(&mut app, "ziele_suchen", json!({}))["ziele"][0].get("adresse").is_none(), "ausgeblendet");
+        // Aktionen: nur mit freigegebenem Anmeldeobjekt.
+        let r = call(&mut app, "verbinden", json!({ "id": a }));
+        assert!(r["error"].as_str().unwrap().contains("Anmeldeobjekt"), "{r}");
+        let groups = cmd(&mut app, json!({ "op": "credmerge_list" }));
+        let entries = groups["groups"].as_array().map(|g| g.iter().find(|g| g["username"] == "admin").map(|g| g["entries"].clone())).flatten();
+        let lid = match entries {
+            Some(e) => cmd(&mut app, json!({ "op": "credmerge_apply", "entries": e, "name": "Claude-Konto" }))["login"].as_str().unwrap().to_string(),
+            None => {
+                // Nur ein Ziel mit diesen Daten: Anmeldeobjekt direkt anlegen.
+                let entry = app.index.referenced_entries().into_iter().next().unwrap();
+                let l = rj_core::Login { id: Uuid::new_v4(), name: "Claude-Konto".into(), folder: Uuid::parse_str(&open).unwrap(), entry: CredentialRef { entry, last_title: None } };
+                let id = l.id;
+                app.index.logins.push(l);
+                rj_core::inherit::set_credential_mode(&mut app.index, Uuid::parse_str(&a).unwrap(), CredentialMode::Login(id));
+                id.to_string()
+            }
+        };
+        cmd(&mut app, json!({ "op": "set_mcp_settings", "logins": [lid] }));
+        let r = call(&mut app, "verbinden", json!({ "id": a }));
+        assert_eq!(r["needs_confirm"], true, "{r}");
+        let r: Value = serde_json::from_str(&app.edit(&json!({ "op": "mcp_call", "tool": "verbinden", "args": { "id": a }, "confirmed": true }).to_string())).unwrap();
+        assert_eq!(r["freigegeben"], true, "{r}");
+        assert!(cmd(&mut app, json!({ "op": "mcp_log" }))["log"].as_array().unwrap().len() >= 5);
+    }
+
+    #[test]
+    fn same_credentials_are_merged_into_one_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _, _) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let f = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "APs" }))["id"].as_str().unwrap().to_string();
+        let mut ids = Vec::new();
+        for (n, user, pw) in [("a", "admin", "geheim"), ("b", "admin", "geheim"), ("c", "admin", "anders"), ("d", "root", "geheim")] {
+            let t = cmd(&mut app, json!({ "op": "add", "parent": f, "kind": "ssh", "name": n }))["id"].as_str().unwrap().to_string();
+            cmd(&mut app, json!({ "op": "update", "id": t, "fields": {}, "credential": { "mode": "direct", "username": user, "password": pw } }));
+            ids.push(t);
+        }
+        let l = cmd(&mut app, json!({ "op": "credmerge_list" }));
+        let groups = l["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1, "nur admin/geheim kommt zweimal vor: {l}");
+        assert_eq!((groups[0]["username"].as_str(), groups[0]["count"].as_u64()), (Some("admin"), Some(2)));
+        assert!(groups[0]["login"].is_null());
+        assert_eq!(groups[0]["folder"], "APs");
+        assert!(!l.to_string().contains("geheim"), "nie Kennwörter");
+        let r = cmd(&mut app, json!({ "op": "credmerge_apply", "entries": groups[0]["entries"], "name": "Admin APs" }));
+        assert_eq!(r["changed"], 2, "{r}");
+        assert_eq!(app.index.logins.iter().filter(|l| l.name == "Admin APs").count(), 1);
+        assert!(cmd(&mut app, json!({ "op": "credmerge_list" }))["groups"].as_array().unwrap().is_empty(), "zusammengeführt");
+        // Ein weiteres Ziel mit denselben Daten: das vorhandene Anmeldeobjekt wird erkannt.
+        let e = cmd(&mut app, json!({ "op": "add", "parent": f, "kind": "ssh", "name": "e" }))["id"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "update", "id": e, "fields": {}, "credential": { "mode": "direct", "username": "admin", "password": "geheim" } }));
+        let l = cmd(&mut app, json!({ "op": "credmerge_list" }));
+        assert_eq!(l["groups"][0]["login"]["name"], "Admin APs", "{l}");
+        cmd(&mut app, json!({ "op": "credmerge_apply", "entries": l["groups"][0]["entries"] }));
+        assert_eq!(app.index.logins.len(), 1, "kein zweites Anmeldeobjekt");
+        // Rückgängig stellt die direkten Zugangsdaten wieder her.
+        cmd(&mut app, json!({ "op": "undo" }));
+        assert!(!cmd(&mut app, json!({ "op": "credmerge_list" }))["groups"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn orphaned_entries_are_listed_recycled_and_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, path, key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let a = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "A" }))["id"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "update", "id": a, "fields": {}, "credential": { "mode": "direct", "username": "alt", "password": "eins" } }));
+        cmd(&mut app, json!({ "op": "save" }));
+        assert!(cmd(&mut app, json!({ "op": "orphans_list" }))["entries"].as_array().unwrap().is_empty(), "alles verwendet");
+        // Das Ziel löschen: sein Eintrag bleibt in der KDBX und ist dann verwaist.
+        cmd(&mut app, json!({ "op": "delete", "ids": [a] }));
+        cmd(&mut app, json!({ "op": "save" }));
+        let l = cmd(&mut app, json!({ "op": "orphans_list" }));
+        let list = l["entries"].as_array().unwrap();
+        assert_eq!(list.len(), 1, "{l}");
+        assert_eq!(list[0]["username"], "alt");
+        assert!(list[0].get("password").is_none());
+        let e = list[0]["entry"].clone();
+        // Ein fremder Eintrag außerhalb der Gruppe remotejoe wird nie gemeldet.
+        {
+            let mut v = rj_kdbx::Vault::open(&path, key.clone(), rj_core::config::IndexStorage::KdbxCustomData).unwrap();
+            assert!(v.entries().iter().all(|x| v.is_own_entry(x.uuid)), "Testdatei enthält nur eigene Einträge");
+            let _ = &mut v;
+        }
+        let r = cmd(&mut app, json!({ "op": "orphans_recycle", "entries": [e] }));
+        assert_eq!(r["moved"].as_array().unwrap().len(), 1, "{r}");
+        assert!(cmd(&mut app, json!({ "op": "orphans_list" }))["entries"].as_array().unwrap().is_empty(), "im Papierkorb");
+        let r = cmd(&mut app, json!({ "op": "orphans_restore", "entries": [e] }));
+        assert_eq!(r["moved"].as_array().unwrap().len(), 1, "{r}");
+        assert_eq!(cmd(&mut app, json!({ "op": "orphans_list" }))["entries"].as_array().unwrap().len(), 1, "zurückgeholt");
+        // Nach dem Speichern auch in der Datei.
+        let v = rj_kdbx::Vault::open(&path, key, rj_core::config::IndexStorage::KdbxCustomData).unwrap();
+        assert!(v.entries().iter().any(|x| serde_json::json!(x.uuid) == e));
+    }
+
+    #[test]
+    fn tree_start_state_per_kdbx_survives_window_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, path, _) = app_with_vault(dir.path());
+        app.config_path = None;
+        app.config.kdbx_path = Some(path.clone());
+        assert!(cmd(&mut app, json!({ "op": "tree_start" }))["ids"].is_null(), "ohne Eintrag gilt die Vorgabe");
+        cmd(&mut app, json!({ "op": "set_tree_start", "ids": ["a", "b"] }));
+        assert_eq!(cmd(&mut app, json!({ "op": "tree_start" }))["ids"], json!(["a", "b"]));
+        // Fensterlage sichern darf den Startzustand nicht löschen.
+        app.set_window_state(r#"{"x":10,"y":10,"width":1000,"height":700,"tree_width":300}"#);
+        assert_eq!(cmd(&mut app, json!({ "op": "tree_start" }))["ids"], json!(["a", "b"]));
+        // Andere Schlüsseldatenbank: eigener Zustand.
+        app.config.kdbx_path = Some(dir.path().join("andere.kdbx"));
+        assert!(cmd(&mut app, json!({ "op": "tree_start" }))["ids"].is_null());
+        app.config.kdbx_path = Some(path);
+        cmd(&mut app, json!({ "op": "set_tree_start", "ids": null }));
+        assert!(cmd(&mut app, json!({ "op": "tree_start" }))["ids"].is_null(), "zurückgesetzt");
     }
 
     #[test]

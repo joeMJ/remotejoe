@@ -275,6 +275,9 @@ void screenshots(MainWindow& w, const QString& dir)
 	w.settingsForScreenshot(QStringLiteral("backup"));
 	pump(300);
 	save(w.tabs()->currentWidget(), dir, QStringLiteral("sicherung.png"));
+	w.settingsForScreenshot(QStringLiteral("mcp"));
+	pump(300);
+	save(w.tabs()->currentWidget(), dir, QStringLiteral("claude.png"));
 	w.appearanceForScreenshot();
 	pump(300);
 	save(w.tabs()->currentWidget(), dir, QStringLiteral("darstellung.png"));

@@ -226,3 +226,16 @@ fn certificates_are_kept_per_host_and_port() {
     assert!(matches!(c.decide("ap:4343", &b, &p), CertDecision::Accepted) && matches!(c.decide("ap", &a, &p), CertDecision::Accepted));
     assert!(matches!(c.decide("ap:4343", &a, &p), CertDecision::Ask { previous: Some(_), .. }), "eigener Eintrag mit Port: Änderung");
 }
+
+#[test]
+fn old_launch_files_are_found_others_stay() {
+    let d = tempfile::tempdir().unwrap();
+    for n in ["a.ica", "b.ICA", "bericht.pdf"] {
+        std::fs::write(d.path().join(n), b"x").unwrap();
+    }
+    let mut found: Vec<String> = crate::stale_launch_files(d.path(), std::time::Duration::ZERO).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    found.sort();
+    assert_eq!(found, ["a.ica", "b.ICA"]);
+    assert!(crate::stale_launch_files(d.path(), std::time::Duration::from_secs(3600)).is_empty(), "frische Dateien bleiben");
+    assert!(crate::stale_launch_files(&d.path().join("fehlt"), std::time::Duration::ZERO).is_empty());
+}

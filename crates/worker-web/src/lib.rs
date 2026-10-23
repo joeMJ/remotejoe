@@ -824,5 +824,19 @@ impl Damage {
     }
 }
 
+/// Startdateien (`.ica`) im Download-Ordner, die älter als `max_age` sind. Sie enthalten kurzlebige Anmeldetickets
+/// und werden nach dem Öffnen nicht mehr gebraucht.
+pub fn stale_launch_files(dir: &std::path::Path, max_age: std::time::Duration) -> Vec<std::path::PathBuf> {
+    let now = std::time::SystemTime::now();
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case("ica")))
+        .filter(|e| e.metadata().and_then(|m| m.modified()).is_ok_and(|t| now.duration_since(t).is_ok_and(|age| age >= max_age)))
+        .map(|e| e.path())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests;

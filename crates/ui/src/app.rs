@@ -58,6 +58,7 @@ pub struct App {
     /// Objektübersicht: zwischengespeicherte Prüfungen, laufender Ping/Traceroute, Inventarablage.
     pub(crate) overview: crate::overview::OverviewState,
     pub(crate) mass: crate::overview::mass::MassState,
+    pub(crate) credcheck: crate::credcheck::CheckState,
     /// Fortschritt der laufenden Schlüsselprüfung: fertig geprüfte Ziele und Gesamtzahl.
     pub(crate) cert_done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub(crate) cert_total: usize,
@@ -178,6 +179,7 @@ impl App {
             cert_rows: Vec::new(),
             overview: Default::default(),
             mass: Default::default(),
+            credcheck: Default::default(),
             cert_done: Default::default(),
             cert_total: 0,
             vault_lock: None,
@@ -640,6 +642,8 @@ impl App {
             saved: true,
             compact: v.get("compact").and_then(|x| x.as_bool()).unwrap_or(false),
             tree_hidden: v.get("tree_hidden").and_then(|x| x.as_bool()).unwrap_or(false),
+            // Der gespeicherte Startzustand des Baums bleibt beim Sichern der Fensterlage erhalten.
+            tree_start: std::mem::take(&mut self.config.window.tree_start),
         };
         if !self.demo {
             if let Some(cp) = self.config_path.clone() {

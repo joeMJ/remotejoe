@@ -34,6 +34,7 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 - [`docs/INSTALLATION.md`](docs/INSTALLATION.md) – Installation unter Ubuntu und Windows, Zertifikat des Herausgebers
 - [`docs/BAUEN.md`](docs/BAUEN.md) – remotejoe unter Ubuntu und Windows bauen
 - [`docs/DATENSCHUTZ.md`](docs/DATENSCHUTZ.md) – Datenschutz und Netzwerkzugriffe
+- [`docs/MCP.md`](docs/MCP.md) – Claude-Anbindung (MCP): remotejoe als Werkzeug für Claude Desktop
 - [`docs/ZIELE-EINRICHTEN.md`](docs/ZIELE-EINRICHTEN.md) – Windows-Ziele für RDP und PowerShell-Remoting einrichten (mit Skripten unter [`tools/ziel-einrichten/`](tools/ziel-einrichten/))
 - [`THIRD_PARTY.md`](THIRD_PARTY.md) – verwendete Bibliotheken Dritter mit Lizenzen
 
@@ -69,7 +70,7 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 
 | Plattform | Status | Hinweis |
 | :--- | :--- | :--- |
-| **Linux (Ubuntu 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto; Pakete für 26.04 und für 24.04 (eigenes Paket mit Qt 6.4) |
+| **Linux (Ubuntu 24.04 / 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto ([Installation](docs/INSTALLATION.md#installation-linux-ubuntu)); Pakete für 26.04 und für 24.04 (eigenes Paket mit Qt 6.4) |
 | **Windows 10/11** | Aktiv | MSI pro Benutzer ohne Administratorrechte ([Installation](docs/INSTALLATION.md#installation-windows)); Web-Ziele im Tab über WebView2 |
 
 ---
@@ -221,6 +222,20 @@ neu aufklappen.
 - **Masseninventar:** Rechtsklick auf einen Ordner oder eine Auswahl → **Inventar für alle Ziele abfragen …** fragt
   alle Ziele darin ab, bis zu acht gleichzeitig, mit Fortschritt, Ergebnis je Ziel und „Fehlgeschlagene wiederholen“.
   Ziele mit abgeschaltetem Inventar werden übersprungen.
+- **Zugangsdaten prüfen:** Rechtsklick auf einen Ordner oder eine Auswahl → **Zugangsdaten prüfen …** meldet sich je
+  Ziel und Zugangsweg nur an und trennt sofort (SSH, RDP nur NLA, PowerShell/Hyper-V, Proxmox, VNC; Web ist nicht
+  prüfbar). Ziele mit denselben Zugangsdaten kommen nacheinander, und nach einer Ablehnung wird mit diesen Zugangsdaten
+  nichts weiter versucht, damit kein Konto gesperrt wird. Unbekannte Zertifikate werden nicht angenommen. Übersicht mit
+  „Nur Fehler“, „Fehlgeschlagene wiederholen“ und „Zugangsdaten bearbeiten“.
+- **Gleiche Zugangsdaten zusammenführen** (Extras bzw. Kontextmenü): findet gleiche, direkt hinterlegte Zugangsdaten an
+  mehreren Zielen und stellt sie auf ein neues oder ein vorhandenes Anmeldeobjekt mit denselben Daten um.
+- **Verwaiste KDBX-Einträge prüfen** (Extras): Einträge der Gruppe `remotejoe`, auf die nichts mehr verweist; markierte
+  wandern in den Papierkorb der Schlüsseldatenbank (rückgängig machbar, endgültig gelöscht wird nichts).
+- **Startzustand des Baums:** Kontextmenü **Aufklappzustand als Start speichern** – so öffnet der Baum bei jedem Start
+  (je Schlüsseldatenbank); **Startzustand zurücksetzen** stellt die Vorgabe wieder her.
+- **Claude-Anbindung (MCP, zuschaltbar):** Claude Desktop kann remotejoe abfragen – Ziele, gespeichertes Inventar,
+  Aruba-Clusterdaten, Abgleich mit externen Listen – nur für freigegebene Ordner und ohne je Zugangsdaten zu sehen;
+  Aktionen nur mit freigegebenem Anmeldeobjekt und nach Freigabe je Aktion. Siehe [`docs/MCP.md`](docs/MCP.md).
 - **Zugangswege:** Ein Ziel kann neben dem Hauptweg weitere Wege haben (z. B. SSH und die Web-Oberfläche auf
   4343), jeder mit eigenem Protokoll, Adresse, Port, Optionen und Zugangsdaten (die des Ziels, ein Anmeldeobjekt,
   eigene Zugangsdaten direkt am Weg oder keine). Die Optionen gelten je Weg: bei RDP Grafikkanal, Größe, Tastatur,

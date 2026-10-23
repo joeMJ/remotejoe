@@ -683,6 +683,10 @@ impl Worker {
 
     /// Downloads: in den Zielordner speichern, Fortschritt und Ergebnis melden; .ica-Dateien danach öffnen.
     fn connect_downloads(&self, view: &WebView) {
+        // Alte Startdateien (Anmeldetickets) von früheren Läufen entfernen.
+        for f in rj_web::stale_launch_files(&download_dir(), std::time::Duration::from_secs(300)) {
+            let _ = std::fs::remove_file(f);
+        }
         let Ok(w4) = view.webview().cast::<ICoreWebView2_4>() else { return };
         let me = self.clone();
         let h = DownloadStartingEventHandler::create(Box::new(move |_, args| {
@@ -747,6 +751,15 @@ impl Worker {
             let (r, t) = progress_of(&s);
             if state == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED {
                 let opened = if is_auto_open(&name) { me.open_downloaded(&path) } else { Ok(false) };
+                // Geöffnete Startdatei nach einer Minute löschen: das Programm (z. B. Citrix) hat sie dann gelesen,
+                // und das Anmeldeticket darin bleibt nicht liegen.
+                if opened == Ok(true) {
+                    let p = path.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(60));
+                        let _ = std::fs::remove_file(p);
+                    });
+                }
                 match opened {
                     Ok(o) => me.download_event(id, "done", &name, &dir, r.max(t), t, None, o),
                     Err(e) => me.download_event(id, "done", &name, &dir, r.max(t), t, Some(e), false),

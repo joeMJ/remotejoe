@@ -21,4 +21,11 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
 - **Aruba-Werkzeuge** (nur wenn eingeschaltet): „Einrichten“ lädt die Aruba Instant Python Tools von GitHub und die
   Python-Bibliotheken über pip, unter Windows bei Bedarf Python von python.org. Abfragen und Werkzeuge verbinden sich
   nur mit den Aruba-Controllern bzw. APs; beim Firmware-Update lädt der AP die Firmware selbst von der angegebenen URL.
+- **Claude-Anbindung (MCP)** (nur wenn eingeschaltet, ab Werk aus): Claude Desktop fragt remotejoe über einen
+  lokalen Kanal ab. Was Claude dabei liest – Ziel- und Ordnernamen, je nach Einstellung Adressen und Seriennummern,
+  gespeichertes Inventar –, geht als Gesprächsinhalt an den Claude-Dienst von Anthropic. Nur freigegebene Ordner sind
+  sichtbar; Zugangsdaten, Benutzernamen, Notizen und andere Inhalte der Schlüsseldatenbank gehen nie hinaus. Siehe
+  [`MCP.md`](MCP.md).
+- **Zugangsdaten prüfen** meldet sich nur an den ausgewählten Zielen an und trennt sofort; unbekannte Zertifikate
+  werden dabei nicht angenommen.
 - Es gibt keine Telemetrie und keine Nutzungsstatistik.

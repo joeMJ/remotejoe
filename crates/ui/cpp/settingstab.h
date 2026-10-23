@@ -15,6 +15,7 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QListWidget;
 class QPushButton;
 class QSpinBox;
 class QStackedWidget;
@@ -60,6 +61,9 @@ private:
 	QWidget* pageKeys();
 	QWidget* pageFeatures();
 	QWidget* pageBackup();
+	QWidget* pageMcp();
+	void saveMcp();
+	void reloadMcp();
 	void saveBackup();
 	void refreshSummaries();
 	QString edit(const QJsonObject& cmd);
@@ -83,6 +87,13 @@ private:
 	QSpinBox* m_clientsWarn = nullptr;
 	QSpinBox* m_clientsCrit = nullptr;
 	QLabel* m_clientsHint = nullptr;
+	// Claude-Anbindung
+	QCheckBox* m_mcp = nullptr;
+	QCheckBox* m_mcpHideAddr = nullptr;
+	QCheckBox* m_mcpHideSerial = nullptr;
+	QListWidget* m_mcpFolders = nullptr;
+	QListWidget* m_mcpLogins = nullptr;
+	QLabel* m_mcpConfig = nullptr;
 	// Sicherung
 	QCheckBox* m_bkEnabled = nullptr;
 	QSpinBox* m_bkLast = nullptr;

@@ -7,6 +7,11 @@
 #include "aptoolstab.h"
 #include "arubaclientstab.h"
 #include "folderoverviewtab.h"
+#include "orphantab.h"
+#include "credmergetab.h"
+#include "credchecktab.h"
+#include "mcpserver.h"
+#include "mcplogtab.h"
 #include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
@@ -1203,6 +1208,35 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		g_updateNotice = ok ? T(m_backend, "update.applied.ok").arg(m_backend->appVersion()) : T(m_backend, "update.applied.failed").arg(code);
 	}
 #endif
+	// Claude-Anbindung: lokaler Kanal für rj-mcp; freigegebene Aktionen führt das Hauptfenster aus.
+	if (!qEnvironmentVariableIsSet("RJ_NO_MCP"))
+	{
+		auto* mcp = new McpServer(m_backend, this);
+		connect(mcp, &McpServer::actionApproved, this, [this](const QString& action, const QString& id) {
+			selectId(id);
+			const QJsonObject subject{ { QStringLiteral("id"), id } };
+			if (action == QLatin1String("verbinden"))
+				connectSelected();
+			else if (action == QLatin1String("inventar_abfragen"))
+			{
+				openOverview(subject);
+				edit({ { QStringLiteral("op"), QStringLiteral("ov_query") }, { QStringLiteral("id"), id } });
+			}
+			else if (action == QLatin1String("cluster_abfragen"))
+			{
+				openOverview(subject);
+				edit({ { QStringLiteral("op"), QStringLiteral("aruba_cluster") }, { QStringLiteral("id"), id } });
+			}
+			else if (action == QLatin1String("nutzer_anzeigen"))
+			{
+				QJsonObject s = subject;
+				const QString name = m_tree->currentIndex().isValid() ? m_tree->currentIndex().data().toString() : QString();
+				s.insert(QStringLiteral("vc_name"), name);
+				openArubaUsers(s, name);
+			}
+			statusBar()->showMessage(T(m_backend, "mcp.action.done"), 8000);
+		});
+	}
 }
 
 MainWindow::~MainWindow() = default;
@@ -1285,6 +1319,24 @@ void MainWindow::buildMenus()
 	extras->addAction(T(m_backend, "menu.extras.clipclear"), this, [this] { openSettings(QStringLiteral("lock")); });
 	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] { openSettings(QStringLiteral("snmp")); });
 	extras->addAction(T(m_backend, "menu.extras.shared"), this, [this] { openSharedCheck(); });
+	extras->addAction(T(m_backend, "menu.extras.credmerge"), this, [this] { openCredMerge({}); });
+	extras->addAction(T(m_backend, "menu.extras.mcplog"), this, [this] {
+		if (auto* old = findChild<McpLogTab*>())
+		{
+			m_tabs->setCurrentWidget(old);
+			return;
+		}
+		addToolTab(new McpLogTab(m_backend, m_tabs), T(m_backend, "mcplog.tab"));
+	});
+	extras->addAction(T(m_backend, "menu.extras.orphans"), this, [this] {
+		if (auto* old = findChild<OrphanTab*>())
+		{
+			old->load();
+			m_tabs->setCurrentWidget(old);
+			return;
+		}
+		addToolTab(new OrphanTab(m_backend, m_tabs), T(m_backend, "orphans.tab"));
+	});
 	extras->addAction(T(m_backend, "menu.extras.terminal"), this, [this] { openTerminalSettings(); });
 	extras->addAction(T(m_backend, "menu.extras.appearance"), this, [this] { openAppearance(); });
 	extras->addSeparator();
@@ -1657,15 +1709,54 @@ void MainWindow::reloadTree()
 	else
 	{
 		m_autoExpand = true;
-		m_tree->expandToDepth(0);
-		// Erster Start: den ersten Ordner mit Zielen aufklappen.
-		if (m_model->rowCount() > 0)
-			m_tree->expand(m_model->index(0, 0, m_model->index(0, 0)));
+		// Gespeicherter Startzustand (Kontextmenü „Aufklappzustand als Start speichern“), sonst die Vorgabe.
+		const QJsonValue saved = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("tree_start") } })).value(QStringLiteral("ids"));
+		if (saved.isArray())
+		{
+			QSet<QString> ids;
+			for (const QJsonValue& v : saved.toArray())
+				ids.insert(v.toString());
+			std::function<void(const QModelIndex&)> open = [&](const QModelIndex& parent) {
+				for (int r = 0; r < m_model->rowCount(parent); ++r)
+				{
+					const QModelIndex i = m_model->index(r, 0, parent);
+					const QModelIndex first = m_model->index(0, 0, i);
+					if (ids.contains(i.data(RoleId).toString()) && !(first.isValid() && first.data(RolePlaceholder).toBool()))
+						m_tree->expand(i);
+					open(i);
+				}
+			};
+			open(QModelIndex());
+		}
+		else
+		{
+			m_tree->expandToDepth(0);
+			// Erster Start: den ersten Ordner mit Zielen aufklappen.
+			if (m_model->rowCount() > 0)
+				m_tree->expand(m_model->index(0, 0, m_model->index(0, 0)));
+		}
 		collapseUnloadedHypervisors();
 		m_autoExpand = false;
 	}
 	m_treeLoaded = true;
 	addMacroShelf();
+	// Offene Ordnerübersicht mit dem neuen Baum auffrischen (z. B. nach dem Anlegen eines Ziels).
+	if (auto* fo = findChild<FolderOverviewTab*>(); fo && !fo->folderId().isEmpty())
+	{
+		std::function<QModelIndex(const QModelIndex&)> find = [&](const QModelIndex& parent) -> QModelIndex {
+			for (int r = 0; r < m_model->rowCount(parent); ++r)
+			{
+				const QModelIndex i = m_model->index(r, 0, parent);
+				if (i.data(RoleId).toString() == fo->folderId())
+					return i;
+				if (const QModelIndex hit = find(i); hit.isValid())
+					return hit;
+			}
+			return {};
+		};
+		if (const QModelIndex i = find(QModelIndex()); i.isValid())
+			openFolderOverview(i, false);
+	}
 	if (!current.isEmpty())
 	{
 		std::function<QModelIndex(const QModelIndex&)> find = [&](const QModelIndex& parent) -> QModelIndex {
@@ -2312,6 +2403,8 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		// Freie Fläche (auch bei leerem Baum): Hinzufügen auf oberster Ebene anbieten.
 		QMenu empty(this);
 		buildAddMenu(&empty, QString());
+		empty.addSeparator();
+		addTreeStartActions(&empty);
 		empty.exec(m_tree->viewport()->mapToGlobal(pos));
 		return;
 	}
@@ -2455,6 +2548,27 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 			});
 		}
 	}
+	menu.addAction(T(m_backend, "ctx.credcheck"), this, [this] {
+		const QStringList ids = selectedIds();
+		if (ids.isEmpty())
+			return;
+		// Ein Lauf zur Zeit: ein vorhandener Reiter wird ersetzt.
+		if (auto* old = findChild<CredCheckTab*>())
+			closeToolTab(old);
+		const QString title = ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size());
+		auto* t = new CredCheckTab(m_backend, ids, title, m_tabs);
+		connect(t, &CredCheckTab::showTarget, this, [this](const QString& id) { selectId(id); });
+		connect(t, &CredCheckTab::editTarget, this, [this](const QString& id) {
+			selectId(id);
+			openProperties(id);
+		});
+		addToolTab(t, T(m_backend, "credcheck.tab"));
+	});
+	menu.addAction(T(m_backend, "ctx.credmerge"), this, [this] {
+		const QStringList ids = selectedIds();
+		if (!ids.isEmpty())
+			openCredMerge(ids);
+	});
 	menu.addAction(T(m_backend, "ctx.merge"), this, [this] {
 		const QStringList ids = selectedIds();
 		if (!ids.isEmpty())
@@ -2470,7 +2584,33 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 			openPatchday(ids);
 	});
 	menu.addAction(T(m_backend, "ctx.properties") + QStringLiteral("\tF4"), this, [this, id] { openProperties(id); });
+	menu.addSeparator();
+	addTreeStartActions(&menu);
 	menu.exec(m_tree->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::addTreeStartActions(QMenu* menu)
+{
+	// Aufklappzustand des Baums als Start (je Schlüsseldatenbank) speichern bzw. auf die Vorgabe zurücksetzen.
+	menu->addAction(T(m_backend, "ctx.tree.start.save"), this, [this] {
+		QJsonArray ids;
+		std::function<void(const QModelIndex&)> collect = [&](const QModelIndex& parent) {
+			for (int r = 0; r < m_model->rowCount(parent); ++r)
+			{
+				const QModelIndex i = m_model->index(r, 0, parent);
+				if (m_tree->isExpanded(i) && i.data(RoleFolder).toBool() && !i.data(RoleId).toString().isEmpty())
+					ids.append(i.data(RoleId).toString());
+				collect(i);
+			}
+		};
+		collect(QModelIndex());
+		const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("set_tree_start") }, { QStringLiteral("ids"), ids } }));
+		statusBar()->showMessage(r.contains(QStringLiteral("error")) ? r.value(QStringLiteral("error")).toString() : T(m_backend, "status.tree.start.saved").arg(ids.size()), 8000);
+	});
+	menu->addAction(T(m_backend, "ctx.tree.start.reset"), this, [this] {
+		const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("set_tree_start") }, { QStringLiteral("ids"), QJsonValue() } }));
+		statusBar()->showMessage(r.contains(QStringLiteral("error")) ? r.value(QStringLiteral("error")).toString() : T(m_backend, "status.tree.start.reset"), 8000);
+	});
 }
 
 void MainWindow::tabContextMenu(QTabWidget* tabs, const QPoint& pos)
@@ -3144,6 +3284,12 @@ void MainWindow::handleEvents(const QString& json)
 					if (w)
 						w->show();
 				reloadViews();
+				// Erstes Entsperren: Startzustand bzw. Vorgabe des Baums anwenden (vorher war der Baum leer).
+				if (m_firstUnlock)
+				{
+					m_firstUnlock = false;
+					m_treeLoaded = false;
+				}
 				reloadTree();
 				for (auto* ed : findChildren<PropertiesTab*>())
 					ed->reload();
@@ -3271,6 +3417,10 @@ void MainWindow::handleEvents(const QString& json)
 				{
 					if (auto* c = findChild<CertCheckTab*>())
 						c->handleResult(r);
+				}
+				else if (kind == QLatin1String("credcheck"))
+				{
+					// Der Reiter fragt den Stand selbst ab.
 				}
 				else if (kind == QLatin1String("cert_accept"))
 				{
@@ -4110,7 +4260,17 @@ void MainWindow::openArubaLog(const QJsonObject& subject, const QString& ip, con
 	addToolTab(t, t->title());
 }
 
-void MainWindow::openFolderOverview(const QModelIndex& folder)
+void MainWindow::openCredMerge(const QStringList& scope)
+{
+	// Ein Tab; ein neuer Aufruf ersetzt ihn (anderer Bereich).
+	if (auto* old = findChild<CredMergeTab*>())
+		closeToolTab(old);
+	auto* t = new CredMergeTab(m_backend, scope, m_tabs);
+	connect(t, &CredMergeTab::showTarget, this, [this](const QString& id) { selectId(id); });
+	addToolTab(t, T(m_backend, "credmerge.tab"));
+}
+
+void MainWindow::openFolderOverview(const QModelIndex& folder, bool activate)
 {
 	// Elemente direkt im Ordner, wie sie im Baum stehen (Symbol, Typ, Adresse); das Inventar holt der Tab.
 	auto typeName = [](const QString& kind) -> QString {
@@ -4161,7 +4321,8 @@ void MainWindow::openFolderOverview(const QModelIndex& folder)
 	t->showFolder(folder.data(RoleId).toString(), folder.data(Qt::DisplayRole).toString(), path.join(QStringLiteral(" › ")), items);
 	const int i = m_tabs->indexOf(t);
 	m_tabs->setTabText(i, t->title());
-	m_tabs->setCurrentWidget(t);
+	if (activate)
+		m_tabs->setCurrentWidget(t);
 }
 
 void MainWindow::openArubaAp(const QJsonObject& s, const QJsonObject& ap)

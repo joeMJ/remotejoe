@@ -179,6 +179,18 @@ fn run(c: &mut Command, what: &str) -> Result<String, String> {
 
 /// Eigene Python-Umgebung anlegen bzw. auffrischen und die Bibliotheken aus `requirements.txt` der Sammlung
 /// installieren. `proxy`: `Rechner:Port` für pip (aus der Proxy-Einstellung der Updates), sonst wie das System.
+/// Weg der Bibliotheken für die Meldung: pip bekommt nur bei „Manuell“ einen Proxy mit, sonst nimmt es die
+/// Systemeinstellung bzw. `HTTPS_PROXY` (ein Konfigurationsskript/PAC wertet pip nicht aus).
+pub fn pip_route(proxy: Option<&str>) -> String {
+    match proxy {
+        Some(p) => format!("pip über Proxy {p} (Einstellung „Manuell“)"),
+        None => "pip ohne eigene Proxy-Vorgabe (Systemeinstellung bzw. HTTPS_PROXY; ein Konfigurationsskript wertet pip nicht aus)".to_string(),
+    }
+}
+
+/// Hinweis bei fehlgeschlagenem pip.
+const PIP_HINT: &str = "Was helfen kann: Netz bzw. VPN wechseln, den Proxy im Update-Tab unter „Manuell“ eintragen (Rechner:Port) oder die Bibliotheken aus requirements.txt von Hand installieren. Ein Proxy mit Anmeldung wird nicht unterstützt.";
+
 pub fn setup_python(root: &Path, proxy: Option<&str>) -> Result<String, String> {
     let req = collection_dir(root).join("requirements.txt");
     if !req.is_file() {
@@ -203,7 +215,7 @@ pub fn setup_python(root: &Path, proxy: Option<&str>) -> Result<String, String> 
     if let Some(p) = proxy {
         pip.env("HTTPS_PROXY", format!("http://{p}")).env("HTTP_PROXY", format!("http://{p}"));
     }
-    run(&mut pip, "Bibliotheken installieren (pip)")?;
+    run(&mut pip, "Bibliotheken installieren (pip)").map_err(|e| format!("{e}\n\n{}\n{}", pip_route(proxy), PIP_HINT))?;
     let v = run(command(&py).args(["-c", "import paramiko; print(paramiko.__version__)"]), "paramiko prüfen")?;
     Ok(v.trim().to_string())
 }
@@ -697,7 +709,7 @@ impl App {
                 let _ = install_py;
                 let commit = install_collection(&root, &cancel)?;
                 match setup_python(&root, proxy.as_deref()) {
-                    Ok(paramiko) => Ok(json!({ "commit": commit, "paramiko": paramiko })),
+                    Ok(paramiko) => Ok(json!({ "commit": commit, "paramiko": paramiko, "via_collection": rj_update::proxy::describe(REPO_ZIP), "via_pip": pip_route(proxy.as_deref()) })),
                     Err(e) if e == "NO_PYTHON" => Ok(json!({ "commit": commit, "need_python": true })),
                     Err(e) => Err(e),
                 }
@@ -911,6 +923,13 @@ fn target_ids(c: &Value) -> Result<(String, Vec<Uuid>), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pip_route_names_the_way() {
+        assert!(pip_route(Some("proxy.example:8080")).contains("über Proxy proxy.example:8080"));
+        assert!(pip_route(None).contains("ohne eigene Proxy-Vorgabe"));
+        assert!(PIP_HINT.contains("Manuell") && PIP_HINT.contains("Anmeldung"));
+    }
 
     #[test]
     fn update_errors_reach_the_status_board() {

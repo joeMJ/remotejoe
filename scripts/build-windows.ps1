@@ -169,7 +169,7 @@ Schritt 'Paket zusammenstellen'
 $out = Join-Path $Root "target\$outName"
 $paket = Join-Path $out 'remotejoe-paket'
 New-Item -ItemType Directory -Force -Path $paket | Out-Null
-foreach ($exe in @('remotejoe', 'rj-worker-ssh', 'rj-worker-rdp', 'rj-worker-vnc', 'rj-worker-web', 'rj-worker-psrp')) {
+foreach ($exe in @('remotejoe', 'rj-worker-ssh', 'rj-worker-rdp', 'rj-worker-vnc', 'rj-worker-web', 'rj-worker-psrp', 'rj-mcp')) {
     $src = Join-Path $out "$exe.exe"
     if (-not (Test-Path $src)) { Fehler "$exe.exe wurde nicht gebaut." 'cargo build ohne Fehler abschließen.' }
     Copy-Item $src $paket -Force

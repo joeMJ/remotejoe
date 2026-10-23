@@ -21,6 +21,11 @@ fn known_path() -> Option<PathBuf> {
     rj_core::config::data_dir().map(|d| d.join("proxmox-zertifikate.json"))
 }
 
+/// Angenommene Proxmox-Zertifikate (`host:port` → Fingerabdruck), auch für die Prüfung der Zugangsdaten.
+pub(crate) fn known_proxmox_certs() -> BTreeMap<String, String> {
+    known()
+}
+
 fn known() -> BTreeMap<String, String> {
     known_path().and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
