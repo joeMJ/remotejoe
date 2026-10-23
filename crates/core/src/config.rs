@@ -90,11 +90,30 @@ pub struct FeatureSettings {
     /// Anwender je AP, ab denen die Zahl auf der Kachel gelb bzw. rot wird (0 = aus).
     pub aruba_clients_warn: u32,
     pub aruba_clients_crit: u32,
+    /// Claude-Anbindung (MCP), Vorgabe aus.
+    pub mcp: bool,
+    /// Adressen (IP, MAC) bzw. Seriennummern gegenüber Claude ausblenden.
+    pub mcp_hide_addresses: bool,
+    pub mcp_hide_serials: bool,
+    /// Für Claude freigegebene Ordner und Anmeldeobjekte, je Schlüsseldatenbank (Pfad → IDs).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub mcp_folders: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub mcp_logins: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Default for FeatureSettings {
     fn default() -> Self {
-        FeatureSettings { aruba: false, aruba_clients_warn: 30, aruba_clients_crit: 64 }
+        FeatureSettings {
+            aruba: false,
+            aruba_clients_warn: 30,
+            aruba_clients_crit: 64,
+            mcp: false,
+            mcp_hide_addresses: false,
+            mcp_hide_serials: false,
+            mcp_folders: Default::default(),
+            mcp_logins: Default::default(),
+        }
     }
 }
 

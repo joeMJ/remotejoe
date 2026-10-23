@@ -10,6 +10,8 @@
 #include "orphantab.h"
 #include "credmergetab.h"
 #include "credchecktab.h"
+#include "mcpserver.h"
+#include "mcplogtab.h"
 #include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
@@ -1206,6 +1208,35 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		g_updateNotice = ok ? T(m_backend, "update.applied.ok").arg(m_backend->appVersion()) : T(m_backend, "update.applied.failed").arg(code);
 	}
 #endif
+	// Claude-Anbindung: lokaler Kanal für rj-mcp; freigegebene Aktionen führt das Hauptfenster aus.
+	if (!qEnvironmentVariableIsSet("RJ_NO_MCP"))
+	{
+		auto* mcp = new McpServer(m_backend, this);
+		connect(mcp, &McpServer::actionApproved, this, [this](const QString& action, const QString& id) {
+			selectId(id);
+			const QJsonObject subject{ { QStringLiteral("id"), id } };
+			if (action == QLatin1String("verbinden"))
+				connectSelected();
+			else if (action == QLatin1String("inventar_abfragen"))
+			{
+				openOverview(subject);
+				edit({ { QStringLiteral("op"), QStringLiteral("ov_query") }, { QStringLiteral("id"), id } });
+			}
+			else if (action == QLatin1String("cluster_abfragen"))
+			{
+				openOverview(subject);
+				edit({ { QStringLiteral("op"), QStringLiteral("aruba_cluster") }, { QStringLiteral("id"), id } });
+			}
+			else if (action == QLatin1String("nutzer_anzeigen"))
+			{
+				QJsonObject s = subject;
+				const QString name = m_tree->currentIndex().isValid() ? m_tree->currentIndex().data().toString() : QString();
+				s.insert(QStringLiteral("vc_name"), name);
+				openArubaUsers(s, name);
+			}
+			statusBar()->showMessage(T(m_backend, "mcp.action.done"), 8000);
+		});
+	}
 }
 
 MainWindow::~MainWindow() = default;
@@ -1289,6 +1320,14 @@ void MainWindow::buildMenus()
 	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] { openSettings(QStringLiteral("snmp")); });
 	extras->addAction(T(m_backend, "menu.extras.shared"), this, [this] { openSharedCheck(); });
 	extras->addAction(T(m_backend, "menu.extras.credmerge"), this, [this] { openCredMerge({}); });
+	extras->addAction(T(m_backend, "menu.extras.mcplog"), this, [this] {
+		if (auto* old = findChild<McpLogTab*>())
+		{
+			m_tabs->setCurrentWidget(old);
+			return;
+		}
+		addToolTab(new McpLogTab(m_backend, m_tabs), T(m_backend, "mcplog.tab"));
+	});
 	extras->addAction(T(m_backend, "menu.extras.orphans"), this, [this] {
 		if (auto* old = findChild<OrphanTab*>())
 		{

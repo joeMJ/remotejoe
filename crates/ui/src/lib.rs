@@ -20,6 +20,7 @@ pub mod jobs;
 pub mod kdbxbackup;
 pub mod keys;
 pub mod macro_run;
+pub mod mcp;
 pub mod overview;
 pub mod patch;
 pub mod report;

@@ -20,6 +20,10 @@
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QListWidget>
+#include <QtGui/QClipboard>
+#include <QtGui/QGuiApplication>
+#include <QtCore/QCoreApplication>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QSpinBox>
@@ -115,6 +119,7 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 	addArea(QStringLiteral("snmp"), T("snmp.title"), m_snmp, false);
 	addArea(QStringLiteral("backup"), T("settings.backup"), pageBackup(), true);
 	addArea(QStringLiteral("features"), T("settings.features"), pageFeatures(), true);
+	addArea(QStringLiteral("mcp"), T("settings.mcp"), pageMcp(), true);
 	ain->addStretch(1);
 	m_loading = false;
 	reload();
@@ -298,6 +303,115 @@ QWidget* SettingsTab::pageFeatures()
 	return w;
 }
 
+QWidget* SettingsTab::pageMcp()
+{
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	auto* w = new QWidget;
+	auto* v = new QVBoxLayout(w);
+	// Datenschutz zuerst und deutlich: alles, was Claude liest, geht an den Claude-Dienst.
+	auto* privacy = new QLabel(T("settings.mcp.privacy"), w);
+	privacy->setWordWrap(true);
+	privacy->setProperty("rjWarnText", true);
+	v->addWidget(privacy);
+	m_mcp = new QCheckBox(T("settings.mcp.enabled"), w);
+	v->addWidget(m_mcp);
+	m_mcpHideAddr = new QCheckBox(T("settings.mcp.hide.addr"), w);
+	m_mcpHideSerial = new QCheckBox(T("settings.mcp.hide.serial"), w);
+	v->addWidget(m_mcpHideAddr);
+	v->addWidget(m_mcpHideSerial);
+	v->addWidget(rjui::section(T("settings.mcp.folders"), w));
+	v->addWidget(hint(T("settings.mcp.folders.hint"), w));
+	m_mcpFolders = new QListWidget(w);
+	m_mcpFolders->setMinimumHeight(160);
+	v->addWidget(m_mcpFolders);
+	v->addWidget(rjui::section(T("settings.mcp.logins"), w));
+	v->addWidget(hint(T("settings.mcp.logins.hint"), w));
+	m_mcpLogins = new QListWidget(w);
+	m_mcpLogins->setMinimumHeight(100);
+	v->addWidget(m_mcpLogins);
+	v->addWidget(rjui::section(T("settings.mcp.setup"), w));
+	m_mcpConfig = hint(QString(), w);
+	m_mcpConfig->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	v->addWidget(m_mcpConfig);
+	auto* copy = new QPushButton(T("settings.mcp.copy"), w);
+	auto* bh = new QHBoxLayout;
+	bh->addWidget(copy);
+	bh->addStretch(1);
+	v->addLayout(bh);
+	v->addStretch(1);
+	for (QCheckBox* b : { m_mcp, m_mcpHideAddr, m_mcpHideSerial })
+		connect(b, &QCheckBox::toggled, this, &SettingsTab::saveMcp);
+	for (QListWidget* l : { m_mcpFolders, m_mcpLogins })
+		connect(l, &QListWidget::itemChanged, this, &SettingsTab::saveMcp);
+	connect(copy, &QPushButton::clicked, this, [this] {
+		QGuiApplication::clipboard()->setText(m_mcpConfig->property("snippet").toString());
+		emit status(rjText(m_backend, "settings.mcp.copied"));
+	});
+	return w;
+}
+
+void SettingsTab::saveMcp()
+{
+	if (m_loading)
+		return;
+	QJsonArray folders, logins;
+	for (int i = 0; i < m_mcpFolders->count(); ++i)
+		if (m_mcpFolders->item(i)->checkState() == Qt::Checked)
+			folders.append(m_mcpFolders->item(i)->data(Qt::UserRole).toString());
+	for (int i = 0; i < m_mcpLogins->count(); ++i)
+		if (m_mcpLogins->item(i)->checkState() == Qt::Checked)
+			logins.append(m_mcpLogins->item(i)->data(Qt::UserRole).toString());
+	edit({ { QStringLiteral("op"), QStringLiteral("set_mcp_settings") },
+	       { QStringLiteral("enabled"), m_mcp->isChecked() },
+	       { QStringLiteral("hide_addresses"), m_mcpHideAddr->isChecked() },
+	       { QStringLiteral("hide_serials"), m_mcpHideSerial->isChecked() },
+	       { QStringLiteral("allowed"), folders },
+	       { QStringLiteral("logins"), logins } });
+	refreshSummaries();
+}
+
+void SettingsTab::reloadMcp()
+{
+	const bool was = m_loading;
+	m_loading = true;
+	const QJsonObject s = parseObj(edit({ { QStringLiteral("op"), QStringLiteral("mcp_settings") } }));
+	m_mcp->setChecked(s.value(QStringLiteral("enabled")).toBool());
+	m_mcpHideAddr->setChecked(s.value(QStringLiteral("hide_addresses")).toBool());
+	m_mcpHideSerial->setChecked(s.value(QStringLiteral("hide_serials")).toBool());
+	auto fill = [](QListWidget* l, const QJsonArray& all, const QJsonArray& on, const char* label) {
+		QStringList checked;
+		for (const QJsonValue& x : on)
+			checked << x.toString();
+		l->clear();
+		for (const QJsonValue& x : all)
+		{
+			const QJsonObject o = x.toObject();
+			auto* it = new QListWidgetItem(o.value(QString::fromLatin1(label)).toString(), l);
+			it->setData(Qt::UserRole, o.value(QStringLiteral("id")).toString());
+			it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
+			it->setCheckState(checked.contains(o.value(QStringLiteral("id")).toString()) ? Qt::Checked : Qt::Unchecked);
+		}
+	};
+	fill(m_mcpFolders, s.value(QStringLiteral("folders")).toArray(), s.value(QStringLiteral("allowed")).toArray(), "path");
+	fill(m_mcpLogins, s.value(QStringLiteral("all_logins")).toArray(), s.value(QStringLiteral("logins")).toArray(), "name");
+	// Eintrag für Claude Desktop (claude_desktop_config.json): rj-mcp liegt neben remotejoe.
+	const QString exe = QDir::toNativeSeparators(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral(
+#ifdef Q_OS_WIN
+		"rj-mcp.exe"
+#else
+		"rj-mcp"
+#endif
+		)));
+	QJsonObject server{ { QStringLiteral("command"), exe } };
+	const QString home = qEnvironmentVariable("REMOTEJOE_HOME");
+	if (!home.isEmpty())
+		server.insert(QStringLiteral("env"), QJsonObject{ { QStringLiteral("REMOTEJOE_HOME"), home } });
+	const QString snippet = QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("mcpServers"), QJsonObject{ { QStringLiteral("remotejoe"), server } } } }).toJson(QJsonDocument::Indented));
+	m_mcpConfig->setProperty("snippet", snippet);
+	m_mcpConfig->setText(rjText(m_backend, "settings.mcp.setup.hint") + QStringLiteral("\n\n") + snippet);
+	m_loading = was;
+}
+
 QWidget* SettingsTab::pageBackup()
 {
 	auto T = [this](const char* k) { return rjText(m_backend, k); };
@@ -453,6 +567,7 @@ void SettingsTab::reload()
 	m_clientsWarn->setValue(s.value(QStringLiteral("aruba_clients_warn")).toInt(30));
 	m_clientsCrit->setValue(s.value(QStringLiteral("aruba_clients_crit")).toInt(64));
 	reloadBackup();
+	reloadMcp();
 	if (m_appearance)
 		m_appearance->reload();
 	if (m_snmp)
@@ -481,6 +596,8 @@ void SettingsTab::refreshSummaries()
 	set("backup", m_bkEnabled->isChecked() ? T("settings.backup.sum.on").arg(m_bkLast->value()).arg(m_bkDays->value())
 	                                       + (m_bkSecond->isChecked() && !m_bkDir->text().trimmed().isEmpty() ? T("settings.backup.sum.second") : QString())
 	                                       : T("settings.backup.sum.off"));
+	if (m_mcp)
+		set("mcp", T(m_mcp->isChecked() ? "settings.mcp.sum.on" : "settings.mcp.sum.off"));
 	set("features", T(m_aruba->isChecked() ? "settings.features.sum.aruba" : "settings.features.sum.none"));
 }
 

@@ -59,6 +59,7 @@
     <util:CloseApplication Id="CloseWorkerVnc" Target="rj-worker-vnc.exe" Sequence="4" TerminateProcess="0" RebootPrompt="no" />
     <util:CloseApplication Id="CloseWorkerWeb" Target="rj-worker-web.exe" Sequence="5" TerminateProcess="0" RebootPrompt="no" />
     <util:CloseApplication Id="CloseWorkerPsrp" Target="rj-worker-psrp.exe" Sequence="6" TerminateProcess="0" RebootPrompt="no" />
+    <util:CloseApplication Id="CloseMcp" Target="rj-mcp.exe" Sequence="7" TerminateProcess="0" RebootPrompt="no" />
 
     <Feature Id="Main" Title="remotejoe" Level="1">
       <ComponentGroupRef Id="AppFiles" />

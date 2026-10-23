@@ -466,7 +466,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build") | Some("credcheck_start") | Some("credcheck_rows") | Some("credcheck_cancel") | Some("orphans_list")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build") | Some("credcheck_start") | Some("credcheck_rows") | Some("credcheck_cancel") | Some("orphans_list") | Some("mcp_call") | Some("mcp_denied") | Some("data_dir") | Some("mcp_settings") | Some("set_mcp_settings") | Some("mcp_log")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -728,6 +728,12 @@ impl App {
             "shared_list" => Ok(self.shared_list()),
             "orphans_list" => Ok(self.orphans_list()),
             "credcheck_start" => self.credcheck_start(&c),
+            "mcp_call" => self.mcp_call(&c),
+            "mcp_denied" => Ok(self.mcp_denied(&c)),
+            "data_dir" => Ok(json!({ "path": rj_core::config::data_dir() })),
+            "mcp_settings" => Ok(self.mcp_settings_json()),
+            "set_mcp_settings" => self.mcp_apply_settings(&c),
+            "mcp_log" => Ok(self.mcp_log_json()),
             "credcheck_rows" => Ok(self.credcheck_rows()),
             "credcheck_cancel" => Ok(self.credcheck_cancel()),
             "credmerge_list" => Ok(self.credmerge_list(&c)),
@@ -2371,6 +2377,54 @@ mod tests {
 
     fn cmd(app: &mut App, v: Value) -> Value {
         j(app.edit(&v.to_string()))
+    }
+
+    #[test]
+    fn mcp_sees_only_released_folders_and_acts_only_with_released_logins() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, path, _) = app_with_vault(dir.path());
+        app.config_path = None;
+        app.config.kdbx_path = Some(path);
+        let root = app.index.root.id;
+        let open = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "Freigegeben" }))["id"].as_str().unwrap().to_string();
+        let closed = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "Geheim" }))["id"].as_str().unwrap().to_string();
+        let a = cmd(&mut app, json!({ "op": "add", "parent": open, "kind": "ssh", "name": "ap-1" }))["id"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "update", "id": a, "fields": { "host": "192.0.2.10" }, "credential": { "mode": "direct", "username": "admin", "password": "geheim" } }));
+        cmd(&mut app, json!({ "op": "add", "parent": closed, "kind": "ssh", "name": "intern-1" }));
+        let call = |app: &mut App, tool: &str, args: Value| serde_json::from_str::<Value>(&app.edit(&json!({ "op": "mcp_call", "tool": tool, "args": args }).to_string())).unwrap();
+        assert!(call(&mut app, "ziele_suchen", json!({})).get("error").is_some(), "ab Werk aus");
+        cmd(&mut app, json!({ "op": "set_mcp_settings", "enabled": true, "allowed": [open] }));
+        let r = call(&mut app, "ziele_suchen", json!({}));
+        assert_eq!(r["anzahl"], 1, "{r}");
+        assert_eq!(r["ziele"][0]["name"], "ap-1");
+        assert_eq!(r["ziele"][0]["adresse"], "192.0.2.10");
+        assert!(!r.to_string().contains("geheim") && !r.to_string().contains("admin"), "nie Zugangsdaten: {r}");
+        assert!(call(&mut app, "ziele_abgleichen", json!({ "werte": ["192.0.2.10", "192.0.2.99"] }))["nicht_gefunden"] == 1);
+        cmd(&mut app, json!({ "op": "set_mcp_settings", "hide_addresses": true }));
+        assert!(call(&mut app, "ziele_suchen", json!({}))["ziele"][0].get("adresse").is_none(), "ausgeblendet");
+        // Aktionen: nur mit freigegebenem Anmeldeobjekt.
+        let r = call(&mut app, "verbinden", json!({ "id": a }));
+        assert!(r["error"].as_str().unwrap().contains("Anmeldeobjekt"), "{r}");
+        let groups = cmd(&mut app, json!({ "op": "credmerge_list" }));
+        let entries = groups["groups"].as_array().map(|g| g.iter().find(|g| g["username"] == "admin").map(|g| g["entries"].clone())).flatten();
+        let lid = match entries {
+            Some(e) => cmd(&mut app, json!({ "op": "credmerge_apply", "entries": e, "name": "Claude-Konto" }))["login"].as_str().unwrap().to_string(),
+            None => {
+                // Nur ein Ziel mit diesen Daten: Anmeldeobjekt direkt anlegen.
+                let entry = app.index.referenced_entries().into_iter().next().unwrap();
+                let l = rj_core::Login { id: Uuid::new_v4(), name: "Claude-Konto".into(), folder: Uuid::parse_str(&open).unwrap(), entry: CredentialRef { entry, last_title: None } };
+                let id = l.id;
+                app.index.logins.push(l);
+                rj_core::inherit::set_credential_mode(&mut app.index, Uuid::parse_str(&a).unwrap(), CredentialMode::Login(id));
+                id.to_string()
+            }
+        };
+        cmd(&mut app, json!({ "op": "set_mcp_settings", "logins": [lid] }));
+        let r = call(&mut app, "verbinden", json!({ "id": a }));
+        assert_eq!(r["needs_confirm"], true, "{r}");
+        let r: Value = serde_json::from_str(&app.edit(&json!({ "op": "mcp_call", "tool": "verbinden", "args": { "id": a }, "confirmed": true }).to_string())).unwrap();
+        assert_eq!(r["freigegeben"], true, "{r}");
+        assert!(cmd(&mut app, json!({ "op": "mcp_log" }))["log"].as_array().unwrap().len() >= 5);
     }
 
     #[test]

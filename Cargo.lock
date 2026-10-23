@@ -3930,6 +3930,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "remotejoe-mcp"
+version = "0.1.24"
+dependencies = [
+ "remotejoe-core",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "remotejoe-proxmox"
 version = "0.1.24"
 dependencies = [
