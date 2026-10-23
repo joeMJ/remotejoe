@@ -7,6 +7,7 @@
 #include "aptoolstab.h"
 #include "arubaclientstab.h"
 #include "folderoverviewtab.h"
+#include "orphantab.h"
 #include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
@@ -1285,6 +1286,15 @@ void MainWindow::buildMenus()
 	extras->addAction(T(m_backend, "menu.extras.clipclear"), this, [this] { openSettings(QStringLiteral("lock")); });
 	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] { openSettings(QStringLiteral("snmp")); });
 	extras->addAction(T(m_backend, "menu.extras.shared"), this, [this] { openSharedCheck(); });
+	extras->addAction(T(m_backend, "menu.extras.orphans"), this, [this] {
+		if (auto* old = findChild<OrphanTab*>())
+		{
+			old->load();
+			m_tabs->setCurrentWidget(old);
+			return;
+		}
+		addToolTab(new OrphanTab(m_backend, m_tabs), T(m_backend, "orphans.tab"));
+	});
 	extras->addAction(T(m_backend, "menu.extras.terminal"), this, [this] { openTerminalSettings(); });
 	extras->addAction(T(m_backend, "menu.extras.appearance"), this, [this] { openAppearance(); });
 	extras->addSeparator();
