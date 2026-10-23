@@ -6,6 +6,7 @@
 
 #include <QtCore/QDateTime>
 #include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
 #include <QtGui/QClipboard>
 #include <QtGui/QFontDatabase>
 #include <QtGui/QGuiApplication>
@@ -23,7 +24,7 @@ namespace
 class ApTile : public rjui::ClickRow
 {
 public:
-	ApTile(const QJsonObject& ap, const std::function<QString(const char*)>& T, QWidget* parent)
+	ApTile(const QJsonObject& ap, const std::function<QString(const char*)>& T, int warn, int crit, QWidget* parent)
 	  : rjui::ClickRow(parent)
 	{
 		setObjectName(QStringLiteral("rjApTile"));
@@ -62,7 +63,13 @@ public:
 		if (ap.value(QStringLiteral("clients")).isDouble())
 		{
 			// Platz für dreistellige Zahlen, rechts abgesetzt vom Namen.
-			auto* badge = rjui::pill(QString::number(ap.value(QStringLiteral("clients")).toInt()), QStringLiteral("accent"), this);
+			// Schwellen aus Einstellungen → Zusatzfunktionen: gelb bzw. rot ab so vielen Anwendern (0 = aus).
+			const int n = ap.value(QStringLiteral("clients")).toInt();
+			const bool isCrit = crit > 0 && n >= crit;
+			const bool isWarn = !isCrit && warn > 0 && n >= warn;
+			auto* badge = rjui::pill(QString::number(n), isCrit ? QStringLiteral("err") : isWarn ? QStringLiteral("yellow") : QStringLiteral("accent"), this);
+			if (isCrit || isWarn)
+				badge->setToolTip(T("aruba.clients.over").arg(n).arg(isCrit ? crit : warn));
 			badge->setAlignment(Qt::AlignCenter);
 			badge->setMinimumWidth(badge->fontMetrics().horizontalAdvance(QStringLiteral("888")) + 12);
 			h->addSpacing(4);
@@ -108,9 +115,8 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 	v->addLayout(hh);
 	// Werkzeuge: lesend (Analyse, Inventar) und schreibend (Neustart, Update; nur unverwaltet und mit Admin-Konto).
 	auto* th = new QHBoxLayout;
-	// Zuerst die Abfrage, dann die Werkzeuge, alle in einer Zeile.
+	// Werkzeuge links, „Cluster abfragen“ rechtsbündig in derselben Zeile.
 	m_query = new QPushButton(rjui::glyphIcon(rjui::Glyph::Signal), T("aruba.query"), this);
-	th->addWidget(m_query);
 	for (const char* tool : { "analyse", "inventar", "reload", "update" })
 	{
 		const QString name = QString::fromLatin1(tool);
@@ -127,6 +133,7 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 			m_update = b;
 	}
 	th->addStretch(1);
+	th->addWidget(m_query);
 	v->addLayout(th);
 
 	auto* tiles = new QHBoxLayout;
@@ -230,13 +237,16 @@ void ArubaClusterView::render()
 	m_offline->setText(c.value(QStringLiteral("allowed_known")).toBool() ? QString::number(c.value(QStringLiteral("offline")).toInt()) : QStringLiteral("?"));
 	m_clients->setText(QString::number(c.value(QStringLiteral("clients")).toInt()));
 	const int f = m_filter->checkedId();
+	const QJsonObject settings = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"settings\"}")).toUtf8()).object();
+	const int warn = settings.value(QStringLiteral("aruba_clients_warn")).toInt(30);
+	const int crit = settings.value(QStringLiteral("aruba_clients_crit")).toInt(64);
 	for (const QJsonValue& v : c.value(QStringLiteral("aps")).toArray())
 	{
 		const QJsonObject ap = v.toObject();
 		const bool online = ap.value(QStringLiteral("online")).toBool();
 		if ((f == 1 && !online) || (f == 2 && online) || (f == 3 && ap.value(QStringLiteral("in_segment")).toBool(true)))
 			continue;
-		auto* tile = new ApTile(ap, T, m_box);
+		auto* tile = new ApTile(ap, T, warn, crit, m_box);
 		const QString ip = ap.value(QStringLiteral("ip")).toString();
 		QString tip = ap.value(QStringLiteral("name")).toString() + QStringLiteral(" · ") + (ip.isEmpty() ? T("aruba.ip.unknown") : ip);
 		if (ap.value(QStringLiteral("clients")).isDouble())

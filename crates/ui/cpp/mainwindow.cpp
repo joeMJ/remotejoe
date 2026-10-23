@@ -6,6 +6,7 @@
 #include "arubaaptab.h"
 #include "aptoolstab.h"
 #include "arubaclientstab.h"
+#include "folderoverviewtab.h"
 #include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
@@ -960,6 +961,11 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 			openLogin(i.data(RoleId).toString(), QString()); // der Anmeldungs-Tab ist ihre Übersicht
 			return;
 		}
+		if (i.data(RoleFolder).toBool() && i.data(RoleMacro).toInt() == 0 && !i.data(RolePlaceholder).toBool())
+		{
+			openFolderOverview(i);
+			return;
+		}
 		if (i.data(RoleMacro).toInt() != 0 || i.data(RolePlaceholder).toBool() || i.data(RoleFolder).toBool())
 			return;
 		const QString id = i.data(RoleId).toString();
@@ -1422,6 +1428,8 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	                      "QLabel[rjDot=\"warn\"] { color: %8; }"
 	                      "QLabel[rjPill=\"err\"] { background: %16; color: %15; border-radius: 9px; padding: 1px 9px; }"
 	                      "QLabel[rjWarnText=\"true\"] { color: %8; }"
+	                      "QLabel[rjErrText=\"true\"] { color: %15; font-weight: bold; }"
+	                      "QLabel[rjPill=\"yellow\"] { background: %17; color: %18; border-radius: 9px; padding: 1px 9px; }"
 	                      "QFrame#rjRow:hover { background: %3; }"
 	                      "QFrame#rjRow[selected=\"true\"] { background: %11; }"
 	                      // Eingabefelder in Karten: eigener Rand und leicht abgesetzter Hintergrund (bei dunklen
@@ -1442,7 +1450,8 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	                      "QFrame#rjCard *[rjDirty=\"true\"]:enabled { border: 2px solid %14; }")
 	  .arg(base.name(), border.name(), tileBg.name(), muted.name(), okBg.name(), okText.name(), warnBg.name(), warnText.name(), accentBg.name())
 	  .arg(dark ? accent.lighter(140).name() : accent.darker(120).name(), rowSel.name(), fieldBg.name(), fieldBorder.name(), accent.name())
-	  .arg(dark ? QStringLiteral("#f28b82") : QStringLiteral("#b3261e"), mix(QColor("#d93025"), base, dark ? 30 : 16).name());
+	  .arg(dark ? QStringLiteral("#f28b82") : QStringLiteral("#b3261e"), mix(QColor("#d93025"), base, dark ? 30 : 16).name())
+	  .arg(mix(QColor("#f2c200"), base, dark ? 30 : 28).name(), dark ? QStringLiteral("#ffe08a") : QStringLiteral("#6b5200"));
 }
 
 void MainWindow::applyTheme(bool dark)
@@ -4099,6 +4108,60 @@ void MainWindow::openArubaLog(const QJsonObject& subject, const QString& ip, con
 	// Je Abruf ein Tab (nichts wird gespeichert); im Tab lässt sich der Filter ändern.
 	auto* t = new ArubaLogTab(m_backend, subject, ip, where, kind, filter, m_tabs);
 	addToolTab(t, t->title());
+}
+
+void MainWindow::openFolderOverview(const QModelIndex& folder)
+{
+	// Elemente direkt im Ordner, wie sie im Baum stehen (Symbol, Typ, Adresse); das Inventar holt der Tab.
+	auto typeName = [](const QString& kind) -> QString {
+		static const QMap<QString, QString> names = { { QStringLiteral("rdp"), QStringLiteral("RDP") },        { QStringLiteral("ssh"), QStringLiteral("SSH") },
+			                                          { QStringLiteral("vnc"), QStringLiteral("VNC") },        { QStringLiteral("web"), QStringLiteral("Web") },
+			                                          { QStringLiteral("proxmox"), QStringLiteral("Proxmox") }, { QStringLiteral("hyperv"), QStringLiteral("Hyper-V") },
+			                                          { QStringLiteral("psrp"), QStringLiteral("PowerShell") }, { QStringLiteral("aruba"), QStringLiteral("Aruba") },
+			                                          { QStringLiteral("task"), QStringLiteral("Aufgabe") },   { QStringLiteral("multi"), QStringLiteral("Mehrere Wege") } };
+		return names.value(kind, kind.toUpper());
+	};
+	QList<FolderOverviewTab::Item> items;
+	for (int r = 0; r < m_model->rowCount(folder); ++r)
+	{
+		const QModelIndex c = m_model->index(r, 0, folder);
+		if (c.data(RolePlaceholder).toBool() || c.data(RoleMacro).toInt() != 0 || c.data(RoleLogin).toBool() || c.data(RoleId).toString().isEmpty())
+			continue;
+		FolderOverviewTab::Item it;
+		it.id = c.data(RoleId).toString();
+		it.name = c.data(Qt::DisplayRole).toString();
+		it.folder = c.data(RoleFolder).toBool();
+		it.type = typeName(c.data(RoleIconKind).toString());
+		it.host = c.data(Qt::ToolTipRole).toString().section(QLatin1Char('\n'), 0, 0);
+		it.icon = c.data(Qt::DecorationRole).value<QIcon>();
+		items << it;
+	}
+	QStringList path;
+	for (QModelIndex p = folder; p.isValid(); p = p.parent())
+		path.prepend(p.data(Qt::DisplayRole).toString());
+	auto* t = findChild<FolderOverviewTab*>();
+	if (!t)
+	{
+		t = new FolderOverviewTab(m_backend, m_tabs);
+		connect(t, &FolderOverviewTab::targetClicked, this, [this](const QString& id, const QIcon& icon) {
+			selectId(id);
+			openOverview(QJsonObject{ { QStringLiteral("id"), id } }, icon);
+		});
+		connect(t, &FolderOverviewTab::targetActivated, this, [this](const QString& id) {
+			selectId(id);
+			connectSelected();
+		});
+		connect(t, &FolderOverviewTab::folderClicked, this, [this](const QString& id) {
+			selectId(id);
+			if (m_tree->currentIndex().isValid())
+				openFolderOverview(m_tree->currentIndex());
+		});
+		addToolTab(t, QString());
+	}
+	t->showFolder(folder.data(RoleId).toString(), folder.data(Qt::DisplayRole).toString(), path.join(QStringLiteral(" › ")), items);
+	const int i = m_tabs->indexOf(t);
+	m_tabs->setTabText(i, t->title());
+	m_tabs->setCurrentWidget(t);
 }
 
 void MainWindow::openArubaAp(const QJsonObject& s, const QJsonObject& ap)

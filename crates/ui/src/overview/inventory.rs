@@ -108,6 +108,14 @@ impl Inventory {
     }
 }
 
+/// Versionsnummer aus dem Feld „System“: das erste Wort aus Ziffern und Punkten mit mindestens einem Punkt
+/// („Aruba Instant 8.10.0.24 LSR (Modell 335)“ → „8.10.0.24“, „Ubuntu 24.04.1 LTS“ → „24.04.1“).
+pub fn version_of(system: &str) -> Option<&str> {
+    system
+        .split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',')
+        .find(|w| w.contains('.') && w.starts_with(|c: char| c.is_ascii_digit()) && w.chars().all(|c| c.is_ascii_digit() || c == '.') && !w.ends_with('.'))
+}
+
 /// Geräteart aus dem Inventar, für ein eigenes Symbol im Baum: `aruba-ap`, sobald das Inventar ein Aruba-Gerät
 /// meldet (System „Aruba Instant …“ aus `show version`).
 pub fn device_kind(inv: &Inventory) -> Option<&'static str> {
@@ -198,6 +206,14 @@ pub fn format_bytes(b: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn version_from_system() {
+        use super::version_of;
+        assert_eq!(version_of("Aruba Instant 8.10.0.24 LSR (Modell 335)"), Some("8.10.0.24"));
+        assert_eq!(version_of("Ubuntu 24.04.1 LTS"), Some("24.04.1"));
+        assert_eq!(version_of("Windows Server 2022 Standard (10.0.20348)"), Some("10.0.20348"));
+        assert_eq!(version_of("Debian GNU/Linux 12 (bookworm)"), None);
+    }
 
     #[test]
     fn uptime_is_overwritten_other_fields_become_proposals() {

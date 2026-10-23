@@ -124,6 +124,8 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 		QFrame* t = rjui::tile(fieldLabel(QString::fromLatin1(kTiles[i])), &m_tileValue[i], inv);
 		m_tileCap[i] = t->findChild<QLabel*>(QStringLiteral("rjTileLabel"));
 		m_tileKeys << QString::fromLatin1(kTiles[i]);
+		if (qstrcmp(kTiles[i], "vcpu") == 0)
+			t->setToolTip(m_backend->text(QStringLiteral("ov.field.vcpu.tip")));
 		tiles->addWidget(t, 0, i);
 		tiles->setColumnStretch(i, 1);
 	}
@@ -507,11 +509,20 @@ void OverviewTab::renderServices(const QJsonValue& s)
 	m_chipsBox->relayout();
 }
 
+bool OverviewTab::isAruba(const QJsonArray& fields)
+{
+	for (const QJsonValue& v : fields)
+		if (v.toObject().value(QStringLiteral("key")).toString() == QLatin1String("system") &&
+		    v.toObject().value(QStringLiteral("value")).toString().startsWith(QLatin1String("Aruba")))
+			return true;
+	return false;
+}
+
 void OverviewTab::updateSub()
 {
 	// Kurzzeile: Protokoll und Adresse, dazu System und Rechnername aus dem Inventar.
 	QStringList parts{ m_subBase };
-	QString name, system;
+	QString name, system, mac;
 	for (const QJsonValue& v : m_inventory)
 	{
 		const QJsonObject f = v.toObject();
@@ -519,30 +530,44 @@ void OverviewTab::updateSub()
 			system = f.value(QStringLiteral("value")).toString();
 		else if (f.value(QStringLiteral("key")).toString() == QLatin1String("name"))
 			name = f.value(QStringLiteral("value")).toString();
+		else if (f.value(QStringLiteral("key")).toString() == QLatin1String("mac"))
+			mac = f.value(QStringLiteral("value")).toString();
 	}
 	if (!system.isEmpty())
 		parts << system;
 	if (!name.isEmpty() && name.compare(m_name, Qt::CaseInsensitive) != 0)
 		parts << m_backend->text(QStringLiteral("ov.machine")).arg(name);
+	// Aruba: die MAC steht hier statt auf einer Kachel.
+	if (isAruba(m_inventory) && !mac.isEmpty())
+		parts << QStringLiteral("MAC ") + mac;
 	m_sub->setText(parts.join(QStringLiteral(" · ")));
 }
 
 void OverviewTab::renderInventory(const QJsonArray& fields)
 {
-	// Aruba-Gerät (System „Aruba …“): Laufzeit und Seriennummer statt vCPU und Speicher.
-	bool aruba = false;
-	for (const QJsonValue& v : fields)
-		if (v.toObject().value(QStringLiteral("key")).toString() == QLatin1String("system") &&
-		    v.toObject().value(QStringLiteral("value")).toString().startsWith(QLatin1String("Aruba")))
-			aruba = true;
-	const QStringList keys = aruba ? QStringList{ QStringLiteral("uptime"), QStringLiteral("serial"), QStringLiteral("ip"), QStringLiteral("mac") }
+	// Aruba-Gerät (System „Aruba …“): Laufzeit, IP-Adresse und – hervorgehoben – die Seriennummer; die MAC steht in der
+	// Kopfzeile.
+	const bool aruba = isAruba(fields);
+	const QStringList keys = aruba ? QStringList{ QStringLiteral("uptime"), QStringLiteral("ip"), QStringLiteral("serial"), QString() }
 	                               : QStringList{ QString::fromLatin1(kTiles[0]), QString::fromLatin1(kTiles[1]), QString::fromLatin1(kTiles[2]), QString::fromLatin1(kTiles[3]) };
 	if (keys != m_tileKeys)
 	{
 		m_tileKeys = keys;
 		for (int i = 0; i < 4; ++i)
 			if (m_tileCap[i])
+			{
 				m_tileCap[i]->setText(fieldLabel(keys.at(i)));
+				m_tileCap[i]->parentWidget()->setVisible(!keys.at(i).isEmpty());
+				m_tileCap[i]->parentWidget()->setToolTip(keys.at(i) == QLatin1String("vcpu") ? m_backend->text(QStringLiteral("ov.field.vcpu.tip")) : QString());
+			}
+		QFont f = m_tileValue[0]->font();
+		if (aruba)
+		{
+			f.setFamily(QFontDatabase::systemFont(QFontDatabase::FixedFont).family());
+			f.setPointSizeF(m_tileValue[0]->font().pointSizeF() * 1.15);
+		}
+		m_tileValue[2]->setFont(f);
+		m_tileValue[2]->setTextInteractionFlags(aruba ? Qt::TextSelectableByMouse : Qt::NoTextInteraction);
 	}
 	m_inventory = fields;
 	updateSub();

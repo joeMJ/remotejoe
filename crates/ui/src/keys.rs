@@ -57,6 +57,11 @@ pub fn keysym(qt_key: u32) -> Option<u32> {
 pub fn terminal_bytes(qt_key: u32, modifiers: u32, text: &str, app_cursor: bool) -> Vec<u8> {
     let ctrl = modifiers & CTRL != 0;
     let alt = modifiers & ALT != 0;
+    // Windows meldet AltGr als Strg+Alt. Liefert die Tastatur dabei ein druckbares Zeichen (deutsch: | @ { } [ ] \ ~ €),
+    // ist es genau dieses Zeichen – kein Steuerzeichen und kein ESC davor.
+    if ctrl && alt && !text.is_empty() && !text.chars().any(char::is_control) {
+        return text.as_bytes().to_vec();
+    }
     let csi = |s: &str| format!("\x1b[{s}").into_bytes();
     let cursor = |c: char| if app_cursor { format!("\x1bO{c}").into_bytes() } else { format!("\x1b[{c}").into_bytes() };
     let out: Vec<u8> = match qt_key {
@@ -114,5 +119,16 @@ mod tests {
         assert_eq!(terminal_bytes('X' as u32, 0, "ä", false), "ä".as_bytes());
         assert_eq!(terminal_bytes('x' as u32, ALT, "x", false), b"\x1bx");
         assert_eq!(terminal_bytes(0x0100_0003, 0, "", false), b"\x7f");
+    }
+
+    #[test]
+    fn altgr_on_windows_arrives_as_ctrl_alt() {
+        // Deutsche Tastatur: AltGr+< = |, AltGr+Q = @, AltGr+8 = [, AltGr+ß = \, AltGr+E = €.
+        for (key, text) in [('<' as u32, "|"), ('Q' as u32, "@"), ('8' as u32, "["), ('9' as u32, "]"), (0xdf, "\\"), ('7' as u32, "{"), ('+' as u32, "~"), ('E' as u32, "€")] {
+            assert_eq!(terminal_bytes(key, CTRL | ALT, text, false), text.as_bytes(), "{text}");
+        }
+        // Echtes Strg+Alt ohne druckbaren Text bleibt wie bisher (ESC + Steuerzeichen).
+        assert_eq!(terminal_bytes('C' as u32, CTRL | ALT, "\u{3}", false), b"\x1b\x03");
+        assert_eq!(terminal_bytes('C' as u32, CTRL | ALT, "", false), b"\x1b\x03");
     }
 }

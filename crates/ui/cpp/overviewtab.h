@@ -75,6 +75,8 @@ private:
 	void renderServices(const QJsonValue& s);
 	void renderInventory(const QJsonArray& fields);
 	void updateSub();
+	/// Inventar eines Aruba-Geräts (System „Aruba …“).
+	static bool isAruba(const QJsonArray& fields);
 	/// Cluster-Karte nur bei Aruba-Geräten und eingeschalteten Aruba-Werkzeugen.
 	void updateAruba(const QJsonObject& r);
 	QString fieldLabel(const QString& key) const;

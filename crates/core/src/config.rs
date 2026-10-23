@@ -82,11 +82,20 @@ impl BackupSettings {
 }
 
 /// Zuschaltbare Zusatzfunktionen (Vorgabe: alle aus).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FeatureSettings {
     /// Aruba-Werkzeuge: Cluster-Übersicht am virtuellen Controller, AP-Seiten, ap_check.
     pub aruba: bool,
+    /// Anwender je AP, ab denen die Zahl auf der Kachel gelb bzw. rot wird (0 = aus).
+    pub aruba_clients_warn: u32,
+    pub aruba_clients_crit: u32,
+}
+
+impl Default for FeatureSettings {
+    fn default() -> Self {
+        FeatureSettings { aruba: false, aruba_clients_warn: 30, aruba_clients_crit: 64 }
+    }
 }
 
 /// Darstellung: Farbschema (`system`, `hell`, `dunkel`, `eingebaut:<Name>` oder `datei:<Name>` für eine eigene Palette)
