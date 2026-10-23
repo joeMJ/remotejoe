@@ -1740,6 +1740,23 @@ void MainWindow::reloadTree()
 	}
 	m_treeLoaded = true;
 	addMacroShelf();
+	// Offene Ordnerübersicht mit dem neuen Baum auffrischen (z. B. nach dem Anlegen eines Ziels).
+	if (auto* fo = findChild<FolderOverviewTab*>(); fo && !fo->folderId().isEmpty())
+	{
+		std::function<QModelIndex(const QModelIndex&)> find = [&](const QModelIndex& parent) -> QModelIndex {
+			for (int r = 0; r < m_model->rowCount(parent); ++r)
+			{
+				const QModelIndex i = m_model->index(r, 0, parent);
+				if (i.data(RoleId).toString() == fo->folderId())
+					return i;
+				if (const QModelIndex hit = find(i); hit.isValid())
+					return hit;
+			}
+			return {};
+		};
+		if (const QModelIndex i = find(QModelIndex()); i.isValid())
+			openFolderOverview(i, false);
+	}
 	if (!current.isEmpty())
 	{
 		std::function<QModelIndex(const QModelIndex&)> find = [&](const QModelIndex& parent) -> QModelIndex {
@@ -3267,6 +3284,12 @@ void MainWindow::handleEvents(const QString& json)
 					if (w)
 						w->show();
 				reloadViews();
+				// Erstes Entsperren: Startzustand bzw. Vorgabe des Baums anwenden (vorher war der Baum leer).
+				if (m_firstUnlock)
+				{
+					m_firstUnlock = false;
+					m_treeLoaded = false;
+				}
 				reloadTree();
 				for (auto* ed : findChildren<PropertiesTab*>())
 					ed->reload();
@@ -3394,6 +3417,10 @@ void MainWindow::handleEvents(const QString& json)
 				{
 					if (auto* c = findChild<CertCheckTab*>())
 						c->handleResult(r);
+				}
+				else if (kind == QLatin1String("credcheck"))
+				{
+					// Der Reiter fragt den Stand selbst ab.
 				}
 				else if (kind == QLatin1String("cert_accept"))
 				{
@@ -4243,7 +4270,7 @@ void MainWindow::openCredMerge(const QStringList& scope)
 	addToolTab(t, T(m_backend, "credmerge.tab"));
 }
 
-void MainWindow::openFolderOverview(const QModelIndex& folder)
+void MainWindow::openFolderOverview(const QModelIndex& folder, bool activate)
 {
 	// Elemente direkt im Ordner, wie sie im Baum stehen (Symbol, Typ, Adresse); das Inventar holt der Tab.
 	auto typeName = [](const QString& kind) -> QString {
@@ -4294,7 +4321,8 @@ void MainWindow::openFolderOverview(const QModelIndex& folder)
 	t->showFolder(folder.data(RoleId).toString(), folder.data(Qt::DisplayRole).toString(), path.join(QStringLiteral(" › ")), items);
 	const int i = m_tabs->indexOf(t);
 	m_tabs->setTabText(i, t->title());
-	m_tabs->setCurrentWidget(t);
+	if (activate)
+		m_tabs->setCurrentWidget(t);
 }
 
 void MainWindow::openArubaAp(const QJsonObject& s, const QJsonObject& ap)

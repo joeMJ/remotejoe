@@ -87,7 +87,7 @@ public:
 	/// Gleiche Zugangsdaten zusammenführen (leer: ganzer Baum).
 	void openCredMerge(const QStringList& scope);
 	/// Übersicht eines Ordners (ein Tab, beim nächsten Ordner neu befüllt).
-	void openFolderOverview(const QModelIndex& folder);
+	void openFolderOverview(const QModelIndex& folder, bool activate = true);
 	/// Kontextmenü des Baums: Aufklappzustand als Start speichern / zurücksetzen.
 	void addTreeStartActions(class QMenu* menu);
 	/// Seite eines APs (je AP ein Tab; ein vorhandener wird neu abgefragt).
@@ -236,6 +236,8 @@ private:
 	QLineEdit* m_search;
 	bool m_edgeOverride = false;
 	bool m_treeLoaded = false;
+	/// Noch nie entsperrt: beim ersten Entsperren gilt der Startzustand des Baums.
+	bool m_firstUnlock = true;
 	/// Aufklappen durch das Programm (Wiederherstellen, Suche): dabei keine Gäste laden.
 	bool m_autoExpand = false;
 	/// Hypervisor-Knoten, deren Gäste noch nicht geladen sind, wieder zuklappen.
