@@ -51,10 +51,82 @@ mod imp {
         }
     }
 
+    /// Anmeldeprüfung (`--auth-check`): Angaben als eine JSON-Zeile auf stdin (Rechner, Port, Benutzer, Domäne,
+    /// Kennwort, Sicherheit, Zertifikatsablage); nur anmelden (NLA), keine Sitzung. Ausgabe: eine JSON-Zeile mit
+    /// `result` (`ok`, `auth`, `locked`, `expired`, `unreachable`, `cert`, `other`) und `message`. Unbekannte oder
+    /// geänderte Zertifikate werden nicht angenommen (`cert`): sonst gingen die Zugangsdaten an einen fremden Server.
+    #[derive(Deserialize)]
+    struct AuthCheck {
+        host: String,
+        port: u16,
+        username: String,
+        #[serde(default)]
+        domain: Option<String>,
+        password: String,
+        #[serde(default)]
+        security: Security,
+        #[serde(default)]
+        config_path: Option<String>,
+    }
+
+    fn auth_check() {
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+        let req: AuthCheck = match serde_json::from_str(line.trim()) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("{}", serde_json::json!({ "result": "other", "message": format!("Angaben unlesbar: {e}") }));
+                return;
+            }
+        };
+        let cert_rejected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = cert_rejected.clone();
+        let mut s = match RdpSession::new(move |_| {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            CertDecision::Reject
+        }) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("{}", serde_json::json!({ "result": "other", "message": e.to_string() }));
+                return;
+            }
+        };
+        let p = RdpParams {
+            host: req.host,
+            port: req.port,
+            username: req.username,
+            domain: req.domain.filter(|d| !d.is_empty()),
+            password: Secret::from_str_exact(&req.password),
+            width: 800,
+            height: 600,
+            security: req.security,
+            ignore_certificate: false,
+            clipboard: rj_core::ClipboardDirection::Off,
+            clipboard_limit: 0,
+            keyboard_layout: 0x0407,
+            config_path: req.config_path.or_else(|| rj_core::config::data_dir().map(|d| d.join("freerdp").display().to_string())),
+            timeout_ms: 10000,
+            gfx: false,
+        };
+        let out = match s.authenticate(&p) {
+            Ok(()) => serde_json::json!({ "result": "ok", "message": "" }),
+            Err(e) => {
+                let msg = e.to_string();
+                let result = if cert_rejected.load(std::sync::atomic::Ordering::SeqCst) { "cert" } else { classify_error(&msg) };
+                serde_json::json!({ "result": result, "message": msg })
+            }
+        };
+        println!("{out}");
+    }
+
     pub fn main() {
         // FreeRDP-Protokoll: nur Warnungen und Fehler.
         if std::env::var_os("WLOG_LEVEL").is_none() {
             std::env::set_var("WLOG_LEVEL", "WARN");
+        }
+        if std::env::args().any(|a| a == "--auth-check") {
+            auth_check();
+            return;
         }
         let mut link = match WorkerLink::stdio("rdp", Duration::from_secs(2)) {
             Ok(l) => l,

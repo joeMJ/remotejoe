@@ -579,6 +579,9 @@ int rj_rdp_connect(rj_rdp* rdp, const rj_params* p)
 	ok &= freerdp_settings_set_bool(s, FreeRDP_NlaSecurity, nla);
 	ok &= freerdp_settings_set_bool(s, FreeRDP_TlsSecurity, tls);
 	ok &= freerdp_settings_set_bool(s, FreeRDP_RdpSecurity, rdpsec);
+	/* Prüfung der Zugangsdaten: nur die NLA-Anmeldung, danach Ende ohne Sitzung (wie xfreerdp /auth-only). */
+	if (p->auth_only)
+		ok &= freerdp_settings_set_bool(s, FreeRDP_AuthenticationOnly, TRUE);
 	if (!ok)
 	{
 		snprintf(rdp->error, sizeof(rdp->error), "Einstellungen ungültig");

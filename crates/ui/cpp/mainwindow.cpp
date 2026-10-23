@@ -9,6 +9,7 @@
 #include "folderoverviewtab.h"
 #include "orphantab.h"
 #include "credmergetab.h"
+#include "credchecktab.h"
 #include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
@@ -2491,6 +2492,22 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 			});
 		}
 	}
+	menu.addAction(T(m_backend, "ctx.credcheck"), this, [this] {
+		const QStringList ids = selectedIds();
+		if (ids.isEmpty())
+			return;
+		// Ein Lauf zur Zeit: ein vorhandener Reiter wird ersetzt.
+		if (auto* old = findChild<CredCheckTab*>())
+			closeToolTab(old);
+		const QString title = ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size());
+		auto* t = new CredCheckTab(m_backend, ids, title, m_tabs);
+		connect(t, &CredCheckTab::showTarget, this, [this](const QString& id) { selectId(id); });
+		connect(t, &CredCheckTab::editTarget, this, [this](const QString& id) {
+			selectId(id);
+			openProperties(id);
+		});
+		addToolTab(t, T(m_backend, "credcheck.tab"));
+	});
 	menu.addAction(T(m_backend, "ctx.credmerge"), this, [this] {
 		const QStringList ids = selectedIds();
 		if (!ids.isEmpty())

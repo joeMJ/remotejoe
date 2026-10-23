@@ -61,6 +61,7 @@ typedef struct
 	const char* config_path;
 	uint32_t timeout_ms;
 	int gfx; /* 1: Grafikkanal (RDPGFX) anbieten */
+	int auth_only; /* 1: nur anmelden (NLA), keine Sitzung aufbauen */
 } rj_params;
 
 rj_rdp* rj_rdp_new(const rj_callbacks* cb);

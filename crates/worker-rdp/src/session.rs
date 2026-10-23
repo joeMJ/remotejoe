@@ -43,6 +43,24 @@ pub struct RdpParams {
     pub gfx: bool,
 }
 
+/// Ergebnis einer Anmeldeprüfung aus der FreeRDP-Fehlermeldung (Name wie `ERRCONNECT_LOGON_FAILURE`):
+/// `auth` (Kennwort falsch), `locked` (Konto gesperrt oder deaktiviert), `expired` (Kennwort abgelaufen),
+/// `unreachable` (nicht erreichbar) oder `other`.
+pub fn classify_error(message: &str) -> &'static str {
+    let has = |names: &[&str]| names.iter().any(|n| message.contains(n));
+    if has(&["ERRCONNECT_ACCOUNT_LOCKED_OUT", "ERRCONNECT_ACCOUNT_DISABLED", "ERRCONNECT_ACCOUNT_RESTRICTION"]) {
+        "locked"
+    } else if has(&["ERRCONNECT_PASSWORD_EXPIRED", "ERRCONNECT_PASSWORD_MUST_CHANGE", "ERRCONNECT_PASSWORD_CERTAINLY_EXPIRED", "ERRCONNECT_ACCOUNT_EXPIRED"]) {
+        "expired"
+    } else if has(&["ERRCONNECT_AUTHENTICATION_FAILED", "ERRCONNECT_LOGON_FAILURE", "ERRCONNECT_WRONG_PASSWORD", "ERRCONNECT_NO_OR_MISSING_CREDENTIALS"]) {
+        "auth"
+    } else if has(&["ERRCONNECT_CONNECT_TRANSPORT_FAILED", "ERRCONNECT_DNS_NAME_NOT_FOUND", "ERRCONNECT_CONNECT_FAILED", "ERRCONNECT_CONNECT_CANCELLED", "ERRCONNECT_SECURITY_NEGO_CONNECT_FAILED"]) {
+        "unreachable"
+    } else {
+        "other"
+    }
+}
+
 /// Angaben zu einem Serverzertifikat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CertInfo {
@@ -336,6 +354,15 @@ impl RdpSession {
     }
 
     pub fn connect(&mut self, p: &RdpParams) -> Result<(), RdpError> {
+        self.connect_inner(p, false)
+    }
+
+    /// Nur anmelden (NLA/CredSSP), keine Sitzung: prüft die Zugangsdaten. Der Server legt dabei keine Sitzung an.
+    pub fn authenticate(&mut self, p: &RdpParams) -> Result<(), RdpError> {
+        self.connect_inner(p, true)
+    }
+
+    fn connect_inner(&mut self, p: &RdpParams, auth_only: bool) -> Result<(), RdpError> {
         let c = |s: &str| CString::new(s).map_err(|_| RdpError::Nul);
         let host = c(&p.host)?;
         let user = c(&p.username)?;
@@ -365,6 +392,7 @@ impl RdpSession {
             config_path: config.as_ptr(),
             timeout_ms: p.timeout_ms,
             gfx: p.gfx as i32,
+            auth_only: auth_only as i32,
         };
         // SAFETY: alle Zeiger leben bis zum Ende des Aufrufs.
         let rc = unsafe { ffi::rj_rdp_connect(self.raw, &params) };
@@ -651,4 +679,17 @@ fn zeroizing_cstring(s: &str) -> Result<ZeroCString, RdpError> {
     v.extend_from_slice(s.as_bytes());
     v.push(0);
     Ok(ZeroCString(v))
+}
+
+#[cfg(test)]
+mod classify_tests {
+    #[test]
+    fn freerdp_errors_map_to_check_results() {
+        use super::classify_error as c;
+        assert_eq!(c("Verbindung fehlgeschlagen: x (ERRCONNECT_LOGON_FAILURE)"), "auth");
+        assert_eq!(c("… (ERRCONNECT_ACCOUNT_LOCKED_OUT)"), "locked");
+        assert_eq!(c("… (ERRCONNECT_PASSWORD_EXPIRED)"), "expired");
+        assert_eq!(c("… (ERRCONNECT_CONNECT_TRANSPORT_FAILED)"), "unreachable");
+        assert_eq!(c("irgendwas"), "other");
+    }
 }
