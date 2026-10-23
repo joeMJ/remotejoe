@@ -216,7 +216,9 @@ void ApToolsTab::handleSetup(const QJsonObject& r)
 	else
 	{
 		const QString commit = r.value(QStringLiteral("commit")).toString().left(7);
-		const QString msg = T("aptools.setup.done").arg(commit.isEmpty() ? QStringLiteral("?") : commit, r.value(QStringLiteral("paramiko")).toString());
+		QString msg = T("aptools.setup.done").arg(commit.isEmpty() ? QStringLiteral("?") : commit, r.value(QStringLiteral("paramiko")).toString());
+		// Weg der Downloads: Sammlung (von remotejoe geladen) und Bibliotheken (pip).
+		msg += QLatin1Char('\n') + T("aptools.setup.via").arg(r.value(QStringLiteral("via_collection")).toString(), r.value(QStringLiteral("via_pip")).toString());
 		m_state->setText(msg);
 		refreshStatus();
 		QMessageBox::information(this, T("aptools.setup.title"), msg);

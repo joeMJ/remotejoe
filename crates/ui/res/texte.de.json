@@ -1053,6 +1053,7 @@
   "aptools.setup.python.busy": "Installiere Python von python.org, danach die Sammlung …",
   "aptools.setup.done": "Eingerichtet: Sammlung %1, paramiko %2.",
   "aptools.setup.step": "Einrichten: %1 … (%2 s)",
+  "aptools.setup.via": "Sammlung geladen %1; Bibliotheken: %2.",
   "aptools.setup.failed": "Einrichten fehlgeschlagen: %1",
   "aptools.python.ask.title": "Python fehlt",
   "aptools.python.ask": "Für die Aruba Instant Python Tools wird Python gebraucht. Python 3.12.10 von python.org laden und nur für diesen Benutzer installieren (ohne Administratorrechte)? Die Signatur des Installers (Python Software Foundation) wird vorher geprüft.",
