@@ -86,6 +86,8 @@ public:
 	void openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
 	/// Übersicht eines Ordners (ein Tab, beim nächsten Ordner neu befüllt).
 	void openFolderOverview(const QModelIndex& folder);
+	/// Kontextmenü des Baums: Aufklappzustand als Start speichern / zurücksetzen.
+	void addTreeStartActions(class QMenu* menu);
 	/// Seite eines APs (je AP ein Tab; ein vorhandener wird neu abgefragt).
 	void openArubaAp(const QJsonObject& subject, const QJsonObject& ap);
 	/// Anwender eines Clusters (je VC ein Tab; ein vorhandener fragt neu ab).

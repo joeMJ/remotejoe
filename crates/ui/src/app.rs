@@ -640,6 +640,8 @@ impl App {
             saved: true,
             compact: v.get("compact").and_then(|x| x.as_bool()).unwrap_or(false),
             tree_hidden: v.get("tree_hidden").and_then(|x| x.as_bool()).unwrap_or(false),
+            // Der gespeicherte Startzustand des Baums bleibt beim Sichern der Fensterlage erhalten.
+            tree_start: std::mem::take(&mut self.config.window.tree_start),
         };
         if !self.demo {
             if let Some(cp) = self.config_path.clone() {

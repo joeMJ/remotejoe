@@ -177,11 +177,14 @@ pub struct WindowState {
     pub compact: bool,
     /// Baum eingeklappt.
     pub tree_hidden: bool,
+    /// Aufgeklappte Ordner beim Start, je Schlüsseldatenbank (Pfad → Ordner-IDs); fehlt der Eintrag, gilt die Vorgabe.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tree_start: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Default for WindowState {
     fn default() -> Self {
-        WindowState { x: 100, y: 100, width: 1280, height: 800, maximized: false, tree_width: 280, saved: false, compact: false, tree_hidden: false }
+        WindowState { x: 100, y: 100, width: 1280, height: 800, maximized: false, tree_width: 280, saved: false, compact: false, tree_hidden: false, tree_start: Default::default() }
     }
 }
 

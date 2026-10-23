@@ -677,6 +677,23 @@ impl App {
             }
             "save" => return self.save_with(str_of(&c, "choice")),
             "backup_status" => Ok(self.backup_settings_json()),
+            // Aufklappzustand des Baums beim Start (je Schlüsseldatenbank); `ids` = null setzt auf die Vorgabe zurück.
+            "tree_start" => Ok(json!({ "ids": self.kdbx_path().and_then(|k| self.config.window.tree_start.get(&k).cloned()) })),
+            "set_tree_start" => {
+                let Some(key) = self.kdbx_path() else { return err("Keine Schlüsseldatenbank geöffnet") };
+                match c.get("ids").and_then(Value::as_array) {
+                    Some(ids) => {
+                        self.config.window.tree_start.insert(key, ids.iter().filter_map(Value::as_str).map(str::to_string).collect());
+                    }
+                    None => {
+                        self.config.window.tree_start.remove(&key);
+                    }
+                }
+                match &self.config_path {
+                    Some(p) => self.config.save(p).map(|_| json!({ "ok": true })).map_err(|e| e.to_string()),
+                    None => Ok(json!({ "ok": true })),
+                }
+            }
             "backup_now" => self.backup_start(None, true).and_then(|j| j.map(|job| json!({ "pending": job })).ok_or_else(|| "Keine gespeicherte KDBX geöffnet".to_string())),
             // Beim Beenden: höchstens `ms` auf eine laufende Sicherung warten.
             "backup_wait" => Ok(json!({ "done": crate::kdbxbackup::wait(std::time::Duration::from_millis(c.get("ms").and_then(Value::as_u64).unwrap_or(10_000).min(30_000))) })),
@@ -2156,6 +2173,26 @@ mod tests {
 
     fn cmd(app: &mut App, v: Value) -> Value {
         j(app.edit(&v.to_string()))
+    }
+
+    #[test]
+    fn tree_start_state_per_kdbx_survives_window_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, path, _) = app_with_vault(dir.path());
+        app.config_path = None;
+        app.config.kdbx_path = Some(path.clone());
+        assert!(cmd(&mut app, json!({ "op": "tree_start" }))["ids"].is_null(), "ohne Eintrag gilt die Vorgabe");
+        cmd(&mut app, json!({ "op": "set_tree_start", "ids": ["a", "b"] }));
+        assert_eq!(cmd(&mut app, json!({ "op": "tree_start" }))["ids"], json!(["a", "b"]));
+        // Fensterlage sichern darf den Startzustand nicht löschen.
+        app.set_window_state(r#"{"x":10,"y":10,"width":1000,"height":700,"tree_width":300}"#);
+        assert_eq!(cmd(&mut app, json!({ "op": "tree_start" }))["ids"], json!(["a", "b"]));
+        // Andere Schlüsseldatenbank: eigener Zustand.
+        app.config.kdbx_path = Some(dir.path().join("andere.kdbx"));
+        assert!(cmd(&mut app, json!({ "op": "tree_start" }))["ids"].is_null());
+        app.config.kdbx_path = Some(path);
+        cmd(&mut app, json!({ "op": "set_tree_start", "ids": null }));
+        assert!(cmd(&mut app, json!({ "op": "tree_start" }))["ids"].is_null(), "zurückgesetzt");
     }
 
     #[test]

@@ -1657,10 +1657,32 @@ void MainWindow::reloadTree()
 	else
 	{
 		m_autoExpand = true;
-		m_tree->expandToDepth(0);
-		// Erster Start: den ersten Ordner mit Zielen aufklappen.
-		if (m_model->rowCount() > 0)
-			m_tree->expand(m_model->index(0, 0, m_model->index(0, 0)));
+		// Gespeicherter Startzustand (Kontextmenü „Aufklappzustand als Start speichern“), sonst die Vorgabe.
+		const QJsonValue saved = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("tree_start") } })).value(QStringLiteral("ids"));
+		if (saved.isArray())
+		{
+			QSet<QString> ids;
+			for (const QJsonValue& v : saved.toArray())
+				ids.insert(v.toString());
+			std::function<void(const QModelIndex&)> open = [&](const QModelIndex& parent) {
+				for (int r = 0; r < m_model->rowCount(parent); ++r)
+				{
+					const QModelIndex i = m_model->index(r, 0, parent);
+					const QModelIndex first = m_model->index(0, 0, i);
+					if (ids.contains(i.data(RoleId).toString()) && !(first.isValid() && first.data(RolePlaceholder).toBool()))
+						m_tree->expand(i);
+					open(i);
+				}
+			};
+			open(QModelIndex());
+		}
+		else
+		{
+			m_tree->expandToDepth(0);
+			// Erster Start: den ersten Ordner mit Zielen aufklappen.
+			if (m_model->rowCount() > 0)
+				m_tree->expand(m_model->index(0, 0, m_model->index(0, 0)));
+		}
 		collapseUnloadedHypervisors();
 		m_autoExpand = false;
 	}
@@ -2312,6 +2334,8 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		// Freie Fläche (auch bei leerem Baum): Hinzufügen auf oberster Ebene anbieten.
 		QMenu empty(this);
 		buildAddMenu(&empty, QString());
+		empty.addSeparator();
+		addTreeStartActions(&empty);
 		empty.exec(m_tree->viewport()->mapToGlobal(pos));
 		return;
 	}
@@ -2470,7 +2494,33 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 			openPatchday(ids);
 	});
 	menu.addAction(T(m_backend, "ctx.properties") + QStringLiteral("\tF4"), this, [this, id] { openProperties(id); });
+	menu.addSeparator();
+	addTreeStartActions(&menu);
 	menu.exec(m_tree->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::addTreeStartActions(QMenu* menu)
+{
+	// Aufklappzustand des Baums als Start (je Schlüsseldatenbank) speichern bzw. auf die Vorgabe zurücksetzen.
+	menu->addAction(T(m_backend, "ctx.tree.start.save"), this, [this] {
+		QJsonArray ids;
+		std::function<void(const QModelIndex&)> collect = [&](const QModelIndex& parent) {
+			for (int r = 0; r < m_model->rowCount(parent); ++r)
+			{
+				const QModelIndex i = m_model->index(r, 0, parent);
+				if (m_tree->isExpanded(i) && i.data(RoleFolder).toBool() && !i.data(RoleId).toString().isEmpty())
+					ids.append(i.data(RoleId).toString());
+				collect(i);
+			}
+		};
+		collect(QModelIndex());
+		const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("set_tree_start") }, { QStringLiteral("ids"), ids } }));
+		statusBar()->showMessage(r.contains(QStringLiteral("error")) ? r.value(QStringLiteral("error")).toString() : T(m_backend, "status.tree.start.saved").arg(ids.size()), 8000);
+	});
+	menu->addAction(T(m_backend, "ctx.tree.start.reset"), this, [this] {
+		const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("set_tree_start") }, { QStringLiteral("ids"), QJsonValue() } }));
+		statusBar()->showMessage(r.contains(QStringLiteral("error")) ? r.value(QStringLiteral("error")).toString() : T(m_backend, "status.tree.start.reset"), 8000);
+	});
 }
 
 void MainWindow::tabContextMenu(QTabWidget* tabs, const QPoint& pos)
