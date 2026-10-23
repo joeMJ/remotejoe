@@ -84,6 +84,8 @@ public:
 	void openApTools(const QString& id, const QString& name, const QString& tool);
 	/// Aruba-Log (system/security, wahlweise gefiltert) am VC oder an einem AP anzeigen.
 	void openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
+	/// Übersicht eines Ordners (ein Tab, beim nächsten Ordner neu befüllt).
+	void openFolderOverview(const QModelIndex& folder);
 	/// Seite eines APs (je AP ein Tab; ein vorhandener wird neu abgefragt).
 	void openArubaAp(const QJsonObject& subject, const QJsonObject& ap);
 	/// Anwender eines Clusters (je VC ein Tab; ein vorhandener fragt neu ab).
@@ -114,6 +116,8 @@ public:
 	void appearanceForScreenshot() { openAppearance(); }
 	/// Extras → Einstellungen beim Bereich `section` (lock, keys, terminal, appearance, snmp).
 	void settingsForScreenshot(const QString& section) { openSettings(section); }
+	/// Bildschirmfoto: Übersicht des ersten Unterordners (Standort → erster Ordner).
+	void folderForScreenshot() { openFolderOverview(m_model->index(0, 0, m_model->index(0, 0))); }
 	QWidget* aboutForScreenshot();
 	/// Update-Tab mit einer Prüfung gegen `base` (lokale Attrappe).
 	void updateForScreenshot(const QString& base);

@@ -80,6 +80,9 @@ private:
 	QCheckBox* m_keyCapture = nullptr;
 	QComboBox* m_closeTab = nullptr;
 	QCheckBox* m_aruba = nullptr;
+	QSpinBox* m_clientsWarn = nullptr;
+	QSpinBox* m_clientsCrit = nullptr;
+	QLabel* m_clientsHint = nullptr;
 	// Sicherung
 	QCheckBox* m_bkEnabled = nullptr;
 	QSpinBox* m_bkLast = nullptr;

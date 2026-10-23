@@ -24,6 +24,8 @@
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollBar>
+#include <QtWidgets/QSplitter>
+#include <QtWidgets/QStyle>
 #include <QtWidgets/QVBoxLayout>
 
 ApToolsTab::ApToolsTab(RjBackend* backend, const QString& id, const QString& name, const QString& tool, QWidget* parent)
@@ -48,6 +50,7 @@ ApToolsTab::ApToolsTab(RjBackend* backend, const QString& id, const QString& nam
 	tf.setPointSizeF(tf.pointSizeF() * 1.3);
 	tf.setBold(true);
 	caption->setFont(tf);
+	caption->setWordWrap(true);
 	hv->addWidget(caption);
 	m_state = new QLabel(T(tool == QLatin1String("inventar") ? "aptools.intro.inventar" : "aptools.intro"), head);
 	m_state->setObjectName(QStringLiteral("rjMuted"));
@@ -307,10 +310,15 @@ void fillResults(RjBackend* backend, QWidget* owner, QVBoxLayout* m_resultsBox, 
 	for (const QJsonValue& v : results)
 	{
 		const QJsonObject r = v.toObject();
+		// Je Ergebnisordner ein Block: Pfad und „Ordner öffnen“, darunter die Dateien umbrechend (nie breiter als der Tab).
+		auto* block = new QWidget(self);
+		auto* bv = new QVBoxLayout(block);
+		bv->setContentsMargins(0, 0, 0, 0);
+		bv->setSpacing(4);
 		auto* row = new QHBoxLayout;
 		const QString dir = r.value(QStringLiteral("path")).toString();
 		// Langer Pfad: umbrechen statt das Fenster zu verbreitern; vollständig im Tooltip.
-		auto* l = new QLabel(QDir::toNativeSeparators(dir), self);
+		auto* l = new QLabel(QDir::toNativeSeparators(dir), block);
 		l->setObjectName(QStringLiteral("rjMuted"));
 		l->setTextInteractionFlags(Qt::TextSelectableByMouse);
 		l->setWordWrap(true);
@@ -318,18 +326,25 @@ void fillResults(RjBackend* backend, QWidget* owner, QVBoxLayout* m_resultsBox, 
 		l->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 		l->setToolTip(QDir::toNativeSeparators(dir));
 		row->addWidget(l, 1);
-		auto* openDir = new QPushButton(m_backend->text(QStringLiteral("aptools.folder")), self);
-		QObject::connect(openDir, &QPushButton::clicked, self, [dir] { QDesktopServices::openUrl(QUrl::fromLocalFile(dir)); });
-		row->addWidget(openDir);
+		auto* openDir = new QPushButton(m_backend->text(QStringLiteral("aptools.folder")), block);
+		QObject::connect(openDir, &QPushButton::clicked, block, [dir] { QDesktopServices::openUrl(QUrl::fromLocalFile(dir)); });
+		row->addWidget(openDir, 0, Qt::AlignTop);
+		bv->addLayout(row);
+		auto* files = new rjui::FlowBox(block, 6);
 		for (const QJsonValue& f : r.value(QStringLiteral("files")).toArray())
 		{
 			const QString file = f.toString();
-			auto* b = new QPushButton(QFileInfo(file).fileName(), self);
-			b->setToolTip(m_backend->text(QStringLiteral("aptools.open.tip")));
-			QObject::connect(b, &QPushButton::clicked, self, [file] { QDesktopServices::openUrl(QUrl::fromLocalFile(file)); });
-			row->addWidget(b);
+			const QString name = QFileInfo(file).fileName();
+			auto* b = new QPushButton(files);
+			b->setText(b->fontMetrics().elidedText(name, Qt::ElideMiddle, 280));
+			b->setToolTip(name + QLatin1Char('\n') + m_backend->text(QStringLiteral("aptools.open.tip")));
+			QObject::connect(b, &QPushButton::clicked, block, [file] { QDesktopServices::openUrl(QUrl::fromLocalFile(file)); });
+			files->flow()->addWidget(b);
+			b->show();
 		}
-		m_resultsBox->addLayout(row);
+		files->relayout();
+		bv->addWidget(files);
+		m_resultsBox->addWidget(block);
 	}
 }
 } // namespace
@@ -458,8 +473,12 @@ ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QStrin
 	tf.setPointSizeF(tf.pointSizeF() * 1.3);
 	tf.setBold(true);
 	caption->setFont(tf);
+	caption->setWordWrap(true);
 	hv->addWidget(caption);
-	auto* sub = new QLabel(update ? T("aruba.update.sub").arg(url, T(reboot ? "aruba.update.sub.reboot" : "aruba.update.sub.noreboot")) : T("aruba.reload.sub"), head);
+	// Die URL darf nach jedem „/“ umbrechen (unsichtbares Leerzeichen), sonst bestimmt sie die Mindestbreite des Tabs.
+	QString breakable = url;
+	breakable.replace(QLatin1Char('/'), QStringLiteral("/\u200B"));
+	auto* sub = new QLabel(update ? T("aruba.update.sub").arg(breakable, T(reboot ? "aruba.update.sub.reboot" : "aruba.update.sub.noreboot")) : T("aruba.reload.sub"), head);
 	sub->setObjectName(QStringLiteral("rjMuted"));
 	sub->setWordWrap(true);
 	sub->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -479,24 +498,37 @@ ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QStrin
 	QVBoxLayout* oin = nullptr;
 	auto* oc = rjui::card(this, &oin);
 	const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	// Statustafel nur beim Update (ap_swarm_reload zeichnet keine).
-	auto* boardTitle = rjui::section(T("aruba.write.board"), oc);
-	oin->addWidget(boardTitle);
-	m_board = new QPlainTextEdit(oc);
+	// Statustafel (nur beim Update; ap_swarm_reload zeichnet keine) und Ausgabe teilen sich die Höhe über einen
+	// ziehbaren Trenner.
+	auto* split = new QSplitter(Qt::Vertical, oc);
+	split->setChildrenCollapsible(false);
+	auto* boardPane = new QWidget(split);
+	auto* bl = new QVBoxLayout(boardPane);
+	bl->setContentsMargins(0, 0, 0, 0);
+	bl->addWidget(rjui::section(T("aruba.write.board"), boardPane));
+	m_board = new QPlainTextEdit(boardPane);
 	m_board->setReadOnly(true);
 	m_board->setFont(mono);
 	m_board->setLineWrapMode(QPlainTextEdit::NoWrap);
-	m_board->setMaximumHeight(220);
+	m_board->setMinimumHeight(60);
 	m_board->setPlaceholderText(T("aruba.write.board.none"));
-	oin->addWidget(m_board);
-	boardTitle->setVisible(update);
-	m_board->setVisible(update);
-	oin->addWidget(rjui::section(T("aptools.output"), oc));
-	m_output = new QPlainTextEdit(oc);
+	bl->addWidget(m_board, 1);
+	boardPane->setVisible(update);
+	auto* outPane = new QWidget(split);
+	auto* ol = new QVBoxLayout(outPane);
+	ol->setContentsMargins(0, 0, 0, 0);
+	ol->addWidget(rjui::section(T("aptools.output"), outPane));
+	m_output = new QPlainTextEdit(outPane);
 	m_output->setReadOnly(true);
 	m_output->setFont(mono);
 	m_output->setLineWrapMode(QPlainTextEdit::NoWrap);
-	oin->addWidget(m_output, 1);
+	m_output->setMinimumHeight(80);
+	ol->addWidget(m_output, 1);
+	split->addWidget(boardPane);
+	split->addWidget(outPane);
+	split->setStretchFactor(0, 1);
+	split->setStretchFactor(1, 2);
+	oin->addWidget(split, 1);
 	oin->addWidget(rjui::section(T("aptools.results"), oc));
 	m_resultsBox = new QVBoxLayout;
 	oin->addLayout(m_resultsBox);
@@ -579,7 +611,13 @@ void ArubaWriteTab::poll()
 	{
 		m_poll->stop();
 		m_stop->setEnabled(false);
+		const int failed = int(run.value(QStringLiteral("failed")).toArray().size());
 		m_state->setText(run.value(QStringLiteral("stopped")).toBool() ? m_backend->text(QStringLiteral("aptools.stopped"))
-		                                                               : m_backend->text(QStringLiteral("aruba.write.done")).arg(results.size()));
+		                 : failed > 0                                    ? m_backend->text(QStringLiteral("aruba.write.done.failed")).arg(failed).arg(results.size())
+		                                                                 : m_backend->text(QStringLiteral("aruba.write.done")).arg(results.size()));
+		// Fehler rot hervorheben (Stil des Hauptfensters).
+		m_state->setProperty("rjErrText", failed > 0 && !run.value(QStringLiteral("stopped")).toBool());
+		m_state->style()->unpolish(m_state);
+		m_state->style()->polish(m_state);
 	}
 }

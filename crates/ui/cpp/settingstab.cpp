@@ -263,8 +263,31 @@ QWidget* SettingsTab::pageFeatures()
 	m_aruba = new QCheckBox(T("settings.features.aruba"), w);
 	f->addRow(QString(), m_aruba);
 	f->addRow(QString(), hint(T("settings.features.aruba.hint"), w));
+	// Anwender je AP: Farbe der Zahl auf der Kachel (0 = aus).
+	auto clients = [&](const char* label) {
+		auto* s = new QSpinBox(w);
+		s->setRange(0, 1000);
+		s->setSpecialValueText(T("settings.aruba.clients.off"));
+		s->setSuffix(T("settings.aruba.clients.suffix"));
+		f->addRow(T(label), s);
+		return s;
+	};
+	m_clientsWarn = clients("settings.aruba.clients.warn");
+	m_clientsCrit = clients("settings.aruba.clients.crit");
+	m_clientsHint = hint(T("settings.aruba.clients.hint"), w);
+	f->addRow(QString(), m_clientsHint);
 	v->addLayout(f);
 	v->addStretch(1);
+	auto saveClients = [this] {
+		const int warn = m_clientsWarn->value(), crit = m_clientsCrit->value();
+		const bool bad = warn > 0 && crit > 0 && crit <= warn;
+		m_clientsHint->setText(rjText(m_backend, bad ? "settings.aruba.clients.bad" : "settings.aruba.clients.hint"));
+		if (m_loading)
+			return;
+		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("aruba_clients_warn"), warn }, { QStringLiteral("aruba_clients_crit"), crit } });
+	};
+	connect(m_clientsWarn, &QSpinBox::valueChanged, this, saveClients);
+	connect(m_clientsCrit, &QSpinBox::valueChanged, this, saveClients);
 	connect(m_aruba, &QCheckBox::toggled, this, [this](bool on) {
 		if (m_loading)
 			return;
@@ -427,6 +450,8 @@ void SettingsTab::reload()
 	if (const int i = m_closeTab->findData(s.value(QStringLiteral("close_tab_key")).toString(QStringLiteral("outside"))); i >= 0)
 		m_closeTab->setCurrentIndex(i);
 	m_aruba->setChecked(s.value(QStringLiteral("aruba_tools")).toBool());
+	m_clientsWarn->setValue(s.value(QStringLiteral("aruba_clients_warn")).toInt(30));
+	m_clientsCrit->setValue(s.value(QStringLiteral("aruba_clients_crit")).toInt(64));
 	reloadBackup();
 	if (m_appearance)
 		m_appearance->reload();

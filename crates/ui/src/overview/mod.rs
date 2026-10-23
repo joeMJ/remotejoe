@@ -529,6 +529,29 @@ impl App {
         Ok(json!({ "pending": job }))
     }
 
+    /// Ordnerübersicht: gespeichertes Inventar mehrerer Ziele (`ids`), ohne Abfrage. Je Ziel die Felder, die Version
+    /// aus „System“ und der Zeitpunkt der jüngsten Abfrage.
+    pub fn inventory_many(&self, c: &Value) -> Value {
+        let mut out = serde_json::Map::new();
+        for id in c.get("ids").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+            let inv = self.overview.demo_inventory.get(id).cloned().unwrap_or_else(|| self.overview.store.load_key(id));
+            let mut row = serde_json::Map::new();
+            for k in inventory::FIELDS {
+                if let Some(v) = inv.value(k) {
+                    row.insert(k.to_string(), json!(v));
+                }
+            }
+            if let Some(v) = inv.value("system").and_then(inventory::version_of) {
+                row.insert("version".into(), json!(v));
+            }
+            if let Some(at) = inv.fields.values().filter(|f| !f.manual).map(|f| f.at).max() {
+                row.insert("at".into(), json!(at));
+            }
+            out.insert(id.to_string(), Value::Object(row));
+        }
+        Value::Object(out)
+    }
+
     /// „Nutzer anzeigen“ bzw. „Nutzer finden“: `show clients` und `show aps` am VC (Ergebnis `aruba_clients` mit `tag`).
     /// Gefiltert wird in der Oberfläche, damit sich der Suchbegriff ohne neue Abfrage ändern lässt.
     pub fn aruba_clients(&mut self, c: &Value) -> Result<Value, String> {

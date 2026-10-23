@@ -639,6 +639,8 @@ impl App {
                 "keyboard_capture": self.config.connection.keyboard_capture,
                 "close_tab_key": self.config.connection.close_tab_key,
                 "aruba_tools": self.config.features.aruba,
+                "aruba_clients_warn": self.config.features.aruba_clients_warn,
+                "aruba_clients_crit": self.config.features.aruba_clients_crit,
                 "backup": self.backup_settings_json(),
             })),
             "set_settings" => {
@@ -661,6 +663,12 @@ impl App {
                 if let Some(b) = c.get("aruba_tools").and_then(Value::as_bool) {
                     self.config.features.aruba = b;
                 }
+                if let Some(n) = c.get("aruba_clients_warn").and_then(Value::as_u64) {
+                    self.config.features.aruba_clients_warn = n.min(1000) as u32;
+                }
+                if let Some(n) = c.get("aruba_clients_crit").and_then(Value::as_u64) {
+                    self.config.features.aruba_clients_crit = n.min(1000) as u32;
+                }
                 self.backup_apply_settings(&c);
                 match &self.config_path {
                     Some(p) => self.config.save(p).map(|_| json!({ "ok": true })).map_err(|e| e.to_string()),
@@ -674,6 +682,7 @@ impl App {
             "backup_wait" => Ok(json!({ "done": crate::kdbxbackup::wait(std::time::Duration::from_millis(c.get("ms").and_then(Value::as_u64).unwrap_or(10_000).min(30_000))) })),
             "overview" => self.overview_json(&c),
             "ov_probe" => self.overview_probe(&c),
+            "inventory_many" => Ok(self.inventory_many(&c)),
             "ov_query" => self.overview_query(&c),
             "aruba_cluster" => self.aruba_cluster(&c),
             "aruba_ap" => self.aruba_ap(&c),

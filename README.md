@@ -373,7 +373,7 @@ neu aufklappen.
 - **Baum links, Sitzungen rechts:** Ordner und Ziele in fester Reihenfolge, Suche über Namen
   und Hosts (Strg+F). Sitzungen in Tabs, gekachelt (1×2, 2×2, frei) oder als eigenes Fenster.
 - **Objektübersicht beim Einfachklick:** Name, Kurzzeile und „Verbinden“; angebotene Dienste als Plaketten
-  (TCP 22, 23, 53, 80, 443, 3389, 4343, 5900, 5985, 5986, 8006 und der Port des Ziels); Kennzahlen (vCPU, Speicher,
+  (TCP 22, 23, 53, 80, 443, 3389, 4343, 5900, 5985, 5986, 8006 und der Port des Ziels); Kennzahlen (CPUs, Speicher,
   IP, MAC, Rechnername, System) mit Quelle und Zeitpunkt, von Hand korrigierbar, neue abweichende Werte zum Übernehmen;
   Notizen des Ziels; Ping und Traceroute. Ohne Anmeldung kommen Adresse, MAC (im selben Netz) und – bei RDP mit NLA –
   der Rechnername; **Inventar abfragen** liest den Rest mit den Zugangsdaten des Ziels (Linux und Aruba über SSH,
@@ -383,7 +383,12 @@ neu aufklappen.
   Ob sich das Inventar an einem Ziel anmelden darf, ist je Ziel bzw. Ordner einstellbar („Abfragen erlaubt“ in der
   Übersicht, Einstellungen → Allgemein → Inventar). Web-Ziele sind ohne eigene Festlegung aus; ein „an“ am Ordner
   schaltet sie nicht ein. Aruba-Instant-APs fragt das Inventar über eine interaktive Sitzung ab (`show version`);
-  erkannte APs bekommen im Baum ein eigenes Symbol.
+  erkannte APs bekommen im Baum ein eigenes Symbol. Bei ihnen zeigen die Kennzahlen Laufzeit, IP-Adresse und
+  hervorgehoben die Seriennummer; die MAC steht in der Kurzzeile.
+- **Ordnerübersicht beim Einfachklick auf einen Ordner:** die Elemente direkt im Ordner als Tabelle mit Typ (Symbol wie
+  im Baum), Name, Adresse und den Werten aus dem gespeicherten Inventar (Version, System, CPUs, Speicher, Laufzeit,
+  Seriennummer, MAC, Stand). Unterordner stehen am Ende. Suchfeld, sortier- und kopierbar; ein Klick öffnet die
+  Übersicht des Elements, ein Doppelklick verbindet wie im Baum. Abgefragt wird dabei nichts.
 - **Masseninventar:** Rechtsklick auf einen Ordner oder eine Auswahl → **Inventar für alle Ziele abfragen …** fragt
   alle Ziele darin ab, bis zu acht gleichzeitig, mit Fortschritt, Ergebnis je Ziel und „Fehlgeschlagene wiederholen“.
   Ziele mit abgeschaltetem Inventar werden übersprungen.
@@ -480,7 +485,8 @@ der Schlüsseldatenbank.
   „.Oktett | Name bzw. MAC“ mit der Anwenderzahl; der Conductor trägt einen Stern, APs außerhalb des Segments zeigen
   die volle Adresse. Lange Namen werden in der Mitte gekürzt (der volle Name steht im Tooltip); ein Rechtsklick auf
   eine Kachel kopiert Name, IP- oder MAC-Adresse. Umbenannte APs ordnet remotejoe über die AP-Tabelle von
-  `show summary` ihrer MAC zu.
+  `show summary` ihrer MAC zu. Ab wie vielen Anwendern je AP die Zahl gelb bzw. rot wird, steht unter Einstellungen →
+  Zusatzfunktionen (Vorgabe 30 und 64; 0 = aus).
 
   <img src="docs/screenshots/aruba-cluster.png" alt="Aruba-Cluster-Karte mit Verwaltung, Zählern und AP-Kacheln" width="760">
 
@@ -504,7 +510,9 @@ der Schlüsseldatenbank.
     der Firmware als URL, wahlweise mit Neustart danach). Beide sind nur möglich, wenn der Cluster weder über Central
     noch über AirWave verwaltet wird und die Anmeldung ein Admin-Konto ist (`mgmt-user` bzw. `hash-mgmt-user` in der Konfiguration);
     remotejoe prüft das vor dem Start bei jedem Controller und lässt nicht passende mit Grund aus. Jede dieser
-    Aktionen läuft in einem eigenen Tab mit Statustafel und Protokoll.
+    Aktionen läuft in einem eigenen Tab mit Statustafel und Protokoll (die Höhe beider ist per Trenner verstellbar).
+    Fehler, die das Werkzeug meldet, und ein am Controller schon laufendes Upgrade („The other drt/image Upgrade or
+    sync is in process“) erscheinen in der Statustafel; die Kopfzeile meldet dann „Fertig, mit Fehlern“.
 - **Einrichten:** Die Sammlung wird von GitHub in den Datenordner geladen (`aptools/sammlung`), dazu eine eigene
   Python-Umgebung (`aptools/python`). Fehlt Python unter Windows, bietet remotejoe die Installation von python.org an
   (nur für den Benutzer, Signatur der Python Software Foundation geprüft); unter Ubuntu werden `python3` und

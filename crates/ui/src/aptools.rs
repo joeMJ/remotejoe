@@ -353,6 +353,8 @@ pub struct Run {
     pub child: std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>,
     /// Ergebnisordner der beendeten Teilläufe.
     pub results: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
+    /// Controller mit Fehler (Adresse, Grund): übersprungen, vom Werkzeug als FEHLER gemeldet oder erkannter Hänger.
+    pub failed: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
 }
 
 impl Run {
@@ -367,8 +369,71 @@ impl Run {
             stop: self.stop.clone(),
             child: self.child.clone(),
             results: self.results.clone(),
+            failed: self.failed.clone(),
         }
     }
+
+    fn fail(&self, host: &str, reason: &str) {
+        let mut f = self.failed.lock().unwrap_or_else(|e| e.into_inner());
+        match f.iter_mut().find(|(h, _)| h == host) {
+            Some(e) => e.1 = reason.to_string(),
+            None => f.push((host.to_string(), reason.to_string())),
+        }
+    }
+
+    /// Statustafel setzen; Zeilen von Controllern mit Fehler zeigen den Fehler (auch wenn das Werkzeug sie
+    /// mit einem älteren Stand neu zeichnet).
+    fn set_board(&self, board: &str) {
+        let failed = self.failed.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        *self.board.lock().unwrap_or_else(|e| e.into_inner()) = mark_board(board, &failed);
+    }
+}
+
+/// Am Controller läuft schon ein Upgrade oder Sync (Antwort der Firmware auf den Upgrade-Befehl).
+const BUSY_PHRASE: &str = "The other drt/image Upgrade or sync is in process";
+const BUSY_REASON: &str = "Am Controller läuft bereits ein Upgrade oder Sync – später erneut versuchen";
+
+/// Fehlerzeile der Schlusszusammenfassung („192.0.2.4 | FEHLER: …“): Adresse und Grund.
+fn summary_failure(l: &str) -> Option<(String, String)> {
+    let (ip, rest) = l.split_once(" | ")?;
+    let ip = ip.trim();
+    ip.parse::<std::net::Ipv4Addr>().ok()?;
+    let rest = rest.trim();
+    if !rest.to_uppercase().starts_with("FEHLER") {
+        return None;
+    }
+    let reason = if rest.contains(BUSY_PHRASE) { BUSY_REASON.to_string() } else { rest[6..].trim_start_matches([':', ' ']).to_string() };
+    Some((ip.to_string(), reason))
+}
+
+/// Zeilen „IP | Status“ der Statustafel für Controller mit Fehler ersetzen; fehlt ein solcher Controller, kommt
+/// eine Zeile dazu (nur wenn die Tafel schon Zeilen hat).
+fn mark_board(board: &str, failed: &[(String, String)]) -> String {
+    if failed.is_empty() {
+        return board.to_string();
+    }
+    let mut seen = Vec::new();
+    let mut out: Vec<String> = board
+        .lines()
+        .map(|l| match l.split_once(" | ") {
+            Some((ip, _)) => match failed.iter().find(|(h, _)| h == ip.trim()) {
+                Some((h, why)) => {
+                    seen.push(h.clone());
+                    format!("{ip} | FEHLER: {why}")
+                }
+                None => l.to_string(),
+            },
+            None => l.to_string(),
+        })
+        .collect();
+    if !board.trim().is_empty() {
+        for (h, why) in failed.iter().filter(|(h, _)| !seen.contains(h)) {
+            out.push(format!("{h:<16} | FEHLER: {why}"));
+        }
+    }
+    let mut s = out.join("\n");
+    s.push('\n');
+    s
 }
 
 /// Ein Controller (VC): Name, Adresse, Zugangsdaten und – für die Vorprüfung schreibender Werkzeuge – die
@@ -459,6 +524,7 @@ pub fn run_tool(root: &Path, tool: &Tool, tasks: Vec<Task>, known: rj_ssh::known
                 }
                 Err(e) => {
                     append(&run.out, &format!("{} ({}): übersprungen – {e}\n", vc.name, vc.host));
+                    run.fail(&vc.host, &format!("übersprungen – {e}"));
                     false
                 }
             });
@@ -507,9 +573,18 @@ pub fn run_tool(root: &Path, tool: &Tool, tasks: Vec<Task>, known: rj_ssh::known
             // Nach der Statustafel kommt die Zusammenfassung (gleiche Zeilenform „IP | Status“): ins Protokoll.
             let mut summary = false;
             let mut blank = false;
+            let mut busy = false;
             for l in std::io::BufReader::new(o).lines().map_while(Result::ok) {
                 if l.contains("FINALE ZUSAMMENFASSUNG") {
                     summary = true;
+                }
+                if l.contains(BUSY_PHRASE) {
+                    busy = true;
+                }
+                if summary {
+                    if let Some((ip, why)) = summary_failure(&l) {
+                        run.fail(&ip, &why);
+                    }
                 }
                 // Mehrere Leerzeilen hintereinander (Reste der Werkzeugausgabe) als eine.
                 if l.trim().is_empty() {
@@ -523,16 +598,25 @@ pub fn run_tool(root: &Path, tool: &Tool, tasks: Vec<Task>, known: rj_ssh::known
                 if l.trim() == "\u{1e}" {
                     // Neue Statustafel: die bisherige ist vollständig.
                     if !board.is_empty() {
-                        *run.board.lock().unwrap_or_else(|e| e.into_inner()) = std::mem::take(&mut board);
+                        run.set_board(&std::mem::take(&mut board));
                     }
                 } else if board_line(&l) && tool.write && !summary {
                     board.push_str(&l);
                     board.push('\n');
-                    *run.board.lock().unwrap_or_else(|e| e.into_inner()) = board.clone();
+                    run.set_board(&board);
                 } else {
                     append(&run.out, &format!("{l}\n"));
                 }
             }
+            // Hänger erkannt, aber ohne Zusammenfassung: alle Controller dieses Teillaufs.
+            if busy {
+                let failed: Vec<String> = run.failed.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(h, _)| h.clone()).collect();
+                for h in hosts.iter().filter(|h| !failed.iter().any(|f| f == *h)) {
+                    run.fail(h, BUSY_REASON);
+                }
+            }
+            let last = run.board.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            run.set_board(&last);
         }
         if let Some(t) = err_thread {
             let _ = t.join();
@@ -769,6 +853,7 @@ impl App {
                 "text": r.out.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "board": r.board.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "done": r.done.load(std::sync::atomic::Ordering::SeqCst),
+                "failed": r.failed.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(h, why)| json!({ "host": h, "reason": why })).collect::<Vec<_>>(),
                 "results": r.results.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|p| json!({ "path": p, "files": std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| e.path()).filter(|x| x.is_file()).collect::<Vec<_>>()).unwrap_or_default() })).collect::<Vec<_>>(),
             }}),
         }
@@ -826,6 +911,22 @@ fn target_ids(c: &Value) -> Result<(String, Vec<Uuid>), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_errors_reach_the_status_board() {
+        let l = "192.0.2.44       | FEHLER: CLI-Befehl abgewiesen (no paging ^ % Parse error The other drt/image Upgrade or sync is in process)";
+        let (ip, why) = summary_failure(l).unwrap();
+        assert_eq!((ip.as_str(), why.as_str()), ("192.0.2.44", BUSY_REASON));
+        assert_eq!(summary_failure("192.0.2.45 | OK: Upgrade abgeschlossen"), None);
+        assert_eq!(summary_failure("192.0.2.46 | FEHLER: Zeitlimit").unwrap().1, "Zeitlimit");
+        let board = "IP-ADRESSE       | STATUS\n192.0.2.44       | Phase 3: Starte CLI-Upgrade...\n192.0.2.45       | Phase 4: Neustart\n";
+        let failed = vec![("192.0.2.44".to_string(), BUSY_REASON.to_string()), ("192.0.2.49".to_string(), "übersprungen – kein Admin".to_string())];
+        let m = mark_board(board, &failed);
+        assert!(m.contains(&format!("192.0.2.44       | FEHLER: {BUSY_REASON}")), "{m}");
+        assert!(m.contains("192.0.2.45       | Phase 4: Neustart"));
+        assert!(m.contains("192.0.2.49       | FEHLER: übersprungen – kein Admin"));
+        assert_eq!(mark_board(board, &[]), board);
+    }
 
     #[test]
     fn several_marked_ids() {
