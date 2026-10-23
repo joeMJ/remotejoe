@@ -8,6 +8,7 @@
 #include "arubaclientstab.h"
 #include "folderoverviewtab.h"
 #include "orphantab.h"
+#include "credmergetab.h"
 #include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
@@ -1286,6 +1287,7 @@ void MainWindow::buildMenus()
 	extras->addAction(T(m_backend, "menu.extras.clipclear"), this, [this] { openSettings(QStringLiteral("lock")); });
 	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] { openSettings(QStringLiteral("snmp")); });
 	extras->addAction(T(m_backend, "menu.extras.shared"), this, [this] { openSharedCheck(); });
+	extras->addAction(T(m_backend, "menu.extras.credmerge"), this, [this] { openCredMerge({}); });
 	extras->addAction(T(m_backend, "menu.extras.orphans"), this, [this] {
 		if (auto* old = findChild<OrphanTab*>())
 		{
@@ -2489,6 +2491,11 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 			});
 		}
 	}
+	menu.addAction(T(m_backend, "ctx.credmerge"), this, [this] {
+		const QStringList ids = selectedIds();
+		if (!ids.isEmpty())
+			openCredMerge(ids);
+	});
 	menu.addAction(T(m_backend, "ctx.merge"), this, [this] {
 		const QStringList ids = selectedIds();
 		if (!ids.isEmpty())
@@ -4168,6 +4175,16 @@ void MainWindow::openArubaLog(const QJsonObject& subject, const QString& ip, con
 	// Je Abruf ein Tab (nichts wird gespeichert); im Tab lässt sich der Filter ändern.
 	auto* t = new ArubaLogTab(m_backend, subject, ip, where, kind, filter, m_tabs);
 	addToolTab(t, t->title());
+}
+
+void MainWindow::openCredMerge(const QStringList& scope)
+{
+	// Ein Tab; ein neuer Aufruf ersetzt ihn (anderer Bereich).
+	if (auto* old = findChild<CredMergeTab*>())
+		closeToolTab(old);
+	auto* t = new CredMergeTab(m_backend, scope, m_tabs);
+	connect(t, &CredMergeTab::showTarget, this, [this](const QString& id) { selectId(id); });
+	addToolTab(t, T(m_backend, "credmerge.tab"));
 }
 
 void MainWindow::openFolderOverview(const QModelIndex& folder)

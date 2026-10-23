@@ -84,6 +84,8 @@ public:
 	void openApTools(const QString& id, const QString& name, const QString& tool);
 	/// Aruba-Log (system/security, wahlweise gefiltert) am VC oder an einem AP anzeigen.
 	void openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
+	/// Gleiche Zugangsdaten zusammenführen (leer: ganzer Baum).
+	void openCredMerge(const QStringList& scope);
 	/// Übersicht eines Ordners (ein Tab, beim nächsten Ordner neu befüllt).
 	void openFolderOverview(const QModelIndex& folder);
 	/// Kontextmenü des Baums: Aufklappzustand als Start speichern / zurücksetzen.

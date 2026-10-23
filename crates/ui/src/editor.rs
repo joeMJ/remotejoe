@@ -727,6 +727,8 @@ impl App {
             "merge_preview" => self.merge_preview(&c),
             "shared_list" => Ok(self.shared_list()),
             "orphans_list" => Ok(self.orphans_list()),
+            "credmerge_list" => Ok(self.credmerge_list(&c)),
+            "credmerge_apply" => self.credmerge_apply(&c),
             "orphans_recycle" => self.orphans_move(&c, true),
             "orphans_restore" => self.orphans_move(&c, false),
             "report_build" => Ok(self.report_build(&c)),
@@ -1638,6 +1640,155 @@ impl App {
         true
     }
 
+    /// Gleiche Zugangsdaten zusammenführen: direkt hinterlegte Zugangsdaten (Hauptdatensatz von Zielen und Ordnern,
+    /// eigene Zugangsdaten an Wegen) mit gleichem Benutzer und Kennwort, dazu ein vorhandenes Anmeldeobjekt mit
+    /// denselben Daten. Kennwörter werden nur im Speicher verglichen. `scope`: nur unter diesen Knoten (leer: alles).
+    fn credmerge_groups(&self, scope: &[Uuid]) -> Vec<(String, Vec<Uuid>, Vec<rj_core::shared::Use>, Option<(Uuid, String)>)> {
+        use rj_core::shared::Use;
+        let Some(vault) = self.vault.as_ref() else { return Vec::new() };
+        let key_of = |e: Uuid| vault.credential(e).map(|c| (c.data.username.clone(), c.data.password.as_bytes().to_vec()));
+        let in_scope = |node: Uuid| scope.is_empty() || scope.iter().any(|s| *s == node || self.index.path_to(node).is_some_and(|p| p.iter().any(|n| n.id() == *s)));
+        let mut groups: Vec<((String, Vec<u8>), Vec<Uuid>, Vec<Use>)> = Vec::new();
+        for (entry, uses) in rj_core::shared::direct_uses(&self.index) {
+            // Nur der Hauptdatensatz eines Knotens und eigene Zugangsdaten an Wegen; weitere Datensätze bleiben.
+            let uses: Vec<Use> = uses
+                .into_iter()
+                .filter(|u| in_scope(u.node()))
+                .filter(|u| match u {
+                    Use::Settings { node, name } => match edit::node(&self.index, *node) {
+                        Some(Node::Target(t)) => name == t.credential_name(),
+                        _ => name == rj_core::DEFAULT_CREDENTIAL,
+                    },
+                    Use::Way { .. } => true,
+                })
+                .collect();
+            if uses.is_empty() {
+                continue;
+            }
+            let Some(key) = key_of(entry) else { continue };
+            if key.0.is_empty() && key.1.is_empty() {
+                continue;
+            }
+            match groups.iter_mut().find(|g| g.0 == key) {
+                Some(g) => {
+                    g.1.push(entry);
+                    g.2.extend(uses);
+                }
+                None => groups.push((key, vec![entry], uses)),
+            }
+        }
+        let logins: Vec<((String, Vec<u8>), Uuid, String)> = self.index.logins.iter().filter_map(|l| key_of(l.entry.entry).map(|k| (k, l.id, l.name.clone()))).collect();
+        let mut out: Vec<_> = groups
+            .into_iter()
+            .filter_map(|(key, entries, uses)| {
+                let login = logins.iter().find(|l| l.0 == key).map(|l| (l.1, l.2.clone()));
+                (uses.len() >= 2 || login.is_some()).then_some((key.0, entries, uses, login))
+            })
+            .collect();
+        out.sort_by(|a, b| b.2.len().cmp(&a.2.len()).then(a.0.cmp(&b.0)));
+        out
+    }
+
+    /// Ordner für ein neues Anmeldeobjekt: der gemeinsame Ordner aller Stellen.
+    fn common_folder(&self, nodes: &[Uuid]) -> Uuid {
+        let folder_of = |n: Uuid| if edit::folder(&self.index, n).is_some() { n } else { edit::parent_of(&self.index, n).unwrap_or(self.index.root.id) };
+        let paths: Vec<Vec<Uuid>> = nodes.iter().map(|n| self.index.path_to(folder_of(*n)).unwrap_or_default().iter().map(|x| x.id()).collect()).collect();
+        let mut common = paths.first().cloned().unwrap_or_default();
+        for p in &paths[1.min(paths.len())..] {
+            let k = common.iter().zip(p).take_while(|(a, b)| a == b).count();
+            common.truncate(k);
+        }
+        common.last().copied().unwrap_or(self.index.root.id)
+    }
+
+    fn credmerge_list(&self, c: &Value) -> Value {
+        use rj_core::shared::Use;
+        if self.vault.is_none() {
+            return json!({ "groups": [], "locked": true });
+        }
+        let scope = ids_of(c, "ids");
+        let groups: Vec<Value> = self
+            .credmerge_groups(&scope)
+            .into_iter()
+            .map(|(user, entries, uses, login)| {
+                let list: Vec<Value> = uses
+                    .iter()
+                    .map(|u| {
+                        let node = u.node();
+                        let path: Vec<String> = self.index.path_to(node).unwrap_or_default().iter().map(|n| rj_core::charset::mark_visible(n.name(), false).into_owned()).collect();
+                        let what = match u {
+                            Use::Settings { .. } => "Zugangsdaten".to_string(),
+                            Use::Way { way, .. } => match self.target(node).and_then(|t| t.ways.iter().find(|w| w.id == *way)) {
+                                Some(w) => format!("Weg „{}“", w.label()),
+                                None => "Weg".into(),
+                            },
+                        };
+                        json!({ "id": node, "name": path.last().cloned().unwrap_or_default(), "path": path[..path.len().saturating_sub(1)].join(" › "), "what": what })
+                    })
+                    .collect();
+                let folder = self.common_folder(&uses.iter().map(|u| u.node()).collect::<Vec<_>>());
+                let folder_path: Vec<String> = self.index.path_to(folder).unwrap_or_default().iter().map(|n| n.name().to_string()).collect();
+                json!({
+                    "username": user,
+                    "entries": entries,
+                    "count": uses.len(),
+                    "login": login.map(|(id, name)| json!({ "id": id, "name": name })),
+                    "suggestion": format!("Anmeldung {user}"),
+                    "folder": folder_path.join(" › "),
+                    "uses": list,
+                })
+            })
+            .collect();
+        json!({ "groups": groups })
+    }
+
+    /// Eine Gruppe (erkannt an einem ihrer Einträge) auf ein Anmeldeobjekt umstellen: vorhandenes verwenden oder neu
+    /// anlegen (`name`). Die bisherigen KDBX-Einträge bleiben liegen und lassen sich danach über „Verwaiste
+    /// KDBX-Einträge prüfen“ in den Papierkorb legen; so bleibt „Rückgängig“ vollständig.
+    fn credmerge_apply(&mut self, c: &Value) -> Result<Value, String> {
+        use rj_core::shared::Use;
+        let scope = ids_of(c, "ids");
+        let want = ids_of(c, "entries");
+        let first = *want.first().ok_or("Gruppe fehlt")?;
+        let (user, entries, uses, login) = self.credmerge_groups(&scope).into_iter().find(|g| g.1.contains(&first)).ok_or("Die Gruppe gibt es nicht mehr; bitte neu prüfen")?;
+        let before = self.index.clone();
+        let lid = match login {
+            Some((id, _)) => id,
+            None => {
+                let mut name = c.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| format!("Anmeldung {user}"));
+                let base = name.clone();
+                let mut n = 2;
+                while self.index.logins.iter().any(|l| l.name == name) {
+                    name = format!("{base} {n}");
+                    n += 1;
+                }
+                let folder = self.common_folder(&uses.iter().map(|u| u.node()).collect::<Vec<_>>());
+                let title = self.vault.as_ref().and_then(|v| v.credential(entries[0])).map(|c| c.data.title);
+                let login = rj_core::Login { id: Uuid::new_v4(), name, folder, entry: CredentialRef { entry: entries[0], last_title: title } };
+                let id = login.id;
+                self.index.logins.push(login);
+                id
+            }
+        };
+        for u in &uses {
+            match u {
+                Use::Settings { node, .. } => {
+                    rj_core::inherit::set_credential_mode(&mut self.index, *node, CredentialMode::Login(lid));
+                }
+                Use::Way { node, way } => {
+                    if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut self.index.root, *node) {
+                        if let Some(w) = t.ways.iter_mut().find(|w| w.id == *way) {
+                            w.own = None;
+                            w.credential = rj_core::model::WayCredential::Login(lid);
+                        }
+                    }
+                }
+            }
+        }
+        self.commit("Gleiche Zugangsdaten zusammenführen", before);
+        Ok(json!({ "login": lid, "changed": uses.len() }))
+    }
+
     /// Verwaiste Einträge: eigene KDBX-Einträge (Gruppe `remotejoe`), auf die nichts im Index verweist – kein Ziel,
     /// Ordner, Weg, Anmeldeobjekt, Tunnel oder SNMP-Gerät. Einträge außerhalb der Gruppe zählen nie. Ohne Kennwörter.
     fn orphans_list(&self) -> Value {
@@ -2217,6 +2368,41 @@ mod tests {
 
     fn cmd(app: &mut App, v: Value) -> Value {
         j(app.edit(&v.to_string()))
+    }
+
+    #[test]
+    fn same_credentials_are_merged_into_one_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _, _) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let f = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "folder", "name": "APs" }))["id"].as_str().unwrap().to_string();
+        let mut ids = Vec::new();
+        for (n, user, pw) in [("a", "admin", "geheim"), ("b", "admin", "geheim"), ("c", "admin", "anders"), ("d", "root", "geheim")] {
+            let t = cmd(&mut app, json!({ "op": "add", "parent": f, "kind": "ssh", "name": n }))["id"].as_str().unwrap().to_string();
+            cmd(&mut app, json!({ "op": "update", "id": t, "fields": {}, "credential": { "mode": "direct", "username": user, "password": pw } }));
+            ids.push(t);
+        }
+        let l = cmd(&mut app, json!({ "op": "credmerge_list" }));
+        let groups = l["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1, "nur admin/geheim kommt zweimal vor: {l}");
+        assert_eq!((groups[0]["username"].as_str(), groups[0]["count"].as_u64()), (Some("admin"), Some(2)));
+        assert!(groups[0]["login"].is_null());
+        assert_eq!(groups[0]["folder"], "APs");
+        assert!(!l.to_string().contains("geheim"), "nie Kennwörter");
+        let r = cmd(&mut app, json!({ "op": "credmerge_apply", "entries": groups[0]["entries"], "name": "Admin APs" }));
+        assert_eq!(r["changed"], 2, "{r}");
+        assert_eq!(app.index.logins.iter().filter(|l| l.name == "Admin APs").count(), 1);
+        assert!(cmd(&mut app, json!({ "op": "credmerge_list" }))["groups"].as_array().unwrap().is_empty(), "zusammengeführt");
+        // Ein weiteres Ziel mit denselben Daten: das vorhandene Anmeldeobjekt wird erkannt.
+        let e = cmd(&mut app, json!({ "op": "add", "parent": f, "kind": "ssh", "name": "e" }))["id"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "update", "id": e, "fields": {}, "credential": { "mode": "direct", "username": "admin", "password": "geheim" } }));
+        let l = cmd(&mut app, json!({ "op": "credmerge_list" }));
+        assert_eq!(l["groups"][0]["login"]["name"], "Admin APs", "{l}");
+        cmd(&mut app, json!({ "op": "credmerge_apply", "entries": l["groups"][0]["entries"] }));
+        assert_eq!(app.index.logins.len(), 1, "kein zweites Anmeldeobjekt");
+        // Rückgängig stellt die direkten Zugangsdaten wieder her.
+        cmd(&mut app, json!({ "op": "undo" }));
+        assert!(!cmd(&mut app, json!({ "op": "credmerge_list" }))["groups"].as_array().unwrap().is_empty());
     }
 
     #[test]
