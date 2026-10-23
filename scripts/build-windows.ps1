@@ -7,7 +7,7 @@
     Umgebungsvariablen für die Rust-Bauskripte (pkg-config, bindgen, cxx-qt),
     baut alle Programme und legt ein lauffähiges Paket mit Qt- und FreeRDP-DLLs an.
     Jeder Fehler wird mit Ursache und nächstem Schritt gemeldet.
-    Anleitung: docs/BUILD-WINDOWS.md
+    Anleitung: docs/BAUEN.md
 
 .PARAMETER VcpkgRoot
     Ordner von vcpkg (Vorgabe: Umgebungsvariable VCPKG_ROOT, sonst C:\vcpkg).
@@ -54,7 +54,7 @@ function Pruefe-Befehl([string]$Name, [string]$Hilfe) {
 
 function Ausfuehren([string]$Was, [scriptblock]$Block) {
     & $Block
-    if ($LASTEXITCODE -ne 0) { Fehler "$Was ist fehlgeschlagen (Rückgabewert $LASTEXITCODE)." 'Meldungen oberhalb prüfen; Stolpersteine stehen in docs/BUILD-WINDOWS.md.' }
+    if ($LASTEXITCODE -ne 0) { Fehler "$Was ist fehlgeschlagen (Rückgabewert $LASTEXITCODE)." 'Meldungen oberhalb prüfen; Stolpersteine stehen in docs/BAUEN.md.' }
 }
 
 $Root = Split-Path -Parent $PSScriptRoot
