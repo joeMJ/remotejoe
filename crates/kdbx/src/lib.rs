@@ -214,6 +214,8 @@ enum EntryOp {
     Field { uuid: Uuid, name: String, data: Secret },
     /// In den Papierkorb der KDBX verschieben (nur eigene Einträge).
     Recycle { uuid: Uuid },
+    /// Aus dem Papierkorb zurück in die Gruppe `remotejoe` (Rückgängig nach `Recycle`).
+    Restore { uuid: Uuid },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,7 +230,7 @@ fn fingerprint(bytes: &[u8]) -> Fingerprint {
 
 fn op_uuid(op: &EntryOp) -> Uuid {
     match op {
-        EntryOp::Create { uuid, .. } | EntryOp::Update { uuid, .. } | EntryOp::Attach { uuid, .. } | EntryOp::Field { uuid, .. } | EntryOp::Recycle { uuid } => *uuid,
+        EntryOp::Create { uuid, .. } | EntryOp::Update { uuid, .. } | EntryOp::Attach { uuid, .. } | EntryOp::Field { uuid, .. } | EntryOp::Recycle { uuid } | EntryOp::Restore { uuid } => *uuid,
     }
 }
 
@@ -585,6 +587,17 @@ impl Vault {
                 let _ = e.move_to(bin);
                 e.times.location_changed = Some(chrono::Utc::now().naive_utc());
             }
+            EntryOp::Restore { uuid } => {
+                let id = EntryId::from_uuid(*uuid);
+                // Nur was im Papierkorb liegt; beim erneuten Anwenden ist es vielleicht schon zurück.
+                if db.entry(id).is_none() || !Self::in_recycle_bin(db, id) {
+                    return Ok(());
+                }
+                let group = Self::ensure_group(db);
+                let mut e = db.entry_mut(id).expect("geprüft");
+                let _ = e.move_to(group);
+                e.times.location_changed = Some(chrono::Utc::now().naive_utc());
+            }
         }
         Ok(())
     }
@@ -611,6 +624,32 @@ impl Vault {
         self.record(EntryOp::Create { uuid, data })?;
         self.created.insert(uuid);
         Ok(uuid)
+    }
+
+    /// Eigener Eintrag (Gruppe `remotejoe`) in den Papierkorb der KDBX; fremde Einträge nie. `false`: nichts zu tun.
+    pub fn recycle_own(&mut self, uuid: Uuid) -> Result<bool, VaultError> {
+        let id = EntryId::from_uuid(uuid);
+        if db_entry_missing(&self.db, id) || Self::in_recycle_bin(&self.db, id) || !Self::in_own_group(&self.db, id) {
+            return Ok(false);
+        }
+        self.record(EntryOp::Recycle { uuid })?;
+        Ok(true)
+    }
+
+    /// Holt einen Eintrag aus dem Papierkorb zurück in die Gruppe `remotejoe` (Rückgängig nach [`Self::recycle_own`]).
+    pub fn restore_own(&mut self, uuid: Uuid) -> Result<bool, VaultError> {
+        let id = EntryId::from_uuid(uuid);
+        if db_entry_missing(&self.db, id) || !Self::in_recycle_bin(&self.db, id) {
+            return Ok(false);
+        }
+        self.record(EntryOp::Restore { uuid })?;
+        Ok(true)
+    }
+
+    /// Angelegt und zuletzt geändert (Unix-Sekunden), soweit die Datei es angibt.
+    pub fn entry_times(&self, uuid: Uuid) -> (Option<i64>, Option<i64>) {
+        let Some(e) = self.db.entry(EntryId::from_uuid(uuid)) else { return (None, None) };
+        (e.times.creation.map(|t| t.and_utc().timestamp()), e.times.last_modification.map(|t| t.and_utc().timestamp()))
     }
 
     /// Hat remotejoe diesen Eintrag in dieser Sitzung angelegt?

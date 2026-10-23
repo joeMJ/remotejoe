@@ -726,6 +726,9 @@ impl App {
             "mass_start" => self.mass_start(&c),
             "merge_preview" => self.merge_preview(&c),
             "shared_list" => Ok(self.shared_list()),
+            "orphans_list" => Ok(self.orphans_list()),
+            "orphans_recycle" => self.orphans_move(&c, true),
+            "orphans_restore" => self.orphans_move(&c, false),
             "report_build" => Ok(self.report_build(&c)),
             "shared_split" => self.shared_split(&c),
             "shared_to_login" => self.shared_to_login(&c),
@@ -1635,6 +1638,47 @@ impl App {
         true
     }
 
+    /// Verwaiste Einträge: eigene KDBX-Einträge (Gruppe `remotejoe`), auf die nichts im Index verweist – kein Ziel,
+    /// Ordner, Weg, Anmeldeobjekt, Tunnel oder SNMP-Gerät. Einträge außerhalb der Gruppe zählen nie. Ohne Kennwörter.
+    fn orphans_list(&self) -> Value {
+        let Some(vault) = self.vault.as_ref() else { return json!({ "entries": [], "locked": true }) };
+        let used = self.index.referenced_entries();
+        let entries: Vec<Value> = vault
+            .entries()
+            .into_iter()
+            .filter(|e| vault.is_own_entry(e.uuid) && !used.contains(&e.uuid))
+            .map(|e| {
+                let (created, modified) = vault.entry_times(e.uuid);
+                json!({ "entry": e.uuid, "title": e.title, "username": e.username, "path": e.group_path.join(" › "), "created": created, "modified": modified })
+            })
+            .collect();
+        json!({ "entries": entries })
+    }
+
+    /// Markierte verwaiste Einträge in den Papierkorb der KDBX (`recycle`) bzw. zurück (Rückgängig) und speichern.
+    /// Ein Eintrag, auf den inzwischen wieder etwas verweist, bleibt unberührt.
+    fn orphans_move(&mut self, c: &Value, recycle: bool) -> Result<Value, String> {
+        let used = self.index.referenced_entries();
+        let vault = self.vault.as_mut().ok_or("Keine Schlüsseldatenbank geöffnet")?;
+        let mut moved = Vec::new();
+        for e in ids_of(c, "entries") {
+            let done = if recycle {
+                if used.contains(&e) {
+                    continue;
+                }
+                vault.recycle_own(e)
+            } else {
+                vault.restore_own(e)
+            }
+            .map_err(|e| e.to_string())?;
+            if done {
+                moved.push(e);
+            }
+        }
+        let saved: Value = serde_json::from_str(&self.save_with(None)).unwrap_or_default();
+        Ok(json!({ "moved": moved, "save": saved }))
+    }
+
     /// Geteilte Zugangsdaten: eigene KDBX-Einträge, die direkt an mehreren Stellen eingetragen sind (Benutzer, nie
     /// Kennwörter).
     fn shared_list(&self) -> Value {
@@ -2173,6 +2217,41 @@ mod tests {
 
     fn cmd(app: &mut App, v: Value) -> Value {
         j(app.edit(&v.to_string()))
+    }
+
+    #[test]
+    fn orphaned_entries_are_listed_recycled_and_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, path, key) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let a = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "A" }))["id"].as_str().unwrap().to_string();
+        cmd(&mut app, json!({ "op": "update", "id": a, "fields": {}, "credential": { "mode": "direct", "username": "alt", "password": "eins" } }));
+        cmd(&mut app, json!({ "op": "save" }));
+        assert!(cmd(&mut app, json!({ "op": "orphans_list" }))["entries"].as_array().unwrap().is_empty(), "alles verwendet");
+        // Das Ziel löschen: sein Eintrag bleibt in der KDBX und ist dann verwaist.
+        cmd(&mut app, json!({ "op": "delete", "ids": [a] }));
+        cmd(&mut app, json!({ "op": "save" }));
+        let l = cmd(&mut app, json!({ "op": "orphans_list" }));
+        let list = l["entries"].as_array().unwrap();
+        assert_eq!(list.len(), 1, "{l}");
+        assert_eq!(list[0]["username"], "alt");
+        assert!(list[0].get("password").is_none());
+        let e = list[0]["entry"].clone();
+        // Ein fremder Eintrag außerhalb der Gruppe remotejoe wird nie gemeldet.
+        {
+            let mut v = rj_kdbx::Vault::open(&path, key.clone(), rj_core::config::IndexStorage::KdbxCustomData).unwrap();
+            assert!(v.entries().iter().all(|x| v.is_own_entry(x.uuid)), "Testdatei enthält nur eigene Einträge");
+            let _ = &mut v;
+        }
+        let r = cmd(&mut app, json!({ "op": "orphans_recycle", "entries": [e] }));
+        assert_eq!(r["moved"].as_array().unwrap().len(), 1, "{r}");
+        assert!(cmd(&mut app, json!({ "op": "orphans_list" }))["entries"].as_array().unwrap().is_empty(), "im Papierkorb");
+        let r = cmd(&mut app, json!({ "op": "orphans_restore", "entries": [e] }));
+        assert_eq!(r["moved"].as_array().unwrap().len(), 1, "{r}");
+        assert_eq!(cmd(&mut app, json!({ "op": "orphans_list" }))["entries"].as_array().unwrap().len(), 1, "zurückgeholt");
+        // Nach dem Speichern auch in der Datei.
+        let v = rj_kdbx::Vault::open(&path, key, rj_core::config::IndexStorage::KdbxCustomData).unwrap();
+        assert!(v.entries().iter().any(|x| serde_json::json!(x.uuid) == e));
     }
 
     #[test]

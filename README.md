@@ -69,7 +69,7 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 
 | Plattform | Status | Hinweis |
 | :--- | :--- | :--- |
-| **Linux (Ubuntu 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto; Pakete für 26.04 und für 24.04 (eigenes Paket mit Qt 6.4) |
+| **Linux (Ubuntu 24.04 / 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto ([Installation](docs/INSTALLATION.md#installation-linux-ubuntu)); Pakete für 26.04 und für 24.04 (eigenes Paket mit Qt 6.4) |
 | **Windows 10/11** | Aktiv | MSI pro Benutzer ohne Administratorrechte ([Installation](docs/INSTALLATION.md#installation-windows)); Web-Ziele im Tab über WebView2 |
 
 ---
