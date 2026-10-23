@@ -684,7 +684,7 @@ impl Worker {
     /// Downloads: in den Zielordner speichern, Fortschritt und Ergebnis melden; .ica-Dateien danach öffnen.
     fn connect_downloads(&self, view: &WebView) {
         // Alte Startdateien (Anmeldetickets) von früheren Läufen entfernen.
-        for f in crate::stale_launch_files(&download_dir(), std::time::Duration::from_secs(300)) {
+        for f in rj_web::stale_launch_files(&download_dir(), std::time::Duration::from_secs(300)) {
             let _ = std::fs::remove_file(f);
         }
         let Ok(w4) = view.webview().cast::<ICoreWebView2_4>() else { return };
