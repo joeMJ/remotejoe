@@ -7,6 +7,7 @@
 
 #include <QtCore/QDateTime>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QTimer>
 #include <QtGui/QFontDatabase>
 #include <QtWidgets/QCheckBox>
@@ -509,6 +510,17 @@ void OverviewTab::renderServices(const QJsonValue& s)
 	m_chipsBox->relayout();
 }
 
+// Aruba: „Aruba Instant 8.10.0.23 LSR (Modell 515)“ → Kopfzeile „Aruba Instant (Modell 515)“, Kachel „8.10.0.23 LSR“.
+static std::pair<QString, QString> splitArubaVersion(const QString& system)
+{
+	static const QRegularExpression re(QStringLiteral("^(Aruba\\s+\\S+)\\s+(\\d[\\w.\\-]*(?:\\s+[A-Z]{2,4}\\b(?!\\)))?)\\s*(.*)$"));
+	const QRegularExpressionMatch m = re.match(system);
+	if (!m.hasMatch())
+		return { system, QString() };
+	const QString rest = m.captured(3).trimmed();
+	return { rest.isEmpty() ? m.captured(1) : m.captured(1) + QLatin1Char(' ') + rest, m.captured(2) };
+}
+
 bool OverviewTab::isAruba(const QJsonArray& fields)
 {
 	for (const QJsonValue& v : fields)
@@ -533,6 +545,9 @@ void OverviewTab::updateSub()
 		else if (f.value(QStringLiteral("key")).toString() == QLatin1String("mac"))
 			mac = f.value(QStringLiteral("value")).toString();
 	}
+	// Aruba: die Version steht auf der eigenen Kachel.
+	if (isAruba(m_inventory))
+		system = splitArubaVersion(system).first;
 	if (!system.isEmpty())
 		parts << system;
 	if (!name.isEmpty() && name.compare(m_name, Qt::CaseInsensitive) != 0)
@@ -545,10 +560,10 @@ void OverviewTab::updateSub()
 
 void OverviewTab::renderInventory(const QJsonArray& fields)
 {
-	// Aruba-Gerät (System „Aruba …“): Laufzeit, IP-Adresse und – hervorgehoben – die Seriennummer; die MAC steht in der
-	// Kopfzeile.
+	// Aruba-Gerät (System „Aruba …“): Laufzeit, IP-Adresse und – hervorgehoben – Seriennummer und Version; die MAC
+	// steht in der Kopfzeile.
 	const bool aruba = isAruba(fields);
-	const QStringList keys = aruba ? QStringList{ QStringLiteral("uptime"), QStringLiteral("ip"), QStringLiteral("serial"), QString() }
+	const QStringList keys = aruba ? QStringList{ QStringLiteral("uptime"), QStringLiteral("ip"), QStringLiteral("serial"), QStringLiteral("version") }
 	                               : QStringList{ QString::fromLatin1(kTiles[0]), QString::fromLatin1(kTiles[1]), QString::fromLatin1(kTiles[2]), QString::fromLatin1(kTiles[3]) };
 	if (keys != m_tileKeys)
 	{
@@ -566,8 +581,11 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 			f.setFamily(QFontDatabase::systemFont(QFontDatabase::FixedFont).family());
 			f.setPointSizeF(m_tileValue[0]->font().pointSizeF() * 1.15);
 		}
-		m_tileValue[2]->setFont(f);
-		m_tileValue[2]->setTextInteractionFlags(aruba ? Qt::TextSelectableByMouse : Qt::NoTextInteraction);
+		for (int i : { 2, 3 })
+		{
+			m_tileValue[i]->setFont(aruba ? f : m_tileValue[0]->font());
+			m_tileValue[i]->setTextInteractionFlags(aruba ? Qt::TextSelectableByMouse : Qt::NoTextInteraction);
+		}
 	}
 	m_inventory = fields;
 	updateSub();
@@ -590,6 +608,12 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 				const QString value = f.value(QStringLiteral("value")).toString();
 				m_tileValue[i]->setText(value.isEmpty() ? QStringLiteral("–") : value);
 				m_tileValue[i]->setToolTip(f.value(QStringLiteral("source")).toString());
+			}
+		if (aruba && key == QLatin1String("system"))
+			if (const QString version = splitArubaVersion(f.value(QStringLiteral("value")).toString()).second; !version.isEmpty())
+			{
+				m_tileValue[3]->setText(version);
+				m_tileValue[3]->setToolTip(f.value(QStringLiteral("source")).toString());
 			}
 		const qint64 at = f.value(QStringLiteral("at")).toInteger();
 		if (at > latest && !f.value(QStringLiteral("manual")).toBool())
