@@ -639,7 +639,7 @@ impl Worker {
                     events::key(&page.window, keyval, false, state, false);
                 }
             }
-            InputEvent::Bytes(_) => {}
+            InputEvent::Bytes(_) | InputEvent::Scancodes(_) => {}
         }
     }
 
