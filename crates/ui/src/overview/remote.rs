@@ -17,6 +17,7 @@ pub type Found = Vec<(&'static str, String)>;
 const LINUX_SCRIPT: &str = "sh -c 'echo @@name; hostname; echo @@os; (. /etc/os-release && echo \"$PRETTY_NAME\") 2>/dev/null || uname -sr; \
 echo @@osver; cat /etc/debian_version /etc/alpine-release 2>/dev/null; \
 echo @@cpu; nproc 2>/dev/null || getconf _NPROCESSORS_ONLN; echo @@mem; grep -m1 MemTotal /proc/meminfo; \
+echo @@uptime; cat /proc/uptime 2>/dev/null; \
 echo @@ip; ip -o -4 addr show scope global 2>/dev/null; echo @@link; ip -o link 2>/dev/null; echo @@end'";
 
 fn sections(out: &str) -> std::collections::HashMap<String, Vec<String>> {
@@ -63,6 +64,18 @@ fn precise_os(os: &str, full: Option<&str>) -> String {
     words.join(" ")
 }
 
+/// Laufzeit wie bei Aruba: Tage nur ab einem Tag, Stunden ab einer Stunde („2 T 0 Std 5 Min“, „3 Std 56 Min“, „4 Min“).
+fn uptime_text(secs: u64) -> String {
+    let (days, hours, mins) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60);
+    if days > 0 {
+        format!("{days} T {hours} Std {mins} Min")
+    } else if hours > 0 {
+        format!("{hours} Std {mins} Min")
+    } else {
+        format!("{mins} Min")
+    }
+}
+
 pub fn parse_linux(out: &str, ip: Option<&str>) -> Option<Found> {
     let s = sections(out);
     if !s.contains_key("end") && !out.contains("@@end") {
@@ -78,6 +91,10 @@ pub fn parse_linux(out: &str, ip: Option<&str>) -> Option<Found> {
     }
     if let Some(c) = first("cpu").filter(|c| c.parse::<u32>().is_ok()) {
         f.push(("vcpu", c));
+    }
+    // „/proc/uptime“: Sekunden seit dem Start („123456.78 …“) → „1 T 10 Std 17 Min“.
+    if let Some(secs) = first("uptime").and_then(|u| u.split_whitespace().next().and_then(|v| v.parse::<f64>().ok())) {
+        f.push(("uptime", uptime_text(secs as u64)));
     }
     if let Some(kb) = first("mem").and_then(|m| m.split_whitespace().nth(1).and_then(|v| v.parse::<u64>().ok())) {
         f.push(("memory", format_bytes(kb * 1024)));
@@ -526,6 +543,19 @@ pub async fn cli_session(conn: &SshConnection, cmds: &[&str]) -> Result<CliResul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linux_uptime_from_proc() {
+        assert_eq!(uptime_text(240), "4 Min");
+        assert_eq!(uptime_text(3 * 3600 + 56 * 60 + 26), "3 Std 56 Min");
+        assert_eq!(uptime_text(2 * 86_400 + 5 * 60), "2 T 0 Std 5 Min");
+        let out = "@@name\nct\n@@os\nAlpine Linux v3.16\n@@uptime\n123456.78 98765.43\n@@end\n";
+        let f = parse_linux(out, None).unwrap();
+        assert!(f.contains(&("uptime", "1 T 10 Std 17 Min".to_string())), "{f:?}");
+        // Ohne /proc/uptime (leerer Abschnitt): keine Laufzeit.
+        let f = parse_linux("@@name\nct\n@@uptime\n@@end\n", None).unwrap();
+        assert!(!f.iter().any(|(k, _)| *k == "uptime"));
+    }
 
     #[test]
     fn precise_version_for_debian_and_alpine() {

@@ -826,7 +826,7 @@
   "settings.mcp.hide.addr": "IP- und MAC-Adressen gegenüber Claude ausblenden",
   "settings.mcp.hide.serial": "Seriennummern gegenüber Claude ausblenden",
   "settings.mcp.folders": "Freigegebene Ordner",
-  "settings.mcp.folders.hint": "Claude sieht nur Ziele in diesen Ordnern (mit allen Unterordnern). Gilt für diese Schlüsseldatenbank.",
+  "settings.mcp.folders.hint": "Claude sieht nur Ziele in diesen Ordnern (mit allen Unterordnern). Ziele, die direkt auf oberster Ebene des Baums liegen, lassen sich nicht freigeben – lege sie dafür in einen Ordner. Gilt für diese Schlüsseldatenbank.",
   "settings.mcp.logins": "Anmeldeobjekte für Aktionen",
   "settings.mcp.logins.hint": "Aktionen (Verbinden, Inventar oder Cluster abfragen, Nutzer anzeigen) nur bei Zielen, deren Zugangsdaten aus einem dieser Anmeldeobjekte stammen – z. B. ein Konto mit wenig Rechten eigens für Claude. Jede Aktion musst du zusätzlich in remotejoe erlauben.",
   "settings.mcp.setup": "Einrichtung in Claude Desktop",

@@ -16,8 +16,9 @@ in remotejoe?“ selbst beantworten – mit den Daten aus remotejoe, aber ohne j
   die Standardein- und -ausgabe und reicht jede Anfrage an das **laufende, entsperrte** remotejoe weiter (lokaler
   Kanal, nur für das eigene Benutzerkonto). `rj-mcp` selbst kennt keine Zugangsdaten.
 - Ab Werk ist die Anbindung **aus**. Einschalten unter **Einstellungen → Claude-Anbindung (MCP)**.
-- Claude sieht nur Ziele in den dort **freigegebenen Ordnern** (je Schlüsseldatenbank). Adressen und Seriennummern
-  lassen sich ausblenden.
+- Claude sieht nur Ziele in den dort **freigegebenen Ordnern** (je Schlüsseldatenbank). Ziele direkt auf oberster
+  Ebene des Baums lassen sich nicht freigeben; lege sie dafür in einen Ordner. Adressen und Seriennummern lassen
+  sich ausblenden.
 - **Aktionen** (Verbinden, Inventar oder Cluster abfragen, Nutzer anzeigen) gehen nur bei Zielen, deren Zugangsdaten
   aus einem **für Claude freigegebenen Anmeldeobjekt** stammen – zum Beispiel ein Konto mit wenig Rechten eigens für
   Claude. Zusätzlich fragt remotejoe bei **jeder** Aktion nach („Erlauben“ / „Ablehnen“; ohne Antwort nach 2 Minuten
