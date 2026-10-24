@@ -15,6 +15,7 @@ pub type Found = Vec<(&'static str, String)>;
 
 /// Ein Befehl für `sh`, Abschnitte mit Markierungen; ohne root lauffähig.
 const LINUX_SCRIPT: &str = "sh -c 'echo @@name; hostname; echo @@os; (. /etc/os-release && echo \"$PRETTY_NAME\") 2>/dev/null || uname -sr; \
+echo @@osver; cat /etc/debian_version /etc/alpine-release 2>/dev/null; \
 echo @@cpu; nproc 2>/dev/null || getconf _NPROCESSORS_ONLN; echo @@mem; grep -m1 MemTotal /proc/meminfo; \
 echo @@ip; ip -o -4 addr show scope global 2>/dev/null; echo @@link; ip -o link 2>/dev/null; echo @@end'";
 
@@ -37,6 +38,31 @@ fn sections(out: &str) -> std::collections::HashMap<String, Vec<String>> {
 }
 
 /// Auswertung der Linux-Ausgabe. `ip`: Adresse, unter der das Ziel erreicht wurde (wählt Schnittstelle und MAC).
+/// Genaue Version in die Systemzeile: `PRETTY_NAME` nennt bei Debian nur die Hauptversion („Debian GNU/Linux 13
+/// (trixie)“), bei Alpine Haupt- und Nebenversion („Alpine Linux v3.16“); `/etc/debian_version` bzw.
+/// `/etc/alpine-release` haben die volle („13.1“, „3.16.9“). Nur ersetzt, wenn die volle Version die kurze fortsetzt
+/// (Ubuntu hat in `/etc/debian_version` etwa „trixie/sid“).
+fn precise_os(os: &str, full: Option<&str>) -> String {
+    let Some(full) = full.map(str::trim).filter(|v| v.contains('.') && v.chars().all(|c| c.is_ascii_digit() || c == '.')) else {
+        return os.to_string();
+    };
+    if !(os.starts_with("Debian") || os.starts_with("Alpine")) {
+        return os.to_string();
+    }
+    let words: Vec<String> = os
+        .split(' ')
+        .map(|w| {
+            let (prefix, num) = w.strip_prefix('v').map_or(("", w), |n| ("v", n));
+            if !num.is_empty() && num.chars().all(|c| c.is_ascii_digit() || c == '.') && full.starts_with(&format!("{num}.")) {
+                format!("{prefix}{full}")
+            } else {
+                w.to_string()
+            }
+        })
+        .collect();
+    words.join(" ")
+}
+
 pub fn parse_linux(out: &str, ip: Option<&str>) -> Option<Found> {
     let s = sections(out);
     if !s.contains_key("end") && !out.contains("@@end") {
@@ -48,7 +74,7 @@ pub fn parse_linux(out: &str, ip: Option<&str>) -> Option<Found> {
         f.push(("name", n));
     }
     if let Some(o) = first("os") {
-        f.push(("system", o));
+        f.push(("system", precise_os(&o, first("osver").as_deref())));
     }
     if let Some(c) = first("cpu").filter(|c| c.parse::<u32>().is_ok()) {
         f.push(("vcpu", c));
@@ -500,6 +526,18 @@ pub async fn cli_session(conn: &SshConnection, cmds: &[&str]) -> Result<CliResul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn precise_version_for_debian_and_alpine() {
+        assert_eq!(precise_os("Debian GNU/Linux 13 (trixie)", Some("13.1")), "Debian GNU/Linux 13.1 (trixie)");
+        assert_eq!(precise_os("Alpine Linux v3.16", Some("3.16.9")), "Alpine Linux v3.16.9");
+        assert_eq!(precise_os("Ubuntu 24.04.4 LTS", Some("trixie/sid")), "Ubuntu 24.04.4 LTS");
+        assert_eq!(precise_os("Debian GNU/Linux 13 (trixie)", Some("12.9")), "Debian GNU/Linux 13 (trixie)");
+        assert_eq!(precise_os("Debian GNU/Linux 13 (trixie)", None), "Debian GNU/Linux 13 (trixie)");
+        let out = "@@name\nct\n@@os\nDebian GNU/Linux 13 (trixie)\n@@osver\n13.1\n@@cpu\n2\n@@end\n";
+        let f = parse_linux(out, None).unwrap();
+        assert!(f.contains(&("system", "Debian GNU/Linux 13.1 (trixie)".to_string())), "{f:?}");
+    }
 
     #[test]
     fn linux_output_is_read_and_the_reached_interface_wins() {
