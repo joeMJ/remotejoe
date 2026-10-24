@@ -438,6 +438,33 @@ mod tests {
     }
 
     #[test]
+    fn builtin_tables_cover_all_offered_layouts() {
+        let all = builtin();
+        for (klid, name) in NAMES {
+            let l = Layout::find(all, klid).unwrap_or_else(|| panic!("Tabelle fehlt: {name}"));
+            assert!(l.keys.len() > 90, "{name}: nur {} Zeichen", l.keys.len());
+            // Tottasten-Zeichen gehen nie als Tastenfolge.
+            for c in &l.dead {
+                assert_eq!(l.sequence(*c), None, "{name}: Tottaste {c:?}");
+            }
+            // Keine Ziffernblock-Taste (hängt am Server von NumLock ab).
+            for (c, (sc, _)) in &l.keys {
+                assert!(!matches!(sc & 0xff, 0x37 | 0x47..=0x53) || *sc == 0x35, "{name}: {c:?} auf dem Ziffernblock (0x{sc:x})");
+            }
+        }
+        // Deutsch: mitgelieferte Tabelle stimmt mit der Kontrolltabelle überein.
+        let de = Layout::find(all, "00000407").unwrap();
+        let control = parse_layouts(DE).unwrap().remove(0);
+        for (c, v) in &control.keys {
+            if *c != '/' {
+                assert_eq!(de.keys.get(c), Some(v), "{c:?}");
+            }
+        }
+        assert_eq!(de.keys.get(&'/'), Some(&(0x08, Level::Shift)), "/ über Umschalt+7, nicht Ziffernblock");
+        assert_eq!(de.dead, control.dead);
+    }
+
+    #[test]
     fn layout_ids() {
         assert_eq!(klid_of("de").as_deref(), Some("00000407"));
         assert_eq!(klid_of("de-AT").as_deref(), Some("00000407"));
