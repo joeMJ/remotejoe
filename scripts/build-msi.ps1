@@ -122,8 +122,20 @@ Remove-Item $vcpkgTexte
 
 if (-not $NoSign) {
     Schritt 'Eigene Programme signieren'
-    $eigene = @(Get-ChildItem $Stage -Filter 'remotejoe.exe') + @(Get-ChildItem $Stage -Filter 'rj-worker-*.exe')
+    # Feste Liste wie in build-windows.ps1 (Paket zusammenstellen): jedes eigene Programm wird signiert; fehlt eines,
+    # bricht der Bau ab.
+    $eigene = foreach ($exe in @('remotejoe', 'rj-worker-ssh', 'rj-worker-rdp', 'rj-worker-vnc', 'rj-worker-web', 'rj-worker-psrp', 'rj-mcp')) {
+        $p = Join-Path $Stage "$exe.exe"
+        if (-not (Test-Path $p)) { Fehler "$exe.exe fehlt im Paket." 'build-windows.ps1 ohne Fehler abschließen.' }
+        Get-Item $p
+    }
+    # Weitere eigene Programme (rj-*.exe), die in der Liste fehlen, fallen hier auf statt unsigniert ausgeliefert zu werden.
+    $fremd = @(Get-ChildItem $Stage -Filter 'rj-*.exe' | Where-Object { $eigene.Name -notcontains $_.Name })
+    if ($fremd.Count -gt 0) { Fehler "Nicht in der Signierliste: $($fremd.Name -join ', ')." 'Liste in build-msi.ps1 (und build-windows.ps1) ergänzen.' }
     Ausfuehren 'signtool sign (Programme)' { & $signtool sign /sha1 $Thumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 /d 'remotejoe' $eigene.FullName }
+    foreach ($e in $eigene) {
+        Ausfuehren "Signatur prüfen ($($e.Name))" { & $signtool verify /pa /q $e.FullName }
+    }
 }
 
 Schritt 'Dateiliste für WiX'
