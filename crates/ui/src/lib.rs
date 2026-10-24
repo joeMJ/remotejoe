@@ -2,6 +2,7 @@
 //! Farbschema, Sitzungen) liegt in Rust; die Widgets sind in C++ (`cpp/`)
 //! und sprechen über das QObject `RjBackend` (cxx-qt) mit Rust.
 
+pub mod adminkeys;
 pub mod alloc;
 pub mod autokeys;
 pub mod appearance;

@@ -228,6 +228,10 @@ pub struct ConnectionDefaults {
     /// Strg+Umschalt+W schließt den aktiven Tab: „outside“ (nur wenn der Fokus nicht in einer Sitzung liegt),
     /// „always“ oder „never“.
     pub close_tab_key: String,
+    /// Administrativer Tastaturmodus (RDP): Belegung (KLID, z. B. „00000407“), wenn das Ziel keine eigene nennt.
+    pub admin_keys_layout: String,
+    /// … und Abschalten nach so vielen Minuten ohne Eingabe (0 = nie).
+    pub admin_keys_timeout_mins: u32,
 }
 
 impl Default for ConnectionDefaults {
@@ -241,6 +245,8 @@ impl Default for ConnectionDefaults {
             connect_all_parallel: 4,
             keyboard_capture: true,
             close_tab_key: "outside".into(),
+            admin_keys_layout: "00000407".into(),
+            admin_keys_timeout_mins: 10,
         }
     }
 }

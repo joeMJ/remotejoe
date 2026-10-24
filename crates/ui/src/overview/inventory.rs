@@ -108,12 +108,14 @@ impl Inventory {
     }
 }
 
-/// Versionsnummer aus dem Feld „System“: das erste Wort aus Ziffern und Punkten mit mindestens einem Punkt
-/// („Aruba Instant 8.10.0.24 LSR (Modell 335)“ → „8.10.0.24“, „Ubuntu 24.04.1 LTS“ → „24.04.1“).
+/// Versionsnummer aus dem Feld „System“: das erste Wort aus Ziffern und Punkten mit mindestens einem Punkt, auch
+/// mit vorangestelltem „v“ („Aruba Instant 8.10.0.24 LSR (Modell 335)“ → „8.10.0.24“, „Ubuntu 24.04.1 LTS“ →
+/// „24.04.1“, „Alpine Linux v3.16“ → „3.16“). Debian nennt nur die Hauptversion („Debian GNU/Linux 13 (trixie)“ →
+/// „13“).
 pub fn version_of(system: &str) -> Option<&str> {
-    system
-        .split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',')
-        .find(|w| w.contains('.') && w.starts_with(|c: char| c.is_ascii_digit()) && w.chars().all(|c| c.is_ascii_digit() || c == '.') && !w.ends_with('.'))
+    let words = || system.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',').map(|w| w.strip_prefix('v').unwrap_or(w));
+    let number = |w: &str| w.starts_with(|c: char| c.is_ascii_digit()) && w.chars().all(|c| c.is_ascii_digit() || c == '.') && !w.ends_with('.');
+    words().find(|w| w.contains('.') && number(w)).or_else(|| if system.starts_with("Debian") { words().find(|w| number(w)) } else { None })
 }
 
 /// Geräteart aus dem Inventar, für ein eigenes Symbol im Baum: `aruba-ap`, sobald das Inventar ein Aruba-Gerät
@@ -212,7 +214,12 @@ mod tests {
         assert_eq!(version_of("Aruba Instant 8.10.0.24 LSR (Modell 335)"), Some("8.10.0.24"));
         assert_eq!(version_of("Ubuntu 24.04.1 LTS"), Some("24.04.1"));
         assert_eq!(version_of("Windows Server 2022 Standard (10.0.20348)"), Some("10.0.20348"));
-        assert_eq!(version_of("Debian GNU/Linux 12 (bookworm)"), None);
+        assert_eq!(version_of("Debian GNU/Linux 12 (bookworm)"), Some("12"));
+        assert_eq!(version_of("Debian GNU/Linux 13.1 (trixie)"), Some("13.1"));
+        assert_eq!(version_of("Alpine Linux v3.16"), Some("3.16"));
+        assert_eq!(version_of("Alpine Linux v3.16.9"), Some("3.16.9"));
+        assert_eq!(version_of("Arch Linux"), None);
+        assert_eq!(version_of("Linux 3.18.24"), Some("3.18.24"));
     }
 
     #[test]

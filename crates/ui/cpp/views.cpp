@@ -10,6 +10,7 @@
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
+#include <QtCore/QDateTime>
 #include <QtCore/QJsonDocument>
 #include <vector>
 #include <QtGui/QAction>
@@ -563,9 +564,40 @@ void FrameView::releasePressed()
 	m_rightCtrlAlone = false;
 }
 
+void FrameView::setAdminKeys(bool on, int timeoutMins, const QString& layoutName)
+{
+	if (on && !m_adminKeys)
+	{
+		// Was unter dem bisherigen Modus gedrückt war, zuerst lösen.
+		releasePressed();
+		m_adminSince = QDateTime::currentMSecsSinceEpoch();
+	}
+	m_adminKeys = on;
+	m_adminLayout = on ? layoutName : QString();
+	if (!on || timeoutMins <= 0)
+	{
+		if (m_adminIdle)
+			m_adminIdle->stop();
+		return;
+	}
+	if (!m_adminIdle)
+	{
+		m_adminIdle = new QTimer(this);
+		m_adminIdle->setSingleShot(true);
+		connect(m_adminIdle, &QTimer::timeout, this, [this] {
+			if (m_adminKeys && s_adminTimeout)
+				s_adminTimeout(this);
+		});
+	}
+	m_adminIdle->setInterval(timeoutMins * 60 * 1000);
+	m_adminIdle->start();
+}
+
 void FrameView::keyPressEvent(QKeyEvent* e)
 {
 	const std::uint32_t code = keyCode(e);
+	if (m_adminKeys && m_adminIdle && m_adminIdle->interval() > 0)
+		m_adminIdle->start();
 	if (KeyCapture::logging())
 	{
 		KeyCapture::pump();
@@ -1271,6 +1303,7 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
   , m_backend(backend)
   , m_session(session)
   , m_title(title)
+  , m_protocol(protocol)
 {
 	connect(&m_loadTick, &QTimer::timeout, this, &SessionPane::updateHeader);
 	auto* lay = new QVBoxLayout(this);

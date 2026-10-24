@@ -27,6 +27,7 @@
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QSpinBox>
+#include <QtGui/QStandardItemModel>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QVBoxLayout>
 
@@ -235,6 +236,15 @@ QWidget* SettingsTab::pageKeys()
 		m_closeTab->addItem(rjText(m_backend, (QByteArray("settings.closetab.") + mode).constData()), QString::fromLatin1(mode));
 	f->addRow(T("settings.closetab"), m_closeTab);
 	f->addRow(QString(), hint(T("settings.closetab.hint"), w));
+	// Administrativer Tastaturmodus (RDP, je Sitzung über das Kontextmenü des Tabs).
+	m_adminLayout = new QComboBox(w);
+	f->addRow(T("settings.adminkeys.layout"), m_adminLayout);
+	f->addRow(QString(), hint(T("settings.adminkeys.layout.hint"), w));
+	m_adminTimeout = new QSpinBox(w);
+	m_adminTimeout->setRange(0, 24 * 60);
+	m_adminTimeout->setSuffix(T("settings.adminkeys.timeout.suffix"));
+	m_adminTimeout->setSpecialValueText(T("settings.adminkeys.timeout.never"));
+	f->addRow(T("settings.adminkeys.timeout"), m_adminTimeout);
 	v->addLayout(f);
 	v->addStretch(1);
 
@@ -247,6 +257,16 @@ QWidget* SettingsTab::pageKeys()
 		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("keyboard_capture"), on } });
 		emit status(rjText(m_backend, on ? "keys.on" : "keys.off"));
 		refreshSummaries();
+	});
+	connect(m_adminLayout, &QComboBox::currentIndexChanged, this, [this] {
+		if (m_loading)
+			return;
+		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("admin_keys_layout"), m_adminLayout->currentData().toString() } });
+	});
+	connect(m_adminTimeout, &QSpinBox::valueChanged, this, [this](int mins) {
+		if (m_loading)
+			return;
+		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("admin_keys_timeout_mins"), mins } });
 	});
 	connect(m_closeTab, &QComboBox::currentIndexChanged, this, [this] {
 		if (m_loading)
@@ -562,6 +582,19 @@ void SettingsTab::reload()
 	m_keyCapture->setChecked(FrameView::s_keyCapture);
 	if (const int i = m_closeTab->findData(s.value(QStringLiteral("close_tab_key")).toString(QStringLiteral("outside"))); i >= 0)
 		m_closeTab->setCurrentIndex(i);
+	m_adminLayout->clear();
+	for (const QJsonValue& l : s.value(QStringLiteral("admin_keys_layouts")).toArray())
+	{
+		const QJsonObject o = l.toObject();
+		m_adminLayout->addItem(o.value(QStringLiteral("name")).toString(), o.value(QStringLiteral("klid")).toString());
+		// Belegungen ohne Tabelle: sichtbar, aber nicht wählbar.
+		if (!o.value(QStringLiteral("available")).toBool())
+			if (auto* model = qobject_cast<QStandardItemModel*>(m_adminLayout->model()))
+				model->item(m_adminLayout->count() - 1)->setEnabled(false);
+	}
+	if (const int i = m_adminLayout->findData(s.value(QStringLiteral("admin_keys_layout")).toString()); i >= 0)
+		m_adminLayout->setCurrentIndex(i);
+	m_adminTimeout->setValue(s.value(QStringLiteral("admin_keys_timeout_mins")).toInt(10));
 	m_aruba->setChecked(s.value(QStringLiteral("aruba_tools")).toBool());
 	m_clientsWarn->setValue(s.value(QStringLiteral("aruba_clients_warn")).toInt(30));
 	m_clientsCrit->setValue(s.value(QStringLiteral("aruba_clients_crit")).toInt(64));

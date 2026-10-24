@@ -115,7 +115,8 @@ fn run(out: Sender, rx: Receiver<ToWorker>, answers: Arc<Mutex<Receiver<(u32, bo
                     let _ = match ev {
                         InputEvent::Text(t) => c.type_text(&t),
                         InputEvent::Key { keysym, down } => c.key(keysym, down),
-                        InputEvent::Bytes(_) => Ok(()),
+                        // Nur RDP (administrativer Tastaturmodus).
+                        InputEvent::Bytes(_) | InputEvent::Scancodes(_) => Ok(()),
                         InputEvent::MouseMove { x, y } => c.pointer(buttons, x.max(0) as u16, y.max(0) as u16),
                         InputEvent::MouseButton { x, y, button, down } => {
                             let bit = match button {

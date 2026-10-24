@@ -89,10 +89,24 @@ Schritt 'Bereitstellungsordner'
 if (-not (Test-Path (Join-Path $PaketDir 'remotejoe.exe'))) {
     Fehler "Kein Paket unter $PaketDir." 'Zuerst scripts\build-windows.ps1 ausführen.'
 }
+# Das Paket muss aus einem erfolgreichen Bau genau dieses Stands stammen (Marke von build-windows.ps1).
+$marke = Join-Path $PaketDir 'paket-ok.txt'
+$bauStand = @{}
+if (Test-Path $marke) {
+    foreach ($z in Get-Content $marke) { if ($z -match '^(\w+)=(.*)$') { $bauStand[$Matches[1]] = $Matches[2].Trim() } }
+}
+$head = (git -C $Root rev-parse HEAD).Trim()
+if ($bauStand['version'] -ne $Version -or $bauStand['commit'] -ne $head) {
+    Fehler "Paket stammt nicht aus einem erfolgreichen Bau dieses Stands (Paket: Version $($bauStand['version']), Commit $($bauStand['commit']); hier: Version $Version, Commit $head)." 'scripts\build-windows.ps1 ohne Fehler durchlaufen lassen.'
+}
+if (-not $NoSign -and $bauStand['geaendert'] -ne 'false') {
+    Fehler 'Paket wurde mit nicht eingecheckten Änderungen gebaut; so wird keine signierte MSI erzeugt.' 'Änderungen einchecken und neu bauen.'
+}
+Write-Host "Paket aus Bau von $($head.Substring(0, 7)) (Version $Version)"
 if (Test-Path $Stage) { Remove-Item $Stage -Recurse -Force }
 New-Item -ItemType Directory -Force $Stage | Out-Null
 # vc_redist.x64.exe braucht Administratorrechte; die Laufzeit liegt stattdessen neben remotejoe.exe.
-Get-ChildItem $PaketDir | Where-Object Name -ne 'vc_redist.x64.exe' | Copy-Item -Destination $Stage -Recurse
+Get-ChildItem $PaketDir | Where-Object { $_.Name -notin @('vc_redist.x64.exe', 'paket-ok.txt') } | Copy-Item -Destination $Stage -Recurse
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $vs = if (Test-Path $vswhere) { & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath } else { $null }
 $crt = if ($vs) {
@@ -122,8 +136,20 @@ Remove-Item $vcpkgTexte
 
 if (-not $NoSign) {
     Schritt 'Eigene Programme signieren'
-    $eigene = @(Get-ChildItem $Stage -Filter 'remotejoe.exe') + @(Get-ChildItem $Stage -Filter 'rj-worker-*.exe')
+    # Feste Liste wie in build-windows.ps1 (Paket zusammenstellen): jedes eigene Programm wird signiert; fehlt eines,
+    # bricht der Bau ab.
+    $eigene = foreach ($exe in @('remotejoe', 'rj-worker-ssh', 'rj-worker-rdp', 'rj-worker-vnc', 'rj-worker-web', 'rj-worker-psrp', 'rj-mcp')) {
+        $p = Join-Path $Stage "$exe.exe"
+        if (-not (Test-Path $p)) { Fehler "$exe.exe fehlt im Paket." 'build-windows.ps1 ohne Fehler abschließen.' }
+        Get-Item $p
+    }
+    # Weitere eigene Programme (rj-*.exe), die in der Liste fehlen, fallen hier auf statt unsigniert ausgeliefert zu werden.
+    $fremd = @(Get-ChildItem $Stage -Filter 'rj-*.exe' | Where-Object { $eigene.Name -notcontains $_.Name })
+    if ($fremd.Count -gt 0) { Fehler "Nicht in der Signierliste: $($fremd.Name -join ', ')." 'Liste in build-msi.ps1 (und build-windows.ps1) ergänzen.' }
     Ausfuehren 'signtool sign (Programme)' { & $signtool sign /sha1 $Thumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 /d 'remotejoe' $eigene.FullName }
+    foreach ($e in $eigene) {
+        Ausfuehren "Signatur prüfen ($($e.Name))" { & $signtool verify /pa /q $e.FullName }
+    }
 }
 
 Schritt 'Dateiliste für WiX'
