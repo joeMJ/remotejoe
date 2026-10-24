@@ -3867,7 +3867,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "remotejoe-core"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "serde",
  "serde_json",
@@ -3880,7 +3880,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-importer"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "quick-xml",
  "remotejoe-core",
@@ -3896,7 +3896,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-ipc"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "libc",
  "memmap2",
@@ -3911,7 +3911,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-kdbx"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
@@ -3931,7 +3931,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-mcp"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "remotejoe-core",
  "serde_json",
@@ -3940,7 +3940,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-proxmox"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.4.3",
@@ -3955,7 +3955,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-snmp"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "remotejoe-core",
  "remotejoe-testkit",
@@ -3967,7 +3967,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-supervisor"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "libc",
  "remotejoe-ipc",
@@ -3976,7 +3976,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-tasks"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "regex",
  "remotejoe-core",
@@ -3988,7 +3988,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-testkit"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "des 0.8.1",
  "libc",
@@ -3997,7 +3997,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-tunnel"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "base64 0.22.1",
  "boringtun",
@@ -4015,7 +4015,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-ui"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "alacritty_terminal",
  "base64 0.22.1",
@@ -4054,7 +4054,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-update"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -4077,7 +4077,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-update-tool"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "remotejoe-update",
  "serde_json",
@@ -4086,7 +4086,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-worker-psrp"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -4102,7 +4102,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-worker-rdp"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "base64 0.22.1",
  "bindgen",
@@ -4124,7 +4124,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-worker-ssh"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "alacritty_terminal",
  "base64 0.22.1",
@@ -4146,7 +4146,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-worker-vnc"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "base64 0.22.1",
  "des 0.8.1",
@@ -4165,7 +4165,7 @@ dependencies = [
 
 [[package]]
 name = "remotejoe-worker-web"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "base64 0.22.1",
  "gtk",

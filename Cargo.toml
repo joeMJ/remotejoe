@@ -5,7 +5,7 @@ members = ["crates/*", "tools/update"]
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-version = "0.1.25"
+version = "0.1.26"
 authors = ["John Lose (joeMJ)"]
 publish = false
 
