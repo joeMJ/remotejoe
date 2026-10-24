@@ -151,6 +151,10 @@ if ($CleanPaths) {
 }
 
 Schritt 'Bauen'
+# Altes Paket vorher entfernen: Schlägt der Bau fehl, bleibt kein Paket zurück, aus dem build-msi.ps1 ein MSI mit
+# altem Programmstand machen könnte.
+$paketAlt = Join-Path $Root "target\$outName\remotejoe-paket"
+if (Test-Path $paketAlt) { Remove-Item $paketAlt -Recurse -Force }
 Ausfuehren 'cargo build' { cargo build @buildProfile --workspace }
 Ausfuehren 'cargo build (Web-Worker mit WebView2)' { cargo build @buildProfile -p remotejoe-worker-web --features webview }
 
@@ -184,4 +188,10 @@ $teile = foreach ($c in Get-ChildItem (Join-Path $inst 'share\*\copyright') -Err
 if (-not $teile) { Fehler 'Keine Lizenztexte unter vcpkg\installed\x64-windows\share gefunden.' 'vcpkg install wiederholen.' }
 Set-Content -Path (Join-Path $paket 'THIRD_PARTY_LICENSES-vcpkg.txt') -Value $teile -Encoding utf8
 Ausfuehren 'windeployqt' { & (Join-Path $qtBins 'windeployqt.exe') --translations de (Join-Path $paket 'remotejoe.exe') }
+# Marke erst ganz am Ende: Das Paket stammt aus einem erfolgreichen Bau dieses Stands (build-msi.ps1 prüft sie).
+$versionLine = Select-String -Path (Join-Path $Root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+$commit = (git -C $Root rev-parse HEAD).Trim()
+$geaendert = [bool](git -C $Root status --porcelain --untracked-files=no)
+Set-Content -Path (Join-Path $paket 'paket-ok.txt') -Encoding utf8 -Value @(
+    "version=$($versionLine.Matches[0].Groups[1].Value)", "commit=$commit", "geaendert=$($geaendert.ToString().ToLower())")
 Write-Host "Fertig: $paket" -ForegroundColor Green
