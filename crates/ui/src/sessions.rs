@@ -250,6 +250,8 @@ struct Session {
     last_activity: Instant,
     /// Hält den Bildspeicher einer Vorführsitzung am Leben.
     _demo_frame: Option<rj_ipc::shm::FrameBufferWriter>,
+    /// Administrativer Tastaturmodus (nur RDP, vorübergehend): Zeichen als Tastenfolgen.
+    admin: Option<crate::adminkeys::AdminKeys>,
 }
 
 
@@ -493,7 +495,7 @@ impl Manager {
         let id = self.next;
         self.next += 1;
         let view = (spec.protocol == Protocol::Ssh).then(|| blank_view(spec.request.width as usize, spec.request.height as usize, &self.scheme));
-        self.sessions.insert(id, Session { spec, worker: None, view, demo_term: None, state: String::new(), connected_at: None, attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None });
+        self.sessions.insert(id, Session { spec, worker: None, view, demo_term: None, state: String::new(), connected_at: None, attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None, admin: None });
         self.start(id);
         id
     }
@@ -542,7 +544,7 @@ impl Manager {
         term.set_scheme(self.scheme.clone());
         term.feed(content.as_bytes());
         let spec = demo_spec(title, Protocol::Ssh);
-        self.sessions.insert(id, Session { spec, worker: None, view: None, demo_term: Some(term), state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None });
+        self.sessions.insert(id, Session { spec, worker: None, view: None, demo_term: Some(term), state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None, admin: None });
         self.pending.push(UiEvent::State { s: id, state: "connected".into(), detail: String::new() });
         self.pending.push(UiEvent::Terminal { s: id });
         id
@@ -589,7 +591,7 @@ impl Manager {
         }
         let fd = fb.share_handle().map(into_raw).unwrap_or(-1);
         let spec = demo_spec(title, Protocol::Rdp);
-        self.sessions.insert(id, Session { spec, worker: None, view: None, demo_term: None, state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: Some(fb) });
+        self.sessions.insert(id, Session { spec, worker: None, view: None, demo_term: None, state: "connected".into(), connected_at: Some(std::time::SystemTime::now()), attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: Some(fb), admin: None });
         self.pending.push(UiEvent::State { s: id, state: "connected".into(), detail: String::new() });
         self.pending.push(UiEvent::SharedFrame { s: id, fd, w, h });
         self.pending.push(UiEvent::Frame { s: id, x: 0, y: 0, w, h });
@@ -662,9 +664,40 @@ impl Manager {
             }
             return;
         }
+        if let Some(admin) = self.sessions.get_mut(&s).and_then(|x| x.admin.as_mut()) {
+            for ev in admin.translate(qt_key, modifiers, text, down) {
+                self.send(s, &ToWorker::Input(ev));
+            }
+            return;
+        }
         if let Some(ev) = image_key_input(qt_key, modifiers, text, down) {
             self.send(s, &ToWorker::Input(ev));
         }
+    }
+
+    /// Administrativen Tastaturmodus ein (mit Belegung) oder aus. Beim Ausschalten wird alles Offene gelöst.
+    pub fn set_admin_keys(&mut self, s: SessionId, layout: Option<crate::adminkeys::Layout>) -> Result<(), String> {
+        let sess = self.sessions.get_mut(&s).ok_or("Sitzung nicht gefunden")?;
+        if layout.is_some() && sess.spec.protocol != Protocol::Rdp {
+            return Err("Nur für RDP-Sitzungen".into());
+        }
+        let release = sess.admin.take().map(|mut a| a.release_all()).unwrap_or_default();
+        sess.admin = layout.map(crate::adminkeys::AdminKeys::new);
+        for ev in release {
+            self.send(s, &ToWorker::Input(ev));
+        }
+        Ok(())
+    }
+
+    pub fn admin_keys(&self, s: SessionId) -> Option<&str> {
+        self.sessions.get(&s).and_then(|x| x.admin.as_ref()).map(|a| a.layout.klid.as_str())
+    }
+
+    /// Tastaturbelegung am Ziel (RDP-Option `keyboard_layout`), falls eingetragen.
+    pub fn keyboard_layout(&self, s: SessionId) -> Option<String> {
+        let x = self.sessions.get(&s)?;
+        let o: serde_json::Value = serde_json::from_str(&x.spec.request.options_json).ok()?;
+        o.get("keyboard_layout").and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
     }
 
     pub fn mouse(&mut self, s: SessionId, x: i32, y: i32, button: Option<MouseButton>, down: bool) {
@@ -971,6 +1004,8 @@ impl Manager {
     fn start_auto_keys(&mut self, s: SessionId) {
         let Some(x) = self.sessions.get_mut(&s) else { return };
         x.connect_count += 1;
+        // Neue Verbindung: der administrative Tastaturmodus beginnt immer aus.
+        x.admin = None;
         let (n, automatic) = (x.connect_count, std::mem::take(&mut x.auto_reconnect));
         x.auto = None;
         if !matches!(x.spec.protocol, Protocol::Rdp | Protocol::Ssh) {

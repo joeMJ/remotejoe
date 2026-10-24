@@ -638,6 +638,9 @@ impl App {
                 "connect_all_parallel": self.config.connection.connect_all_parallel,
                 "keyboard_capture": self.config.connection.keyboard_capture,
                 "close_tab_key": self.config.connection.close_tab_key,
+                "admin_keys_layout": self.config.connection.admin_keys_layout,
+                "admin_keys_timeout_mins": self.config.connection.admin_keys_timeout_mins,
+                "admin_keys_layouts": crate::adminkeys::NAMES.iter().map(|(k, n)| json!({ "klid": k, "name": n, "available": crate::adminkeys::Layout::find(crate::adminkeys::builtin(), k).is_some() })).collect::<Vec<_>>(),
                 "aruba_tools": self.config.features.aruba,
                 "aruba_clients_warn": self.config.features.aruba_clients_warn,
                 "aruba_clients_crit": self.config.features.aruba_clients_crit,
@@ -659,6 +662,12 @@ impl App {
                 }
                 if let Some(k) = c.get("close_tab_key").and_then(Value::as_str).filter(|k| matches!(*k, "outside" | "always" | "never")) {
                     self.config.connection.close_tab_key = k.to_string();
+                }
+                if let Some(k) = c.get("admin_keys_layout").and_then(Value::as_str).filter(|k| crate::adminkeys::NAMES.iter().any(|(n, _)| n == k)) {
+                    self.config.connection.admin_keys_layout = k.to_string();
+                }
+                if let Some(n) = c.get("admin_keys_timeout_mins").and_then(Value::as_u64) {
+                    self.config.connection.admin_keys_timeout_mins = n.min(24 * 60) as u32;
                 }
                 if let Some(b) = c.get("aruba_tools").and_then(Value::as_bool) {
                     self.config.features.aruba = b;
@@ -734,6 +743,7 @@ impl App {
             "mcp_settings" => Ok(self.mcp_settings_json()),
             "set_mcp_settings" => self.mcp_apply_settings(&c),
             "mcp_log" => Ok(self.mcp_log_json()),
+            "admin_keys" => self.admin_keys_op(&c),
             "credcheck_rows" => Ok(self.credcheck_rows()),
             "credcheck_cancel" => Ok(self.credcheck_cancel()),
             "credmerge_list" => Ok(self.credmerge_list(&c)),
@@ -2351,6 +2361,28 @@ fn link(index: &mut Index, id: Uuid, f: impl FnOnce(&mut rj_core::Meta)) -> Resu
     let (_, meta) = edit_target(index, id).ok_or(EditError::NotFound)?;
     f(meta);
     Ok(())
+}
+
+impl App {
+    /// Administrativer Tastaturmodus einer RDP-Sitzung: `{session, on}`. Belegung: die des Ziels
+    /// (`keyboard_layout`), sonst die aus den Einstellungen. Antwort mit Belegung und Abschaltzeit.
+    fn admin_keys_op(&mut self, c: &Value) -> Result<Value, String> {
+        let s = c.get("session").and_then(Value::as_u64).ok_or("Sitzung fehlt")?;
+        if !c.get("on").and_then(Value::as_bool).unwrap_or(false) {
+            self.sessions.set_admin_keys(s, None)?;
+            return Ok(json!({ "on": false }));
+        }
+        let klid = self
+            .sessions
+            .keyboard_layout(s)
+            .and_then(|k| crate::adminkeys::klid_of(&k))
+            .unwrap_or_else(|| self.config.connection.admin_keys_layout.clone());
+        let layout = crate::adminkeys::Layout::find(crate::adminkeys::builtin(), &klid)
+            .cloned()
+            .ok_or_else(|| format!("Für die Tastaturbelegung „{}“ gibt es keine Tabelle", crate::adminkeys::name_of(&klid)))?;
+        self.sessions.set_admin_keys(s, Some(layout))?;
+        Ok(json!({ "on": true, "klid": klid, "name": crate::adminkeys::name_of(&klid), "timeout_mins": self.config.connection.admin_keys_timeout_mins }))
+    }
 }
 
 #[cfg(test)]

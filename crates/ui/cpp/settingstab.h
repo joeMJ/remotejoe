@@ -83,6 +83,8 @@ private:
 	// Tastatur
 	QCheckBox* m_keyCapture = nullptr;
 	QComboBox* m_closeTab = nullptr;
+	QComboBox* m_adminLayout = nullptr;
+	QSpinBox* m_adminTimeout = nullptr;
 	QCheckBox* m_aruba = nullptr;
 	QSpinBox* m_clientsWarn = nullptr;
 	QSpinBox* m_clientsCrit = nullptr;

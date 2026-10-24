@@ -300,6 +300,14 @@ mod imp {
                                 }
                             }
                         }
+                        InputEvent::Scancodes(seq) => {
+                            for (sc, down) in seq {
+                                if std::env::var_os("RJ_KEYLOG").is_some() {
+                                    eprintln!("[remotejoe-rdp] Tastenfolge Scancode 0x{sc:x} {}", if down { "gedrückt" } else { "losgelassen" });
+                                }
+                                s.send_scancode(sc, down);
+                            }
+                        }
                         InputEvent::Bytes(_) => {}
                         InputEvent::MouseMove { x, y } => s.send_mouse(mouse::MOVE, x.max(0) as u16, y.max(0) as u16),
                         InputEvent::MouseButton { x, y, button, down } => {

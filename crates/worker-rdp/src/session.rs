@@ -444,6 +444,12 @@ impl RdpSession {
         }
     }
 
+    /// Scancode unmittelbar senden (Set 1, `0x100` = E0-Präfix).
+    pub fn send_scancode(&mut self, scancode: u32, down: bool) {
+        // SAFETY: gültige Sitzung.
+        unsafe { ffi::rj_rdp_send_scancode(self.raw, scancode, down as i32) };
+    }
+
     pub fn send_key(&mut self, keysym: u32, down: bool) -> bool {
         match crate::keymap::scancode(keysym) {
             Some(sc) => {

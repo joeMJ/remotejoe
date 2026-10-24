@@ -58,6 +58,15 @@ public:
 	inline static std::function<void(const QString&)> s_notice;
 	/// Bildpunkt der Gegenstelle in Koordinaten dieses Widgets.
 	QPoint toLocal(const QPoint& remote) const;
+	/// Administrativer Tastaturmodus (RDP): Anzeige und Abschaltzeit; die Übersetzung macht das Backend. Beim
+	/// Einschalten werden vorher alle gedrückten Tasten gelöst. `timeoutMins` 0 = kein Abschalten.
+	void setAdminKeys(bool on, int timeoutMins = 0, const QString& layoutName = QString());
+	bool adminKeys() const { return m_adminKeys; }
+	QString adminLayout() const { return m_adminLayout; }
+	/// Zeitpunkt des Einschaltens (ms seit Epoche), für das anfängliche Blinken des Symbols.
+	qint64 adminSince() const { return m_adminSince; }
+	/// Abschalten nach Zeit ohne Eingabe (setzt das Hauptfenster).
+	inline static std::function<void(FrameView*)> s_adminTimeout;
 
 protected:
 	void paintEvent(QPaintEvent*) override;
@@ -87,6 +96,10 @@ private:
 	void sendBounds();
 	bool m_web = false;
 	bool m_embedded = false;
+	bool m_adminKeys = false;
+	QString m_adminLayout;
+	qint64 m_adminSince = 0;
+	QTimer* m_adminIdle = nullptr;
 	QSet<std::uint32_t> m_pressed;
 	/// Rechte Strg-Taste gedrückt und noch keine andere Taste dazu (Notausgang).
 	bool m_rightCtrlAlone = false;
@@ -203,6 +216,7 @@ public:
 	std::uint64_t session() const { return m_session; }
 	QString title() const { return m_title; }
 	QString state() const { return m_state; }
+	QString protocol() const { return m_protocol; }
 	/// Öffnet den Editor eines Makros (setzt das Hauptfenster).
 	void setMacroOpener(std::function<void(const QString&)> opener) { m_openMacro = std::move(opener); }
 	/// Ergebnis eines Makrolaufs in der Kopfzeile anzeigen.
@@ -245,6 +259,7 @@ private:
 	RjBackend* m_backend;
 	std::uint64_t m_session;
 	QString m_title;
+	QString m_protocol;
 	QString m_state;
 	std::function<void(const QString&)> m_openMacro;
 	QLabel* m_macroState = nullptr;

@@ -35,6 +35,7 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 - [`docs/BAUEN.md`](docs/BAUEN.md) – remotejoe unter Ubuntu und Windows bauen
 - [`docs/DATENSCHUTZ.md`](docs/DATENSCHUTZ.md) – Datenschutz und Netzwerkzugriffe
 - [`docs/MCP.md`](docs/MCP.md) – Claude-Anbindung (MCP): remotejoe als Werkzeug für Claude Desktop
+- [`docs/TASTATUR.md`](docs/TASTATUR.md) – Tastatur in RDP-Sitzungen, administrativer Tastaturmodus für Fenster „als Administrator“
 - [`docs/ZIELE-EINRICHTEN.md`](docs/ZIELE-EINRICHTEN.md) – Windows-Ziele für RDP und PowerShell-Remoting einrichten (mit Skripten unter [`tools/ziel-einrichten/`](tools/ziel-einrichten/))
 - [`THIRD_PARTY.md`](THIRD_PARTY.md) – verwendete Bibliotheken Dritter mit Lizenzen
 

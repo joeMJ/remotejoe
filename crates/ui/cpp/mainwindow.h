@@ -189,6 +189,10 @@ private:
 	void addToolTab(ToolTab* t, const QString& title);
 	void closeToolTab(ToolTab* t);
 	void tabContextMenu(QTabWidget* tabs, const QPoint& pos);
+	/// Administrativer Tastaturmodus einer RDP-Sitzung ein/aus (`reason`: Hinweis beim automatischen Abschalten).
+	void setAdminKeys(SessionPane* pane, bool on, const QString& reason = QString());
+	/// Tastatursymbol neben dem Tab-Symbol aller Tabs mit eingeschaltetem Modus.
+	void updateAdminIndicators();
 	void configureTabBar(QTabWidget* tabs);
 	void buildAddMenu(QMenu* menu, const QString& parentId);
 	QString edit(const QJsonObject& cmd);

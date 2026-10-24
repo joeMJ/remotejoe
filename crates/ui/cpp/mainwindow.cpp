@@ -881,6 +881,11 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		m_closeTabKey = st.value(QStringLiteral("close_tab_key")).toString(QStringLiteral("outside"));
 	}
 	FrameView::s_notice = [this](const QString& m) { statusBar()->showMessage(m, 8000); };
+	FrameView::s_adminTimeout = [this](FrameView* f) {
+		for (SessionPane* p : std::as_const(m_panes))
+			if (p->frame() == f)
+				setAdminKeys(p, false, T(m_backend, "adminkeys.off.idle"));
+	};
 	statusBar()->showMessage(T(m_backend, "status.ready"));
 	// Fußzeile rechts: womit, wohin, seit wann, als wer.
 	m_connInfo = new QWidget(this);
@@ -2639,7 +2644,129 @@ void MainWindow::tabContextMenu(QTabWidget* tabs, const QPoint& pos)
 				rebuildTabs();
 		});
 	}
+	// Administrativer Tastaturmodus für jede RDP-Sitzung im Tab (vorübergehend, nur diese Sitzung).
+	QList<SessionPane*> rdp;
+	// SessionPane hat kein Q_OBJECT: über alle Kind-Widgets suchen.
+	for (QWidget* c : tabs->widget(idx)->findChildren<QWidget*>())
+		if (auto* p = dynamic_cast<SessionPane*>(c); p && p->protocol() == QLatin1String("rdp") && p->frame())
+			rdp << p;
+	if (!rdp.isEmpty())
+	{
+		menu.addSeparator();
+		menu.setToolTipsVisible(true);
+		for (SessionPane* p : rdp)
+		{
+			QAction* a = menu.addAction(rdp.size() == 1 ? T(m_backend, "adminkeys.menu") : T(m_backend, "adminkeys.menu.named").arg(p->title()));
+			a->setCheckable(true);
+			a->setChecked(p->frame()->adminKeys());
+			a->setToolTip(T(m_backend, "adminkeys.tip"));
+			QPointer<SessionPane> guard(p);
+			connect(a, &QAction::triggered, this, [this, guard](bool on) {
+				if (guard)
+					setAdminKeys(guard, on);
+			});
+		}
+	}
 	menu.exec(tabs->tabBar()->mapToGlobal(pos));
+}
+
+void MainWindow::setAdminKeys(SessionPane* pane, bool on, const QString& reason)
+{
+	FrameView* f = pane ? pane->frame() : nullptr;
+	if (!f)
+		return;
+	auto call = [this, pane](bool enable) {
+		const QJsonObject cmd{ { QStringLiteral("op"), QStringLiteral("admin_keys") }, { QStringLiteral("session"), qint64(pane->session()) }, { QStringLiteral("on"), enable } };
+		return parseObject(m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact))));
+	};
+	if (on)
+	{
+		// Erst lokal einschalten (löst gedrückte Tasten noch im bisherigen Modus), dann im Backend.
+		f->setAdminKeys(true);
+		const QJsonObject r = call(true);
+		if (r.contains(QStringLiteral("error")))
+		{
+			f->setAdminKeys(false);
+			statusBar()->showMessage(r.value(QStringLiteral("error")).toString(), 10000);
+		}
+		else
+		{
+			const QString name = r.value(QStringLiteral("name")).toString();
+			f->setAdminKeys(true, r.value(QStringLiteral("timeout_mins")).toInt(), name);
+			statusBar()->showMessage(T(m_backend, "adminkeys.on").arg(name), 10000);
+		}
+	}
+	else if (f->adminKeys())
+	{
+		call(false);
+		f->setAdminKeys(false);
+		statusBar()->showMessage(reason.isEmpty() ? T(m_backend, "adminkeys.off") : reason, 10000);
+	}
+	updateAdminIndicators();
+}
+
+void MainWindow::updateAdminIndicators()
+{
+	static const QString objName = QStringLiteral("rjAdminKeys");
+	const QColor orange(QStringLiteral("#e07000"));
+	auto pixmap = [&](qreal dpr) {
+		const QString svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><g fill='none' stroke='%1' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'>"
+		                                   "<rect x='3' y='8' width='26' height='17' rx='2.5'/><path d='M8 13h1M12 13h1M16 13h1M20 13h1M24 13h1M8 17h1M12 17h1M16 17h1M20 17h1M24 17h1M11 21h10'/></g></svg>")
+		                        .arg(orange.name());
+		QPixmap pm(QSize(16, 16) * dpr);
+		pm.fill(Qt::transparent);
+		QPainter p(&pm);
+		QSvgRenderer(svg.toUtf8()).render(&p);
+		pm.setDevicePixelRatio(dpr);
+		return pm;
+	};
+	for (QWidget* top : QApplication::topLevelWidgets())
+		for (QTabWidget* tw : top->findChildren<QTabWidget*>())
+			for (int i = 0; i < tw->count(); ++i)
+			{
+				FrameView* on = nullptr;
+				for (QWidget* c : tw->widget(i)->findChildren<QWidget*>())
+					if (auto* p = dynamic_cast<SessionPane*>(c); p && p->frame() && p->frame()->adminKeys())
+						on = p->frame();
+				auto* existing = qobject_cast<QLabel*>(tw->tabBar()->tabButton(i, QTabBar::LeftSide));
+				const bool ours = existing && existing->objectName() == objName;
+				if (!on)
+				{
+					if (ours)
+					{
+						tw->tabBar()->setTabButton(i, QTabBar::LeftSide, nullptr);
+						existing->deleteLater();
+					}
+					continue;
+				}
+				QLabel* label = ours ? existing : new QLabel;
+				label->setToolTip(T(m_backend, "adminkeys.badge").arg(on->adminLayout()));
+				if (ours)
+					continue;
+				label->setObjectName(objName);
+				const QPixmap pm = pixmap(tw->devicePixelRatioF());
+				label->setPixmap(pm);
+				label->setFixedSize(18, 16);
+				tw->tabBar()->setTabButton(i, QTabBar::LeftSide, label);
+				// Die ersten Sekunden nach dem Einschalten blinken, danach ruhig orange.
+				const qint64 until = on->adminSince() + 4000;
+				if (QDateTime::currentMSecsSinceEpoch() < until)
+				{
+					auto* blink = new QTimer(label);
+					blink->setInterval(350);
+					connect(blink, &QTimer::timeout, label, [label, blink, pm, until] {
+						if (QDateTime::currentMSecsSinceEpoch() >= until)
+						{
+							label->setPixmap(pm);
+							blink->stop();
+							blink->deleteLater();
+							return;
+						}
+						label->setPixmap(label->pixmap().isNull() ? pm : QPixmap());
+					});
+					blink->start();
+				}
+			}
 }
 
 void MainWindow::showUnlock(bool locked)
@@ -2980,6 +3107,7 @@ void MainWindow::rebuildTabs()
 	}
 	updateStatus();
 	updateSessionMarks();
+	updateAdminIndicators();
 }
 
 QWidget* MainWindow::detachedWindow() const
@@ -3145,6 +3273,9 @@ void MainWindow::handleEvents(const QString& json)
 			{
 				if (p)
 					p->setState(e.value(QStringLiteral("state")).toString(), e.value(QStringLiteral("detail")).toString());
+				// Verbindung getrennt oder im Neuaufbau: der administrative Tastaturmodus endet.
+				if (p && p->frame() && p->frame()->adminKeys() && e.value(QStringLiteral("state")).toString() != QLatin1String("connected"))
+					setAdminKeys(p, false, T(m_backend, "adminkeys.off.state"));
 				updateNotice();
 				updateStatus();
 				updateSessionMarks();

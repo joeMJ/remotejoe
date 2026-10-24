@@ -88,6 +88,9 @@ pub enum InputEvent {
     Bytes(Vec<u8>),
     MouseMove { x: i32, y: i32 },
     MouseButton { x: i32, y: i32, button: MouseButton, down: bool },
+    /// Feste Folge von RDP-Scancodes (Set 1, `0x100` = E0-Präfix) mit gedrückt/losgelassen: administrativer
+    /// Tastaturmodus (Zeichen als Tastendrücke statt Unicode).
+    Scancodes(Vec<(u32, bool)>),
 }
 
 /// Nachrichten an den Worker.
@@ -366,6 +369,7 @@ mod tests {
     fn old_messages_keep_their_encoding() {
         assert_eq!(enc(&ToWorker::Answer { question: 1, accept: true }), [2, 1, 1]);
         assert_eq!(enc(&ToWorker::Input(InputEvent::Bytes(vec![9]))), [3, 2, 1, 9]);
+        assert_eq!(enc(&ToWorker::Input(InputEvent::Scancodes(vec![(0x2A, true)])))[..2], [3, 5]);
         assert_eq!(enc(&ToWorker::Resize { width: 80, height: 24 }), [4, 80, 24]);
         assert_eq!(enc(&ToWorker::Ping), [6]);
         assert_eq!(enc(&ToWorker::Shutdown), [7]);
