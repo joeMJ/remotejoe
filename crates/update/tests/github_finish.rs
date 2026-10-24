@@ -23,6 +23,8 @@ struct State {
     /// Hochgeladene Dateien wie auf GitHub danach als Anhang führen (Zusatzdateien).
     keep_uploads: bool,
     deleted: Vec<String>,
+    /// So viele Abrufe der Liste mit „503“ beantworten (vorübergehende Störung).
+    fail_lists: u32,
 }
 
 struct Mock {
@@ -69,7 +71,10 @@ fn start() -> Mock {
             if let Some(a) = head.lines().find(|l| l.to_lowercase().starts_with("authorization:")) {
                 g.auth_seen.push(a.to_string());
             }
-            let (status, ctype, out): (u16, &str, Vec<u8>) = if method == "GET" && path.starts_with("/repos/o/r/releases?") {
+            let (status, ctype, out): (u16, &str, Vec<u8>) = if method == "GET" && path.starts_with("/repos/o/r/releases?") && g.fail_lists > 0 {
+                g.fail_lists -= 1;
+                (503, "text/plain", Vec::new())
+            } else if method == "GET" && path.starts_with("/repos/o/r/releases?") {
                 let mut assets: Vec<serde_json::Value> = g
                     .files
                     .keys()
@@ -203,4 +208,26 @@ fn extra_file_is_attached_listed_in_sums_and_signed() {
     assert_eq!(sign::sums_lookup(&new_sums, &name).unwrap(), sign::sha256_hex(b"Archiv-Inhalt"));
     let sig = &g.uploaded.iter().find(|(n, _)| n == SIG).unwrap().1;
     sign::verify(&key.verifying_key(), &new_sums, sig).unwrap();
+}
+
+#[test]
+fn temporary_errors_while_waiting_do_not_abort() {
+    let m = start();
+    let key = sign::generate().unwrap();
+    let name = "remotejoe-1.2.3-linux-x86_64.tar.zst".to_string();
+    {
+        let mut g = m.state.lock().unwrap();
+        g.fail_lists = 1;
+        g.files.insert(name.clone(), b"paket".to_vec());
+        g.files.insert(SUMS.into(), sign::sums_text(&[(name, sign::sha256_hex(b"paket"))]).into_bytes());
+    }
+    // Erster Abruf: 503; danach geht es weiter und die Veröffentlichung gelingt.
+    let f = finish_release(&ep(&m), "o/r", "v1.2.3", TOKEN, &key, &key.verifying_key(), Duration::from_secs(30), None).unwrap();
+    assert_eq!(f.tag, "v1.2.3");
+    assert!(!m.state.lock().unwrap().draft);
+    // Bleibt die Störung bis zur Frist, endet das Warten mit Zeitlimit statt mit dem Netzfehler.
+    let m = start();
+    m.state.lock().unwrap().fail_lists = 1000;
+    let e = finish_release(&ep(&m), "o/r", "v1.2.3", TOKEN, &key, &key.verifying_key(), Duration::from_millis(1), None).unwrap_err();
+    assert!(matches!(e, UpdateError::Timeout), "{e}");
 }

@@ -147,7 +147,21 @@ pub fn finish_release_with(
     let version = Version::parse(tag)?;
     let deadline = Instant::now() + wait;
     let (id, release) = loop {
-        match find_draft(ep, repo, tag, token, cancel)? {
+        // Störungen beim Warten (Netz, Zeitlimit einer Anfrage, Serverfehler, Drosselung) beenden das Warten nicht;
+        // erst die Frist entscheidet. Andere Fehler (Anmeldung, unlesbare Antwort) brechen sofort ab.
+        let found = match find_draft(ep, repo, tag, token, cancel) {
+            Ok(f) => f,
+            Err(e @ (UpdateError::Net(_) | UpdateError::Timeout)) => {
+                eprintln!("Hinweis beim Warten: {e} – erneuter Versuch.");
+                None
+            }
+            Err(e @ UpdateError::Status { status, .. }) if status >= 500 || status == 429 => {
+                eprintln!("Hinweis beim Warten: {e} – erneuter Versuch.");
+                None
+            }
+            Err(e) => return Err(e),
+        };
+        match found {
             Some((id, r)) if r.draft && r.assets.iter().any(|a| a.name == SUMS) && r.assets.iter().any(|a| a.name.starts_with("remotejoe-") && a.name != SUMS) => break (id, r),
             Some((_, r)) if !r.draft => return Err(UpdateError::Install(format!("Die Veröffentlichung {tag} ist schon veröffentlicht."))),
             _ => {}
