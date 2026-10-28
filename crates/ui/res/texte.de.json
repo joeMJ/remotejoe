@@ -1045,6 +1045,7 @@
   "adminkeys.badge": "Administrativer Tastaturmodus an (%1): Zeichen gehen als Tastendrücke. Nach Gebrauch abschalten (Rechtsklick auf den Tab).",
   "adminkeys.on": "Administrativer Tastaturmodus an (%1) – nach Gebrauch wieder abschalten.",
   "adminkeys.off": "Administrativer Tastaturmodus aus.",
+  "adminkeys.foot": "⌨ Administrativer Tastaturmodus: %1",
   "adminkeys.off.idle": "Administrativer Tastaturmodus nach längerer Zeit ohne Eingabe abgeschaltet.",
   "adminkeys.off.state": "Administrativer Tastaturmodus aus (Verbindung getrennt oder neu aufgebaut).",
   "settings.adminkeys.layout": "Belegung im administrativen Tastaturmodus",
