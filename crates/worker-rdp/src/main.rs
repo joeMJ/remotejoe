@@ -121,10 +121,15 @@ mod imp {
 
     /// Windows: Winsock starten (sonst scheitert in FreeRDP jede Adressauflösung, auch für IP-Adressen, als
     /// „DNS host name was not found“) und OpenSSL den LEGACY-Provider (legacy.dll, RC4/MD4) im Programmordner
-    /// suchen lassen statt im beim Bau eingetragenen Pfad.
+    /// suchen lassen statt im beim Bau eingetragenen Pfad. libcrypto liest die Variable über getenv() der UCRT,
+    /// deren Kopie der Umgebung set_var (SetEnvironmentVariableW) nicht erreicht; daher zusätzlich _wputenv_s.
     #[cfg(windows)]
     fn windows_init() {
+        use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Networking::WinSock::{WSAStartup, WSADATA};
+        extern "C" {
+            fn _wputenv_s(name: *const u16, value: *const u16) -> i32;
+        }
         let mut data: WSADATA = unsafe { std::mem::zeroed() };
         let rc = unsafe { WSAStartup(0x0202, &mut data) };
         if rc != 0 {
@@ -132,7 +137,12 @@ mod imp {
         }
         if std::env::var_os("OPENSSL_MODULES").is_none() {
             if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
-                std::env::set_var("OPENSSL_MODULES", dir);
+                std::env::set_var("OPENSSL_MODULES", &dir);
+                let wide = |s: &std::ffi::OsStr| s.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+                let (name, value) = (wide("OPENSSL_MODULES".as_ref()), wide(dir.as_os_str()));
+                if unsafe { _wputenv_s(name.as_ptr(), value.as_ptr()) } != 0 {
+                    eprintln!("OPENSSL_MODULES nicht gesetzt");
+                }
             }
         }
     }
