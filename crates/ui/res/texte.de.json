@@ -821,7 +821,7 @@
   "aruba.clients.over": "%1 Anwender – Schwelle %2 erreicht",
   "settings.features.sum.none": "Keine zugeschaltet",
   "settings.mcp": "Claude-Anbindung (MCP)",
-  "settings.mcp.privacy": "Datenschutz: Alles, was Claude über diese Anbindung liest, geht als Gesprächsinhalt an den Claude-Dienst von Anthropic – Zielnamen, Ordnernamen (z. B. Schulen und Orte), Adressen, Seriennummern und Inventar. Zugangsdaten, Benutzernamen, Notizen und andere Inhalte der Schlüsseldatenbank gehen nie hinaus. Gib nur Ordner frei, deren Inhalt du so weitergeben darfst, und blende Adressen und Seriennummern bei Bedarf aus.",
+  "settings.mcp.privacy": "Datenschutz: Alles, was Claude über diese Anbindung liest, geht als Gesprächsinhalt an den Claude-Dienst von Anthropic – Zielnamen, Ordnernamen, Adressen, Seriennummern und Inventar. Zugangsdaten, Benutzernamen, Notizen und andere Inhalte der Schlüsseldatenbank gehen nie hinaus. Gib nur Ordner frei, deren Inhalt du so weitergeben darfst, und blende Adressen und Seriennummern bei Bedarf aus.",
   "settings.mcp.enabled": "Claude-Anbindung einschalten (Claude Desktop kann remotejoe abfragen)",
   "settings.mcp.hide.addr": "IP- und MAC-Adressen gegenüber Claude ausblenden",
   "settings.mcp.hide.serial": "Seriennummern gegenüber Claude ausblenden",

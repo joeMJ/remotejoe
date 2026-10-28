@@ -216,7 +216,7 @@ pub fn plan(doc: &SourceDocument, title: &str) -> ImportPlan {
         }
     }
     attach(&mut top, None, &mut children, 0);
-    // Übrig sind Objekte, deren Elternverweise einen Kreis bilden oder die zu
+    // Übrig sind Objekte, deren Elternverweise einen Zyklus bilden oder die zu
     // tief verschachtelt sind: oben einordnen statt still verlieren.
     let mut moved = 0;
     while let Some(k) = children.keys().next().cloned() {

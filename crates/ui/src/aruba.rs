@@ -324,7 +324,7 @@ pub fn ap_json(outputs: &[String], name: &str, ip: &str) -> Value {
 pub fn demo() -> (Value, Value) {
     // Namensspalte 30 Zeichen breit wie bei langen AP-Namen am Gerät.
     let mut rows = String::from("Name                          IP Address       Mode    Spectrum  Clients  Type         Serial #\n----                          ----------       ----    --------  -------  ----         --------\n");
-    let named = [(3, "aula"), (4, "mensa"), (7, "lehrerzimmer-altbau-og2-AP07")];
+    let named = [(3, "flur"), (4, "halle"), (7, "besprechung1-altbau-og2-AP07")];
     let off = [16, 21, 23];
     let clients = [0, 12, 5, 31, 18, 0, 3, 9, 14, 2, 0, 7, 11, 6, 0, 4, 0, 8, 1, 22, 3, 0, 5, 0];
     let mut config = String::from("version 8.10.0.0-8.10.0\n");
@@ -349,8 +349,8 @@ pub fn demo() -> (Value, Value) {
         String::new(),
         "ArubaOS (MODEL: 515), Version 8.10.0.23 LSR\nAP uptime is 3 days 4 hours 12 minutes 2 seconds".to_string(),
         "bond0 is up\nHardware is Ethernet, address is 02:00:5e:00:41:37".to_string(),
-        "Profile Name  ESSID       Clients  Type      Band  Authentication Method\n------------  -----       -------  ----      ----  ---------------------\nschule-1x     Schule      9        employee  all   802.1x\ngast          Gast-WLAN   3        guest     all   None".to_string(),
-        "Name        IP Address    MAC Address        OS     ESSID      Access Point       Channel\n----        ----------    -----------        --     -----      ------------       -------\nanna        198.51.100.5  02:00:5e:00:10:01  Win10  Schule     02:00:5e:00:41:37  36E\nbernd       198.51.100.6  02:00:5e:00:10:02  iOS    Gast-WLAN  02:00:5e:00:41:37  1\nclara       198.51.100.9  02:00:5e:00:10:03  Win11  Schule     02:00:5e:00:41:37  36E".to_string(),
+        "Profile Name  ESSID       Clients  Type      Band  Authentication Method\n------------  -----       -------  ----      ----  ---------------------\nintern-1x     Intern      9        employee  all   802.1x\ngast          Gast-WLAN   3        guest     all   None".to_string(),
+        "Name        IP Address    MAC Address        OS     ESSID      Access Point       Channel\n----        ----------    -----------        --     -----      ------------       -------\nanna        198.51.100.5  02:00:5e:00:10:01  Win10  Intern     02:00:5e:00:41:37  36E\nbernd       198.51.100.6  02:00:5e:00:10:02  iOS    Gast-WLAN  02:00:5e:00:41:37  1\nclara       198.51.100.9  02:00:5e:00:10:03  Win11  Intern     02:00:5e:00:41:37  36E".to_string(),
     ];
     let mut ap = ap_json(&outputs, "02:00:5e:00:41:37", "192.0.2.182");
     ap["at"] = json!(crate::overview::inventory::now());
@@ -394,8 +394,8 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
             String::new(),
             "ArubaOS (MODEL: 515), Version 8.10.0.23 LSR\nAP uptime is 3 hours 56 minutes 26 seconds".to_string(),
             "eth0 is up, line protocol is up\nHardware is Gigabit Ethernet, address is 02:00:5E:00:53:12\nbond0 is up\nHardware is Ethernet, address is 02:00:5e:00:53:99".to_string(),
-            "Networks\n--------\nProfile Name  ESSID       Clients  Type      Band  Authentication Method\n------------  -----       -------  ----      ----  ---------------------\nschule-1x     Schule      7        employee  all   802.1x\ngast          Gast-WLAN   2        guest     all   None".to_string(),
-            "Client List\n-----------\nName        IP Address    MAC Address        OS     ESSID   Access Point       Channel\n----        ----------    -----------        --     -----   ------------       -------\nanna        198.51.100.5  02:00:5e:00:10:01  Win10  Schule  02:00:5e:00:53:12  36E\nbernd       198.51.100.6  02:00:5e:00:10:02  iOS    Gast    andere-ap          1".to_string(),
+            "Networks\n--------\nProfile Name  ESSID       Clients  Type      Band  Authentication Method\n------------  -----       -------  ----      ----  ---------------------\nintern-1x     Intern      7        employee  all   802.1x\ngast          Gast-WLAN   2        guest     all   None".to_string(),
+            "Client List\n-----------\nName        IP Address    MAC Address        OS     ESSID   Access Point       Channel\n----        ----------    -----------        --     -----   ------------       -------\nanna        198.51.100.5  02:00:5e:00:10:01  Win10  Intern  02:00:5e:00:53:12  36E\nbernd       198.51.100.6  02:00:5e:00:10:02  iOS    Gast    andere-ap          1".to_string(),
         ];
         let a = ap_json(&outputs, "02:00:5e:00:53:12", "192.0.2.210");
         assert_eq!(a["mac"], "02:00:5e:00:53:99", "bond0 vor eth0");
@@ -409,11 +409,11 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
 
     #[test]
     fn show_network_and_empty_client_list_as_on_the_test_ap() {
-        let net = "Networks\r\n--------\r\nProfile Name     ESSID            Clients  Type      Band          Authentication Method  Key Management  IP Assignment  Status   Zone  Coding   Active  Max IPv4 Users\r\n------------     -----            -------  ----      ----          ---------------------  --------------  -------------  ------   ----  ------   ------  -------------\r\nPROBESCHULE      PROBESCHULE      0        employee  2.4ghz,5ghz   None                   WPA2-AES        Default VLAN   Enabled  -     Default  Yes     N/A\r\nson-selfservice  son-selfservice  0        employee  2.4ghz        None                   none            VLAN 23        Enabled  -     Default  Yes     N/A";
+        let net = "Networks\r\n--------\r\nProfile Name     ESSID            Clients  Type      Band          Authentication Method  Key Management  IP Assignment  Status   Zone  Coding   Active  Max IPv4 Users\r\n------------     -----            -------  ----      ----          ---------------------  --------------  -------------  ------   ----  ------   ------  -------------\r\nTESTNETZ-01      TESTNETZ-01      0        employee  2.4ghz,5ghz   None                   WPA2-AES        Default VLAN   Enabled  -     Default  Yes     N/A\r\nmitarbeiter-net  mitarbeiter-net  0        employee  2.4ghz        None                   none            VLAN 23        Enabled  -     Default  Yes     N/A";
         let t = table_json(net, &["Profile Name"]);
         assert_eq!(t["columns"][7], "IP Assignment");
         assert_eq!(t["rows"][0][7], "Default VLAN", "Wert mit Leerzeichen bleibt ganz");
-        assert_eq!(t["rows"][1][1], "son-selfservice");
+        assert_eq!(t["rows"][1][1], "mitarbeiter-net");
         assert_eq!(t["rows"].as_array().unwrap().len(), 2);
         let cl = "\r\nClient List\r\n-----------\r\nName  IP Address  MAC Address  OS  ESSID  Access Point  Channel  Type  Role  IPv6 Address  Signal  Speed (mbps)  \r\n----  ----------  -----------  --  -----  ------------  -------  ----  ----  ------------  ------  ------------  \r\nNumber of Clients   :0\r\nInfo timestamp      :72853";
         let c = table_json(cl, &["IP Address", "MAC Address"]);
@@ -458,7 +458,7 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
 
     #[test]
     fn named_aps_make_offline_assignment_uncertain_and_no_allowed_list_means_unknown() {
-        let named = SHOW_APS.replace("02:00:5e:00:53:13  ", "aula               ");
+        let named = SHOW_APS.replace("02:00:5e:00:53:13  ", "flur               ");
         let c = cluster_json(&named, CONFIG, "", "192.0.2.200");
         assert_eq!(c["offline_uncertain"], true);
         assert_eq!(c["offline"], 1, "4 freigegeben, 3 online");
@@ -476,7 +476,7 @@ MAC  Name  IP Address  ESSID  Access Point  \r\n\
 MAC                IP Address       Name               Clients   Need Antenna Config  \r\n\
 ---                ----------       ----               -------   -------------------  \r\n\
 02:00:5e:00:53:12  192.0.2.210      MASTER-demo        7         No                   \r\n\
-02:00:5e:00:53:13  192.0.2.211      aula               12        No                   \r\n\
+02:00:5e:00:53:13  192.0.2.211      flur               12        No                   \r\n\
 02:00:5e:00:53:14  198.51.100.7     02:00:5e:00:53:14  0         No                   \r\n\
 Restricted Management Access Subnets\r\n";
 
@@ -485,21 +485,21 @@ Restricted Management Access Subnets\r\n";
         let clients = "\r\nClient List\r\n-----------\r\n\
 Name    IP Address    MAC Address        OS     ESSID   Access Point       Channel  Type  Role    IPv6 Address  Signal    Speed (mbps)\r\n\
 ----    ----------    -----------        --     -----   ------------       -------  ----  ----    ------------  ------    ------------\r\n\
-anna    198.51.100.5  02:00:5e:00:10:01  Win10  Schule  aula               36E      AC    schule  --            46(good)  173(good)\r\n\
+anna    198.51.100.5  02:00:5e:00:10:01  Win10  Intern  flur               36E      AC    intern  --            46(good)  173(good)\r\n\
 bernd   198.51.100.6  02:00:5e:00:10:02  iOS    Gast    02:00:5e:00:53:12  1        GN    gast    --            27(good)  72(ok)\r\n\
 Number of Clients   :2\r\n";
-        let named = SHOW_APS.replace("02:00:5e:00:53:13  ", "aula               ");
+        let named = SHOW_APS.replace("02:00:5e:00:53:13  ", "flur               ");
         let c = clients_json(clients, &named, "192.0.2.200");
         assert_eq!(c["rows"].as_array().unwrap().len(), 2, "Summenzeile gehört nicht dazu");
         assert_eq!(c["ap_col"], 5);
         assert_eq!(c["rows"][0][10], "46(good)");
-        assert_eq!(c["aps"]["aula"]["ip"], "192.0.2.211");
+        assert_eq!(c["aps"]["flur"]["ip"], "192.0.2.211");
         assert_eq!(c["aps"]["02:00:5e:00:53:12"]["conductor"], true);
     }
 
     #[test]
     fn renamed_aps_get_their_mac_from_show_summary() {
-        let named = SHOW_APS.replace("02:00:5e:00:53:12  192.0.2.210*", "MASTER-demo        192.0.2.210*").replace("02:00:5e:00:53:13  ", "aula               ");
+        let named = SHOW_APS.replace("02:00:5e:00:53:12  192.0.2.210*", "MASTER-demo        192.0.2.210*").replace("02:00:5e:00:53:13  ", "flur               ");
         assert_eq!(summary_aps(SUMMARY).len(), 3);
         let c = cluster_json(&named, CONFIG, SUMMARY, "192.0.2.200");
         assert_eq!(c["offline_uncertain"], false);

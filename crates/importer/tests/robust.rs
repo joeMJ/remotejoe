@@ -103,7 +103,7 @@ fn zip_bomb_is_rejected() {
 #[test]
 fn cyclic_and_deep_parents_are_kept() {
     let mut doc = SourceDocument { format: "Probe".into(), ..Default::default() };
-    // Kreis A → B → A mit einem Ziel in A.
+    // Zyklus A → B → A mit einem Ziel in A.
     doc.items.push(SourceItem::Folder { id: "A".into(), parent: Some("B".into()), name: "A".into(), order: 0 });
     doc.items.push(SourceItem::Folder { id: "B".into(), parent: Some("A".into()), name: "B".into(), order: 1 });
     // Kette mit 200 Ebenen.

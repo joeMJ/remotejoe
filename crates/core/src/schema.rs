@@ -193,7 +193,7 @@ mod tests {
     fn schema_3_stays_until_the_first_access_way() {
         use crate::model::{AccessWay, Folder, Node, Protocol, Target, WayCredential};
         let mut idx = Index::default();
-        let mut f = Folder::new("Schule");
+        let mut f = Folder::new("Standort");
         let mut t = Target::new("ap-01", Protocol::Ssh, "192.0.2.4");
         let tid = t.id;
         t.meta.notes = "Notiz".into();
