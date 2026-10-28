@@ -24,6 +24,9 @@ thiserror.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Networking_WinSock"] }
+
 [build-dependencies]
 cc = "1"
 bindgen = "0.72"

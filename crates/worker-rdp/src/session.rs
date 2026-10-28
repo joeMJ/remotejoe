@@ -43,6 +43,21 @@ pub struct RdpParams {
     pub gfx: bool,
 }
 
+/// Verständliche Meldung bei nicht erreichbarem Ziel. FreeRDP meldet bei einer IP-Adresse ohne Antwort
+/// „The DNS host name was not found (ERRCONNECT_DNS_NAME_NOT_FOUND)“; das führt in die Irre. Die Meldung von
+/// FreeRDP bleibt dahinter erhalten (mit Fehlername, für Diagnose und [`classify_error`]).
+pub fn readable_failure(message: &str, host: &str, port: u16) -> String {
+    let ip = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok();
+    let text = if message.contains("ERRCONNECT_DNS_NAME_NOT_FOUND") && !ip {
+        format!("Der Rechnername „{host}“ wurde nicht gefunden (DNS).")
+    } else if ["ERRCONNECT_DNS_NAME_NOT_FOUND", "ERRCONNECT_CONNECT_FAILED", "ERRCONNECT_CONNECT_TRANSPORT_FAILED"].iter().any(|n| message.contains(n)) {
+        format!("{host}:{port} ist nicht erreichbar (keine Antwort oder Verbindung abgelehnt).")
+    } else {
+        return message.to_string();
+    };
+    format!("{text} Meldung von FreeRDP: {message}")
+}
+
 /// Ergebnis einer Anmeldeprüfung aus der FreeRDP-Fehlermeldung (Name wie `ERRCONNECT_LOGON_FAILURE`):
 /// `auth` (Kennwort falsch), `locked` (Konto gesperrt oder deaktiviert), `expired` (Kennwort abgelaufen),
 /// `unreachable` (nicht erreichbar) oder `other`.
@@ -691,8 +706,15 @@ fn zeroizing_cstring(s: &str) -> Result<ZeroCString, RdpError> {
 mod classify_tests {
     #[test]
     fn freerdp_errors_map_to_check_results() {
-        use super::classify_error as c;
+        use super::{classify_error as c, readable_failure};
         assert_eq!(c("Verbindung fehlgeschlagen: x (ERRCONNECT_LOGON_FAILURE)"), "auth");
+        // Verständliche Meldung; der Fehlername bleibt für die Einordnung erhalten.
+        let dns = "The DNS host name was not found (ERRCONNECT_DNS_NAME_NOT_FOUND)";
+        let r = readable_failure(dns, "192.0.2.30", 3389);
+        assert!(r.starts_with("192.0.2.30:3389 ist nicht erreichbar") && c(&r) == "unreachable", "{r}");
+        assert!(readable_failure(dns, "srv.example.test", 3389).starts_with("Der Rechnername „srv.example.test“ wurde nicht gefunden"));
+        assert!(readable_failure(dns, "2001:db8::1", 3389).contains("nicht erreichbar"));
+        assert_eq!(readable_failure("x (ERRCONNECT_LOGON_FAILURE)", "192.0.2.30", 3389), "x (ERRCONNECT_LOGON_FAILURE)");
         assert_eq!(c("… (ERRCONNECT_ACCOUNT_LOCKED_OUT)"), "locked");
         assert_eq!(c("… (ERRCONNECT_PASSWORD_EXPIRED)"), "expired");
         assert_eq!(c("… (ERRCONNECT_CONNECT_TRANSPORT_FAILED)"), "unreachable");

@@ -396,7 +396,7 @@ impl Worker {
             })
             .with_devtools(false)
             .with_visible(self.0.visible.get())
-            .with_url(&url)
+            // Ohne Adresse: geladen wird erst nach dem Leeren der Zertifikatsentscheidungen (navigate_fresh).
             .build_as_child(&Parent(self.0.embed.get()));
         let view = match built {
             Ok(v) => Rc::new(v),
@@ -411,11 +411,44 @@ impl Worker {
         *self.0.ctx.borrow_mut() = Some(ctx);
         self.apply_scale(&view);
         self.connect_events(&view, &profile, ignore);
+        Self::navigate_fresh(&view, &url);
         *self.0.view.borrow_mut() = Some(view);
         self.send(FromWorker::State(SessionState::Connected));
         let host = self.0.target.borrow().as_ref().map(|t| t.url.host.clone()).unwrap_or_default();
         self.send(FromWorker::Log(format!("Web-Sitzung geöffnet: {host}")));
         self.trace(&format!("Seite angelegt nach {} ms", self.0.started.elapsed().as_millis()));
+    }
+
+    /// Seite laden, nachdem WebView2 seine Zertifikatsentscheidungen vergessen hat. WebView2 merkt sich ein „immer
+    /// erlauben“ je Rechner für die ganze Browsersitzung (alle Seiten desselben Profils) und meldet danach keine
+    /// Zertifikatsfehler mehr – ein anderes Zertifikat desselben Rechners (443 und 4343 eines APs) oder ein erneutes
+    /// Öffnen endete dann in der Fehlerseite. So entscheidet remotejoe bei jedem Laden selbst anhand der gespeicherten
+    /// Fingerabdrücke.
+    fn navigate_fresh(view: &WebView, url: &str) {
+        let core = view.webview();
+        let target = HSTRING::from(url);
+        let Ok(w14) = core.cast::<ICoreWebView2_14>() else {
+            // SAFETY: COM-Aufruf auf dem Thread, der die WebView besitzt.
+            unsafe {
+                let _ = core.Navigate(&target);
+            }
+            return;
+        };
+        let nav = core.clone();
+        let go = target.clone();
+        let h = webview2_com::ClearServerCertificateErrorActionsCompletedHandler::create(Box::new(move |_| {
+            // SAFETY: Rückruf auf dem Thread der WebView.
+            unsafe {
+                let _ = nav.Navigate(&go);
+            }
+            Ok(())
+        }));
+        // SAFETY: COM-Aufruf auf dem Thread, der die WebView besitzt.
+        if unsafe { w14.ClearServerCertificateErrorActions(&h) }.is_err() {
+            unsafe {
+                let _ = core.Navigate(&target);
+            }
+        }
     }
 
     /// Seite und Elternfenster lösen (neues Ziel, Beenden).
@@ -640,10 +673,12 @@ impl Worker {
             unsafe {
                 let _ = args.ErrorStatus(&mut status);
             }
-            let host = check_url(&uri).map(|u| u.host).unwrap_or_default();
+            // Schlüssel je Rechner und Port wie unter Linux (443 und 4343 eines APs haben verschiedene Zertifikate).
+            let (host, port) = check_url(&uri).map(|u| (u.host, u.port)).unwrap_or_default();
+            let key = AcceptedCerts::key(&host, port);
             let der = unsafe { args.ServerCertificate() }.ok().and_then(|c| certificate_der(&c)).unwrap_or_default();
             let known = AcceptedCerts::load(&profile);
-            match known.decide(&host, &der, &[web_error_text(status)]) {
+            match known.decide(&key, &der, &[web_error_text(status)]) {
                 CertDecision::Valid | CertDecision::Accepted => unsafe {
                     let _ = args.SetAction(always);
                 },
@@ -656,8 +691,8 @@ impl Worker {
                     };
                     let id = me.0.next_ask.get().wrapping_add(1).max(1);
                     me.0.next_ask.set(id);
-                    me.0.asks.borrow_mut().insert(id, CertAsk { args: args.clone(), deferral, host: host.clone(), der, profile: profile.clone() });
-                    let info = rj_ipc::msg::SecurityInfo { kind: "certificate".into(), host, port: 0, key_type: "X.509".into(), fingerprint, previous };
+                    me.0.asks.borrow_mut().insert(id, CertAsk { args: args.clone(), deferral, host: key, der, profile: profile.clone() });
+                    let info = rj_ipc::msg::SecurityInfo { kind: "certificate".into(), host, port, key_type: "X.509".into(), fingerprint, previous };
                     me.send(FromWorker::Question { id, text, detail, info });
                 }
             }

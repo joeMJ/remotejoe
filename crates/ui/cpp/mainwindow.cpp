@@ -2708,6 +2708,24 @@ void MainWindow::setAdminKeys(SessionPane* pane, bool on, const QString& reason)
 void MainWindow::updateAdminIndicators()
 {
 	static const QString objName = QStringLiteral("rjAdminKeys");
+	// Zusätzlich dauerhaft in der Fußzeile: bleibt sichtbar, auch wenn ein Stil das Symbol am Tab nicht zeigt.
+	{
+		QStringList active;
+		for (SessionPane* p : std::as_const(m_panes))
+			if (p->frame() && p->frame()->adminKeys())
+				active << p->title();
+		auto* foot = statusBar()->findChild<QLabel*>(QStringLiteral("rjAdminKeysFoot"));
+		if (!foot)
+		{
+			foot = new QLabel(statusBar());
+			foot->setObjectName(QStringLiteral("rjAdminKeysFoot"));
+			foot->setStyleSheet(QStringLiteral("QLabel { color: #ffffff; background: #e07000; border-radius: 3px; padding: 0 6px; font-weight: bold; }"));
+			statusBar()->addPermanentWidget(foot);
+		}
+		foot->setText(T(m_backend, "adminkeys.foot").arg(active.join(QStringLiteral(", "))));
+		foot->setToolTip(T(m_backend, "adminkeys.tip"));
+		foot->setVisible(!active.isEmpty());
+	}
 	const QColor orange(QStringLiteral("#e07000"));
 	auto pixmap = [&](qreal dpr) {
 		const QString svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><g fill='none' stroke='%1' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'>"
@@ -2730,6 +2748,14 @@ void MainWindow::updateAdminIndicators()
 						on = p->frame();
 				auto* existing = qobject_cast<QLabel*>(tw->tabBar()->tabButton(i, QTabBar::LeftSide));
 				const bool ours = existing && existing->objectName() == objName;
+				// Diagnose (RJ_KEYLOG=1): welcher Tab das Symbol bekommt.
+				// Windows-Programm ohne Konsole: direkt auf stderr (qInfo ginge dort an den Debugger).
+				if (on && qEnvironmentVariableIsSet("RJ_KEYLOG"))
+				{
+					std::fprintf(stderr, "[remotejoe-tasten] Symbol Tastaturmodus: Tab %d \"%s\", vorhanden %s, Tabbreite %d, Leiste sichtbar %s\n", i, qUtf8Printable(tw->tabText(i)), ours ? "ja" : "nein",
+					             tw->tabBar()->tabRect(i).width(), tw->tabBar()->isVisible() ? "ja" : "nein");
+					std::fflush(stderr);
+				}
 				if (!on)
 				{
 					if (ours)

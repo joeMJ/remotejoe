@@ -213,6 +213,10 @@ fn certificates_are_kept_per_host_and_port() {
     assert_eq!(AcceptedCerts::key("ap", 443), "ap");
     assert_eq!(AcceptedCerts::key("ap", 4343), "ap:4343");
     assert_eq!(AcceptedCerts::key("2001:db8::1", 4343), "[2001:db8::1]:4343");
+    // Aus der Adresse (Linux und Windows gleich).
+    assert_eq!(AcceptedCerts::key_of_url("https://ap:4343/#/login").as_deref(), Some("ap:4343"));
+    assert_eq!(AcceptedCerts::key_of_url("https://ap/").as_deref(), Some("ap"));
+    assert_eq!(AcceptedCerts::key_of_url("https://[2001:db8::1]:4343/").as_deref(), Some("[2001:db8::1]:4343"));
     // Älterer Eintrag ohne Port (Zertifikat von 4343): gilt weiter für ap:4343.
     c.accept("ap", &b);
     assert!(matches!(c.decide("ap:4343", &b, &p), CertDecision::Accepted));

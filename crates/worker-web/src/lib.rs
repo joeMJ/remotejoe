@@ -507,6 +507,11 @@ impl AcceptedCerts {
         }
     }
 
+    /// Schlüssel zu einer Adresse (`https://ap:4343/…` → `ap:4343`); gleich unter Linux und Windows.
+    pub fn key_of_url(url: &str) -> Option<String> {
+        check_url(url).ok().map(|u| Self::key(&u.host, u.port))
+    }
+
     /// Rechner aus einem Schlüssel (ohne Port).
     fn host_of(key: &str) -> &str {
         match key.rsplit_once(':') {
