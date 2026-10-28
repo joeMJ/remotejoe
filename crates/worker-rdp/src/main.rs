@@ -119,7 +119,27 @@ mod imp {
         println!("{out}");
     }
 
+    /// Windows: Winsock starten (sonst scheitert in FreeRDP jede Adressauflösung, auch für IP-Adressen, als
+    /// „DNS host name was not found“) und OpenSSL den LEGACY-Provider (legacy.dll, RC4/MD4) im Programmordner
+    /// suchen lassen statt im beim Bau eingetragenen Pfad.
+    #[cfg(windows)]
+    fn windows_init() {
+        use windows_sys::Win32::Networking::WinSock::{WSAStartup, WSADATA};
+        let mut data: WSADATA = unsafe { std::mem::zeroed() };
+        let rc = unsafe { WSAStartup(0x0202, &mut data) };
+        if rc != 0 {
+            eprintln!("Winsock nicht verfügbar (WSAStartup: {rc})");
+        }
+        if std::env::var_os("OPENSSL_MODULES").is_none() {
+            if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+                std::env::set_var("OPENSSL_MODULES", dir);
+            }
+        }
+    }
+
     pub fn main() {
+        #[cfg(windows)]
+        windows_init();
         // FreeRDP-Protokoll: nur Warnungen und Fehler.
         if std::env::var_os("WLOG_LEVEL").is_none() {
             std::env::set_var("WLOG_LEVEL", "WARN");
