@@ -261,7 +261,7 @@ mod imp {
                         self.send(FromWorker::Notice("Der Server hat den Aufbau ohne Grafikkanal abgebrochen. Neuer Versuch mit Grafikkanal (GFX).".into()));
                         continue;
                     }
-                    self.send(FromWorker::State(SessionState::Failed { reason: text }));
+                    self.send(FromWorker::State(SessionState::Failed { reason: rj_rdp::session::readable_failure(&text, &params.host, params.port) }));
                     return;
                 }
             }

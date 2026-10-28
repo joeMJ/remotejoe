@@ -2730,6 +2730,9 @@ void MainWindow::updateAdminIndicators()
 						on = p->frame();
 				auto* existing = qobject_cast<QLabel*>(tw->tabBar()->tabButton(i, QTabBar::LeftSide));
 				const bool ours = existing && existing->objectName() == objName;
+				// Diagnose (RJ_KEYLOG=1): welcher Tab das Symbol bekommt.
+				if (on && qEnvironmentVariableIsSet("RJ_KEYLOG"))
+					qInfo("[remotejoe-tasten] Symbol Tastaturmodus: Tab %d „%s“, vorhanden %s, Tabbreite %d", i, qUtf8Printable(tw->tabText(i)), ours ? "ja" : "nein", tw->tabBar()->tabRect(i).width());
 				if (!on)
 				{
 					if (ours)
