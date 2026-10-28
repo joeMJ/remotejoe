@@ -72,7 +72,7 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 | Plattform | Status | Hinweis |
 | :--- | :--- | :--- |
 | **Linux (Ubuntu 24.04 / 26.04)** | Aktiv | Rust + Qt 6, eigener Prozess je Sitzung; Installation im Benutzerkonto ([Installation](docs/INSTALLATION.md#installation-linux-ubuntu)); Pakete für 26.04 und für 24.04 (eigenes Paket mit Qt 6.4) |
-| **Windows 10/11** | Aktiv | MSI pro Benutzer ohne Administratorrechte ([Installation](docs/INSTALLATION.md#installation-windows)); Web-Ziele im Tab über WebView2 |
+| **Windows 10/11** | Aktiv, benötigt Hilfe von Euch beim Testen | MSI pro Benutzer ohne Administratorrechte ([Installation](docs/INSTALLATION.md#installation-windows)); Web-Ziele im Tab über WebView2 |
 
 ---
 
@@ -89,6 +89,11 @@ Die vollständige Anleitung steht in [`docs/INSTALLATION.md`](docs/INSTALLATION.
 
 - **Windows 10/11:** MSI pro Benutzer ohne Administratorrechte –
   [Installation (Windows)](docs/INSTALLATION.md#installation-windows).
+
+> [!WARNING]
+> **Windows: mit Fehlern rechnen (Expect Issues).** Ich teste selbst hauptsächlich unter Ubuntu; die Windows-Fassung
+> wird seltener und nicht an allen Zielarten geprüft. Rückmeldungen und Tests unter Windows helfen sehr – bitte als
+> [Issue](https://github.com/joeMJ/remotejoe/issues) melden.
 
 > [!IMPORTANT]
 > **Windows: vor der ersten Installation das Zertifikat des Herausgebers eintragen.** Die MSI ist mit einem selbst
