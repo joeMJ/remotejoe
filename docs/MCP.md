@@ -6,7 +6,7 @@ in remotejoe?“ selbst beantworten – mit den Daten aus remotejoe, aber ohne j
 
 > [!IMPORTANT]
 > **Datenschutz:** Alles, was Claude über diese Anbindung liest, geht als Gesprächsinhalt an den Claude-Dienst von
-> Anthropic – Zielnamen, Ordnernamen (z. B. Schulen und Orte), Adressen, Seriennummern und Inventar. Gib nur Ordner
+> Anthropic – Zielnamen, Ordnernamen, Adressen, Seriennummern und Inventar. Gib nur Ordner
 > frei, deren Inhalt du so weitergeben darfst, und blende Adressen und Seriennummern bei Bedarf aus. Zugangsdaten,
 > Benutzernamen, Notizen und andere Inhalte der Schlüsseldatenbank gehen nie hinaus.
 
