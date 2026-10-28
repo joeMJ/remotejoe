@@ -1095,7 +1095,7 @@ mod tls {
                 }
                 let der = cert.certificate().map(|b| b.to_vec()).unwrap_or_default();
                 let known = AcceptedCerts::load(&profile);
-                let key = rj_web::check_url(uri).map(|u| AcceptedCerts::key(&u.host, u.port)).unwrap_or_else(|_| host.clone());
+                let key = AcceptedCerts::key_of_url(uri).unwrap_or_else(|| host.clone());
                 match known.decide(&key, &der, &problems(flags)) {
                     CertDecision::Valid | CertDecision::Accepted => allow(view, cert, &host, uri),
                     CertDecision::Ask { text, detail, fingerprint, previous } => {
@@ -1105,7 +1105,8 @@ mod tls {
                             *n
                         };
                         asks.borrow_mut().insert(id, Ask { view: view.clone(), cert: cert.clone(), host: host.clone(), key: key.clone(), uri: uri.to_string(), profile: profile.clone() });
-                        let info = rj_ipc::msg::SecurityInfo { kind: "certificate".into(), host: host.clone(), port: 0, key_type: "X.509".into(), fingerprint, previous };
+                        let port = rj_web::check_url(uri).map(|u| u.port).unwrap_or(0);
+                        let info = rj_ipc::msg::SecurityInfo { kind: "certificate".into(), host: host.clone(), port, key_type: "X.509".into(), fingerprint, previous };
                         let _ = out.send(&FromWorker::Question { id, text, detail, info });
                         view.load_html("<html><body style='font-family:sans-serif'><h2>Zertifikat nicht vertrauenswürdig</h2><p>Bitte die Rückfrage in remotejoe beantworten.</p></body></html>", None);
                     }

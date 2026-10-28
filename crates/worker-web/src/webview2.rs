@@ -640,10 +640,12 @@ impl Worker {
             unsafe {
                 let _ = args.ErrorStatus(&mut status);
             }
-            let host = check_url(&uri).map(|u| u.host).unwrap_or_default();
+            // Schlüssel je Rechner und Port wie unter Linux (443 und 4343 eines APs haben verschiedene Zertifikate).
+            let (host, port) = check_url(&uri).map(|u| (u.host, u.port)).unwrap_or_default();
+            let key = AcceptedCerts::key(&host, port);
             let der = unsafe { args.ServerCertificate() }.ok().and_then(|c| certificate_der(&c)).unwrap_or_default();
             let known = AcceptedCerts::load(&profile);
-            match known.decide(&host, &der, &[web_error_text(status)]) {
+            match known.decide(&key, &der, &[web_error_text(status)]) {
                 CertDecision::Valid | CertDecision::Accepted => unsafe {
                     let _ = args.SetAction(always);
                 },
@@ -656,8 +658,8 @@ impl Worker {
                     };
                     let id = me.0.next_ask.get().wrapping_add(1).max(1);
                     me.0.next_ask.set(id);
-                    me.0.asks.borrow_mut().insert(id, CertAsk { args: args.clone(), deferral, host: host.clone(), der, profile: profile.clone() });
-                    let info = rj_ipc::msg::SecurityInfo { kind: "certificate".into(), host, port: 0, key_type: "X.509".into(), fingerprint, previous };
+                    me.0.asks.borrow_mut().insert(id, CertAsk { args: args.clone(), deferral, host: key, der, profile: profile.clone() });
+                    let info = rj_ipc::msg::SecurityInfo { kind: "certificate".into(), host, port, key_type: "X.509".into(), fingerprint, previous };
                     me.send(FromWorker::Question { id, text, detail, info });
                 }
             }
