@@ -6,6 +6,7 @@
 
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
+#include <QtCore/QEvent>
 #include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
@@ -23,10 +24,75 @@
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QVBoxLayout>
+
+namespace
+{
+/// Ergebnisse unter der Ausgabe: eigener Bereich mit Rollbalken, damit viele Ergebnisordner die Ausgabe nicht
+/// verdrängen; die Blöcke landen oben bündig in `box`.
+QWidget* resultsPane(QWidget* parent, const QString& title, QVBoxLayout** box)
+{
+	auto* pane = new QWidget(parent);
+	auto* pl = new QVBoxLayout(pane);
+	pl->setContentsMargins(0, 0, 0, 0);
+	pl->addWidget(rjui::section(title, pane));
+	auto* scroll = new QScrollArea(pane);
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+	scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	scroll->setMinimumHeight(60);
+	auto* inner = new QWidget(scroll);
+	auto* il = new QVBoxLayout(inner);
+	il->setContentsMargins(0, 0, 0, 0);
+	*box = new QVBoxLayout;
+	il->addLayout(*box);
+	il->addStretch(1);
+	scroll->setWidget(inner);
+	// Wie die Karte darunter, ohne eigenen Hintergrund.
+	scroll->viewport()->setAutoFillBackground(false);
+	inner->setAutoFillBackground(false);
+	pl->addWidget(scroll, 1);
+	return pane;
+}
+
+/// Teilt einen Trenner beim ersten Anzeigen nach Gewichten auf; danach bestimmt der Nutzer die Aufteilung.
+class InitialSplit : public QObject
+{
+public:
+	InitialSplit(QSplitter* split, QList<int> weights)
+		: QObject(split)
+		, m_split(split)
+		, m_weights(std::move(weights))
+	{
+		split->installEventFilter(this);
+	}
+
+protected:
+	bool eventFilter(QObject* o, QEvent* e) override
+	{
+		if (o == m_split && e->type() == QEvent::Resize && m_split->isVisible() && m_split->height() > 0)
+		{
+			int sum = 0;
+			for (int w : m_weights)
+				sum += w;
+			QList<int> sizes;
+			for (int w : m_weights)
+				sizes << m_split->height() * w / sum;
+			m_split->setSizes(sizes);
+			m_split->removeEventFilter(this);
+		}
+		return false;
+	}
+
+private:
+	QSplitter* m_split;
+	QList<int> m_weights;
+};
+} // namespace
 
 ApToolsTab::ApToolsTab(RjBackend* backend, const QString& id, const QString& name, const QString& tool, QWidget* parent)
   : ToolTab(parent)
@@ -86,15 +152,23 @@ ApToolsTab::ApToolsTab(RjBackend* backend, const QString& id, const QString& nam
 
 	QVBoxLayout* oin = nullptr;
 	auto* oc = rjui::card(this, &oin);
-	oin->addWidget(rjui::section(T("aptools.output"), oc));
-	m_output = new QPlainTextEdit(oc);
+	// Ausgabe und Ergebnisse teilen sich die Höhe über einen ziehbaren Trenner (anfangs zwei Drittel zu einem).
+	auto* split = new QSplitter(Qt::Vertical, oc);
+	split->setChildrenCollapsible(false);
+	auto* outPane = new QWidget(split);
+	auto* ol = new QVBoxLayout(outPane);
+	ol->setContentsMargins(0, 0, 0, 0);
+	ol->addWidget(rjui::section(T("aptools.output"), outPane));
+	m_output = new QPlainTextEdit(outPane);
 	m_output->setReadOnly(true);
 	m_output->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 	m_output->setLineWrapMode(QPlainTextEdit::NoWrap);
-	oin->addWidget(m_output, 1);
-	oin->addWidget(rjui::section(T("aptools.results"), oc));
-	m_resultsBox = new QVBoxLayout;
-	oin->addLayout(m_resultsBox);
+	m_output->setMinimumHeight(80);
+	ol->addWidget(m_output, 1);
+	split->addWidget(outPane);
+	split->addWidget(resultsPane(split, T("aptools.results"), &m_resultsBox));
+	new InitialSplit(split, { 2, 1 });
+	oin->addWidget(split, 1);
 	lay->addWidget(oc, 1);
 
 	m_poll = new QTimer(this);
@@ -500,8 +574,8 @@ ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QStrin
 	QVBoxLayout* oin = nullptr;
 	auto* oc = rjui::card(this, &oin);
 	const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	// Statustafel (nur beim Update; ap_swarm_reload zeichnet keine) und Ausgabe teilen sich die Höhe über einen
-	// ziehbaren Trenner.
+	// Statustafel (nur beim Update; ap_swarm_reload zeichnet keine), Ausgabe und Ergebnisse teilen sich die Höhe über
+	// ziehbare Trenner; die Ergebnisse anfangs ein Drittel.
 	auto* split = new QSplitter(Qt::Vertical, oc);
 	split->setChildrenCollapsible(false);
 	auto* boardPane = new QWidget(split);
@@ -528,12 +602,9 @@ ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QStrin
 	ol->addWidget(m_output, 1);
 	split->addWidget(boardPane);
 	split->addWidget(outPane);
-	split->setStretchFactor(0, 1);
-	split->setStretchFactor(1, 2);
+	split->addWidget(resultsPane(split, T("aptools.results"), &m_resultsBox));
+	new InitialSplit(split, update ? QList<int>{ 2, 4, 3 } : QList<int>{ 0, 2, 1 });
 	oin->addWidget(split, 1);
-	oin->addWidget(rjui::section(T("aptools.results"), oc));
-	m_resultsBox = new QVBoxLayout;
-	oin->addLayout(m_resultsBox);
 	lay->addWidget(oc, 1);
 
 	m_poll = new QTimer(this);
