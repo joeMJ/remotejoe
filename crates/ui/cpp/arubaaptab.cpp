@@ -1,5 +1,6 @@
 #include "arubaaptab.h"
 
+#include "arubalogtab.h"
 #include "cards.h"
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
@@ -96,7 +97,7 @@ ArubaApTab::ArubaApTab(RjBackend* backend, const QJsonObject& subject, const QJs
 	// Die beiden Tabellen teilen sich die Höhe über einen ziehbaren Trenner.
 	auto* split = new QSplitter(Qt::Vertical, page);
 	split->setChildrenCollapsible(false);
-	auto table = [&](const char* title, QLabel** info, QTableWidget** t) {
+	auto table = [&](const char* title, QLabel** info, QTableWidget** t, UserDiag** diag) {
 		QVBoxLayout* in = nullptr;
 		auto* c = rjui::card(split, &in);
 		in->addWidget(rjui::section(T(title), c));
@@ -111,12 +112,26 @@ ArubaApTab::ArubaApTab(RjBackend* backend, const QJsonObject& subject, const QJs
 		// Linksbündig: der Titel der gestreckten letzten Spalte steht sonst weit rechts.
 		(*t)->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 		(*t)->setMinimumHeight(110);
-		rjui::makeCopyable(*t, T);
+		if (diag)
+		{
+			// Anwender: Diagnosen für den gewählten, an diesem AP.
+			*diag = new UserDiag(m_backend, *t, [this](int) { return m_ap; }, c);
+			in->addLayout((*diag)->buttons());
+			rjui::makeCopyable(*t, T, [diag](QMenu* menu, int row) {
+				if (row >= 0)
+					(*diag)->addTo(menu, row);
+			});
+		}
+		else
+			rjui::makeCopyable(*t, T);
 		in->addWidget(*t, 1);
 		split->addWidget(c);
 	};
-	table("aruba.ap.networks", &m_netsInfo, &m_nets);
-	table("aruba.ap.clients", &m_clientsInfo, &m_clients);
+	table("aruba.ap.networks", &m_netsInfo, &m_nets, nullptr);
+	table("aruba.ap.clients", &m_clientsInfo, &m_clients, &m_diag);
+	connect(m_diag, &UserDiag::requested, this, [this](const QString& ip, const QString& where, const QString& kind, const QString& filter) {
+		emit userLogRequested(m_subject, ip, where, kind, filter);
+	});
 	split->setStretchFactor(0, 1);
 	split->setStretchFactor(1, 2);
 	lay->addWidget(split, 1);
@@ -184,6 +199,7 @@ void ArubaApTab::handleResult(const QJsonObject& r)
 	const QJsonObject clients = r.value(QStringLiteral("clients")).toObject();
 	fillTable(m_nets, nets);
 	fillTable(m_clients, clients);
+	m_diag->update();
 	m_netsInfo->setText(T("aruba.ap.networks.count").arg(nets.value(QStringLiteral("rows")).toArray().size()));
 	m_clientsInfo->setText(T("aruba.ap.clients.count").arg(clients.value(QStringLiteral("rows")).toArray().size()));
 	QStringList state;

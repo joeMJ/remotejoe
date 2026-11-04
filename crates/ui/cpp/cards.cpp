@@ -248,7 +248,7 @@ QIcon glyphIcon(Glyph g)
 	return QIcon(new GlyphEngine(g));
 }
 
-void makeCopyable(QTableWidget* t, const std::function<QString(const char*)>& text)
+void makeCopyable(QTableWidget* t, const std::function<QString(const char*)>& text, const std::function<void(QMenu*, int row)>& extra)
 {
 	t->setSelectionBehavior(QAbstractItemView::SelectRows);
 	t->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -274,10 +274,19 @@ void makeCopyable(QTableWidget* t, const std::function<QString(const char*)>& te
 	QObject::connect(sc, &QShortcut::activated, t, [rows] { rows(false); });
 	t->setContextMenuPolicy(Qt::CustomContextMenu);
 	const QString one = text("table.copy"), all = text("table.copy.all");
-	QObject::connect(t, &QWidget::customContextMenuRequested, t, [t, rows, one, all](const QPoint& pos) {
+	QObject::connect(t, &QWidget::customContextMenuRequested, t, [t, rows, one, all, extra](const QPoint& pos) {
+		// Die Zeile unter dem Mauszeiger gilt, auch wenn sie noch nicht gewählt war.
+		const int row = t->rowAt(pos.y());
+		if (row >= 0 && !t->selectionModel()->isRowSelected(row, QModelIndex()))
+			t->setCurrentCell(row, qMax(0, t->columnAt(pos.x())));
 		QMenu menu(t);
 		menu.addAction(one, [rows] { rows(false); })->setEnabled(t->selectionModel()->hasSelection());
 		menu.addAction(all, [rows] { rows(true); });
+		if (extra)
+		{
+			menu.addSeparator();
+			extra(&menu, row);
+		}
 		menu.exec(t->viewport()->mapToGlobal(pos));
 	});
 }

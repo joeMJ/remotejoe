@@ -458,11 +458,18 @@ bool ArubaWriteTab::confirm(RjBackend* backend, QWidget* parent, const QString& 
 	auto* list = new QPlainTextEdit(&dlg);
 	list->setReadOnly(true);
 	QStringList lines;
+	// Verwaltete (oder noch nicht abgefragte) Schwärme: vor dem Start ausdrücklich nachfragen.
+	bool managed = false;
 	for (const QJsonValue& tv : targets)
 	{
 		const QJsonObject t = tv.toObject();
 		const QJsonObject w = t.value(QStringLiteral("write")).toObject();
-		const QString state = w.isEmpty() ? T("aruba.write.unknown") : w.value(QStringLiteral("ok")).toBool() ? T("aruba.write.ok") : T("aruba.write.blocked").arg(w.value(QStringLiteral("reason")).toString());
+		const bool warn = w.value(QStringLiteral("warn")).isString();
+		managed = managed || w.isEmpty() || (w.value(QStringLiteral("ok")).toBool() && warn);
+		const QString state = w.isEmpty()                              ? T("aruba.write.unknown")
+		  : !w.value(QStringLiteral("ok")).toBool()                    ? T("aruba.write.blocked").arg(w.value(QStringLiteral("reason")).toString())
+		  : warn                                                       ? T("aruba.write.warn").arg(w.value(QStringLiteral("warn")).toString())
+		                                                               : T("aruba.write.ok");
 		lines << QStringLiteral("%1 (%2): %3").arg(t.value(QStringLiteral("name")).toString(), t.value(QStringLiteral("host")).toString(), state);
 	}
 	list->setPlainText(lines.join(QLatin1Char('\n')));
@@ -516,6 +523,8 @@ bool ArubaWriteTab::confirm(RjBackend* backend, QWidget* parent, const QString& 
 				return;
 			}
 		}
+		if (managed && QMessageBox::warning(&dlg, dlg.windowTitle(), T("aruba.write.managed.ask"), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+			return;
 		dlg.accept();
 	});
 	if (dlg.exec() != QDialog::Accepted)

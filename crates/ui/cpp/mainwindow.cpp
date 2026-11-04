@@ -879,6 +879,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		const QJsonObject st = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("settings") } }));
 		FrameView::s_keyCapture = st.value(QStringLiteral("keyboard_capture")).toBool(true);
 		m_closeTabKey = st.value(QStringLiteral("close_tab_key")).toString(QStringLiteral("outside"));
+		m_findKey = st.value(QStringLiteral("find_key")).toString(QStringLiteral("outside"));
 	}
 	FrameView::s_notice = [this](const QString& m) { statusBar()->showMessage(m, 8000); };
 	FrameView::s_adminTimeout = [this](FrameView* f) {
@@ -1169,13 +1170,14 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		connect(s, &QShortcut::activated, this, fn);
 	};
 	sc(QKeySequence(QStringLiteral("Ctrl+F")), [this] {
-		// Fokus in einer Web-Sitzung: in der Seite suchen; sonst die Suche über dem Baum.
-		for (QWidget* w = QApplication::focusWidget(); w; w = w->parentWidget())
-			if (auto* pane = dynamic_cast<SessionPane*>(w); pane && pane->isWeb())
-			{
-				pane->openFind();
-				return;
-			}
+		// Fokus in einer Web-Sitzung: in der Seite suchen; sonst die Suche über dem Baum (wenn eingestellt).
+		if (SessionPane* pane = focusedWebPane())
+		{
+			pane->openFind();
+			return;
+		}
+		if (!findKeyActive())
+			return;
 		m_search->setFocus();
 		m_search->selectAll();
 	});
@@ -3189,6 +3191,7 @@ void MainWindow::openSettings(const QString& section)
 		t = new SettingsTab(m_backend, m_tabs);
 		connect(t, &SettingsTab::appearanceChanged, this, [this] { applyAppearance(); });
 		connect(t, &SettingsTab::closeTabKeyChanged, this, [this](const QString& mode) { m_closeTabKey = mode; });
+		connect(t, &SettingsTab::findKeyChanged, this, [this](const QString& mode) { m_findKey = mode; });
 		connect(t, &SettingsTab::featuresChanged, this, [this] {
 			if (auto* o = findChild<OverviewTab*>())
 				o->refreshInventorySwitch();
@@ -3660,6 +3663,21 @@ bool MainWindow::closeTabKeyActive() const
 	return m_closeTabKey == QLatin1String("always") || !focusInSession();
 }
 
+SessionPane* MainWindow::focusedWebPane() const
+{
+	for (QWidget* w = QApplication::focusWidget(); w; w = w->parentWidget())
+		if (auto* pane = dynamic_cast<SessionPane*>(w); pane && pane->isWeb())
+			return pane;
+	return nullptr;
+}
+
+bool MainWindow::findKeyActive() const
+{
+	if (m_findKey == QLatin1String("never"))
+		return false;
+	return m_findKey == QLatin1String("always") || !focusInSession();
+}
+
 bool MainWindow::eventFilter(QObject* o, QEvent* e)
 {
 	if (o == m_search && (e->type() == QEvent::ShortcutOverride || e->type() == QEvent::KeyPress))
@@ -3680,6 +3698,12 @@ bool MainWindow::eventFilter(QObject* o, QEvent* e)
 	{
 		auto* k = static_cast<QKeyEvent*>(e);
 		if (k->key() == Qt::Key_W && (k->modifiers() & ~Qt::KeypadModifier) == (Qt::ControlModifier | Qt::ShiftModifier) && !closeTabKeyActive())
+		{
+			e->accept();
+			return true;
+		}
+		// Ebenso Strg+F, wenn es nicht in die Suche über dem Baum springen soll (Web-Sitzungen suchen selbst).
+		if (k->key() == Qt::Key_F && (k->modifiers() & ~Qt::KeypadModifier) == Qt::ControlModifier && !focusedWebPane() && !findKeyActive())
 		{
 			e->accept();
 			return true;
@@ -4417,6 +4441,13 @@ void MainWindow::openArubaLog(const QJsonObject& subject, const QString& ip, con
 	addToolTab(t, t->title());
 }
 
+void MainWindow::openArubaUserLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, const QString& filter)
+{
+	// Diagnose für einen Anwender: Filter (seine MAC bzw. IP) steht schon fest, keine Rückfrage.
+	auto* t = new ArubaLogTab(m_backend, subject, ip, where, kind, filter, m_tabs);
+	addToolTab(t, t->title());
+}
+
 void MainWindow::openCredMerge(const QStringList& scope)
 {
 	// Ein Tab; ein neuer Aufruf ersetzt ihn (anderer Bereich).
@@ -4495,6 +4526,7 @@ void MainWindow::openArubaAp(const QJsonObject& s, const QJsonObject& ap)
 	auto* a = new ArubaApTab(m_backend, s, ap, m_tabs);
 	connect(a, &ArubaApTab::connectWayRequested, this, &MainWindow::connectWay);
 	connect(a, &ArubaApTab::logRequested, this, &MainWindow::openArubaLog);
+	connect(a, &ArubaApTab::userLogRequested, this, &MainWindow::openArubaUserLog);
 	addToolTab(a, a->title());
 }
 
@@ -4510,6 +4542,7 @@ void MainWindow::openArubaUsers(const QJsonObject& subject, const QString& where
 		}
 	auto* t = new ArubaClientsTab(m_backend, subject, where, m_tabs);
 	connect(t, &ArubaClientsTab::apRequested, this, &MainWindow::openArubaAp);
+	connect(t, &ArubaClientsTab::logRequested, this, &MainWindow::openArubaUserLog);
 	addToolTab(t, t->title());
 }
 

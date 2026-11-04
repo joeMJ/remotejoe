@@ -2,7 +2,8 @@
 
 // Aruba-Werkzeuge: Seite eines einzelnen APs eines Clusters (Klick auf seine Kachel in der Cluster-Karte).
 // Abgefragt per SSH am AP mit den Zugangsdaten des VC: Seriennummer, MAC, Laufzeit, aktive SSIDs (show networks)
-// und angemeldete Anwender (show clients). „SSH-Sitzung“ öffnet eine Sitzung zum AP.
+// und angemeldete Anwender (show clients). „SSH-Sitzung“ öffnet eine Sitzung zum AP. Für den gewählten Anwender
+// zeigen drei Knöpfe (auch im Kontextmenü) Anmeldeprobleme, System- und Firewallereignisse an diesem AP.
 
 #include "editor.h"
 
@@ -12,6 +13,7 @@ class QLabel;
 class QPushButton;
 class QTableWidget;
 class RjBackend;
+class UserDiag;
 
 class ArubaApTab : public ToolTab
 {
@@ -30,6 +32,8 @@ signals:
 	void connectWayRequested(const QJsonObject& subject, const QString& way);
 	/// Log an diesem AP anzeigen.
 	void logRequested(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
+	/// Log für einen Anwender an diesem AP (`filter`: seine MAC bzw. IP), siehe `UserDiag`.
+	void userLogRequested(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, const QString& filter);
 
 private:
 	static void fillTable(QTableWidget* t, const QJsonObject& table);
@@ -48,4 +52,5 @@ private:
 	QTableWidget* m_nets;
 	QLabel* m_clientsInfo;
 	QTableWidget* m_clients;
+	UserDiag* m_diag = nullptr;
 };

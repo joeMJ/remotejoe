@@ -450,9 +450,11 @@ impl App {
                 let mut v = crate::aruba::cluster_json(&r.outputs[1], &r.outputs[2], r.outputs.get(3).map_or("", String::as_str), &vc);
                 let managed = r.outputs.get(3).and_then(|s| crate::aruba::management(s));
                 v["managed"] = json!(managed);
-                // Schreibende Werkzeuge (Neustart, Update): nur unverwaltet und mit Admin-Konto.
-                let check = crate::aruba::write_check(managed, &crate::aruba::admin_users(&r.outputs[2]), &user);
-                v["write"] = json!({ "ok": check.is_ok(), "reason": check.err() });
+                // Schreibende Werkzeuge (Neustart, Update): nur mit Admin-Konto; bei Verwaltung mit Warnung.
+                v["write"] = match crate::aruba::write_check(managed, &crate::aruba::admin_users(&r.outputs[2]), &user) {
+                    Ok(warn) => json!({ "ok": true, "warn": warn }),
+                    Err(reason) => json!({ "ok": false, "reason": reason }),
+                };
                 Ok((v, note))
             })();
             drop(spec);
@@ -475,7 +477,7 @@ impl App {
         Ok(json!({ "pending": job }))
     }
 
-    /// Aruba-Werkzeuge: Log anzeigen (`kind`: system oder security, `filter` optional) – am VC (`id`) oder an einem
+    /// Aruba-Werkzeuge: Log anzeigen (`kind`: system, security oder auth, `filter` optional) – am VC (`id`) oder an einem
     /// AP (`ip`), mit den Zugangsdaten des VC. Nur Anzeige, nichts wird gespeichert. Ergebnis „aruba_log“, Ziel `tag`.
     pub fn aruba_log(&mut self, c: &Value) -> Result<Value, String> {
         if !self.config.features.aruba {

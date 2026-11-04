@@ -198,28 +198,29 @@ pub fn admin_users(running_config: &str) -> Vec<String> {
         .collect()
 }
 
-/// Dürfen schreibende Werkzeuge (Neustart, Update) an diesem Cluster laufen? Nicht bei Verwaltung über Central oder
-/// AirWave (oder unbekannter Verwaltung) und nur, wenn der Benutzer aus der KDBX ein Admin-Konto ist.
-pub fn write_check(managed: Option<&str>, admins: &[String], user: &str) -> Result<(), String> {
-    match managed {
-        Some("none") => {}
-        Some("central") => return Err("wird über Central verwaltet".into()),
-        Some("airwave") => return Err("wird über AirWave verwaltet".into()),
-        _ => return Err("Verwaltung unbekannt (show summary ohne Antwort)".into()),
+/// Dürfen schreibende Werkzeuge (Neustart, Update) an diesem Cluster laufen? Nur, wenn der Benutzer aus der KDBX ein
+/// Admin-Konto ist. Verwaltung über Central oder AirWave (oder unbekannte Verwaltung) sperrt nicht, sondern liefert
+/// eine Warnung (`Ok(Some(..))`): Der Nutzer wird vor dem Start gefragt, der Vorgang kann dort fehlschlagen.
+pub fn write_check(managed: Option<&str>, admins: &[String], user: &str) -> Result<Option<String>, String> {
+    if !admins.iter().any(|a| a == user) {
+        return Err(format!("„{user}“ ist kein Admin-Konto (mgmt-user bzw. hash-mgmt-user) in der Konfiguration"));
     }
-    if admins.iter().any(|a| a == user) {
-        Ok(())
-    } else {
-        Err(format!("„{user}“ ist kein Admin-Konto (mgmt-user bzw. hash-mgmt-user) in der Konfiguration"))
-    }
+    Ok(match managed {
+        Some("none") => None,
+        Some("central") => Some("wird über Central verwaltet".into()),
+        Some("airwave") => Some("wird über AirWave verwaltet".into()),
+        _ => Some("Verwaltung unbekannt (show summary ohne Antwort)".into()),
+    })
 }
 
-/// Log-Befehl: `show log system` bzw. `show log security`, wahlweise mit `| include <Filter>`. Im Filter sind
+/// Log-Befehl: `show log system`, `show log security` bzw. (`auth`) `show ap debug auth-trace-buf`, wahlweise mit
+/// `| include <Filter>`. Im Filter sind
 /// Steuerzeichen und `|` nicht erlaubt (kein zweiter Befehl), führende und folgende Leerzeichen werden entfernt.
 pub fn log_command(kind: &str, filter: Option<&str>) -> Result<String, String> {
     let base = match kind {
         "system" => "show log system",
         "security" => "show log security",
+        "auth" => "show ap debug auth-trace-buf",
         other => return Err(format!("Unbekanntes Log „{other}“")),
     };
     match filter.map(str::trim).filter(|f| !f.is_empty()) {
@@ -343,7 +344,7 @@ pub fn demo() -> (Value, Value) {
     }
     let mut cluster = cluster_json(&rows, &config, &summary, "192.0.2.240");
     cluster["managed"] = json!("central");
-    cluster["write"] = json!({ "ok": false, "reason": "wird über Central verwaltet" });
+    cluster["write"] = json!({ "ok": true, "warn": "wird über Central verwaltet" });
     cluster["at"] = json!(crate::overview::inventory::now());
     let outputs = vec![
         String::new(),
@@ -435,12 +436,13 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
         let cfg = "hash-mgmt-password\nhash-mgmt-user admin password hash 0123abcd\nhash-mgmt-user leser password hash 4567ef usertype read-only\n";
         let admins = admin_users(cfg);
         assert_eq!(admins, vec!["admin".to_string()]);
-        assert!(write_check(Some("none"), &admins, "admin").is_ok());
+        assert_eq!(write_check(Some("none"), &admins, "admin"), Ok(None));
         assert!(write_check(Some("none"), &admins, "leser").unwrap_err().contains("kein Admin-Konto"));
         assert!(write_check(Some("none"), &admins, "operator").is_err());
-        assert!(write_check(Some("central"), &admins, "admin").unwrap_err().contains("Central"));
-        assert!(write_check(Some("airwave"), &admins, "admin").unwrap_err().contains("AirWave"));
-        assert!(write_check(None, &admins, "admin").is_err());
+        assert!(write_check(Some("central"), &admins, "admin").unwrap().unwrap().contains("Central"));
+        assert!(write_check(Some("airwave"), &admins, "admin").unwrap().unwrap().contains("AirWave"));
+        assert!(write_check(None, &admins, "admin").unwrap().unwrap().contains("unbekannt"));
+        assert!(write_check(Some("central"), &admins, "leser").unwrap_err().contains("kein Admin-Konto"));
         // Andere Firmware: mgmt-user mit Hash, Nur-Lesen mit „read-only“ am Ende.
         let cfg = "mgmt-user admin 0123456789abcdef0123456789abcdef\nmgmt-user operator fedcba9876543210fedcba9876543210 read-only\nmgmt-user gast 00ff00ff guest-provisioning\n";
         assert_eq!(admin_users(cfg), vec!["admin".to_string()]);
@@ -453,6 +455,7 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
         assert_eq!(log_command("system", Some("")).unwrap(), "show log system");
         assert!(log_command("system", Some("a | b")).is_err());
         assert!(log_command("system", Some("a\nreload all")).is_err());
+        assert_eq!(log_command("auth", Some("02:00:5e:00:10:01")).unwrap(), "show ap debug auth-trace-buf | include 02:00:5e:00:10:01");
         assert!(log_command("debug", None).is_err());
     }
 

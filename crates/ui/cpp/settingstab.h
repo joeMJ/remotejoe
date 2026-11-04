@@ -46,6 +46,7 @@ signals:
 	void appearanceChanged();
 	/// Strg+Umschalt+W: neuer Modus (outside, always, never).
 	void closeTabKeyChanged(const QString& mode);
+	void findKeyChanged(const QString& mode);
 	/// Zusatzfunktionen ein- oder ausgeschaltet (z. B. Aruba-Werkzeuge).
 	void featuresChanged();
 
@@ -83,6 +84,7 @@ private:
 	// Tastatur
 	QCheckBox* m_keyCapture = nullptr;
 	QComboBox* m_closeTab = nullptr;
+	QComboBox* m_findKey = nullptr;
 	QComboBox* m_adminLayout = nullptr;
 	QSpinBox* m_adminTimeout = nullptr;
 	QCheckBox* m_aruba = nullptr;

@@ -14,6 +14,8 @@
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QMenu>
+#include <QtWidgets/QTableWidget>
 #include <QtWidgets/QVBoxLayout>
 
 ArubaLogTab::ArubaLogTab(RjBackend* backend, const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, const QString& filter, QWidget* parent)
@@ -78,7 +80,8 @@ ArubaLogTab::ArubaLogTab(RjBackend* backend, const QJsonObject& subject, const Q
 
 QString ArubaLogTab::title() const
 {
-	return m_backend->text(QString::fromLatin1(m_kind == QLatin1String("security") ? "aruba.log.security" : "aruba.log.system")) + QStringLiteral(" · ") + m_where;
+	const char* key = m_kind == QLatin1String("security") ? "aruba.log.security" : m_kind == QLatin1String("auth") ? "aruba.log.auth" : "aruba.log.system";
+	return m_backend->text(QString::fromLatin1(key)) + QStringLiteral(" · ") + m_where;
 }
 
 bool ArubaLogTab::askFilter(RjBackend* backend, QWidget* parent, const QString& kind, QString* filter)
@@ -136,4 +139,62 @@ void ArubaLogTab::handleResult(const QJsonObject& r)
 	if (r.value(QStringLiteral("note")).isString())
 		state << r.value(QStringLiteral("note")).toString();
 	m_state->setText(state.join(QStringLiteral(" · ")));
+}
+
+UserDiag::UserDiag(RjBackend* backend, QTableWidget* table, const std::function<QJsonObject(int row)>& apOf, QWidget* parent)
+  : QObject(parent)
+  , m_backend(backend)
+  , m_table(table)
+  , m_apOf(apOf)
+  , m_row(new QHBoxLayout)
+{
+	auto T = [backend](const QByteArray& k) { return backend->text(QString::fromLatin1(k)); };
+	m_row->addWidget(new QLabel(T("aruba.users.diag"), parent));
+	for (const char* kind : { "auth", "system", "security" })
+	{
+		auto* b = new QPushButton(T(QByteArray("aruba.users.diag.") + kind), parent);
+		b->setProperty("kind", QString::fromLatin1(kind));
+		b->setToolTip(T(QByteArray("aruba.users.diag.") + kind + ".tip"));
+		connect(b, &QPushButton::clicked, this, [this, b] { request(m_table->currentRow(), b->property("kind").toString()); });
+		m_row->addWidget(b);
+		m_buttons << b;
+	}
+	m_row->addStretch(1);
+	connect(table, &QTableWidget::currentCellChanged, this, &UserDiag::update);
+	update();
+}
+
+QString UserDiag::filterOf(int row, const QString& kind) const
+{
+	if (row < 0 || row >= m_table->rowCount() || m_table->isRowHidden(row) || m_apOf(row).isEmpty())
+		return {};
+	const QString head = kind == QLatin1String("security") ? QStringLiteral("IP Address") : QStringLiteral("MAC Address");
+	for (int c = 0; c < m_table->columnCount(); ++c)
+		if (m_table->horizontalHeaderItem(c) && m_table->horizontalHeaderItem(c)->text() == head)
+			return m_table->item(row, c) ? m_table->item(row, c)->text().trimmed() : QString();
+	return {};
+}
+
+void UserDiag::addTo(QMenu* menu, int row)
+{
+	for (QPushButton* b : std::as_const(m_buttons))
+	{
+		const QString kind = b->property("kind").toString();
+		menu->addAction(b->text(), this, [this, row, kind] { request(row, kind); })->setEnabled(!filterOf(row, kind).isEmpty());
+	}
+}
+
+void UserDiag::update()
+{
+	for (QPushButton* b : std::as_const(m_buttons))
+		b->setEnabled(!filterOf(m_table->currentRow(), b->property("kind").toString()).isEmpty());
+}
+
+void UserDiag::request(int row, const QString& kind)
+{
+	const QString filter = filterOf(row, kind);
+	if (filter.isEmpty())
+		return;
+	const QJsonObject ap = m_apOf(row);
+	emit requested(ap.value(QStringLiteral("ip")).toString().remove(QLatin1Char('*')), ap.value(QStringLiteral("name")).toString(), kind, filter);
 }

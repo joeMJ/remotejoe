@@ -113,7 +113,7 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 	hh->addWidget(m_managed, 0, Qt::AlignVCenter);
 	hh->addWidget(m_head, 1);
 	v->addLayout(hh);
-	// Werkzeuge: lesend (Analyse, Inventar) und schreibend (Neustart, Update; nur unverwaltet und mit Admin-Konto).
+	// Werkzeuge: lesend (Analyse, Inventar) und schreibend (Neustart, Update; nur mit Admin-Konto, verwaltet mit Rückfrage).
 	auto* th = new QHBoxLayout;
 	// Werkzeuge links, „Cluster abfragen“ rechtsbündig in derselben Zeile.
 	m_query = new QPushButton(rjui::glyphIcon(rjui::Glyph::Signal), T("aruba.query"), this);
@@ -230,7 +230,9 @@ void ArubaClusterView::render()
 	for (QPushButton* b : { m_reload, m_update })
 	{
 		b->setEnabled(w.value(QStringLiteral("ok")).toBool());
-		b->setToolTip(w.value(QStringLiteral("ok")).toBool() ? QString() : T("aruba.write.blocked").arg(w.value(QStringLiteral("reason")).toString(T("aruba.write.query.first"))));
+		b->setToolTip(!w.value(QStringLiteral("ok")).toBool() ? T("aruba.write.blocked").arg(w.value(QStringLiteral("reason")).toString(T("aruba.write.query.first")))
+		              : w.value(QStringLiteral("warn")).isString() ? T("aruba.write.warn").arg(w.value(QStringLiteral("warn")).toString())
+		                                                           : QString());
 	}
 	m_total->setText(QString::number(c.value(QStringLiteral("total")).toInt()));
 	m_online->setText(QString::number(c.value(QStringLiteral("online")).toInt()));

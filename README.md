@@ -207,7 +207,8 @@ neu aufklappen.
 ## Was das Programm kann
 
 - **Baum links, Sitzungen rechts:** Ordner und Ziele in fester Reihenfolge, Suche über Namen
-  und Hosts (Strg+F). Sitzungen in Tabs, gekachelt (1×2, 2×2, frei) oder als eigenes Fenster.
+  und Hosts (Strg+F; in Sitzungen geht Strg+F standardmäßig an das Ziel, einstellbar unter Einstellungen → Tastatur).
+  Sitzungen in Tabs, gekachelt (1×2, 2×2, frei) oder als eigenes Fenster.
 - **Objektübersicht beim Einfachklick:** Name, Kurzzeile und „Verbinden“; angebotene Dienste als Plaketten
   (TCP 22, 23, 53, 80, 443, 3389, 4343, 5900, 5985, 5986, 8006 und der Port des Ziels); Kennzahlen (CPUs, Speicher,
   IP, MAC, Rechnername, System) mit Quelle und Zeitpunkt, von Hand korrigierbar, neue abweichende Werte zum Übernehmen;
@@ -348,6 +349,9 @@ der Schlüsseldatenbank.
 - **Nutzer anzeigen** in der Cluster-Karte: alle Anwender des Clusters (`show clients` am VC) mit IP, MAC, SSID, AP,
   Signal und Geschwindigkeit. Das Suchfeld filtert sofort nach Anmeldename, IP, MAC oder jedem anderen Feld; beim
   Roaming taucht ein Anwender an jedem AP auf, an dem er gerade angemeldet ist. Ein Klick auf den AP öffnet dessen Seite.
+  Für den gewählten Anwender zeigen drei Knöpfe (auch im Kontextmenü) an seinem AP: **Anmeldeprobleme**
+  (`show ap debug auth-trace-buf | include <MAC>`), **Systemereignisse** (`show log system | include <MAC>`) und
+  **Firewallereignisse** (`show log security | include <IP>`), jeweils im Protokoll-Tab mit änderbarem Filter.
 - **Tabellen** (Nutzer, SSIDs, Anwender der AP-Seite) lassen sich sortieren und kopieren: Strg+C oder Kontextmenü,
   tabulatorgetrennt mit Kopfzeile. Auf der AP-Seite teilen sich SSIDs und Anwender die Höhe über einen ziehbaren Trenner.
 - **Protokolle** in der Cluster-Karte (am VC) und auf der AP-Seite (an diesem AP): Systemlog (`show log system`) und
@@ -357,9 +361,11 @@ der Schlüsseldatenbank.
   Controller, alle Controller eines Ordners oder mehrerer markierter Ziele und Ordner (Rechtsklick → **Aruba**):
   - **Analyse** (`ap_check`) und **Inventar** (`ap_list`, mit AP-Namen) – lesend.
   - **Cluster neustarten** (`ap_swarm_reload`) und **Cluster aktualisieren** (`ap_swarm_update` mit dem Verzeichnis
-    der Firmware als URL, wahlweise mit Neustart danach). Beide sind nur möglich, wenn der Cluster weder über Central
-    noch über AirWave verwaltet wird und die Anmeldung ein Admin-Konto ist (`mgmt-user` bzw. `hash-mgmt-user` in der Konfiguration);
-    remotejoe prüft das vor dem Start bei jedem Controller und lässt nicht passende mit Grund aus. Jede dieser
+    der Firmware als URL, wahlweise mit Neustart danach). Beide setzen ein Admin-Konto voraus (`mgmt-user` bzw.
+    `hash-mgmt-user` in der Konfiguration); remotejoe prüft das vor dem Start bei jedem Controller und lässt nicht
+    passende mit Grund aus. Wird ein Cluster über Central oder AirWave verwaltet (oder ist die Verwaltung unbekannt),
+    fragt remotejoe vor dem Start ausdrücklich nach, weil der Vorgang dort fehlschlagen oder von der Verwaltung
+    rückgängig gemacht werden kann; das Protokoll vermerkt solche Controller. Jede dieser
     Aktionen läuft in einem eigenen Tab mit Statustafel und Protokoll (die Höhe beider ist per Trenner verstellbar).
     Fehler, die das Werkzeug meldet, und ein am Controller schon laufendes Upgrade („The other drt/image Upgrade or
     sync is in process“) erscheinen in der Statustafel; die Kopfzeile meldet dann „Fertig, mit Fehlern“.

@@ -495,7 +495,8 @@ fn board_line(l: &str) -> bool {
 }
 
 /// Schreibende Werkzeuge: Verwaltung (`show summary`) und Admin-Konto (`hash-mgmt-user`) am Controller prüfen.
-fn precheck(vc: &Vc, known: rj_ssh::known_hosts::KnownHosts) -> Result<(), String> {
+/// `Ok(Some(..))`: verwaltet oder unbekannt – der Nutzer hat vor dem Start zugestimmt, es geht mit Hinweis weiter.
+fn precheck(vc: &Vc, known: rj_ssh::known_hosts::KnownHosts) -> Result<Option<String>, String> {
     let (rt, conn, _, _, _) = crate::overview::remote::ssh_open(&vc.spec, vc.port, known)?;
     let r = rt.block_on(crate::overview::remote::cli_session(&conn, &["no paging", "show summary", "show running-config"]));
     rt.block_on(conn.disconnect());
@@ -530,8 +531,12 @@ pub fn run_tool(root: &Path, tool: &Tool, tasks: Vec<Task>, known: rj_ssh::known
         if tool.write {
             append(&run.out, "\n===== Vorprüfung: Verwaltung und Admin-Konto =====\n");
             vcs.retain(|vc| match precheck(vc, known.clone()) {
-                Ok(()) => {
+                Ok(None) => {
                     append(&run.out, &format!("{} ({}): ok\n", vc.name, vc.host));
+                    true
+                }
+                Ok(Some(warn)) => {
+                    append(&run.out, &format!("{} ({}): {warn} – auf Nachfrage fortgesetzt, kann fehlschlagen\n", vc.name, vc.host));
                     true
                 }
                 Err(e) => {

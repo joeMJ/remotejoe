@@ -13,6 +13,7 @@
 
 class QLabel;
 class QPushButton;
+class QMenu;
 class QTableWidget;
 class QVBoxLayout;
 
@@ -44,8 +45,9 @@ QIcon glyphIcon(Glyph g);
 /// Knopf „Protokolle“ (Aruba) mit Zettel-Symbol und Menü: Systemlog und Sicherheitslog, ganz oder gefiltert.
 /// `text` liefert die Beschriftungen, `pick` erhält „system“ bzw. „security“ und ob gefiltert.
 /// Tabelle zum Kopieren einrichten: Zeilen markierbar (auch mehrere), Strg+C und Kontextmenü „Kopieren“ bzw.
-/// „Alles kopieren“ geben tabulatorgetrennten Text mit Kopfzeile in die Zwischenablage.
-void makeCopyable(QTableWidget* t, const std::function<QString(const char*)>& text);
+/// „Alles kopieren“ geben tabulatorgetrennten Text mit Kopfzeile in die Zwischenablage. Ein Rechtsklick wählt die
+/// Zeile darunter; `extra` hängt weitere Einträge für diese Zeile (-1: keine) in dasselbe Menü.
+void makeCopyable(QTableWidget* t, const std::function<QString(const char*)>& text, const std::function<void(QMenu*, int row)>& extra = {});
 QPushButton* logMenuButton(const std::function<QString(const char*)>& text, QWidget* parent, const std::function<void(const QString& kind, bool filtered)>& pick);
 
 /// Zeile, die auf Klick reagiert (Bereichsliste); `selected` hebt sie hervor.

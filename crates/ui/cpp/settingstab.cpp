@@ -236,6 +236,11 @@ QWidget* SettingsTab::pageKeys()
 		m_closeTab->addItem(rjText(m_backend, (QByteArray("settings.closetab.") + mode).constData()), QString::fromLatin1(mode));
 	f->addRow(T("settings.closetab"), m_closeTab);
 	f->addRow(QString(), hint(T("settings.closetab.hint"), w));
+	m_findKey = new QComboBox(w);
+	for (const char* mode : { "outside", "always", "never" })
+		m_findKey->addItem(rjText(m_backend, (QByteArray("settings.closetab.") + mode).constData()), QString::fromLatin1(mode));
+	f->addRow(T("settings.findkey"), m_findKey);
+	f->addRow(QString(), hint(T("settings.findkey.hint"), w));
 	// Administrativer Tastaturmodus (RDP, je Sitzung über das Kontextmenü des Tabs).
 	m_adminLayout = new QComboBox(w);
 	f->addRow(T("settings.adminkeys.layout"), m_adminLayout);
@@ -275,6 +280,13 @@ QWidget* SettingsTab::pageKeys()
 		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("close_tab_key"), mode } });
 		emit closeTabKeyChanged(mode);
 		refreshSummaries();
+	});
+	connect(m_findKey, &QComboBox::currentIndexChanged, this, [this] {
+		if (m_loading)
+			return;
+		const QString mode = m_findKey->currentData().toString();
+		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("find_key"), mode } });
+		emit findKeyChanged(mode);
 	});
 	return w;
 }
@@ -582,6 +594,8 @@ void SettingsTab::reload()
 	m_keyCapture->setChecked(FrameView::s_keyCapture);
 	if (const int i = m_closeTab->findData(s.value(QStringLiteral("close_tab_key")).toString(QStringLiteral("outside"))); i >= 0)
 		m_closeTab->setCurrentIndex(i);
+	if (const int i = m_findKey->findData(s.value(QStringLiteral("find_key")).toString(QStringLiteral("outside"))); i >= 0)
+		m_findKey->setCurrentIndex(i);
 	m_adminLayout->clear();
 	for (const QJsonValue& l : s.value(QStringLiteral("admin_keys_layouts")).toArray())
 	{

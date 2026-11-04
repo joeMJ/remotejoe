@@ -1,5 +1,6 @@
 #include "arubaclientstab.h"
 
+#include "arubalogtab.h"
 #include "cards.h"
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
@@ -12,6 +13,7 @@
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QMenu>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QTableWidget>
 #include <QtWidgets/QVBoxLayout>
@@ -28,6 +30,8 @@ ArubaClientsTab::ArubaClientsTab(RjBackend* backend, const QJsonObject& subject,
 	auto* lay = new QVBoxLayout(this);
 	lay->setContentsMargins(6, 6, 6, 6);
 	lay->setSpacing(10);
+	// Die Tabelle zuerst: die Diagnose-Knöpfe im Kopf beziehen sich auf sie (Platz im Layout weiter unten).
+	m_table = new QTableWidget(this);
 	QVBoxLayout* hin = nullptr;
 	auto* head = rjui::card(this, &hin);
 	auto* hh = new QHBoxLayout;
@@ -59,17 +63,25 @@ ArubaClientsTab::ArubaClientsTab(RjBackend* backend, const QJsonObject& subject,
 	m_count->setObjectName(QStringLiteral("rjMuted"));
 	fh->addWidget(m_count);
 	hin->addLayout(fh);
+	// Diagnosen für den gewählten Anwender, an seinem AP.
+	m_diag = new UserDiag(backend, m_table, [this](int row) { return apOf(row); }, head);
+	connect(m_diag, &UserDiag::requested, this, [this](const QString& ip, const QString& where, const QString& kind, const QString& filter) {
+		emit logRequested(m_subject, ip, where, kind, filter);
+	});
+	hin->addLayout(m_diag->buttons());
 	lay->addWidget(head);
 
 	QVBoxLayout* tin = nullptr;
 	auto* tc = rjui::card(this, &tin);
-	m_table = new QTableWidget(tc);
 	m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	m_table->verticalHeader()->hide();
 	m_table->horizontalHeader()->setStretchLastSection(true);
 	m_table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 	m_table->setSortingEnabled(true);
-	rjui::makeCopyable(m_table, T);
+	rjui::makeCopyable(m_table, T, [this](QMenu* menu, int row) {
+		if (row >= 0 && !apOf(row).isEmpty())
+			m_diag->addTo(menu, row);
+	});
 	tin->addWidget(m_table, 1);
 	lay->addWidget(tc, 1);
 
@@ -160,6 +172,14 @@ void ArubaClientsTab::handleResult(const QJsonObject& r)
 	applyFilter();
 }
 
+QJsonObject ArubaClientsTab::apOf(int row) const
+{
+	if (row < 0 || m_apCol < 0 || !m_table->item(row, m_apCol))
+		return {};
+	const QJsonObject ap = m_aps.value(m_table->item(row, m_apCol)->text().toLower()).toObject();
+	return ap.value(QStringLiteral("ip")).toString().isEmpty() ? QJsonObject() : ap;
+}
+
 void ArubaClientsTab::applyFilter()
 {
 	// Suchbegriff in irgendeiner Spalte (Anmeldename, IP, MAC …), ohne Groß-/Kleinschreibung.
@@ -174,4 +194,5 @@ void ArubaClientsTab::applyFilter()
 		shown += hit ? 1 : 0;
 	}
 	m_count->setText(m_backend->text(QStringLiteral("aruba.users.count")).arg(shown).arg(m_table->rowCount()));
+	m_diag->update();
 }

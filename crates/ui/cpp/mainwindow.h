@@ -84,6 +84,7 @@ public:
 	void openApTools(const QString& id, const QString& name, const QString& tool);
 	/// Aruba-Log (system/security, wahlweise gefiltert) am VC oder an einem AP anzeigen.
 	void openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
+	void openArubaUserLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, const QString& filter);
 	/// Gleiche Zugangsdaten zusammenführen (leer: ganzer Baum).
 	void openCredMerge(const QStringList& scope);
 	/// Übersicht eines Ordners (ein Tab, beim nächsten Ordner neu befüllt).
@@ -224,6 +225,10 @@ private:
 	bool focusInSession() const;
 	/// Darf Strg+Umschalt+W gerade den Tab schließen (Einstellung „close_tab_key“)?
 	bool closeTabKeyActive() const;
+	/// Strg+F geht an die Suche über dem Baum (sonst an die Sitzung); eine Web-Sitzung sucht immer in der Seite.
+	bool findKeyActive() const;
+	/// Fokus in einer Web-Sitzung: deren Bereich, sonst nullptr.
+	SessionPane* focusedWebPane() const;
 	void updateConnInfo();
 	void openTerminalSettings();
 	void openAppearance();
@@ -275,6 +280,7 @@ private:
 	class QLabel* m_logo = nullptr;
 	/// Strg+Umschalt+W: „outside“, „always“ oder „never“.
 	QString m_closeTabKey = QStringLiteral("outside");
+	QString m_findKey = QStringLiteral("outside");
 	bool m_macroShelfOpen = false;
 	QStandardItemModel* m_model = nullptr;
 	QTabWidget* m_tabs = nullptr;

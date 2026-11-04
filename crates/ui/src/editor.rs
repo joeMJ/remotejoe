@@ -638,6 +638,7 @@ impl App {
                 "connect_all_parallel": self.config.connection.connect_all_parallel,
                 "keyboard_capture": self.config.connection.keyboard_capture,
                 "close_tab_key": self.config.connection.close_tab_key,
+                "find_key": self.config.connection.find_key,
                 "admin_keys_layout": self.config.connection.admin_keys_layout,
                 "admin_keys_timeout_mins": self.config.connection.admin_keys_timeout_mins,
                 "admin_keys_layouts": crate::adminkeys::NAMES.iter().map(|(k, n)| json!({ "klid": k, "name": n, "available": crate::adminkeys::Layout::find(crate::adminkeys::builtin(), k).is_some() })).collect::<Vec<_>>(),
@@ -662,6 +663,9 @@ impl App {
                 }
                 if let Some(k) = c.get("close_tab_key").and_then(Value::as_str).filter(|k| matches!(*k, "outside" | "always" | "never")) {
                     self.config.connection.close_tab_key = k.to_string();
+                }
+                if let Some(k) = c.get("find_key").and_then(Value::as_str).filter(|k| matches!(*k, "outside" | "always" | "never")) {
+                    self.config.connection.find_key = k.to_string();
                 }
                 if let Some(k) = c.get("admin_keys_layout").and_then(Value::as_str).filter(|k| crate::adminkeys::NAMES.iter().any(|(n, _)| n == k)) {
                     self.config.connection.admin_keys_layout = k.to_string();
