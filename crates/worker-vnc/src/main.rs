@@ -33,11 +33,14 @@ fn main() {
     };
     let out = link.sender.clone();
     let (msg_tx, msg_rx) = mpsc::channel::<ToWorker>();
-    let (ans_tx, ans_rx) = mpsc::channel::<(u32, bool)>();
+    let (ans_tx, ans_rx) = mpsc::channel::<(u32, CertAnswer)>();
     std::thread::spawn(move || loop {
         match link.recv() {
             Ok(ToWorker::Answer { question, accept }) => {
-                let _ = ans_tx.send((question, accept));
+                let _ = ans_tx.send((question, accept.into()));
+            }
+            Ok(ToWorker::AnswerOnce { question }) => {
+                let _ = ans_tx.send((question, CertAnswer::AcceptOnce));
             }
             Ok(m) => {
                 if msg_tx.send(m).is_err() {
@@ -53,7 +56,7 @@ fn main() {
     run(out, msg_rx, Arc::new(Mutex::new(ans_rx)));
 }
 
-fn cert_check(out: Sender, answers: Arc<Mutex<Receiver<(u32, bool)>>>) -> CertCheck {
+fn cert_check(out: Sender, answers: Arc<Mutex<Receiver<(u32, CertAnswer)>>>) -> CertCheck {
     let next = Arc::new(Mutex::new(1u32));
     Arc::new(move |c: &CertInfo| {
         let id = {
@@ -84,13 +87,13 @@ fn cert_check(out: Sender, answers: Arc<Mutex<Receiver<(u32, bool)>>>) -> CertCh
             match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                 Ok((q, a)) if q == id => return a,
                 Ok(_) => continue,
-                Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return false,
+                Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return CertAnswer::Reject,
             }
         }
     })
 }
 
-fn run(out: Sender, rx: Receiver<ToWorker>, answers: Arc<Mutex<Receiver<(u32, bool)>>>) {
+fn run(out: Sender, rx: Receiver<ToWorker>, answers: Arc<Mutex<Receiver<(u32, CertAnswer)>>>) {
     let send = |m: FromWorker| {
         let _ = out.send(&m);
     };

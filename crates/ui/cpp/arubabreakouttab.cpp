@@ -59,11 +59,17 @@ ArubaBreakoutTab::ArubaBreakoutTab(RjBackend* backend, const QJsonObject& subjec
 	tf.setBold(true);
 	caption->setFont(tf);
 	hv->addWidget(caption);
+	// Ergebnis als Pille: grün ohne Treffer, rot ab einem Treffer; daneben Zeitpunkt und Hinweise.
+	auto* sh = new QHBoxLayout;
+	m_result = rjui::pill(QString(), QStringLiteral("off"), head);
+	m_result->hide();
+	sh->addWidget(m_result, 0, Qt::AlignVCenter);
 	m_state = new QLabel(head);
 	m_state->setObjectName(QStringLiteral("rjMuted"));
 	m_state->setWordWrap(true);
 	m_state->setTextInteractionFlags(Qt::TextSelectableByMouse);
-	hv->addWidget(m_state);
+	sh->addWidget(m_state, 1);
+	hv->addLayout(sh);
 	hh->addLayout(hv, 1);
 	m_again = new QPushButton(T("aruba.breakout.again"), head);
 	auto* close = new QPushButton(T("mass.close"), head);
@@ -172,6 +178,7 @@ void ArubaBreakoutTab::search()
 		return;
 	}
 	m_again->setEnabled(false);
+	m_result->hide();
 	m_state->setText(m_backend->text(QStringLiteral("aruba.breakout.busy")));
 }
 
@@ -199,8 +206,10 @@ void ArubaBreakoutTab::handleResult(const QJsonObject& r)
 		setRow(i, hits[i].toObject());
 	m_table->setSortingEnabled(true);
 	m_table->resizeColumnsToContents();
+	rjui::setPill(m_result, T("aruba.breakout.summary").arg(r.value(QStringLiteral("segment")).toString()).arg(r.value(QStringLiteral("scanned")).toInt()).arg(hits.size()),
+	              hits.isEmpty() ? QStringLiteral("ok") : QStringLiteral("err"));
+	m_result->show();
 	QStringList state;
-	state << T("aruba.breakout.summary").arg(r.value(QStringLiteral("segment")).toString()).arg(r.value(QStringLiteral("scanned")).toInt()).arg(hits.size());
 	state << T("aruba.at").arg(QDateTime::fromSecsSinceEpoch(r.value(QStringLiteral("at")).toInteger()).toString(QStringLiteral("dd.MM.yyyy HH:mm:ss")));
 	if (!r.value(QStringLiteral("complete")).toBool(true))
 		state << T("aruba.breakout.incomplete");

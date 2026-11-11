@@ -200,12 +200,13 @@ public:
 	SessionPane(RjBackend* backend, std::uint64_t session, const QString& title, const QString& protocol,
 	            QWidget* parent = nullptr);
 	void setState(const QString& state, const QString& detail);
-	void setNotice(const QString& text);
+	/// Hinweis für die Fußzeile; `severe` zeigt ihn rot (z. B. übergangener Schlüsselfehler).
+	void setNotice(const QString& text, bool severe = false);
 	QString notice() const { return m_noticeText; }
 	/// Zustand für die Fußzeile des Hauptfensters; leer bei „Verbunden“.
 	QString statusLine() const { return m_state.isEmpty() || m_state == QLatin1String("connected") ? QString() : m_stateText; }
 	/// Schwerer Fehler (Verbindung fehlgeschlagen oder Worker abgestürzt).
-	bool severe() const { return m_state == QLatin1String("failed") || m_state == QLatin1String("crashed"); }
+	bool severe() const { return m_noticeSevere || m_state == QLatin1String("failed") || m_state == QLatin1String("crashed"); }
 	FrameView* frame() const { return m_frame; }
 	TerminalView* terminal() const { return m_terminal; }
 	QWidget* view() const;
@@ -269,6 +270,7 @@ private:
 	QLabel* m_header;
 	QLabel* m_notice;
 	QString m_noticeText;
+	bool m_noticeSevere = false;
 	QPushButton* m_reconnect;
 	SecurityBar* m_security;
 	ActionBar* m_ask;

@@ -3344,6 +3344,27 @@ void MainWindow::handleEvents(const QString& json)
 				if (e.value(QStringLiteral("reason")).toString() == QLatin1String("timeout"))
 					statusBar()->showMessage(T(m_backend, "security.timed_out"), 8000);
 			}
+			else if (t == QLatin1String("key_warning"))
+			{
+				// Schlüsselfehler, über den ohne Rückfrage hinweggegangen wurde: rot in der Fußzeile – an der Sitzung,
+				// bei Hintergrundabfragen eine Minute lang für das ganze Fenster.
+				const QString text = e.value(QStringLiteral("text")).toString();
+				statusBar()->showMessage(text, 15000);
+				if (p)
+					p->setNotice(text, true);
+				else
+				{
+					m_keyWarning = text;
+					QTimer::singleShot(60000, this, [this, text] {
+						if (m_keyWarning == text)
+						{
+							m_keyWarning.clear();
+							updateNotice();
+						}
+					});
+				}
+				updateNotice();
+			}
 			else if (t == QLatin1String("notice"))
 			{
 				if (p)
@@ -4239,6 +4260,11 @@ void MainWindow::updateNotice()
 			severe = severe || p->severe();
 			parts.append(line);
 		}
+	}
+	if (!m_keyWarning.isEmpty())
+	{
+		parts.prepend(m_keyWarning);
+		severe = true;
 	}
 	const QString text = parts.join(QStringLiteral("   |   "));
 	m_noticeLabel->setProperty("severe", severe);

@@ -67,6 +67,10 @@ mod imp {
         security: Security,
         #[serde(default)]
         config_path: Option<String>,
+        /// „Bei Schlüsselfehlern trotzdem fortfahren“: unbekannte oder geänderte Zertifikate nur für diese Prüfung
+        /// annehmen; die Ausgabe nennt es in `cert_warning`.
+        #[serde(default)]
+        accept_key_errors: bool,
     }
 
     fn auth_check() {
@@ -81,7 +85,14 @@ mod imp {
         };
         let cert_rejected = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = cert_rejected.clone();
-        let mut s = match RdpSession::new(move |_| {
+        let accept = req.accept_key_errors;
+        let warning = Arc::new(Mutex::new(None::<String>));
+        let w2 = warning.clone();
+        let mut s = match RdpSession::new(move |c: &CertInfo| {
+            if accept {
+                *w2.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{}:{} {} {}", c.host, c.port, c.fingerprint, if c.old_fingerprint.is_some() { "(geändert)" } else { "(unbekannt)" }));
+                return CertDecision::AcceptOnce;
+            }
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
             CertDecision::Reject
         }) {
@@ -108,7 +119,7 @@ mod imp {
             timeout_ms: 10000,
             gfx: false,
         };
-        let out = match s.authenticate(&p) {
+        let mut out = match s.authenticate(&p) {
             Ok(()) => serde_json::json!({ "result": "ok", "message": "" }),
             Err(e) => {
                 let msg = e.to_string();
@@ -116,6 +127,9 @@ mod imp {
                 serde_json::json!({ "result": result, "message": msg })
             }
         };
+        if let Some(w) = warning.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            out["cert_warning"] = serde_json::json!(w);
+        }
         println!("{out}");
     }
 
@@ -167,11 +181,14 @@ mod imp {
         };
         let out = link.sender.clone();
         let (msg_tx, msg_rx) = mpsc::channel::<ToWorker>();
-        let (ans_tx, ans_rx) = mpsc::channel::<(u32, bool)>();
+        let (ans_tx, ans_rx) = mpsc::channel::<(u32, CertDecision)>();
         std::thread::spawn(move || loop {
             match link.recv() {
                 Ok(ToWorker::Answer { question, accept }) => {
-                    let _ = ans_tx.send((question, accept));
+                    let _ = ans_tx.send((question, if accept { CertDecision::Accept } else { CertDecision::Reject }));
+                }
+                Ok(ToWorker::AnswerOnce { question }) => {
+                    let _ = ans_tx.send((question, CertDecision::AcceptOnce));
                 }
                 Ok(m) => {
                     if msg_tx.send(m).is_err() {
@@ -189,7 +206,7 @@ mod imp {
 
     struct Worker {
         out: Sender,
-        answers: Arc<Mutex<Receiver<(u32, bool)>>>,
+        answers: Arc<Mutex<Receiver<(u32, CertDecision)>>>,
         session: Option<RdpSession>,
         fb: Option<FrameBufferWriter>,
         serial: u64,
@@ -238,9 +255,7 @@ mod imp {
                 let deadline = Instant::now() + Duration::from_secs(300);
                 loop {
                     match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                        Ok((q, accept)) if q == id => {
-                            return if accept { CertDecision::Accept } else { CertDecision::Reject };
-                        }
+                        Ok((q, decision)) if q == id => return decision,
                         Ok(_) => continue,
                         Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return CertDecision::Reject,
                     }
@@ -315,7 +330,7 @@ mod imp {
                     return false;
                 }
                 ToWorker::Ping => self.send(FromWorker::Pong),
-                ToWorker::Answer { .. } | ToWorker::Custom(_) | ToWorker::Term(_) => {}
+                ToWorker::Answer { .. } | ToWorker::AnswerOnce { .. } | ToWorker::Custom(_) | ToWorker::Term(_) => {}
                 ToWorker::Input(ev) => {
                     let Some(s) = self.session.as_mut() else { return true };
                     match ev {
@@ -458,7 +473,7 @@ mod imp {
         }
     }
 
-    fn run(out: Sender, rx: Receiver<ToWorker>, answers: Arc<Mutex<Receiver<(u32, bool)>>>) {
+    fn run(out: Sender, rx: Receiver<ToWorker>, answers: Arc<Mutex<Receiver<(u32, CertDecision)>>>) {
         let mut w = Worker { out, answers, session: None, fb: None, serial: 0, last: None, connected_at: None, clip_notice_sent: false, clip_wait: None };
         let mut pending = (None, None);
         let mut events = Vec::new();

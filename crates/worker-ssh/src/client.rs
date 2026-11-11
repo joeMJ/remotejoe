@@ -52,7 +52,27 @@ impl Auth {
 }
 
 /// Rückfrage mit Antwortkanal.
-pub type HostKeyAsk = mpsc::UnboundedSender<(HostKeyQuestion, oneshot::Sender<bool>)>;
+pub type HostKeyAsk = mpsc::UnboundedSender<(HostKeyQuestion, oneshot::Sender<HostKeyAnswer>)>;
+
+/// Antwort auf eine Rückfrage zum Host-Schlüssel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostKeyAnswer {
+    Reject,
+    /// Annehmen und in `known_hosts` merken.
+    Accept,
+    /// Nur für diese Verbindung annehmen; `known_hosts` bleibt unverändert.
+    AcceptOnce,
+}
+
+impl From<bool> for HostKeyAnswer {
+    fn from(accept: bool) -> Self {
+        if accept {
+            HostKeyAnswer::Accept
+        } else {
+            HostKeyAnswer::Reject
+        }
+    }
+}
 
 /// Verbindungsparameter.
 #[derive(Clone)]
@@ -110,19 +130,19 @@ impl client::Handler for Handler {
             return Ok(false);
         }
         self.asking.lock().unwrap_or_else(|e| e.into_inner()).since = Some(std::time::Instant::now());
-        let accepted = rx.await.unwrap_or(false);
+        let answer = rx.await.unwrap_or(HostKeyAnswer::Reject);
         {
             let mut c = self.asking.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(t) = c.since.take() {
                 c.spent += t.elapsed();
             }
         }
-        if accepted {
+        if answer == HostKeyAnswer::Accept {
             self.known
                 .remember(&self.host, self.port, &key)
                 .map_err(|e| SshError::Connect(self.host.clone(), format!("Host-Schlüssel nicht speicherbar: {e}")))?;
         }
-        Ok(accepted)
+        Ok(answer != HostKeyAnswer::Reject)
     }
 }
 

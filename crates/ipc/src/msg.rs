@@ -109,6 +109,8 @@ pub enum ToWorker {
     Custom(Vec<u8>),
     /// Befehl an die Terminal-Zustandsmaschine des Workers (nur SSH).
     Term(TermCmd),
+    /// Rückfrage (Host-Schlüssel, Zertifikat) nur für diese Verbindung annehmen: nichts wird gespeichert.
+    AnswerOnce { question: u32 },
 }
 
 /// Zustand einer Sitzung.
@@ -368,6 +370,8 @@ mod tests {
     #[test]
     fn old_messages_keep_their_encoding() {
         assert_eq!(enc(&ToWorker::Answer { question: 1, accept: true }), [2, 1, 1]);
+        // Neue Nachrichten hinten anhängen: die Nummern der vorhandenen bleiben.
+        assert_eq!(enc(&ToWorker::AnswerOnce { question: 1 }), [10, 1]);
         assert_eq!(enc(&ToWorker::Input(InputEvent::Bytes(vec![9]))), [3, 2, 1, 9]);
         assert_eq!(enc(&ToWorker::Input(InputEvent::Scancodes(vec![(0x2A, true)])))[..2], [3, 5]);
         assert_eq!(enc(&ToWorker::Resize { width: 80, height: 24 }), [4, 80, 24]);

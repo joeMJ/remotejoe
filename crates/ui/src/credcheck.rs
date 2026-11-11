@@ -119,7 +119,7 @@ fn check_rdp(spec: &JobSpec, worker_dir: &std::path::Path) -> Outcome {
     use std::io::Write;
     let exe = worker_dir.join(if cfg!(windows) { "rj-worker-rdp.exe" } else { "rj-worker-rdp" });
     let password = String::from_utf8_lossy(&spec.credentials.password.0).into_owned();
-    let mut line = json!({ "host": spec.host, "port": spec.port, "username": spec.credentials.username, "domain": spec.credentials.domain, "password": password }).to_string().into_bytes();
+    let mut line = json!({ "host": spec.host, "port": spec.port, "username": spec.credentials.username, "domain": spec.credentials.domain, "password": password, "accept_key_errors": crate::keyerrors::accept() }).to_string().into_bytes();
     drop(password);
     line.push(b'\n');
     let mut cmd = std::process::Command::new(&exe);
@@ -144,6 +144,12 @@ fn check_rdp(spec: &JobSpec, worker_dir: &std::path::Path) -> Outcome {
     let text = String::from_utf8_lossy(&out.stdout);
     let Some(v) = text.lines().rev().find_map(|l| serde_json::from_str::<Value>(l).ok()) else { return ("fehler", "Keine Antwort der RDP-Prüfung".into()) };
     let message = v["message"].as_str().unwrap_or_default().to_string();
+    // Mit „Bei Schlüsselfehlern trotzdem fortfahren“ angenommenes Zertifikat (nur für diese Prüfung) melden.
+    if let Some(w) = v["cert_warning"].as_str() {
+        let (hp, fp) = w.split_once(' ').unwrap_or((w, ""));
+        let (h, port) = hp.rsplit_once(':').unwrap_or((hp, "3389"));
+        crate::keyerrors::warn(crate::keyerrors::text("certificate", h, port.parse().unwrap_or(3389), "X.509", fp.trim_end_matches(" (geändert)").trim_end_matches(" (unbekannt)"), fp.ends_with("(geändert)")));
+    }
     let state = match v["result"].as_str().unwrap_or("other") {
         "ok" => "ok",
         "auth" => "abgelehnt",
@@ -177,8 +183,13 @@ fn check_proxmox(spec: &JobSpec) -> Outcome {
     let accepted = crate::hyper::known_proxmox_certs().get(&key).cloned();
     let unknown = Arc::new(AtomicBool::new(false));
     let flag = unknown.clone();
+    let (h, port) = (spec.host.clone(), spec.port);
     let check: rj_proxmox::CertCheck = Arc::new(move |fp: &str| {
         let ok = accepted.as_deref() == Some(fp);
+        if !ok && crate::keyerrors::accept() {
+            crate::keyerrors::warn(crate::keyerrors::text("certificate", &h, port, "X.509", fp, accepted.is_some()));
+            return true;
+        }
         if !ok {
             flag.store(true, Ordering::SeqCst);
         }
@@ -214,8 +225,16 @@ fn check_vnc(spec: &JobSpec) -> Outcome {
         connect_timeout: Duration::from_secs(10),
         extended_clipboard: false,
     };
-    // Nur gespeicherte Zertifikate gelten (die Prüfung über `known_certs`); Unbekanntes wird abgelehnt.
-    match rj_vnc::client::VncClient::connect(&p, Arc::new(|_| false)) {
+    // Nur gespeicherte Zertifikate gelten (die Prüfung über `known_certs`); Unbekanntes wird abgelehnt – außer mit
+    // „Bei Schlüsselfehlern trotzdem fortfahren“ (nur für diese Prüfung, gemeldet).
+    let check: rj_vnc::client::CertCheck = Arc::new(|c: &rj_vnc::client::CertInfo| {
+        if !crate::keyerrors::accept() {
+            return rj_vnc::client::CertAnswer::Reject;
+        }
+        crate::keyerrors::warn(crate::keyerrors::text("certificate", &c.host, c.port, "X.509", &c.fingerprint, c.old_fingerprint.is_some()));
+        rj_vnc::client::CertAnswer::AcceptOnce
+    });
+    match rj_vnc::client::VncClient::connect(&p, check) {
         Ok(c) => {
             drop(c);
             ("ok", String::new())

@@ -53,7 +53,7 @@ impl Fix {
 
     /// Fragt Host-Schlüssel automatisch mit `accept` ab und zählt die Fragen.
     fn asker(&self, accept: bool) -> (HostKeyAsk, Arc<std::sync::Mutex<Vec<HostKeyStatus>>>) {
-        let (tx, mut rx) = mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<rj_ssh::client::HostKeyAnswer>)>();
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
         let s2 = seen.clone();
         let q = self.questions.clone();
@@ -61,7 +61,7 @@ impl Fix {
             while let Some((question, reply)) = rx.recv().await {
                 q.fetch_add(1, Ordering::SeqCst);
                 s2.lock().unwrap().push(question.status.clone());
-                let _ = reply.send(accept);
+                let _ = reply.send(accept.into());
             }
         });
         (tx, seen)

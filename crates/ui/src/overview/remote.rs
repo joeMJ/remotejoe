@@ -301,7 +301,7 @@ pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHo
     ssh_inventory_on(spec, port, rt, conn, note, params, ask, known, ip, prefer_windows)
 }
 
-type AskSender = tokio::sync::mpsc::UnboundedSender<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>;
+type AskSender = tokio::sync::mpsc::UnboundedSender<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<rj_ssh::client::HostKeyAnswer>)>;
 
 /// SSH-Verbindung für lesende Abfragen mit den Zugangsdaten des Ziels: unbekannter Host-Schlüssel wird übernommen und
 /// gemeldet, ein geänderter nie; ältere Verfahren nur, wenn das Gerät nichts anderes anbietet. Liefert die Laufzeit,
@@ -309,15 +309,23 @@ type AskSender = tokio::sync::mpsc::UnboundedSender<(rj_ssh::known_hosts::HostKe
 #[allow(clippy::type_complexity)]
 pub fn ssh_open(spec: &JobSpec, port: u16, known: KnownHosts) -> Result<(tokio::runtime::Runtime, SshConnection, Option<String>, rj_ssh::client::SshParams, AskSender), String> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-    // Unbekannter Host-Schlüssel: sofort übernehmen und melden. Geänderter: nie automatisch.
-    let (ask, mut q) = tokio::sync::mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>();
+    // Unbekannter Host-Schlüssel: sofort übernehmen und melden. Geänderter: nie automatisch – außer mit „Bei
+    // Schlüsselfehlern trotzdem fortfahren“, dann nur für diese Verbindung (nicht gespeichert) und gemeldet.
+    let (ask, mut q) = tokio::sync::mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<rj_ssh::client::HostKeyAnswer>)>();
     let seen: std::sync::Arc<std::sync::Mutex<Option<rj_ssh::known_hosts::HostKeyQuestion>>> = Default::default();
     let seen2 = seen.clone();
     rt.spawn(async move {
         while let Some((question, r)) = q.recv().await {
-            let accept = question.status == rj_ssh::known_hosts::HostKeyStatus::Unknown;
+            let answer = if question.status == rj_ssh::known_hosts::HostKeyStatus::Unknown {
+                rj_ssh::client::HostKeyAnswer::Accept
+            } else if crate::keyerrors::accept() {
+                crate::keyerrors::warn(crate::keyerrors::text("hostkey", &question.host, question.port, &question.algorithm, &question.fingerprint, true));
+                rj_ssh::client::HostKeyAnswer::AcceptOnce
+            } else {
+                rj_ssh::client::HostKeyAnswer::Reject
+            };
             *seen2.lock().unwrap_or_else(|e| e.into_inner()) = Some(question);
-            let _ = r.send(accept);
+            let _ = r.send(answer);
         }
     });
     let mut params = ssh_params(spec, port);
@@ -333,6 +341,9 @@ pub fn ssh_open(spec: &JobSpec, port: u16, known: KnownHosts) -> Result<(tokio::
     let notes: Vec<String> = [
         question.as_ref().filter(|q| q.status == rj_ssh::known_hosts::HostKeyStatus::Unknown).map(|q| {
             format!("Neuer SSH-Host-Schlüssel von {}:{} übernommen: {} {}", q.host, q.port, q.algorithm, q.fingerprint)
+        }),
+        question.as_ref().filter(|q| q.status != rj_ssh::known_hosts::HostKeyStatus::Unknown && connected.is_ok()).map(|q| {
+            format!("Geänderter SSH-Host-Schlüssel von {}:{} nur für diese Verbindung angenommen: {} {}", q.host, q.port, q.algorithm, q.fingerprint)
         }),
         legacy_used.then(|| "Ältere SSH-Verfahren verwendet – das Gerät bietet nur diese an".to_string()),
     ]

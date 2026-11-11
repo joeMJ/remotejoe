@@ -248,7 +248,7 @@ fn server() -> (String, Arc<Mutex<Log>>) {
 }
 
 fn no_tls() -> CertCheck {
-    Arc::new(|_| false)
+    Arc::new(|_| false.into())
 }
 
 fn password_client(url: &str, pw: &str) -> Client {
@@ -317,7 +317,7 @@ fn console_bridge_carries_rfb() {
         connect_timeout: Duration::from_secs(15),
         extended_clipboard: false,
     };
-    let vnc = VncClient::connect(&p, Arc::new(|_| false)).unwrap();
+    let vnc = VncClient::connect(&p, Arc::new(|_| false.into())).unwrap();
     assert_eq!(vnc.name, "vm100");
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -356,7 +356,7 @@ fn reconnect_reopens_console_without_leftovers() {
     let c = password_client(&url, PASSWORD);
     let g = c.guests().unwrap();
     let first = c.console(&g[0]).unwrap();
-    let vnc1 = VncClient::connect(&vnc_params(first.port, first.password.clone()), Arc::new(|_| false)).unwrap();
+    let vnc1 = VncClient::connect(&vnc_params(first.port, first.password.clone()), Arc::new(|_| false.into())).unwrap();
     assert_eq!(vnc1.name, "vm100");
     assert_eq!(log.lock().unwrap().open_ws, 1);
     let (port1, done1) = (first.port, first.finished_flag());
@@ -371,7 +371,7 @@ fn reconnect_reopens_console_without_leftovers() {
     // beendet und kein Websocket mehr offen ist, prüft die Schleife oben.
     let _ = port1;
     let second = c.console(&g[0]).unwrap();
-    let vnc2 = VncClient::connect(&vnc_params(second.port, second.password.clone()), Arc::new(|_| false)).unwrap();
+    let vnc2 = VncClient::connect(&vnc_params(second.port, second.password.clone()), Arc::new(|_| false.into())).unwrap();
     assert_eq!(vnc2.name, "vm100");
     assert_eq!(log.lock().unwrap().open_ws, 1, "genau eine Konsole offen");
 }

@@ -635,6 +635,7 @@ impl App {
             "settings" => Ok(json!({
                 "lock_after_idle_mins": self.config.security.lock_after_idle_mins,
                 "disconnect_on_lock": self.config.security.disconnect_on_lock,
+                "accept_key_errors": self.config.security.accept_key_errors,
                 "connect_all_parallel": self.config.connection.connect_all_parallel,
                 "keyboard_capture": self.config.connection.keyboard_capture,
                 "close_tab_key": self.config.connection.close_tab_key,
@@ -654,6 +655,10 @@ impl App {
                 }
                 if let Some(d) = c.get("disconnect_on_lock").and_then(Value::as_bool) {
                     self.config.security.disconnect_on_lock = d;
+                }
+                if let Some(a) = c.get("accept_key_errors").and_then(Value::as_bool) {
+                    self.config.security.accept_key_errors = a;
+                    crate::keyerrors::set(a);
                 }
                 if let Some(n) = c.get("connect_all_parallel").and_then(Value::as_u64) {
                     self.config.connection.connect_all_parallel = n.clamp(1, 64) as u32;

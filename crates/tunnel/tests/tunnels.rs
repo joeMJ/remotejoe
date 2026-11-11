@@ -28,10 +28,10 @@ fn params(port: u16) -> SshParams {
 }
 
 fn accept_all(rt: &tokio::runtime::Runtime) -> HostKeyAsk {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<rj_ssh::client::HostKeyAnswer>)>();
     rt.spawn(async move {
         while let Some((_, r)) = rx.recv().await {
-            let _ = r.send(true);
+            let _ = r.send(true.into());
         }
     });
     tx

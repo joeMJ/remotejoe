@@ -1605,10 +1605,11 @@ void SessionPane::showWebMenu(const QJsonObject& e)
 	menu->popup(m_frame->mapToGlobal(at));
 }
 
-void SessionPane::setNotice(const QString& text)
+void SessionPane::setNotice(const QString& text, bool severe)
 {
 	// Der Hinweis erscheint in der Fußzeile des Hauptfensters, nicht in der Sitzung.
 	m_noticeText = text;
+	m_noticeSevere = severe;
 }
 
 void SessionPane::fillMacroMenu()

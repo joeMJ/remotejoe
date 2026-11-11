@@ -149,11 +149,19 @@ impl rj_tasks::apt::Progress for JobProgress<'_> {
 impl AppExecutor {
     fn apt(&self, spec: &JobSpec, job: &JobHandle) -> Result<(), String> {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-        // Im Stapelbetrieb keine Rückfragen: unbekannte Host-Schlüssel werden abgelehnt.
-        let (ask, mut q) = tokio::sync::mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>();
+        // Im Stapelbetrieb keine Rückfragen: unbekannte Host-Schlüssel werden abgelehnt – außer mit „Bei
+        // Schlüsselfehlern trotzdem fortfahren“ (dann nur für diese Verbindung angenommen und gemeldet).
+        let (ask, mut q) = tokio::sync::mpsc::unbounded_channel::<(rj_ssh::known_hosts::HostKeyQuestion, tokio::sync::oneshot::Sender<rj_ssh::client::HostKeyAnswer>)>();
         rt.spawn(async move {
-            while let Some((_, r)) = q.recv().await {
-                let _ = r.send(false);
+            while let Some((question, r)) = q.recv().await {
+                let answer = if crate::keyerrors::accept() {
+                    let changed = matches!(question.status, rj_ssh::known_hosts::HostKeyStatus::Changed { .. });
+                    crate::keyerrors::warn(crate::keyerrors::text("hostkey", &question.host, question.port, &question.algorithm, &question.fingerprint, changed));
+                    rj_ssh::client::HostKeyAnswer::AcceptOnce
+                } else {
+                    rj_ssh::client::HostKeyAnswer::Reject
+                };
+                let _ = r.send(answer);
             }
         });
         let pw = Secret::from_bytes(spec.credentials.password.0.clone());

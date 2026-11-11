@@ -279,6 +279,8 @@ private:
 	class QAbstractButton* m_compactSwitch = nullptr;
 	class QToolButton* m_treeButton = nullptr;
 	class QLabel* m_noticeLabel = nullptr;
+	/// Zuletzt übergangener Schlüsselfehler einer Hintergrundabfrage (Fußzeile, rot, eine Minute).
+	QString m_keyWarning;
 	QTimer m_fitTimer;
 	QWidget* m_emptyHint = nullptr;
 	class QLabel* m_logo = nullptr;

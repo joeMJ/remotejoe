@@ -258,9 +258,16 @@ impl App {
 fn proxmox_client(c: &Ctx, seen: Arc<Mutex<Option<String>>>, timeout: Duration) -> Result<rj_proxmox::Client, String> {
     let key = format!("{}:{}", c.host, c.port);
     let accepted = known().get(&key).cloned();
+    let (host, port) = (c.host.clone(), c.port);
     let check: rj_proxmox::CertCheck = Arc::new(move |fp: &str| {
         *seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(fp.to_string());
-        accepted.as_deref() == Some(fp)
+        let ok = accepted.as_deref() == Some(fp);
+        // „Bei Schlüsselfehlern trotzdem fortfahren“: nur für diese Verbindung annehmen und melden.
+        if !ok && crate::keyerrors::accept() {
+            crate::keyerrors::warn(crate::keyerrors::text("certificate", &host, port, "X.509", fp, accepted.is_some()));
+            return true;
+        }
+        ok
     });
     let host = if c.host.contains(':') && !c.host.starts_with('[') { format!("[{}]", c.host) } else { c.host.clone() };
     rj_proxmox::Client::new(&format!("https://{host}:{}", c.port), proxmox_auth(&c.creds), check, timeout).map_err(|e| e.to_string())

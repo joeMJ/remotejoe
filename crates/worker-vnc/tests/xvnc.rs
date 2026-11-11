@@ -36,7 +36,7 @@ fn start(sec: VncSecurity) -> Option<Arc<Xvnc>> {
 }
 
 fn accept_all() -> CertCheck {
-    Arc::new(|_| true)
+    Arc::new(|_| true.into())
 }
 
 fn wait(c: &VncClient, ms: u64, mut f: impl FnMut(&VncEvent) -> bool) -> bool {
@@ -178,7 +178,7 @@ fn vencrypt_x509_with_certificate_prompt() {
     let a = asked.clone();
     let r = VncClient::connect(&params(&x, PASSWORD), Arc::new(move |_| {
         a.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        false
+        false.into()
     }));
     assert!(matches!(r, Err(VncError::CertificateRejected)), "{:?}", r.err());
     // Annehmen und merken.
@@ -186,7 +186,7 @@ fn vencrypt_x509_with_certificate_prompt() {
     let c = VncClient::connect(&params(&x, PASSWORD), Arc::new(move |info| {
         assert!(info.old_fingerprint.is_none());
         a.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        true
+        true.into()
     }))
     .expect("VeNCrypt");
     assert_eq!(c.security, "VeNCrypt X.509 + VNC-Kennwort");

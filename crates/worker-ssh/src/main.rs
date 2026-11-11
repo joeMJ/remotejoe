@@ -68,7 +68,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<ToWorker>, out: rj_ipc::worker::Sen
     let mut conn: Option<SshConnection> = None;
     let mut shell: Option<Shell> = None;
     let (ask_tx, mut ask_rx) = mpsc::unbounded_channel();
-    let mut pending: HashMap<u32, oneshot::Sender<bool>> = HashMap::new();
+    let mut pending: HashMap<u32, oneshot::Sender<rj_ssh::client::HostKeyAnswer>> = HashMap::new();
     let mut next_q = 1u32;
     let mut connecting: Option<tokio::task::JoinHandle<Result<(SshConnection, Shell), String>>> = None;
     let mut host = TermHost::default();
@@ -110,7 +110,12 @@ async fn run(mut rx: mpsc::UnboundedReceiver<ToWorker>, out: rj_ipc::worker::Sen
                     ToWorker::Credentials(c) => creds = Some(c),
                     ToWorker::Answer { question, accept } => {
                         if let Some(tx) = pending.remove(&question) {
-                            let _ = tx.send(accept);
+                            let _ = tx.send(accept.into());
+                        }
+                    }
+                    ToWorker::AnswerOnce { question } => {
+                        if let Some(tx) = pending.remove(&question) {
+                            let _ = tx.send(rj_ssh::client::HostKeyAnswer::AcceptOnce);
                         }
                     }
                     ToWorker::Input(InputEvent::Bytes(b)) => {

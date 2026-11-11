@@ -334,7 +334,8 @@ impl Worker {
                         self.send(FromWorker::State(SessionState::Failed { reason: e }));
                     }
                 }
-                ToWorker::Answer { question, accept } => self.answer(question, accept),
+                ToWorker::Answer { question, accept } => self.answer(question, accept, true),
+                ToWorker::AnswerOnce { question } => self.answer(question, true, false),
                 // Größe, Eingaben und Zwischenablage regelt WebView2 selbst (Befehle Bounds/Embed, Systemzwischenablage).
                 ToWorker::Resize { .. } | ToWorker::Input(_) | ToWorker::Clipboard(_) | ToWorker::Term(_) => {}
                 ToWorker::Custom(bytes) => match serde_json::from_slice::<WebCommand>(&bytes) {
@@ -703,9 +704,10 @@ impl Worker {
     }
 
     /// Antwort auf die Zertifikatsfrage.
-    fn answer(&self, id: u32, accept: bool) {
+    /// Antwort auf eine Zertifikatsfrage; `remember`: für das Profil speichern (sonst nur diese Verbindung).
+    fn answer(&self, id: u32, accept: bool, remember: bool) {
         let Some(a) = self.0.asks.borrow_mut().remove(&id) else { return };
-        if accept {
+        if accept && remember {
             let mut known = AcceptedCerts::load(&a.profile);
             known.accept(&a.host, &a.der);
             let _ = known.save(&a.profile);

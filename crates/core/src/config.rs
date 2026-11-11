@@ -266,11 +266,14 @@ pub struct SecurityDefaults {
     pub clipboard_clear_secs: u32,
     /// Das Hauptkennwort liegt (auf Wunsch) im Schlüsselbund des Systems; der Start entsperrt damit.
     pub keyring_unlock: bool,
+    /// Bei Schlüsselfehlern (unbekannte oder geänderte Host-Schlüssel und Zertifikate) ohne Rückfrage fortfahren,
+    /// nur für die jeweilige Verbindung; gemeldet wird es trotzdem. Vorgabe: aus.
+    pub accept_key_errors: bool,
 }
 
 impl Default for SecurityDefaults {
     fn default() -> Self {
-        SecurityDefaults { lock_after_idle_mins: 0, disconnect_on_lock: false, clipboard_clear_secs: 30, keyring_unlock: false }
+        SecurityDefaults { lock_after_idle_mins: 0, disconnect_on_lock: false, clipboard_clear_secs: 30, keyring_unlock: false, accept_key_errors: false }
     }
 }
 

@@ -49,7 +49,27 @@ pub struct CertInfo {
     pub old_fingerprint: Option<String>,
 }
 
-pub type CertCheck = Arc<dyn Fn(&CertInfo) -> bool + Send + Sync>;
+pub type CertCheck = Arc<dyn Fn(&CertInfo) -> CertAnswer + Send + Sync>;
+
+/// Antwort auf eine Rückfrage zum Zertifikat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CertAnswer {
+    Reject,
+    /// Annehmen und merken.
+    Accept,
+    /// Nur für diese Verbindung annehmen, nichts speichern.
+    AcceptOnce,
+}
+
+impl From<bool> for CertAnswer {
+    fn from(accept: bool) -> Self {
+        if accept {
+            CertAnswer::Accept
+        } else {
+            CertAnswer::Reject
+        }
+    }
+}
 
 /// Bekannte Zertifikate (Fingerabdruck SHA-256 je Host und Port).
 #[derive(Debug, Clone)]
@@ -388,15 +408,17 @@ fn start_tls(sock: TcpStream, p: &VncParams, cert_check: &CertCheck) -> Result<(
         if old.as_deref() == Some(fp.as_str()) {
             return true;
         }
-        let ok = check_cb(&CertInfo { host: host.clone(), port, fingerprint: fp.clone(), old_fingerprint: old });
-        if ok {
-            if let Some(k) = &known {
-                let _ = k.remember(&id, &fp);
+        let answer = check_cb(&CertInfo { host: host.clone(), port, fingerprint: fp.clone(), old_fingerprint: old });
+        match answer {
+            CertAnswer::Accept => {
+                if let Some(k) = &known {
+                    let _ = k.remember(&id, &fp);
+                }
             }
-        } else {
-            *rej2.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            CertAnswer::AcceptOnce => {}
+            CertAnswer::Reject => *rej2.lock().unwrap_or_else(|e| e.into_inner()) = true,
         }
-        ok
+        answer != CertAnswer::Reject
     });
     let verifier = Arc::new(FingerprintVerifier { provider: provider.clone(), check: Arc::new(Mutex::new(Some(check))) });
     let config = rustls::ClientConfig::builder_with_provider(provider)

@@ -51,6 +51,7 @@ private:
 	/// Laufende „Erkennen“-Abfragen (IP).
 	QHash<QString, bool> m_identifying;
 	QPushButton* m_again;
+	QLabel* m_result;
 	QLabel* m_state;
 	QLabel* m_offline;
 	QTableWidget* m_table;

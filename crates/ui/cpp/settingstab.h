@@ -80,6 +80,7 @@ private:
 	// Sperre und Zwischenablage
 	QComboBox* m_idle = nullptr;
 	QCheckBox* m_disconnect = nullptr;
+	QCheckBox* m_keyErrors = nullptr;
 	QSpinBox* m_clipSecs = nullptr;
 	// Tastatur
 	QCheckBox* m_keyCapture = nullptr;

@@ -198,6 +198,10 @@ QWidget* SettingsTab::pageLock()
 	m_clipSecs->setSpecialValueText(T("settings.clip.never"));
 	f->addRow(T("settings.clip"), m_clipSecs);
 	f->addRow(QString(), hint(T("clip.clear.text"), w));
+	// Schlüsselfehler (Host-Schlüssel, Zertifikate): ohne Rückfrage nur für diese Verbindung annehmen.
+	m_keyErrors = new QCheckBox(T("settings.keyerrors"), w);
+	f->addRow(QString(), m_keyErrors);
+	f->addRow(QString(), hint(T("settings.keyerrors.hint"), w));
 	v->addLayout(f);
 	v->addStretch(1);
 
@@ -213,6 +217,12 @@ QWidget* SettingsTab::pageLock()
 	};
 	connect(m_idle, &QComboBox::currentIndexChanged, this, saveIdle);
 	connect(m_disconnect, &QCheckBox::toggled, this, saveIdle);
+	connect(m_keyErrors, &QCheckBox::toggled, this, [this](bool on) {
+		if (m_loading)
+			return;
+		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("accept_key_errors"), on } });
+		refreshSummaries();
+	});
 	connect(m_clipSecs, &QSpinBox::valueChanged, this, [this](int secs) {
 		if (m_loading)
 			return;
@@ -590,6 +600,7 @@ void SettingsTab::reload()
 	if (const int i = m_idle->findData(s.value(QStringLiteral("lock_after_idle_mins")).toInt()); i >= 0)
 		m_idle->setCurrentIndex(i);
 	m_disconnect->setChecked(s.value(QStringLiteral("disconnect_on_lock")).toBool());
+	m_keyErrors->setChecked(s.value(QStringLiteral("accept_key_errors")).toBool());
 	m_clipSecs->setValue(m_backend->clipboardClearSecs());
 	m_keyCapture->setChecked(FrameView::s_keyCapture);
 	if (const int i = m_closeTab->findData(s.value(QStringLiteral("close_tab_key")).toString(QStringLiteral("outside"))); i >= 0)
@@ -633,7 +644,8 @@ void SettingsTab::refreshSummaries()
 	const int secs = m_clipSecs->value();
 	set("lock", T("settings.lock.sum")
 	              .arg(mins == 0 ? T("idle.off") : T("idle.minutes").arg(mins))
-	              .arg(secs == 0 ? T("settings.clip.never") : QString::number(secs) + T("settings.clip.suffix")));
+	              .arg(secs == 0 ? T("settings.clip.never") : QString::number(secs) + T("settings.clip.suffix"))
+	            + (m_keyErrors->isChecked() ? T("settings.keyerrors.sum") : QString()));
 	set("keys", T(m_keyCapture->isChecked() ? "settings.keys.sum.on" : "settings.keys.sum.off"));
 	set("terminal", T("settings.terminal.sum"));
 	set("appearance", T("settings.appearance.sum"));

@@ -119,18 +119,26 @@ impl App {
     pub fn new(demo: bool) -> Self {
         let config_path = rj_core::config::default_config_path();
         let config = config_path.as_deref().map(Config::load).and_then(Result::ok).unwrap_or_default();
+        crate::keyerrors::set(config.security.accept_key_errors);
         let reconnect = Reconnect { auto: config.connection.auto_reconnect, max: Duration::from_secs(config.connection.reconnect_max_secs as u64) };
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("Laufzeit");
         let known_hosts = KnownHosts::default_location().unwrap_or_else(|| KnownHosts::new(std::env::temp_dir().join("remotejoe-known_hosts")));
         let hop_question = std::sync::Arc::new(std::sync::Mutex::new(None));
         // Rückfragen zu Sprungservern: hier ablehnen und merken; die Oberfläche
         // fragt den Benutzer und versucht es nach Zustimmung erneut.
-        let (ask, mut questions) = tokio::sync::mpsc::unbounded_channel::<(HostKeyQuestion, tokio::sync::oneshot::Sender<bool>)>();
+        // Mit „Bei Schlüsselfehlern trotzdem fortfahren“: nur für diese Verbindung annehmen und melden.
+        let (ask, mut questions) = tokio::sync::mpsc::unbounded_channel::<(HostKeyQuestion, tokio::sync::oneshot::Sender<rj_ssh::client::HostKeyAnswer>)>();
         let hq = hop_question.clone();
         rt.spawn(async move {
             while let Some((q, reply)) = questions.recv().await {
+                if crate::keyerrors::accept() {
+                    let changed = matches!(q.status, rj_ssh::known_hosts::HostKeyStatus::Changed { .. });
+                    crate::keyerrors::warn(crate::keyerrors::text("hostkey", &q.host, q.port, &q.algorithm, &q.fingerprint, changed));
+                    let _ = reply.send(rj_ssh::client::HostKeyAnswer::AcceptOnce);
+                    continue;
+                }
                 *hq.lock().unwrap_or_else(|e| e.into_inner()) = Some(q);
-                let _ = reply.send(false);
+                let _ = reply.send(rj_ssh::client::HostKeyAnswer::Reject);
             }
         });
         let tunnels = std::sync::Arc::new(std::sync::Mutex::new(TunnelManager::new(rt.handle().clone(), known_hosts.clone(), ask)));
@@ -1511,6 +1519,7 @@ impl App {
 
     pub fn poll(&mut self) -> Vec<UiEvent> {
         let mut out = self.sessions.poll(Duration::from_millis(0));
+        out.extend(crate::keyerrors::take().into_iter().map(|text| UiEvent::KeyWarning { s: 0, text }));
         self.process_probe(&mut out);
         // Eingaben laufender Makros an die Sitzungen weitergeben, beendete Makros melden.
         while let Ok((s, bytes)) = self.macro_input_rx.try_recv() {

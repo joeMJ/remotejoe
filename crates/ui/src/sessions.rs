@@ -115,6 +115,9 @@ pub enum UiEvent {
     /// geschlossen, `ended`: Verbindung beendet).
     QuestionClosed { s: SessionId, q: u32, reason: String },
     Notice { s: SessionId, text: String },
+    /// Schlüsselfehler, über den ohne Rückfrage hinweggegangen wurde (Einstellung „Bei Schlüsselfehlern trotzdem
+    /// fortfahren“); `s` ist 0 bei Hintergrundaufgaben.
+    KeyWarning { s: SessionId, text: String },
     Clipboard { s: SessionId, text: String },
     ClipboardReadRequest { s: SessionId },
     Title { s: SessionId, title: String },
@@ -1184,6 +1187,13 @@ impl Manager {
             FromWorker::Clipboard(ClipData::Files(files)) => {
                 let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
                 self.pending.push(UiEvent::Notice { s, text: format!("Dateien in der Zwischenablage empfangen: {}", names.join(", ")) });
+            }
+            FromWorker::Question { id, text, detail, info } if crate::keyerrors::accept() && matches!(info.kind.as_str(), "hostkey" | "certificate") => {
+                // Ohne Rückfrage nur für diese Verbindung annehmen und melden.
+                let _ = (text, detail);
+                self.send(s, &ToWorker::AnswerOnce { question: id });
+                let changed = info.previous.is_some();
+                self.pending.push(UiEvent::KeyWarning { s, text: crate::keyerrors::text(&info.kind, &info.host, info.port, &info.key_type, &info.fingerprint, changed) });
             }
             FromWorker::Question { id, text, detail, info } => {
                 self.questions.insert((s, id), Instant::now() + self.question_timeout);

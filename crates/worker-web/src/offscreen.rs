@@ -204,7 +204,12 @@ impl Worker {
             }
             ToWorker::Answer { question, accept } => {
                 if let Some(p) = self.page() {
-                    p.tls.answer(question, accept);
+                    p.tls.answer(question, accept, true);
+                }
+            }
+            ToWorker::AnswerOnce { question } => {
+                if let Some(p) = self.page() {
+                    p.tls.answer(question, true, false);
                 }
             }
             ToWorker::Resize { width, height } => {
@@ -1115,16 +1120,20 @@ mod tls {
             });
         }
 
-        pub fn answer(&self, id: u32, accept: bool) {
+        /// Antwort auf eine Zertifikatsfrage; `remember`: angenommenes Zertifikat für das Profil speichern
+        /// (sonst gilt es nur für diese Verbindung).
+        pub fn answer(&self, id: u32, accept: bool, remember: bool) {
             let Some(a) = self.asks.borrow_mut().remove(&id) else { return };
             if !accept {
                 a.view.load_html("<html><body style='font-family:sans-serif'><h2>Verbindung abgelehnt</h2><p>Das Zertifikat wurde nicht angenommen.</p></body></html>", None);
                 return;
             }
-            let der = a.cert.certificate().map(|b| b.to_vec()).unwrap_or_default();
-            let mut known = AcceptedCerts::load(&a.profile);
-            known.accept(&a.key, &der);
-            let _ = known.save(&a.profile);
+            if remember {
+                let der = a.cert.certificate().map(|b| b.to_vec()).unwrap_or_default();
+                let mut known = AcceptedCerts::load(&a.profile);
+                known.accept(&a.key, &der);
+                let _ = known.save(&a.profile);
+            }
             allow(&a.view, &a.cert, &a.host, &a.uri);
         }
     }

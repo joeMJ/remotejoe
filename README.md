@@ -215,7 +215,7 @@ neu aufklappen.
   Notizen des Ziels; Ping und Traceroute. Ohne Anmeldung kommen Adresse, MAC (im selben Netz) und – bei RDP mit NLA –
   der Rechnername; **Inventar abfragen** liest den Rest mit den Zugangsdaten des Ziels (Linux und Aruba über SSH,
   Windows über PowerShell per OpenSSH bzw. WinRM). Ein noch unbekannter SSH-Host-Schlüssel wird dabei übernommen und
-  gemeldet, ein geänderter nie. Gäste von Proxmox und Hyper-V zeigen ihr Inventar vom Hypervisor. Das Inventar liegt
+  gemeldet, ein geänderter nie (außer mit „Bei Schlüsselfehlern trotzdem fortfahren“, siehe Einstellungen). Gäste von Proxmox und Hyper-V zeigen ihr Inventar vom Hypervisor. Das Inventar liegt
   als Datei im Datenordner (`inventar/`), nicht in der Schlüsseldatenbank.
   Ob sich das Inventar an einem Ziel anmelden darf, ist je Ziel bzw. Ordner einstellbar („Abfragen erlaubt“ in der
   Übersicht, Einstellungen → Allgemein → Inventar). Web-Ziele sind ohne eigene Festlegung aus; ein „an“ am Ordner
@@ -232,7 +232,8 @@ neu aufklappen.
 - **Zugangsdaten prüfen:** Rechtsklick auf einen Ordner oder eine Auswahl → **Zugangsdaten prüfen …** meldet sich je
   Ziel und Zugangsweg nur an und trennt sofort (SSH, RDP nur NLA, PowerShell/Hyper-V, Proxmox, VNC; Web ist nicht
   prüfbar). Ziele mit denselben Zugangsdaten kommen nacheinander, und nach einer Ablehnung wird mit diesen Zugangsdaten
-  nichts weiter versucht, damit kein Konto gesperrt wird. Unbekannte Zertifikate werden nicht angenommen. Übersicht mit
+  nichts weiter versucht, damit kein Konto gesperrt wird. Unbekannte Zertifikate werden nicht angenommen (außer mit
+  „Bei Schlüsselfehlern trotzdem fortfahren“). Übersicht mit
   „Nur Fehler“, „Fehlgeschlagene wiederholen“ und „Zugangsdaten bearbeiten“.
 - **Gleiche Zugangsdaten zusammenführen** (Extras bzw. Kontextmenü): findet gleiche, direkt hinterlegte Zugangsdaten an
   mehreren Zielen und stellt sie auf ein neues oder ein vorhandenes Anmeldeobjekt mit denselben Daten um.
@@ -495,18 +496,23 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
 12. **Hilfe** enthält „Nach Updates suchen …“, „Hilfe“ (diese Anleitung auf GitHub), „Fehler melden / Wunsch …“
     (siehe [Fehler melden und Wünsche](#fehler-melden-und-wünsche)) und „Über remotejoe …“.
 13. **Einstellungen:** Alle Programmeinstellungen stehen gesammelt unter **Extras → Einstellungen**, aufgebaut
-    wie die Einstellungen eines Ziels: links die Bereiche mit Kurzfassung (Sperre und Zwischenablage, Tastatur,
+    wie die Einstellungen eines Ziels: links die Bereiche mit Kurzfassung (Sicherheit, Tastatur,
     Terminal, Darstellung, SNMP-Geräte), rechts der gewählte Bereich. Änderungen gelten sofort und werden
     gespeichert. Die einzelnen Einträge im Menü Extras öffnen den Reiter gleich beim passenden Bereich.
+    Unter **Sicherheit** stehen Sperre nach Leerlauf, Löschen kopierter Kennwörter und **Bei Schlüsselfehlern
+    trotzdem fortfahren** (Vorgabe aus): Unbekannte oder geänderte Host-Schlüssel und Zertifikate – bei Sitzungen,
+    Tunneln, Hintergrundabfragen, Proxmox und „Zugangsdaten prüfen“ – werden dann ohne Rückfrage angenommen, nur für
+    diese eine Verbindung; gespeichert wird nichts, und jeder Fall erscheint rot in der Fußzeile. Ein geänderter
+    Schlüssel kann auf einen fremden Server dazwischen hindeuten – die Zugangsdaten gehen dann trotzdem hinaus.
 
 <p align="center">
   <img src="docs/screenshots/eigenschaften.png" alt="Einstellungen eines Ziels: links die Bereiche, rechts der gewählte Bereich" width="760">
   <br>
   <em>Einstellungen eines Ziels (F4)</em>
   <br><br>
-  <img src="docs/screenshots/einstellungen.png" alt="Extras → Einstellungen: Sperre und Zwischenablage" width="760">
+  <img src="docs/screenshots/einstellungen.png" alt="Extras → Einstellungen: Sicherheit" width="760">
   <br>
-  <em>Extras → Einstellungen: Sperre und Zwischenablage</em>
+  <em>Extras → Einstellungen: Sicherheit</em>
   <br><br>
   <img src="docs/screenshots/terminal-einstellungen.png" alt="Einstellungen → Terminal im Farbschema Catppuccin Mocha" width="760">
   <br>
