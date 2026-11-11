@@ -36,6 +36,8 @@ signals:
 	void logRequested(const QString& kind, bool filtered);
 	/// Anwender des Clusters anzeigen.
 	void usersRequested();
+	/// Clusteraufbrüche suchen (Segment auf 4343).
+	void breakoutsRequested();
 	/// Kachel eines online-APs angeklickt (`name`, `ip`, `serial`, …).
 	void apClicked(const QJsonObject& ap);
 

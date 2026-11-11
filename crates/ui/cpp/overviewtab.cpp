@@ -251,6 +251,11 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 		s.insert(QStringLiteral("vc_name"), m_name);
 		emit arubaUsersRequested(s, m_name);
 	});
+	connect(m_cluster, &ArubaClusterView::breakoutsRequested, this, [this] {
+		QJsonObject s = m_subject;
+		s.insert(QStringLiteral("vc_name"), m_name);
+		emit arubaBreakoutsRequested(s, m_name);
+	});
 	connect(m_cluster, &ArubaClusterView::apClicked, this, [this](const QJsonObject& ap) {
 		QJsonObject s = m_subject;
 		s.insert(QStringLiteral("vc_name"), m_name);

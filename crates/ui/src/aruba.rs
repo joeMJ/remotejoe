@@ -321,6 +321,100 @@ pub fn ap_json(outputs: &[String], name: &str, ip: &str) -> Value {
     })
 }
 
+/// Befehle für „Erkennen“ bei der Suche nach Clusteraufbrüchen (am gefundenen Gerät, mit den Zugangsdaten des VC).
+pub const BREAKOUT_COMMANDS: [&str; 4] = ["no paging", "show summary", "show version", "show interface"];
+
+/// Adressen für die Suche nach Clusteraufbrüchen: .1 bis .254 des Segments (`a.b.c.0/24`) ohne `exclude`
+/// (online-APs des Schwarms und die VC-IP). `None`, wenn das Segment kein /24 im bekannten Format ist.
+pub fn breakout_hosts(segment: &str, exclude: &[String]) -> Option<Vec<String>> {
+    let base = segment.strip_suffix(".0/24")?;
+    segment_of(&format!("{base}.0"))?;
+    Some((1..=254).map(|i| format!("{base}.{i}")).filter(|ip| !exclude.iter().any(|e| e.trim_end_matches('*') == ip)).collect())
+}
+
+/// Wert eines Felds aus dem Kopf von `show summary` („Name  :wert“); der erste passende Name zählt.
+fn summary_field(summary: &str, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        summary.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            (k.trim().eq_ignore_ascii_case(name)).then(|| v.trim().to_string()).filter(|v| !v.is_empty())
+        })
+    })
+}
+
+/// Ergebnis von „Erkennen“ für ein Gerät, das auf 4343 antwortet, aber nicht im Schwarm ist: Name, MAC, Firmware,
+/// die VC-IP, die es für sich beansprucht, und wie viele APs es selbst sieht. `offline` sind die MACs der als
+/// offline gemeldeten APs des Schwarms, `vc` dessen VC-IP. `verdict`: `breakout` (offline gemeldeter AP dieses
+/// Schwarms), `claims_vc` (beansprucht die VC-IP dieses Schwarms), `foreign` (anderes Gerät oder anderer Schwarm).
+pub fn breakout_json(outputs: &[String], ip: &str, offline: &[String], vc: &str) -> Value {
+    let get = |i: usize| outputs.get(i).map(String::as_str).unwrap_or("");
+    let summary = get(1);
+    let version = crate::overview::remote::parse_aruba(get(2)).unwrap_or_default();
+    let system = version.iter().find(|(f, _)| *f == "system").map(|(_, v)| v.clone());
+    let mac = interface_mac(get(3));
+    let name = summary_field(summary, &["Name"]);
+    let claimed = summary_field(summary, &["VC IP Address", "Virtual Controller IP Address", "Virtual Controller IP", "VC IP"])
+        .map(|v| v.split_whitespace().next().unwrap_or("").to_string())
+        .filter(|v| segment_of(v).is_some());
+    // „3 Access Points“ über der AP-Tabelle; sonst die Zeilen der Tabelle.
+    let seen = summary
+        .lines()
+        .find_map(|l| l.trim().strip_suffix("Access Points").and_then(|n| n.trim().parse::<u32>().ok()))
+        .or_else(|| (!summary_aps(summary).is_empty()).then(|| summary_aps(summary).len() as u32));
+    let member = mac.as_deref().is_some_and(|m| offline.iter().any(|o| o.eq_ignore_ascii_case(m)));
+    let verdict = if member {
+        "breakout"
+    } else if claimed.as_deref() == Some(vc.trim_end_matches('*')) {
+        "claims_vc"
+    } else {
+        "foreign"
+    };
+    json!({
+        "ip": ip,
+        "name": name,
+        "mac": mac,
+        "system": system,
+        "claimed_vc": claimed,
+        "aps_seen": seen,
+        "member": member,
+        "verdict": verdict,
+        "aruba": !version.is_empty() || name.is_some(),
+    })
+}
+
+/// Nur Vorführung (Bildschirmfotos): Suche nach Clusteraufbrüchen im erfundenen Cluster aus [`demo`] – ein
+/// aufgebrochener AP (schon erkannt), ein Gerät eines anderen Schwarms und ein noch nicht erkanntes.
+pub fn demo_breakouts(cluster: &Value) -> Value {
+    let offline: Vec<String> = cluster["aps"].as_array().into_iter().flatten().filter(|a| a["online"] == false).filter_map(|a| a["name"].as_str().map(str::to_string)).collect();
+    let mac = offline.first().cloned().unwrap_or_default();
+    let found = vec![
+        format!("Name          :{mac}\nVC IP Address :192.0.2.240\n\n1 Access Points\n"),
+        "ArubaOS (MODEL: 515), Version 8.10.0.23 LSR\nAP uptime is 0 days 0 hours 41 minutes 9 seconds".to_string(),
+        format!("bond0 is up\nHardware is Ethernet, address is {mac}"),
+    ];
+    let mut outputs = vec![String::new()];
+    outputs.extend(found);
+    let foreign = vec![
+        String::new(),
+        "Name          :ap-lager-01\nVC IP Address :192.0.2.20\n\n4 Access Points\n".to_string(),
+        "ArubaOS (MODEL: 505), Version 8.12.0.1 SSR".to_string(),
+        "bond0 is up\nHardware is Ethernet, address is 02:00:5e:00:7a:01".to_string(),
+    ];
+    let mut a = breakout_json(&outputs, "192.0.2.233", &offline, "192.0.2.240");
+    a["ms"] = json!(4);
+    let mut b = breakout_json(&foreign, "192.0.2.21", &offline, "192.0.2.240");
+    b["ms"] = json!(3);
+    json!({
+        "segment": cluster["segment"],
+        "vc": "192.0.2.240",
+        "offline": offline,
+        "scanned": 231,
+        "hits": [b, a, { "ip": "192.0.2.250", "ms": 6 }],
+        "complete": true,
+        "at": crate::overview::inventory::now(),
+    })
+}
+
 /// Nur Vorführung (Bildschirmfotos): erfundener Cluster mit 24 APs und eine AP-Seite.
 pub fn demo() -> (Value, Value) {
     // Namensspalte 30 Zeichen breit wie bei langen AP-Namen am Gerät.
@@ -446,6 +540,54 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
         // Andere Firmware: mgmt-user mit Hash, Nur-Lesen mit „read-only“ am Ende.
         let cfg = "mgmt-user admin 0123456789abcdef0123456789abcdef\nmgmt-user operator fedcba9876543210fedcba9876543210 read-only\nmgmt-user gast 00ff00ff guest-provisioning\n";
         assert_eq!(admin_users(cfg), vec!["admin".to_string()]);
+    }
+
+    #[test]
+    fn breakout_hosts_skip_swarm_and_vc() {
+        let h = breakout_hosts("192.0.2.0/24", &["192.0.2.10*".into(), "192.0.2.4".into()]).unwrap();
+        assert_eq!(h.len(), 252);
+        assert_eq!(h.first().map(String::as_str), Some("192.0.2.1"));
+        assert!(!h.contains(&"192.0.2.10".to_string()) && !h.contains(&"192.0.2.4".to_string()));
+        assert!(h.contains(&"192.0.2.254".to_string()) && !h.contains(&"192.0.2.255".to_string()));
+        assert!(breakout_hosts("192.0.2.0/23", &[]).is_none());
+        assert!(breakout_hosts("kein-segment", &[]).is_none());
+    }
+
+    #[test]
+    fn breakout_is_recognised_by_offline_mac() {
+        let offline = vec!["02:00:5e:00:41:37".to_string()];
+        let out = |name: &str, vc: &str, n: u32, mac: &str| {
+            vec![
+                String::new(),
+                format!("Name                         :{name}\r\nSystem Location              :\r\nVC IP Address                :{vc}\r\n\r\n{n} Access Points\r\n"),
+                "ArubaOS (MODEL: 515), Version 8.10.0.23 LSR".to_string(),
+                format!("bond0 is up\nHardware is Ethernet, address is {mac}"),
+            ]
+        };
+        let b = breakout_json(&out("02:00:5e:00:41:37", "192.0.2.4", 1, "02:00:5E:00:41:37"), "192.0.2.77", &offline, "192.0.2.4");
+        assert_eq!((b["verdict"].as_str(), b["member"].as_bool(), b["aps_seen"].as_u64()), (Some("breakout"), Some(true), Some(1)));
+        assert_eq!(b["claimed_vc"], "192.0.2.4");
+        assert_eq!(b["mac"], "02:00:5e:00:41:37");
+        assert!(b["system"].as_str().unwrap().contains("8.10.0.23"));
+        // Fremde MAC, aber die VC-IP dieses Schwarms beansprucht.
+        let c = breakout_json(&out("ap-x", "192.0.2.4", 1, "02:00:5e:00:99:01"), "192.0.2.78", &offline, "192.0.2.4");
+        assert_eq!(c["verdict"], "claims_vc");
+        // Anderer Schwarm.
+        let f = breakout_json(&out("ap-y", "192.0.2.20", 5, "02:00:5e:00:99:02"), "192.0.2.21", &offline, "192.0.2.4");
+        assert_eq!((f["verdict"].as_str(), f["aps_seen"].as_u64()), (Some("foreign"), Some(5)));
+        // Keine Aruba-Antwort (z. B. anderes Gerät auf 4343).
+        let n = breakout_json(&[String::new(), String::new(), String::new(), String::new()], "192.0.2.22", &offline, "192.0.2.4");
+        assert_eq!((n["verdict"].as_str(), n["aruba"].as_bool()), (Some("foreign"), Some(false)));
+    }
+
+    #[test]
+    fn breakout_demo_matches_its_cluster() {
+        let (cluster, _) = demo();
+        let d = demo_breakouts(&cluster);
+        let hits = d["hits"].as_array().unwrap();
+        assert!(hits.iter().any(|h| h["verdict"] == "breakout"));
+        assert!(hits.iter().any(|h| h["verdict"] == "foreign"));
+        assert_eq!(d["offline"].as_array().unwrap().len(), 3);
     }
 
     #[test]

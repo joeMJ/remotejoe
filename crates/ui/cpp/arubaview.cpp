@@ -159,6 +159,11 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 	auto* users = new QPushButton(rjui::glyphIcon(rjui::Glyph::Person), T("aruba.users.show"), this);
 	connect(users, &QPushButton::clicked, this, &ArubaClusterView::usersRequested);
 	fh->addWidget(users);
+	// APs, die aus dem Schwarm gefallen sind, aber im Segment auf 4343 antworten (Suche im eigenen Tab).
+	auto* breakouts = new QPushButton(rjui::glyphIcon(rjui::Glyph::Search), T("aruba.breakout.show"), this);
+	breakouts->setToolTip(T("aruba.breakout.show.tip"));
+	connect(breakouts, &QPushButton::clicked, this, &ArubaClusterView::breakoutsRequested);
+	fh->addWidget(breakouts);
 	// Logs am Controller: ganz oder gefiltert (show log … | include …), nur Anzeige. Rechts in der Filterzeile,
 	// damit er nicht unter „Cluster abfragen“ steht.
 	fh->addWidget(rjui::logMenuButton(T, this, [this](const QString& kind, bool filtered) { emit logRequested(kind, filtered); }));

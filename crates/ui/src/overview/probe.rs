@@ -70,6 +70,28 @@ pub fn scan(ip: IpAddr, ports: &[(u16, String)], timeout: Duration) -> Vec<Servi
     handles.into_iter().filter_map(|h| h.join().ok()).collect()
 }
 
+/// Einen Port an vielen Adressen prüfen, höchstens `parallel` gleichzeitig. Liefert die Adressen, die antworten,
+/// mit der Zeit bis zur Antwort (ms), in der Reihenfolge von `hosts`. `stop` bricht zwischen zwei Runden ab.
+pub fn sweep(hosts: &[IpAddr], port: u16, timeout: Duration, parallel: usize, stop: &dyn Fn() -> bool) -> Vec<(IpAddr, u64)> {
+    let mut out = Vec::new();
+    for chunk in hosts.chunks(parallel.max(1)) {
+        if stop() {
+            break;
+        }
+        let handles: Vec<_> = chunk
+            .iter()
+            .map(|&ip| {
+                std::thread::spawn(move || {
+                    let t0 = std::time::Instant::now();
+                    TcpStream::connect_timeout(&SocketAddr::new(ip, port), timeout).ok().map(|_| (ip, t0.elapsed().as_millis() as u64))
+                })
+            })
+            .collect();
+        out.extend(handles.into_iter().filter_map(|h| h.join().ok().flatten()));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,6 +106,17 @@ mod tests {
         let r = scan(ip, &[(open, "eigen".into()), (closed, "zu".into())], Duration::from_millis(500));
         assert_eq!(r.iter().find(|s| s.port == open).map(|s| s.open), Some(true));
         assert_eq!(r.iter().find(|s| s.port == closed).map(|s| s.open), Some(false));
+    }
+
+    #[test]
+    fn sweep_finds_listening_hosts_only() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        // 127.0.0.1 lauscht; 127.0.0.2 und .3 erreichen denselben Rechner, aber dort lauscht niemand.
+        let hosts: Vec<IpAddr> = ["127.0.0.2", "127.0.0.1", "127.0.0.3"].iter().map(|h| h.parse().unwrap()).collect();
+        let r = sweep(&hosts, port, Duration::from_millis(500), 2, &|| false);
+        assert_eq!(r.iter().map(|(ip, _)| ip.to_string()).collect::<Vec<_>>(), ["127.0.0.1"]);
+        assert!(sweep(&hosts, port, Duration::from_millis(500), 2, &|| true).is_empty());
     }
 
     #[test]

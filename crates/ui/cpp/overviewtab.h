@@ -59,6 +59,7 @@ signals:
 	void arubaLogRequested(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
 	/// Aruba: Anwender des Clusters anzeigen.
 	void arubaUsersRequested(const QJsonObject& subject, const QString& where);
+	void arubaBreakoutsRequested(const QJsonObject& subject, const QString& where);
 
 private:
 	QJsonObject call(const QJsonObject& cmd) const;

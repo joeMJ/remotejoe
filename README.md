@@ -352,6 +352,17 @@ der Schlüsseldatenbank.
   Für den gewählten Anwender zeigen drei Knöpfe (auch im Kontextmenü) an seinem AP: **Anmeldeprobleme**
   (`show ap debug auth-trace-buf | include <MAC>`), **Systemereignisse** (`show log system | include <MAC>`) und
   **Firewallereignisse** (`show log security | include <IP>`), jeweils im Protokoll-Tab mit änderbarem Filter.
+- **Clusteraufbrüche suchen** in der Cluster-Karte: Ein AP, der die Verbindung zum Conductor verliert (etwa wegen
+  falscher Uhrzeit oder eines Kabelproblems), fällt aus dem Schwarm, bleibt aber per IP erreichbar und beansprucht
+  selbst die VC-IP. remotejoe prüft das Segment des Schwarms auf Port 4343 – ohne die online-APs und die VC-IP – und
+  listet in einem eigenen Tab die Geräte, die antworten, dazu die offline gemeldeten APs. **Erkennen** fragt einen
+  Treffer per SSH mit den Zugangsdaten des VC ab (`show summary`, `show version`, `show interface`): Name, MAC,
+  Firmware, die VC-IP, die er für sich beansprucht, und wie viele APs er sieht. Passt die MAC zu einem offline
+  gemeldeten AP, steht er als **aufgebrochen** in der Liste; ein Gerät, das die VC-IP dieses Schwarms beansprucht,
+  wird ebenfalls hervorgehoben. **SSH-Sitzung** und **Web-Oberfläche** öffnen den Treffer mit den Zugangsdaten des VC.
+
+  <img src="docs/screenshots/aruba-clusteraufbrueche.png" alt="Suche nach Clusteraufbrüchen mit erkanntem, aufgebrochenem AP" width="760">
+
 - **Tabellen** (Nutzer, SSIDs, Anwender der AP-Seite) lassen sich sortieren und kopieren: Strg+C oder Kontextmenü,
   tabulatorgetrennt mit Kopfzeile. Auf der AP-Seite teilen sich SSIDs und Anwender die Höhe über einen ziehbaren Trenner.
 - **Protokolle** in der Cluster-Karte (am VC) und auf der AP-Seite (an diesem AP): Systemlog (`show log system`) und

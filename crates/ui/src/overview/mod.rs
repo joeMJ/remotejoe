@@ -607,6 +607,107 @@ impl App {
         Ok(json!({ "pending": job }))
     }
 
+    /// „Clusteraufbrüche suchen“: im Segment des Schwarms (aus „Cluster abfragen“) alle Adressen auf TCP 4343
+    /// prüfen, ohne die online-APs und die VC-IP. Antwortet dort ein Gerät, ist es nicht im Schwarm – etwa ein AP,
+    /// der die PAPI-Verbindung zum Conductor verloren hat und selbst die VC-IP beansprucht. Nur Anzeige, nichts wird
+    /// gespeichert. Ergebnis „aruba_breakouts“, Ziel `tag`.
+    pub fn aruba_breakouts(&mut self, c: &Value) -> Result<Value, String> {
+        if !self.config.features.aruba {
+            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
+        }
+        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
+        let tag = c.get("tag").and_then(Value::as_str).unwrap_or_default().to_string();
+        let key = t.id.to_string();
+        let Some(cluster) = self.overview.aruba.get(&key).cloned() else {
+            return Err("Erst „Cluster abfragen“: die Suche braucht das Segment und die APs des Schwarms".into());
+        };
+        if self.demo {
+            let mut v = crate::aruba::demo_breakouts(&cluster);
+            v["host"] = json!(cluster["vc"]);
+            return Ok(json!({ "demo": v }));
+        }
+        let segment = cluster["segment"].as_str().unwrap_or_default().to_string();
+        let vc = cluster["vc"].as_str().unwrap_or_default().to_string();
+        let aps = cluster["aps"].as_array().cloned().unwrap_or_default();
+        let mut exclude: Vec<String> = aps.iter().filter(|a| a["online"] == true).filter_map(|a| a["ip"].as_str().map(str::to_string)).collect();
+        exclude.push(vc.clone());
+        let offline: Vec<String> = aps.iter().filter(|a| a["online"] == false).filter_map(|a| a["name"].as_str().map(str::to_string)).collect();
+        let hosts = crate::aruba::breakout_hosts(&segment, &exclude).ok_or_else(|| format!("Segment „{segment}“ unbekannt – erst „Cluster abfragen“"))?;
+        let ips: Vec<std::net::IpAddr> = hosts.iter().filter_map(|h| h.parse().ok()).collect();
+        let job = self.jobs.spawn_cancellable(&format!("Clusteraufbrüche in {segment}"), move |job, stop| {
+            let hits = probe::sweep(&ips, 4343, std::time::Duration::from_millis(900), 48, &|| stop.load(std::sync::atomic::Ordering::SeqCst));
+            let complete = !stop.load(std::sync::atomic::Ordering::SeqCst);
+            Box::new(move |_app: &mut App, cancelled| {
+                if cancelled {
+                    return Vec::new();
+                }
+                let json = json!({
+                    "segment": segment,
+                    "vc": vc,
+                    "host": vc,
+                    "offline": offline,
+                    "scanned": ips.len(),
+                    "hits": hits.iter().map(|(ip, ms)| json!({ "ip": ip.to_string(), "ms": ms })).collect::<Vec<_>>(),
+                    "complete": complete,
+                    "at": now(),
+                });
+                vec![UiEvent::JobResult { job, kind: "aruba_breakouts".into(), target: tag, json: json.to_string() }]
+            })
+        });
+        Ok(json!({ "pending": job }))
+    }
+
+    /// „Erkennen“ eines Treffers der Suche nach Clusteraufbrüchen: per SSH am Gerät (`ip`) mit den Zugangsdaten des
+    /// VC `show summary`, `show version` und `show interface`; Abgleich mit den offline gemeldeten APs des Schwarms.
+    /// Ergebnis „aruba_breakout_id“, Ziel `tag`.
+    pub fn aruba_breakout_identify(&mut self, c: &Value) -> Result<Value, String> {
+        if !self.config.features.aruba {
+            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
+        }
+        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
+        if self.demo {
+            return Err("In der Vorführung nicht verfügbar".into());
+        }
+        let tag = c.get("tag").and_then(Value::as_str).unwrap_or_default().to_string();
+        let ip: std::net::IpAddr = c.get("ip").and_then(Value::as_str).unwrap_or_default().parse().map_err(|_| "IP-Adresse ungültig")?;
+        let (t, r) = self.inventory_view(&t)?;
+        let cluster = self.overview.aruba.get(&t.id.to_string()).cloned().unwrap_or_default();
+        let vc = cluster["vc"].as_str().unwrap_or_default().to_string();
+        let offline: Vec<String> = cluster["aps"].as_array().into_iter().flatten().filter(|a| a["online"] == false).filter_map(|a| a["name"].as_str().map(str::to_string)).collect();
+        let spec = crate::patch::JobSpec {
+            protocol: Protocol::Ssh,
+            host: ip.to_string(),
+            port: 22,
+            credentials: self.credential_payload(&r, Protocol::Ssh)?,
+            transport: None,
+            legacy: self.target_legacy_of(t.id),
+        };
+        let known = self.known_hosts_ref();
+        let host = ip.to_string();
+        let job = self.jobs.spawn(&format!("Erkennen {host}"), move |job| {
+            let res = (|| {
+                let (rt, conn, note, _, _) = remote::ssh_open(&spec, 22, known)?;
+                let r = rt.block_on(remote::cli_session(&conn, &crate::aruba::BREAKOUT_COMMANDS));
+                rt.block_on(conn.disconnect());
+                let r = r?;
+                let mut v = crate::aruba::breakout_json(&r.outputs, &ip.to_string(), &offline, &vc);
+                v["complete"] = json!(r.outputs.len() == crate::aruba::BREAKOUT_COMMANDS.len());
+                v["note"] = json!(note);
+                Ok::<_, String>(v)
+            })();
+            drop(spec);
+            Box::new(move |_app: &mut App, cancelled| {
+                if cancelled {
+                    return Vec::new();
+                }
+                let mut json = res.unwrap_or_else(|e| json!({ "error": e }));
+                json["ip"] = json!(host);
+                vec![UiEvent::JobResult { job, kind: "aruba_breakout_id".into(), target: tag, json: json.to_string() }]
+            })
+        });
+        Ok(json!({ "pending": job }))
+    }
+
     /// Nur Vorführung (Bildschirmfotos): Aruba-Werkzeuge einschalten und dem Ziel `id` einen erfundenen Cluster geben.
     /// Liefert die erfundene AP-Seite (`ap`) und den zugehörigen Eintrag aus dem Cluster (`entry`).
     pub fn aruba_demo(&mut self, c: &Value) -> Result<Value, String> {

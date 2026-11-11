@@ -84,6 +84,8 @@ public:
 	void openApTools(const QString& id, const QString& name, const QString& tool);
 	/// Aruba-Log (system/security, wahlweise gefiltert) am VC oder an einem AP anzeigen.
 	void openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
+	/// Clusteraufbrüche suchen (Tab je VC).
+	void openArubaBreakouts(const QJsonObject& subject, const QString& where);
 	void openArubaUserLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, const QString& filter);
 	/// Gleiche Zugangsdaten zusammenführen (leer: ganzer Baum).
 	void openCredMerge(const QStringList& scope);
@@ -104,6 +106,8 @@ public:
 	/// Für Bildschirmfotos: Eigenschaften des ersten Ziels, Hinzufügen-Menü, Entsperren.
 	/// Bildschirmfotos: Aruba-Werkzeuge mit erfundenem Cluster am ersten SSH-Ziel; Übersicht oder AP-Seite.
 	QWidget* arubaForScreenshot(bool apPage);
+	/// Nur Vorführung: Suche nach Clusteraufbrüchen im erfundenen Cluster (Tab mit fertigem Ergebnis).
+	QWidget* arubaBreakoutsForScreenshot();
 	PropertiesTab* openFirstTargetProperties(const QString& protocol = QStringLiteral("rdp"));
 	QMenu* popupAddMenu();
 	BulkAddTab* openBulkAdd(const QString& parentId);

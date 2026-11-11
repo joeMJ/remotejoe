@@ -1063,7 +1063,7 @@ impl App {
     pub fn connect_way(&mut self, target: Uuid, sel: WaySel, credential: Option<&str>, remember: bool, width: u32, height: u32) -> String {
         let Some(base) = self.target(target).cloned() else { return json!({ "error": "Ziel nicht gefunden" }).to_string() };
         let way = match sel {
-            WaySel::Main | WaySel::SshHost(_) => None,
+            WaySel::Main | WaySel::SshHost(_) | WaySel::WebHost(_) => None,
             WaySel::Default => base.open_with,
             WaySel::Way(w) => Some(w),
         };
@@ -1084,6 +1084,15 @@ impl App {
             t.protocol = Protocol::Ssh;
             t.host = ip.to_string();
             t.port = None;
+            t.name = format!("{} – {ip}", t.name);
+        }
+        if let WaySel::WebHost(ip) = sel {
+            // Zertifikat wie bei jedem Web-Ziel: Rückfrage beim ersten Mal, je Rechner und Port gemerkt.
+            let url = format!("https://{ip}:4343/");
+            t.options = ProtocolOptions::Web(rj_core::model::WebOptions { url: Some(url.clone()), ..Default::default() });
+            t.protocol = Protocol::Web;
+            t.host = url;
+            t.port = Some(4343);
             t.name = format!("{} – {ip}", t.name);
         }
         let resolved = match (way_cred, credential) {
@@ -1800,6 +1809,9 @@ pub enum WaySel {
     Way(Uuid),
     /// SSH zu einer anderen Adresse mit den Zugangsdaten des Ziels (Aruba: einzelner AP eines Clusters).
     SshHost(std::net::IpAddr),
+    /// Web-Oberfläche (https, Port 4343) einer anderen Adresse mit den Zugangsdaten des Ziels (Aruba: Gerät aus der
+    /// Suche nach Clusteraufbrüchen).
+    WebHost(std::net::IpAddr),
 }
 
 impl WaySel {
@@ -1808,6 +1820,7 @@ impl WaySel {
         match id.split_once('#') {
             Some((t, "main")) => (t, WaySel::Main),
             Some((t, w)) if w.starts_with("ssh:") => (t, w[4..].parse().map(WaySel::SshHost).unwrap_or(WaySel::Default)),
+            Some((t, w)) if w.starts_with("web:") => (t, w[4..].parse().map(WaySel::WebHost).unwrap_or(WaySel::Default)),
             Some((t, w)) => (t, Uuid::parse_str(w).map(WaySel::Way).unwrap_or(WaySel::Default)),
             None => (id, WaySel::Default),
         }
@@ -1824,6 +1837,7 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         assert_eq!(WaySel::split(&format!("{id}#ssh:192.0.2.211")).1, WaySel::SshHost("192.0.2.211".parse().unwrap()));
         assert_eq!(WaySel::split(&format!("{id}#ssh:kein-ip")).1, WaySel::Default);
+        assert_eq!(WaySel::split(&format!("{id}#web:192.0.2.212")).1, WaySel::WebHost("192.0.2.212".parse().unwrap()));
         assert_eq!(WaySel::split(&format!("{id}#main")).1, WaySel::Main);
         assert_eq!(WaySel::split(&id).1, WaySel::Default);
     }

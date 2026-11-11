@@ -12,6 +12,7 @@
 #include "credchecktab.h"
 #include "mcpserver.h"
 #include "mcplogtab.h"
+#include "arubabreakouttab.h"
 #include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
@@ -3543,6 +3544,17 @@ void MainWindow::handleEvents(const QString& json)
 						if (c->tag() == e.value(QStringLiteral("target")).toString())
 							c->handleResult(r);
 				}
+				else if (kind == QLatin1String("aruba_breakouts") || kind == QLatin1String("aruba_breakout_id"))
+				{
+					for (auto* b : findChildren<ArubaBreakoutTab*>())
+						if (b->tag() == e.value(QStringLiteral("target")).toString())
+						{
+							if (kind == QLatin1String("aruba_breakouts"))
+								b->handleResult(r);
+							else
+								b->handleIdentify(r);
+						}
+				}
 				else if (kind == QLatin1String("aruba_log"))
 				{
 					for (auto* l : findChildren<ArubaLogTab*>())
@@ -4546,6 +4558,21 @@ void MainWindow::openArubaUsers(const QJsonObject& subject, const QString& where
 	addToolTab(t, t->title());
 }
 
+void MainWindow::openArubaBreakouts(const QJsonObject& subject, const QString& where)
+{
+	// Je VC ein Tab: ein vorhandener sucht neu.
+	for (auto* b : findChildren<ArubaBreakoutTab*>())
+		if (b->vcId() == subject.value(QStringLiteral("id")).toString())
+		{
+			m_tabs->setCurrentWidget(b);
+			b->search();
+			return;
+		}
+	auto* t = new ArubaBreakoutTab(m_backend, subject, where, m_tabs);
+	connect(t, &ArubaBreakoutTab::connectWayRequested, this, &MainWindow::connectWay);
+	addToolTab(t, t->title());
+}
+
 void MainWindow::openApTools(const QString& id, const QString& name, const QString& tool)
 {
 	// Schreibend: Bestätigung, dann je Aktion ein eigener Tab mit dem Protokoll.
@@ -4614,6 +4641,7 @@ void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 		// Aruba-Werkzeuge: Kachel eines APs öffnet seine Seite (je AP ein Tab).
 		connect(t, &OverviewTab::arubaApRequested, this, &MainWindow::openArubaAp);
 		connect(t, &OverviewTab::arubaUsersRequested, this, &MainWindow::openArubaUsers);
+		connect(t, &OverviewTab::arubaBreakoutsRequested, this, &MainWindow::openArubaBreakouts);
 		connect(t, &OverviewTab::arubaToolsRequested, this, &MainWindow::openApTools);
 		connect(t, &OverviewTab::arubaLogRequested, this, &MainWindow::openArubaLog);
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
@@ -4758,6 +4786,16 @@ QWidget* MainWindow::arubaForScreenshot(bool apPage)
 	addToolTab(a, a->title());
 	a->handleResult(r.value(QStringLiteral("ap")).toObject());
 	return a;
+}
+
+QWidget* MainWindow::arubaBreakoutsForScreenshot()
+{
+	auto* o = qobject_cast<OverviewTab*>(arubaForScreenshot(false));
+	const QString id = currentId();
+	if (!o || id.isEmpty())
+		return nullptr;
+	openArubaBreakouts(QJsonObject{ { QStringLiteral("id"), id }, { QStringLiteral("vc_name"), o->targetName() } }, o->targetName());
+	return findChild<ArubaBreakoutTab*>();
 }
 
 PropertiesTab* MainWindow::openFirstTargetProperties(const QString& protocol)

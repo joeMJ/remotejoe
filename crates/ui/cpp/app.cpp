@@ -162,6 +162,13 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.tabs()->removeTab(w.tabs()->indexOf(a));
 		a->deleteLater();
 	}
+	if (QWidget* b = w.arubaBreakoutsForScreenshot())
+	{
+		pump(400);
+		save(&w, dir, QStringLiteral("aruba-clusteraufbrueche.png"));
+		w.tabs()->removeTab(w.tabs()->indexOf(b));
+		b->deleteLater();
+	}
 	w.patchdayForFirstTargets(25);
 	pump(1500);
 	QString patchday;

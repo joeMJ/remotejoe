@@ -718,6 +718,8 @@ impl App {
             "aruba_ap" => self.aruba_ap(&c),
             "aruba_log" => self.aruba_log(&c),
             "aruba_clients" => self.aruba_clients(&c),
+            "aruba_breakouts" => self.aruba_breakouts(&c),
+            "aruba_breakout_identify" => self.aruba_breakout_identify(&c),
             "aruba_demo" => self.aruba_demo(&c),
             "aptools_status" => self.aptools_status(),
             "aptools_setup" => self.aptools_setup(&c),
