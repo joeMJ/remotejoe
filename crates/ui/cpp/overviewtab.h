@@ -60,6 +60,10 @@ signals:
 	/// Aruba: Anwender des Clusters anzeigen.
 	void arubaUsersRequested(const QJsonObject& subject, const QString& where);
 	void arubaBreakoutsRequested(const QJsonObject& subject, const QString& where);
+	/// „Offline-APs löschen“ für den VC `id` (alle offline-MACs aus der Clusterkarte).
+	void arubaOfflineDeleteRequested(const QString& id, const QString& name, const QStringList& macs);
+	/// Kurze Meldung für die Statusleiste.
+	void statusMessage(const QString& text);
 
 private:
 	QJsonObject call(const QJsonObject& cmd) const;

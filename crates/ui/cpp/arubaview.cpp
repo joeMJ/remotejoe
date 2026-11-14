@@ -24,7 +24,8 @@ namespace
 class ApTile : public rjui::ClickRow
 {
 public:
-	ApTile(const QJsonObject& ap, const std::function<QString(const char*)>& T, int warn, int crit, QWidget* parent)
+	/// `extra`: weitere Einträge im Kontextmenü (offline-APs: Offline-MACs kopieren, Anzahl merken, löschen).
+	ApTile(const QJsonObject& ap, const std::function<QString(const char*)>& T, int warn, int crit, const std::function<void(QMenu*)>& extra, QWidget* parent)
 	  : rjui::ClickRow(parent)
 	{
 		setObjectName(QStringLiteral("rjApTile"));
@@ -79,13 +80,18 @@ public:
 		setContextMenuPolicy(Qt::CustomContextMenu);
 		const QString mac = ap.value(QStringLiteral("mac")).isString() ? ap.value(QStringLiteral("mac")).toString() : QString();
 		const QStringList copy = { T("aruba.copy.name"), T("aruba.copy.ip"), T("aruba.copy.mac") };
-		connect(this, &QWidget::customContextMenuRequested, this, [this, full, ip, mac, copy](const QPoint& pos) {
+		connect(this, &QWidget::customContextMenuRequested, this, [this, full, ip, mac, copy, extra](const QPoint& pos) {
 			QMenu menu(this);
 			menu.addAction(copy[0], [full] { QGuiApplication::clipboard()->setText(full); });
 			if (!ip.isEmpty())
 				menu.addAction(copy[1], [ip] { QGuiApplication::clipboard()->setText(ip); });
 			if (!mac.isEmpty() && mac != full)
 				menu.addAction(copy[2], [mac] { QGuiApplication::clipboard()->setText(mac); });
+			if (extra)
+			{
+				menu.addSeparator();
+				extra(&menu);
+			}
 			menu.exec(mapToGlobal(pos));
 		});
 		// Einheitliche Breite (Raster) aus dem Bedarf der Inhalte: Oktett, Stern, MAC, dreistellige Zahl.
@@ -139,7 +145,8 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 	auto* tiles = new QHBoxLayout;
 	tiles->addWidget(rjui::tile(T("aruba.total"), &m_total, this));
 	tiles->addWidget(rjui::tile(T("aruba.online"), &m_online, this));
-	tiles->addWidget(rjui::tile(T("aruba.offline"), &m_offline, this));
+	m_offlineTile = rjui::tile(T("aruba.offline"), &m_offline, this);
+	tiles->addWidget(m_offlineTile);
 	tiles->addWidget(rjui::tile(T("aruba.clients"), &m_clients, this));
 	v->addLayout(tiles);
 
@@ -187,6 +194,68 @@ void ArubaClusterView::setCluster(const QJsonObject& c)
 	render();
 }
 
+void ArubaClusterView::setName(const QString& name)
+{
+	m_name = name;
+}
+
+QStringList ArubaClusterView::offlineMacs(const QJsonObject& c)
+{
+	QStringList macs;
+	for (const QJsonValue& v : c.value(QStringLiteral("aps")).toArray())
+		if (!v.toObject().value(QStringLiteral("online")).toBool())
+			macs << v.toObject().value(QStringLiteral("name")).toString();
+	return macs;
+}
+
+QString ArubaClusterView::offlineText(RjBackend* backend, const QString& name, const QJsonObject& c)
+{
+	const QStringList macs = offlineMacs(c);
+	QStringList lines;
+	lines << backend->text(QStringLiteral("aruba.offline.copy.cluster")).arg(name);
+	lines << backend->text(QStringLiteral("aruba.offline.copy.segment")).arg(c.value(QStringLiteral("segment")).toString(QStringLiteral("–")));
+	lines << backend->text(QStringLiteral("aruba.offline.copy.vc")).arg(c.value(QStringLiteral("vc")).toString());
+	lines << backend->text(QStringLiteral("aruba.offline.copy.list")).arg(macs.size());
+	lines << macs;
+	return lines.join(QLatin1Char('\n')) + QLatin1Char('\n');
+}
+
+QString ArubaClusterView::offlineCount(RjBackend* backend, const QJsonObject& c, QString* tip)
+{
+	if (!c.value(QStringLiteral("allowed_known")).toBool())
+		return QStringLiteral("?");
+	QString text = QString::number(c.value(QStringLiteral("offline")).toInt());
+	// Gemerkte Zahl erst nach der nächsten Abfrage zeigen.
+	const QJsonObject mark = c.value(QStringLiteral("mark")).toObject();
+	if (!mark.isEmpty() && mark.value(QStringLiteral("at")).toInteger() < c.value(QStringLiteral("at")).toInteger())
+	{
+		text += QStringLiteral(" ") + backend->text(QStringLiteral("aruba.offline.before")).arg(mark.value(QStringLiteral("offline")).toInt());
+		if (tip)
+			*tip = backend->text(QStringLiteral("aruba.offline.marked.at"))
+			         .arg(QDateTime::fromSecsSinceEpoch(mark.value(QStringLiteral("at")).toInteger()).toString(QStringLiteral("dd.MM.yyyy HH:mm")));
+	}
+	return text;
+}
+
+QString ArubaClusterView::rebootText(RjBackend* backend, const QJsonObject& c, QString* tip, bool label)
+{
+	const QJsonObject r = c.value(QStringLiteral("reboot")).toObject();
+	if (r.isEmpty())
+		return QString();
+	const QString kind = r.value(QStringLiteral("kind")).toString();
+	const QString cause = r.value(QStringLiteral("cause")).toString();
+	const QString what = kind == QLatin1String("other") ? cause : backend->text(QStringLiteral("aruba.reboot.") + kind).arg(cause);
+	QString when;
+	if (r.value(QStringLiteral("at")).isDouble())
+		when = (r.value(QStringLiteral("approx")).toBool() ? backend->text(QStringLiteral("aruba.reboot.approx")) : QString())
+		       + QDateTime::fromSecsSinceEpoch(r.value(QStringLiteral("at")).toInteger()).toString(QStringLiteral("dd.MM.yyyy HH:mm"));
+	if (tip)
+		*tip = r.value(QStringLiteral("raw")).toString();
+	if (!label)
+		return when.isEmpty() ? what : when + QStringLiteral(" – ") + what;
+	return when.isEmpty() ? backend->text(QStringLiteral("aruba.reboot.short")).arg(what) : backend->text(QStringLiteral("aruba.reboot.text")).arg(when, what);
+}
+
 void ArubaClusterView::setBusy(bool busy)
 {
 	m_query->setEnabled(!busy);
@@ -214,6 +283,9 @@ void ArubaClusterView::render()
 	{
 		m_managed->hide();
 		m_head->setText(T("aruba.head.none"));
+		m_head->setToolTip(QString());
+		m_offlineTile->setProperty("rjAlarm", false);
+		m_offlineTile->setToolTip(QString());
 		for (QLabel* l : { m_total, m_online, m_offline, m_clients })
 			l->setText(QStringLiteral("–"));
 		m_foot->setText(T("aruba.hint"));
@@ -225,7 +297,11 @@ void ArubaClusterView::render()
 		m_box->relayout();
 		return;
 	}
-	m_head->setText(T("aruba.head").arg(c.value(QStringLiteral("vc")).toString(), c.value(QStringLiteral("segment")).toString(QStringLiteral("–"))));
+	QString rebootTip;
+	const QString reboot = rebootText(m_backend, c, &rebootTip);
+	m_head->setText(T("aruba.head").arg(c.value(QStringLiteral("vc")).toString(), c.value(QStringLiteral("segment")).toString(QStringLiteral("–")))
+	                + (reboot.isEmpty() ? QString() : QStringLiteral(" · ") + reboot));
+	m_head->setToolTip(rebootTip);
 	const QString managed = c.value(QStringLiteral("managed")).toString();
 	m_managed->setVisible(!managed.isEmpty());
 	if (!managed.isEmpty())
@@ -241,7 +317,18 @@ void ArubaClusterView::render()
 	}
 	m_total->setText(QString::number(c.value(QStringLiteral("total")).toInt()));
 	m_online->setText(QString::number(c.value(QStringLiteral("online")).toInt()));
-	m_offline->setText(c.value(QStringLiteral("allowed_known")).toBool() ? QString::number(c.value(QStringLiteral("offline")).toInt()) : QStringLiteral("?"));
+	QString markTip;
+	m_offline->setText(offlineCount(m_backend, c, &markTip));
+	m_offlineTile->setToolTip(markTip);
+	// Mindestens ein AP offline: Kachel rot hinterlegen.
+	m_offlineTile->setProperty("rjAlarm", c.value(QStringLiteral("allowed_known")).toBool() && c.value(QStringLiteral("offline")).toInt() > 0);
+	m_offlineTile->style()->unpolish(m_offlineTile);
+	m_offlineTile->style()->polish(m_offlineTile);
+	for (QLabel* l : m_offlineTile->findChildren<QLabel*>())
+	{
+		l->style()->unpolish(l);
+		l->style()->polish(l);
+	}
 	m_clients->setText(QString::number(c.value(QStringLiteral("clients")).toInt()));
 	const int f = m_filter->checkedId();
 	const QJsonObject settings = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"settings\"}")).toUtf8()).object();
@@ -253,7 +340,16 @@ void ArubaClusterView::render()
 		const bool online = ap.value(QStringLiteral("online")).toBool();
 		if ((f == 1 && !online) || (f == 2 && online) || (f == 3 && ap.value(QStringLiteral("in_segment")).toBool(true)))
 			continue;
-		auto* tile = new ApTile(ap, T, warn, crit, m_box);
+		// Offline-APs: Offline-MACs kopieren, Anzahl merken, alle offline-APs aus dem VC löschen.
+		std::function<void(QMenu*)> extra;
+		if (!online)
+			extra = [this, T](QMenu* menu) {
+				menu->addAction(T("aruba.offline.copy"), this, [this] { QGuiApplication::clipboard()->setText(offlineText(m_backend, m_name, m_cluster)); });
+				menu->addAction(T("aruba.offline.mark"), this, &ArubaClusterView::markRequested);
+				menu->addSeparator();
+				menu->addAction(T("aruba.offline.delete"), this, [this] { emit offlineDeleteRequested(offlineMacs(m_cluster)); });
+			};
+		auto* tile = new ApTile(ap, T, warn, crit, extra, m_box);
 		const QString ip = ap.value(QStringLiteral("ip")).toString();
 		QString tip = ap.value(QStringLiteral("name")).toString() + QStringLiteral(" · ") + (ip.isEmpty() ? T("aruba.ip.unknown") : ip);
 		if (ap.value(QStringLiteral("clients")).isDouble())

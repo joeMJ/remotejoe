@@ -4,8 +4,8 @@
 
 use serde_json::{json, Value};
 
-/// Befehle für die Cluster-Karte am VC.
-pub const CLUSTER_COMMANDS: [&str; 4] = ["no paging", "show aps", "show running-config", "show summary"];
+/// Befehle für die Cluster-Karte am VC; `show version` liefert Laufzeit und Grund des letzten Neustarts.
+pub const CLUSTER_COMMANDS: [&str; 5] = ["no paging", "show aps", "show running-config", "show summary", "show version"];
 
 /// Verwaltung des Clusters aus `show summary` (wie `ap_quick_inventory.py`): `central` (auch On-Premises),
 /// `airwave` oder `none`; `None`, wenn die Ausgabe nichts dazu enthält.
@@ -81,7 +81,7 @@ pub fn cell<'a>(row: &'a str, cols: &[(String, usize)], name: &str) -> Option<&'
     row.get(*start..)?.split_whitespace().next().filter(|w| *w != "--")
 }
 
-fn is_mac(s: &str) -> bool {
+pub fn is_mac(s: &str) -> bool {
     s.len() == 17 && s.split(':').count() == 6 && s.split(':').all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
@@ -170,6 +170,17 @@ pub fn cluster_json(show_aps: &str, running_config: &str, summary: &str, vc_ip: 
         // Fehlt einem online-AP die MAC, kann eine nicht gefundene MAC auch zu ihm gehören.
         list.push(json!({ "name": m, "ip": null, "online": false, "uncertain": !all_macs, "conductor": false, "clients": null, "in_segment": true }));
     }
+    // Reihenfolge der Kacheln: online-APs des Segments nach IP (numerisch), dann die aus anderen Segmenten, zuletzt
+    // die offline-APs nach MAC.
+    list.sort_by_key(|a| {
+        let ip: Option<std::net::Ipv4Addr> = a["ip"].as_str().and_then(|s| s.parse().ok());
+        let group = match (ip, a["in_segment"] != false) {
+            (Some(_), true) => 0,
+            (Some(_), false) => 1,
+            (None, _) => 2,
+        };
+        (group, ip.map_or(0, u32::from), a["name"].as_str().unwrap_or_default().to_ascii_lowercase())
+    });
     let clients: u64 = aps.iter().filter_map(|a| a["clients"].as_u64()).sum();
     json!({
         "vc": vc_ip,
@@ -182,6 +193,90 @@ pub fn cluster_json(show_aps: &str, running_config: &str, summary: &str, vc_ip: 
         "clients": clients,
         "aps": list,
     })
+}
+
+/// Letzter Neustart aus `show version` (Instant 8.x): Zeile „Reboot Time and Cause: …“, entweder mit Zeitpunkt
+/// („AP rebooted Sat Nov 14 10:20:02 UTC 2026; System cmd at uptime …: reload all“) oder nur mit Grund
+/// („AP Reboot reason:  Power-reset“), dazu die Laufzeit („AP uptime is 1 week 4 days …“). Ohne Zeitpunkt wird er aus
+/// der Laufzeit zurückgerechnet (`approx`). `now`: Abfragezeit (Sekunden seit 1970).
+pub fn reboot_info(show_version: &str, now: u64) -> Option<Value> {
+    let line = show_version.lines().find_map(|l| l.trim().strip_prefix("Reboot Time and Cause:"))?.trim();
+    let uptime = uptime_secs(show_version);
+    let (at, rest) = match line.strip_prefix("AP rebooted ").and_then(|r| r.split_once(';')) {
+        Some((when, rest)) => (parse_reboot_time(when.trim()), rest.trim()),
+        None => (None, line),
+    };
+    let rest = rest.strip_prefix("AP Reboot reason:").map(str::trim).unwrap_or(rest);
+    // Ursachenkette „System cmd at uptime …: CLI cmd at uptime …: reload all“ → letzter Teil.
+    let cause = rest.rsplit(": ").next().unwrap_or(rest).trim().to_string();
+    if cause.is_empty() {
+        return None;
+    }
+    let (at, approx) = match (at, uptime) {
+        (Some(t), _) => (Some(t), false),
+        (None, Some(u)) => (Some(now.saturating_sub(u)), true),
+        (None, None) => (None, false),
+    };
+    Some(json!({ "cause": cause, "kind": reboot_kind(&cause), "at": at, "approx": approx, "uptime": uptime, "raw": line }))
+}
+
+/// Art des Neustartgrunds für die Anzeige: `power` (Stromunterbrechung), `command` (Befehl wie „reload all“),
+/// sonst `other` (Text so, wie das Gerät ihn schreibt).
+fn reboot_kind(cause: &str) -> &'static str {
+    let c = cause.to_ascii_lowercase();
+    if c.contains("power") {
+        "power"
+    } else if c.contains("reload") || c.contains("reboot") || c.contains("cli cmd") {
+        "command"
+    } else {
+        "other"
+    }
+}
+
+/// Laufzeit in Sekunden aus „AP uptime is 1 week 4 days 23 hours 50 minutes 17 seconds“.
+fn uptime_secs(show_version: &str) -> Option<u64> {
+    let rest = show_version.lines().find_map(|l| l.split("uptime is").nth(1))?;
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    let mut secs = 0u64;
+    let mut any = false;
+    for pair in words.chunks(2) {
+        if let [n, unit] = pair {
+            let Ok(n) = n.parse::<u64>() else { continue };
+            let f = match unit.trim_end_matches(',') {
+                "week" | "weeks" => 7 * 86_400,
+                "day" | "days" => 86_400,
+                "hour" | "hours" => 3_600,
+                "minute" | "minutes" => 60,
+                "second" | "seconds" => 1,
+                _ => continue,
+            };
+            secs += n * f;
+            any = true;
+        }
+    }
+    any.then_some(secs)
+}
+
+/// „Sat Nov 14 10:20:02 UTC 2026“ → Sekunden seit 1970 (UTC).
+fn parse_reboot_time(s: &str) -> Option<u64> {
+    let w: Vec<&str> = s.split_whitespace().collect();
+    let [_, mon, day, time, zone, year] = w.as_slice() else { return None };
+    if *zone != "UTC" {
+        return None;
+    }
+    let month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].iter().position(|m| m == mon)? as u64 + 1;
+    let (day, year): (u64, i64) = (day.parse().ok()?, year.parse().ok()?);
+    let t: Vec<u64> = time.split(':').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    let [h, m, sec] = t.as_slice() else { return None };
+    // Tage seit 1970 (Algorithmus „days from civil“).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy as i64;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days * 86_400).ok().map(|d| d + h * 3_600 + m * 60 + sec)
 }
 
 /// Admin-Konten aus der laufenden Konfiguration: `hash-mgmt-user <Name> …` bzw. `mgmt-user <Name> <Hash>` (je nach
@@ -382,6 +477,27 @@ pub fn breakout_json(outputs: &[String], ip: &str, offline: &[String], vc: &str)
     })
 }
 
+/// Nur Vorführung (Bildschirmfotos): Varianten des erfundenen Clusters für die Clusterübersicht – `i` = 0 wie [`demo`],
+/// dann ohne Offline-APs, mit Neustart per Befehl und mit anderer VC-Adresse.
+pub fn demo_variant(i: usize) -> Value {
+    let (mut c, _) = demo();
+    let at = c["at"].as_u64().unwrap_or(0);
+    c["vc"] = json!(format!("192.0.2.{}", 240 - i));
+    if i % 2 == 1 {
+        let aps: Vec<Value> = c["aps"].as_array().cloned().unwrap_or_default().into_iter().filter(|a| a["online"] == true).collect();
+        c["total"] = json!(aps.len());
+        c["offline"] = json!(0);
+        c["aps"] = json!(aps);
+        c["mark"] = Value::Null;
+    }
+    if i % 3 == 2 {
+        c["reboot"] = json!(reboot_info("AP uptime is 12 days 2 hours 5 minutes 1 seconds\nReboot Time and Cause: AP rebooted Mon Nov 2 06:00:02 UTC 2026; System cmd at uptime 20D 1H 0M 0S: CLI cmd at uptime 20D 1H 0M 0S: reload all\n", at));
+        c["managed"] = json!("none");
+    }
+    c["clients"] = json!(c["clients"].as_u64().unwrap_or(0) / (i as u64 + 1));
+    c
+}
+
 /// Nur Vorführung (Bildschirmfotos): Suche nach Clusteraufbrüchen im erfundenen Cluster aus [`demo`] – ein
 /// aufgebrochener AP (schon erkannt), ein Gerät eines anderen Schwarms und ein noch nicht erkanntes.
 pub fn demo_breakouts(cluster: &Value) -> Value {
@@ -439,7 +555,11 @@ pub fn demo() -> (Value, Value) {
     let mut cluster = cluster_json(&rows, &config, &summary, "192.0.2.240");
     cluster["managed"] = json!("central");
     cluster["write"] = json!({ "ok": true, "warn": "wird über Central verwaltet" });
-    cluster["at"] = json!(crate::overview::inventory::now());
+    let at = crate::overview::inventory::now();
+    cluster["at"] = json!(at);
+    cluster["reboot"] = json!(reboot_info("AP uptime is 3 days 4 hours 12 minutes 2 seconds\nReboot Time and Cause: AP Reboot reason:  Power-reset\n", at));
+    // Gemerkte Zahl vom Vortag: die Karte zeigt „3 (zuvor 5)“.
+    cluster["mark"] = json!({ "offline": 5, "at": at.saturating_sub(86_400) });
     let outputs = vec![
         String::new(),
         "ArubaOS (MODEL: 515), Version 8.10.0.23 LSR\nAP uptime is 3 days 4 hours 12 minutes 2 seconds".to_string(),
@@ -540,6 +660,32 @@ Name               IP Address       Mode    Spectrum  Clients  Type         IPv6
         // Andere Firmware: mgmt-user mit Hash, Nur-Lesen mit „read-only“ am Ende.
         let cfg = "mgmt-user admin 0123456789abcdef0123456789abcdef\nmgmt-user operator fedcba9876543210fedcba9876543210 read-only\nmgmt-user gast 00ff00ff guest-provisioning\n";
         assert_eq!(admin_users(cfg), vec!["admin".to_string()]);
+    }
+
+    #[test]
+    fn reboot_cause_with_and_without_time() {
+        let cmd = "ArubaOS (MODEL: 315), Version 8.10.0.21 LSR\r\nAP uptime is 4 minutes 41 seconds\r\nReboot Time and Cause: AP rebooted Sat Nov 14 10:20:02 UTC 2026; System cmd at uptime 53D 2H 42M 49S: CLI cmd at uptime 53D 2H 42M 30S: reload all\r\n";
+        let r = reboot_info(cmd, 0).unwrap();
+        assert_eq!((r["cause"].as_str(), r["kind"].as_str(), r["approx"].as_bool()), (Some("reload all"), Some("command"), Some(false)));
+        // 14.11.2026 10:20:02 UTC
+        assert_eq!(r["at"].as_u64(), Some(1_794_651_602));
+        assert_eq!(r["uptime"].as_u64(), Some(281));
+        let power = "AP uptime is 1 week 4 days 23 hours 50 minutes 17 seconds\nReboot Time and Cause: AP Reboot reason:  Power-reset\n";
+        let now = 2_000_000_000;
+        let r = reboot_info(power, now).unwrap();
+        assert_eq!((r["cause"].as_str(), r["kind"].as_str(), r["approx"].as_bool()), (Some("Power-reset"), Some("power"), Some(true)));
+        let up = 11 * 86_400 + 23 * 3_600 + 50 * 60 + 17;
+        assert_eq!(r["at"].as_u64(), Some(now - up));
+        assert!(reboot_info("ArubaOS (MODEL: 315), Version 8.10.0.21", now).is_none());
+    }
+
+    #[test]
+    fn tiles_are_sorted_by_ip_offline_last() {
+        let aps = "Name   IP Address    Mode\n----   ----------    ----\nzeta   192.0.2.100*  access\nalpha  192.0.2.20    access\nmitte  192.0.2.9     access\nfremd  198.51.100.4  access\n";
+        let config = "allowed-ap 02:00:5e:00:00:09\nallowed-ap 02:00:5e:00:00:01\n";
+        let c = cluster_json(aps, config, "", "192.0.2.100");
+        let order: Vec<&str> = c["aps"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
+        assert_eq!(order, ["mitte", "alpha", "zeta", "fremd", "02:00:5e:00:00:01", "02:00:5e:00:00:09"]);
     }
 
     #[test]

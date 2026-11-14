@@ -13,6 +13,7 @@
 #include "mcpserver.h"
 #include "mcplogtab.h"
 #include "arubabreakouttab.h"
+#include "arubasummarytab.h"
 #include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
@@ -1475,6 +1476,8 @@ static QString cardStyle(const QColor& base, const QColor& window, const QColor&
 	Q_UNUSED(alternate);
 	return QStringLiteral("QFrame#rjCard { background: %1; border: 1px solid %2; border-radius: 10px; }"
 	                      "QFrame#rjTile { background: %3; border-radius: 6px; }"
+	                      "QFrame#rjTile[rjAlarm=\"true\"] { background: %16; }"
+	                      "QFrame#rjTile[rjAlarm=\"true\"] QLabel { color: %15; }"
 	                      "QLabel#rjSection, QLabel#rjTileLabel, QLabel#rjMuted { color: %4; }"
 	                      "QLabel[rjPill=\"ok\"] { background: %5; color: %6; border-radius: 9px; padding: 1px 9px; }"
 	                      "QLabel[rjPill=\"warn\"] { background: %7; color: %8; border-radius: 9px; padding: 1px 9px; }"
@@ -2545,6 +2548,14 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 	if (!selectedIds().isEmpty() && parseObject(m_backend->edit(QStringLiteral("{\"op\":\"settings\"}"))).value(QStringLiteral("aruba_tools")).toBool())
 	{
 		QMenu* aruba = menu.addMenu(T(m_backend, "ctx.aptools"));
+		// Clusterabfrage für alle VCs der Auswahl, mit Übersicht (auch ohne neue Abfrage: gespeicherter Stand).
+		for (const bool query : { true, false })
+			aruba->addAction(T(m_backend, query ? "ctx.aruba.query" : "ctx.aruba.summary"), this, [this, query] {
+				const QStringList ids = selectedIds();
+				if (!ids.isEmpty())
+					openArubaSummary(ids, ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size()), query);
+			});
+		aruba->addSeparator();
 		for (const char* tool : { "analyse", "inventar", "reload", "update" })
 		{
 			const QString name = QString::fromLatin1(tool);
@@ -3564,6 +3575,14 @@ void MainWindow::handleEvents(const QString& json)
 					for (auto* c : findChildren<ArubaClientsTab*>())
 						if (c->tag() == e.value(QStringLiteral("target")).toString())
 							c->handleResult(r);
+				}
+				else if (kind == QLatin1String("ov_aruba_cluster") && !findChildren<ArubaSummaryTab*>().isEmpty())
+				{
+					// Clusterübersichten bekommen jedes Ergebnis; die Übersicht des Ziels ebenso.
+					for (auto* s : findChildren<ArubaSummaryTab*>())
+						s->handleResult(e.value(QStringLiteral("target")).toString(), r);
+					if (auto* o = findChild<OverviewTab*>())
+						o->handleResult(kind, e.value(QStringLiteral("target")).toString(), r);
 				}
 				else if (kind == QLatin1String("aruba_breakouts") || kind == QLatin1String("aruba_breakout_id"))
 				{
@@ -4599,6 +4618,40 @@ void MainWindow::openArubaBreakouts(const QJsonObject& subject, const QString& w
 	addToolTab(t, t->title());
 }
 
+void MainWindow::openArubaSummary(const QStringList& ids, const QString& where, bool query)
+{
+	// Je Auswahl ein Tab: ein vorhandener zeigt den Stand und fragt auf Wunsch neu ab.
+	for (auto* s : findChildren<ArubaSummaryTab*>())
+		if (s->selection() == ids.join(QLatin1Char(',')))
+		{
+			m_tabs->setCurrentWidget(s);
+			if (query)
+				s->queryAll();
+			return;
+		}
+	auto* t = new ArubaSummaryTab(m_backend, ids, where, query, m_tabs);
+	connect(t, &ArubaSummaryTab::openTarget, this, [this](const QString& id) {
+		selectId(id);
+		openOverview(QJsonObject{ { QStringLiteral("id"), id } });
+	});
+	addToolTab(t, t->title());
+}
+
+void MainWindow::openArubaOfflineDelete(const QString& id, const QString& name, const QStringList& macs)
+{
+	// Schreibend: Bestätigung mit allen MACs (und dem Stand für schreibende Werkzeuge), dann eigener Tab mit Protokoll;
+	// danach wird der Cluster neu abgefragt.
+	if (macs.isEmpty())
+		return;
+	if (!ArubaWriteTab::confirmOfflineDelete(m_backend, this, id, name, macs))
+		return;
+	auto* w = new ArubaWriteTab(m_backend, id, name, QStringLiteral("offline_delete"), QString(), false, m_tabs, macs);
+	connect(w, &ArubaWriteTab::finished, this, [this, id] {
+		edit({ { QStringLiteral("op"), QStringLiteral("aruba_cluster") }, { QStringLiteral("id"), id } });
+	});
+	addToolTab(w, w->title());
+}
+
 void MainWindow::openApTools(const QString& id, const QString& name, const QString& tool)
 {
 	// Schreibend: Bestätigung, dann je Aktion ein eigener Tab mit dem Protokoll.
@@ -4668,6 +4721,8 @@ void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 		connect(t, &OverviewTab::arubaApRequested, this, &MainWindow::openArubaAp);
 		connect(t, &OverviewTab::arubaUsersRequested, this, &MainWindow::openArubaUsers);
 		connect(t, &OverviewTab::arubaBreakoutsRequested, this, &MainWindow::openArubaBreakouts);
+		connect(t, &OverviewTab::arubaOfflineDeleteRequested, this, &MainWindow::openArubaOfflineDelete);
+		connect(t, &OverviewTab::statusMessage, this, [this](const QString& m) { statusBar()->showMessage(m, 8000); });
 		connect(t, &OverviewTab::arubaToolsRequested, this, &MainWindow::openApTools);
 		connect(t, &OverviewTab::arubaLogRequested, this, &MainWindow::openArubaLog);
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
@@ -4822,6 +4877,28 @@ QWidget* MainWindow::arubaBreakoutsForScreenshot()
 		return nullptr;
 	openArubaBreakouts(QJsonObject{ { QStringLiteral("id"), id }, { QStringLiteral("vc_name"), o->targetName() } }, o->targetName());
 	return findChild<ArubaBreakoutTab*>();
+}
+
+QWidget* MainWindow::arubaSummaryForScreenshot()
+{
+	// Die ersten fünf SSH-Ziele als Controller mit erfundenen Clustern.
+	QStringList ids;
+	std::function<void(const QModelIndex&)> walk = [&](const QModelIndex& parent) {
+		for (int r = 0; r < m_model->rowCount(parent) && ids.size() < 5; ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			if (!i.data(RoleFolder).toBool() && i.data(RoleProtocol).toString() == QLatin1String("ssh"))
+				ids << i.data(RoleId).toString();
+			walk(i);
+		}
+	};
+	walk(QModelIndex());
+	if (ids.isEmpty())
+		return nullptr;
+	if (parseObject(edit({ { QStringLiteral("op"), QStringLiteral("aruba_demo_summary") }, { QStringLiteral("ids"), QJsonArray::fromStringList(ids) } })).contains(QStringLiteral("error")))
+		return nullptr;
+	openArubaSummary(ids, T(m_backend, "mass.title.n").arg(ids.size()), false);
+	return findChild<ArubaSummaryTab*>();
 }
 
 PropertiesTab* MainWindow::openFirstTargetProperties(const QString& protocol)

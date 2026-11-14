@@ -84,6 +84,10 @@ public:
 	void openApTools(const QString& id, const QString& name, const QString& tool);
 	/// Aruba-Log (system/security, wahlweise gefiltert) am VC oder an einem AP anzeigen.
 	void openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
+	/// Clusterübersicht für mehrere VCs (Auswahl im Baum); `query`: gleich alle abfragen.
+	void openArubaSummary(const QStringList& ids, const QString& where, bool query);
+	/// Offline-APs eines VC löschen (ap_offline_delete), danach Cluster neu abfragen.
+	void openArubaOfflineDelete(const QString& id, const QString& name, const QStringList& macs);
 	/// Clusteraufbrüche suchen (Tab je VC).
 	void openArubaBreakouts(const QJsonObject& subject, const QString& where);
 	void openArubaUserLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, const QString& filter);
@@ -108,6 +112,8 @@ public:
 	QWidget* arubaForScreenshot(bool apPage);
 	/// Nur Vorführung: Suche nach Clusteraufbrüchen im erfundenen Cluster (Tab mit fertigem Ergebnis).
 	QWidget* arubaBreakoutsForScreenshot();
+	/// Nur Vorführung: Clusterübersicht über erfundene Controller.
+	QWidget* arubaSummaryForScreenshot();
 	PropertiesTab* openFirstTargetProperties(const QString& protocol = QStringLiteral("rdp"));
 	QMenu* popupAddMenu();
 	BulkAddTab* openBulkAdd(const QString& parentId);

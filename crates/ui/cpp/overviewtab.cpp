@@ -256,6 +256,13 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 		s.insert(QStringLiteral("vc_name"), m_name);
 		emit arubaBreakoutsRequested(s, m_name);
 	});
+	connect(m_cluster, &ArubaClusterView::markRequested, this, [this] {
+		const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("aruba_mark") } });
+		emit statusMessage(r.contains(QStringLiteral("error")) ? r.value(QStringLiteral("error")).toString() : m_backend->text(QStringLiteral("aruba.offline.marked")));
+	});
+	connect(m_cluster, &ArubaClusterView::offlineDeleteRequested, this, [this](const QStringList& macs) {
+		emit arubaOfflineDeleteRequested(m_subject.value(QStringLiteral("id")).toString(), m_name, macs);
+	});
 	connect(m_cluster, &ArubaClusterView::apClicked, this, [this](const QJsonObject& ap) {
 		QJsonObject s = m_subject;
 		s.insert(QStringLiteral("vc_name"), m_name);
@@ -442,7 +449,10 @@ void OverviewTab::updateAruba(const QJsonObject& r)
 	const bool on = r.value(QStringLiteral("aruba")).toBool() && r.value(QStringLiteral("aruba_tools")).toBool();
 	m_arubaCard->setVisible(on);
 	if (on)
+	{
+		m_cluster->setName(m_name);
 		m_cluster->setCluster(r.value(QStringLiteral("aruba_cluster")).toObject());
+	}
 }
 
 void OverviewTab::handleResult(const QString& kind, const QString& target, const QJsonObject& r)

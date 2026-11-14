@@ -162,6 +162,13 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.tabs()->removeTab(w.tabs()->indexOf(a));
 		a->deleteLater();
 	}
+	if (QWidget* s = w.arubaSummaryForScreenshot())
+	{
+		pump(400);
+		save(&w, dir, QStringLiteral("aruba-clusteruebersicht.png"));
+		w.tabs()->removeTab(w.tabs()->indexOf(s));
+		s->deleteLater();
+	}
 	if (QWidget* b = w.arubaBreakoutsForScreenshot())
 	{
 		pump(400);

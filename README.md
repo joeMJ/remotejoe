@@ -332,13 +332,23 @@ Zusatzfunktionen → Aruba-Werkzeuge**. Abgefragt wird per SSH am virtuellen Con
 der Schlüsseldatenbank.
 
 - **Cluster-Karte** in der Übersicht eines als Aruba-AP erkannten Ziels: „Cluster abfragen“ liest `show aps`, die
-  freigegebenen APs (`allowed-ap`) und `show summary`. Angezeigt werden die Verwaltung (nicht verwaltet, Central,
-  AirWave), die Zahl der APs im Cluster, online, offline und der angemeldeten Anwender sowie je AP eine Kachel
-  „.Oktett | Name bzw. MAC“ mit der Anwenderzahl; der Conductor trägt einen Stern, APs außerhalb des Segments zeigen
-  die volle Adresse. Lange Namen werden in der Mitte gekürzt (der volle Name steht im Tooltip); ein Rechtsklick auf
-  eine Kachel kopiert Name, IP- oder MAC-Adresse. Umbenannte APs ordnet remotejoe über die AP-Tabelle von
-  `show summary` ihrer MAC zu. Ab wie vielen Anwendern je AP die Zahl gelb bzw. rot wird, steht unter Einstellungen →
-  Zusatzfunktionen (Vorgabe 30 und 64; 0 = aus).
+  freigegebenen APs (`allowed-ap`), `show summary` und `show version`. Angezeigt werden die Verwaltung (nicht
+  verwaltet, Central, AirWave), der letzte Neustart des Conductors mit Zeitpunkt und Grund (etwa Stromunterbrechung
+  oder Befehl „reload all“; fehlt der Zeitpunkt, wird er aus der Laufzeit zurückgerechnet), die Zahl der APs im
+  Cluster, online, offline (rot hinterlegt, sobald ein AP offline ist) und der angemeldeten Anwender sowie je AP eine
+  Kachel „.Oktett | Name bzw. MAC“ mit der Anwenderzahl, nach IP-Adresse geordnet (APs anderer Segmente danach,
+  offline-APs zuletzt); der Conductor trägt einen Stern, APs außerhalb des Segments zeigen die volle Adresse. Lange
+  Namen werden in der Mitte gekürzt (der volle Name steht im Tooltip); ein Rechtsklick auf eine Kachel kopiert Name,
+  IP- oder MAC-Adresse. Umbenannte APs ordnet remotejoe über die AP-Tabelle von `show summary` ihrer MAC zu. Ab wie
+  vielen Anwendern je AP die Zahl gelb bzw. rot wird, steht unter Einstellungen → Zusatzfunktionen (Vorgabe 30 und
+  64; 0 = aus). Das Ergebnis wird im Datenordner gespeichert (`aruba/`) und steht nach einem Neustart wieder da.
+- **Offline-APs** (Rechtsklick auf eine offline-Kachel): **Offline-MAC-Adressen kopieren** legt Clustername, Segment,
+  VC-IP und alle offline-MACs untereinander in die Zwischenablage, etwa für den Chat mit der Netzwerkabteilung.
+  **Anzahl Offline-APs merken** hält die aktuelle Zahl fest; ab der nächsten Abfrage steht sie in der Kachel
+  „Offline“ in Klammern daneben („3 (zuvor 5)“), bis erneut gemerkt wird. **Offline-APs löschen** entfernt alle
+  offline-MACs aus der Liste der freigegebenen APs (`ap_offline_delete`: `no allowed-ap`, `commit apply`) – nach
+  Bestätigung mit allen MACs, mit Admin-Konto und bei verwaltetem Cluster mit Rückfrage; danach wird der Cluster neu
+  abgefragt.
 
   <img src="docs/screenshots/aruba-cluster.png" alt="Aruba-Cluster-Karte mit Verwaltung, Zählern und AP-Kacheln" width="760">
 
@@ -369,6 +379,16 @@ der Schlüsseldatenbank.
 - **Protokolle** in der Cluster-Karte (am VC) und auf der AP-Seite (an diesem AP): Systemlog (`show log system`) und
   Sicherheitslog (`show log security`), ganz oder gefiltert mit `| include <Begriff>`. Die Anzeige läuft in einem eigenen
   Tab, dort lässt sich der Filter ändern und neu laden; gespeichert wird nichts.
+- **Cluster abfragen für mehrere Controller** (Rechtsklick auf Ziele oder Ordner → **Aruba → Cluster abfragen**):
+  fragt alle als Aruba-AP erkannten Ziele der Auswahl ab (Ordner mit Unterordnern), höchstens so viele gleichzeitig
+  wie bei „Alle verbinden“, und zeigt eine **Clusterübersicht** mit einer Zeile je Controller: Verwaltung, Zähler,
+  Offline-APs (rot hinterlegt), letzter Neustart, Zeitpunkt der Abfrage. **Aruba → Clusterübersicht** öffnet sie mit
+  dem gespeicherten Stand, ohne neu abzufragen. Rechtsklick auf eine Zeile kopiert die offline-MACs; „Anzahl
+  Offline-APs merken“ gilt für die markierten Zeilen (ohne Markierung für alle); ein Doppelklick öffnet die Übersicht
+  des Controllers.
+
+  <img src="docs/screenshots/aruba-clusteruebersicht.png" alt="Clusterübersicht mehrerer Controller mit Offline-APs" width="760">
+
 - **Werkzeuge** aus den [Aruba Instant Python Tools](https://github.com/joeMJ/aruba-instant-python-tools), für einen
   Controller, alle Controller eines Ordners oder mehrerer markierter Ziele und Ordner (Rechtsklick → **Aruba**):
   - **Analyse** (`ap_check`) und **Inventar** (`ap_list`, mit AP-Namen) – lesend.

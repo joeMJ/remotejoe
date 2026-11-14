@@ -62,10 +62,17 @@ public:
 	/// Bestätigung vor dem Start: betroffene Controller mit bekanntem Stand; beim Update Firmware-URL und
 	/// „danach neu starten“. Liefert false bei Abbruch.
 	static bool confirm(RjBackend* backend, QWidget* parent, const QString& id, const QString& name, const QString& tool, QString* url, bool* reboot);
+	/// Bestätigung für „Offline-APs löschen“: alle MACs, Stand des Controllers (Admin-Konto, Verwaltung).
+	static bool confirmOfflineDelete(RjBackend* backend, QWidget* parent, const QString& id, const QString& name, const QStringList& macs);
 	/// Startet den Lauf und zeigt ihn; `startError` erhält eine Fehlermeldung, wenn er nicht starten konnte.
-	ArubaWriteTab(RjBackend* backend, const QString& id, const QString& name, const QString& tool, const QString& url, bool reboot, QWidget* parent = nullptr);
+	/// `macs`: nur bei „offline_delete“ – die zu löschenden offline-MACs.
+	ArubaWriteTab(RjBackend* backend, const QString& id, const QString& name, const QString& tool, const QString& url, bool reboot, QWidget* parent = nullptr, const QStringList& macs = {});
 	QString title() const;
 	bool started() const { return m_started; }
+
+signals:
+	/// Lauf beendet (auch mit Fehlern oder abgebrochen).
+	void finished();
 
 private:
 	QJsonObject call(const QJsonObject& cmd) const;

@@ -78,8 +78,11 @@ pub struct OverviewState {
     busy: HashMap<String, u64>,
     /// Geräteart je Ziel aus dem Inventar (eigenes Symbol im Baum, z. B. Aruba-AP).
     pub devices: HashMap<Uuid, &'static str>,
-    /// Zuletzt abgefragter Aruba-Cluster je Ziel (VC).
+    /// Zuletzt abgefragter Aruba-Cluster je Ziel (VC); liegt auch im Datenordner (`aruba/<Ziel>.json`) und übersteht
+    /// so einen Neustart. Darin ggf. `mark`: gemerkte Zahl der offline-APs (`offline`, `at`).
     pub aruba: HashMap<String, Value>,
+    /// Ordner der gespeicherten Cluster (`None`: nichts speichern, z. B. ohne Datenordner).
+    pub aruba_dir: Option<std::path::PathBuf>,
     /// Nur Vorführung: Inventar im Speicher statt im Datenordner.
     pub demo_inventory: HashMap<String, inventory::Inventory>,
 }
@@ -88,11 +91,39 @@ impl Default for OverviewState {
     fn default() -> Self {
         let store = Store::default_location();
         let devices = store.scan_devices();
-        OverviewState { store, services: HashMap::new(), run: None, busy: HashMap::new(), devices, aruba: HashMap::new(), demo_inventory: HashMap::new() }
+        let aruba_dir = rj_core::config::data_dir().map(|d| d.join("aruba"));
+        let aruba = aruba_dir.as_deref().map(load_clusters).unwrap_or_default();
+        OverviewState { store, services: HashMap::new(), run: None, busy: HashMap::new(), devices, aruba, aruba_dir, demo_inventory: HashMap::new() }
     }
 }
 
+/// Gespeicherte Cluster aus dem Ordner laden (Dateiname = Ziel-ID).
+fn load_clusters(dir: &std::path::Path) -> HashMap<String, Value> {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| {
+                    let p = e.path();
+                    let key = p.file_stem()?.to_str()?.to_string();
+                    Uuid::parse_str(&key).ok()?;
+                    let v: Value = serde_json::from_slice(&std::fs::read(&p).ok()?).ok()?;
+                    Some((key, v))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl OverviewState {
+    /// Cluster eines VC merken und speichern (Fehler beim Schreiben bleiben ohne Folgen für die Anzeige).
+    pub fn put_cluster(&mut self, key: &str, v: Value) {
+        if let (Some(dir), Ok(_)) = (&self.aruba_dir, Uuid::parse_str(key)) {
+            let _ = std::fs::create_dir_all(dir);
+            let _ = rj_core::fsutil::atomic_write_with_backup(&dir.join(format!("{key}.json")), &serde_json::to_vec_pretty(&v).unwrap_or_default());
+        }
+        self.aruba.insert(key.to_string(), v);
+    }
+
     /// Zuletzt bei der Dienstprüfung aufgelöste Adresse eines Ziels.
     pub fn services_ip(&self, key: &str) -> Option<String> {
         self.services.get(key).and_then(|(_, v)| v["ip"].as_str().map(str::to_string))
@@ -448,6 +479,7 @@ impl App {
                     return Err("Keine vollständige Antwort des Controllers (Zeitlimit 30 s)".to_string());
                 }
                 let mut v = crate::aruba::cluster_json(&r.outputs[1], &r.outputs[2], r.outputs.get(3).map_or("", String::as_str), &vc);
+                v["reboot"] = json!(r.outputs.get(4).and_then(|s| crate::aruba::reboot_info(s, now())));
                 let managed = r.outputs.get(3).and_then(|s| crate::aruba::management(s));
                 v["managed"] = json!(managed);
                 // Schreibende Werkzeuge (Neustart, Update): nur mit Admin-Konto; bei Verwaltung mit Warnung.
@@ -466,7 +498,11 @@ impl App {
                     Ok((mut v, note)) => {
                         v["at"] = json!(now());
                         v["note"] = json!(note);
-                        app.overview.aruba.insert(job_key.clone(), v.clone());
+                        // Gemerkte Zahl der offline-APs bleibt bis zum nächsten „merken“.
+                        if let Some(mark) = app.overview.aruba.get(&job_key).map(|old| old["mark"].clone()).filter(|m| !m.is_null()) {
+                            v["mark"] = mark;
+                        }
+                        app.overview.put_cluster(&job_key, v.clone());
                         v
                     }
                     Err(e) => json!({ "error": e }),
@@ -607,6 +643,51 @@ impl App {
         Ok(json!({ "pending": job }))
     }
 
+    /// „Anzahl offline-APs merken“ für einen VC (`id`) oder mehrere (`ids`): die aktuelle Zahl aus dem zuletzt
+    /// abgefragten Cluster; die Karte zeigt sie nach der nächsten Abfrage als „(zuvor N)“.
+    pub fn aruba_mark(&mut self, c: &Value) -> Result<Value, String> {
+        let ids: Vec<String> = match c.get("ids").and_then(Value::as_array) {
+            Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+            None => vec![c.get("id").and_then(Value::as_str).unwrap_or_default().to_string()],
+        };
+        let mut marked = 0;
+        for key in ids {
+            let Some(mut v) = self.overview.aruba.get(&key).cloned() else { continue };
+            if v["allowed_known"] != true {
+                continue;
+            }
+            v["mark"] = json!({ "offline": v["offline"], "at": now() });
+            if self.demo {
+                self.overview.aruba.insert(key, v);
+            } else {
+                self.overview.put_cluster(&key, v);
+            }
+            marked += 1;
+        }
+        if marked == 0 {
+            return Err("Kein abgefragter Cluster mit bekannter Offline-Zahl – erst „Cluster abfragen“".into());
+        }
+        Ok(json!({ "marked": marked }))
+    }
+
+    /// Übersicht für die Sammelabfrage: alle als Aruba-AP erkannten Ziele unter `ids` (Ordner mit Unterordnern) mit
+    /// dem zuletzt gespeicherten Cluster (oder `null`).
+    pub fn aruba_summary(&self, c: &Value) -> Result<Value, String> {
+        if !self.config.features.aruba {
+            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
+        }
+        let ids: Vec<Uuid> = c.get("ids").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).filter_map(|s| Uuid::parse_str(s).ok()).collect();
+        let rows: Vec<Value> = self
+            .aruba_targets_under(&ids)
+            .into_iter()
+            .filter_map(|tid| {
+                let t = self.target(tid)?;
+                Some(json!({ "id": tid.to_string(), "name": t.name, "host": t.host, "cluster": self.overview.aruba.get(&tid.to_string()) }))
+            })
+            .collect();
+        Ok(json!({ "rows": rows }))
+    }
+
     /// „Clusteraufbrüche suchen“: im Segment des Schwarms (aus „Cluster abfragen“) alle Adressen auf TCP 4343
     /// prüfen, ohne die online-APs und die VC-IP. Antwortet dort ein Gerät, ist es nicht im Schwarm – etwa ein AP,
     /// der die PAPI-Verbindung zum Conductor verloren hat und selbst die VC-IP beansprucht. Nur Anzeige, nichts wird
@@ -727,6 +808,20 @@ impl App {
         let entry = cluster["aps"].as_array().and_then(|a| a.iter().find(|x| x["ip"] == "192.0.2.182").cloned());
         self.overview.aruba.insert(key, cluster);
         Ok(json!({ "ap": ap, "entry": entry }))
+    }
+
+    /// Nur Vorführung (Bildschirmfotos): die Ziele `ids` als Aruba-Controller mit erfundenen Clustern (Varianten).
+    pub fn aruba_demo_summary(&mut self, c: &Value) -> Result<Value, String> {
+        if !self.demo {
+            return Err("Nur in der Vorführung".into());
+        }
+        self.config.features.aruba = true;
+        let ids: Vec<Uuid> = c.get("ids").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).filter_map(|s| Uuid::parse_str(s).ok()).collect();
+        for (i, id) in ids.iter().enumerate() {
+            self.overview.devices.insert(*id, "aruba-ap");
+            self.overview.aruba.insert(id.to_string(), crate::aruba::demo_variant(i));
+        }
+        Ok(json!({ "ok": ids.len() }))
     }
 
     /// Aruba-Werkzeuge: Seite eines einzelnen APs (`ip`, `ap_name`) – per SSH am AP mit den Zugangsdaten des VC (`id`).

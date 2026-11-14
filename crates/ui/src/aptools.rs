@@ -321,19 +321,22 @@ pub struct Tool {
     pub prefix: &'static str,
     pub args: Vec<String>,
     pub answers: Vec<(String, String)>,
-    /// Schreibend (Neustart, Update): Vorprüfung je Controller, mehrere Controller in einem Lauf.
+    /// Schreibend (Neustart, Update, Offline-APs löschen): Vorprüfung je Controller, mehrere Controller in einem Lauf.
     pub write: bool,
+    /// Offline-APs löschen: Inhalt der Importdatei (`Conductor IP,Offline AP MAC`); das Werkzeug bekommt dann
+    /// `--importfile` statt der Adressen.
+    pub csv: Option<String>,
 }
 
 impl Tool {
     pub fn by_name(name: &str, url: Option<&str>, reboot: bool) -> Result<Tool, String> {
         let mut answers = common_answers();
         Ok(match name {
-            "analyse" => Tool { script: "ap_check.py", prefix: "ap_check_", args: vec!["--log".into()], answers, write: false },
-            "inventar" => Tool { script: "ap_list.py", prefix: "ap_list_", args: vec!["--apname".into(), "--log".into()], answers, write: false },
+            "analyse" => Tool { script: "ap_check.py", prefix: "ap_check_", args: vec!["--log".into()], answers, write: false, csv: None },
+            "inventar" => Tool { script: "ap_list.py", prefix: "ap_list_", args: vec!["--apname".into(), "--log".into()], answers, write: false, csv: None },
             "reload" => {
                 answers.push(("Reload-Versuch ber\u{fc}cksichtigt".into(), "n".into()));
-                Tool { script: "ap_swarm_reload.py", prefix: "logs_", args: vec!["--log".into()], answers, write: true }
+                Tool { script: "ap_swarm_reload.py", prefix: "logs_", args: vec!["--log".into()], answers, write: true, csv: None }
             }
             "update" => {
                 let url = url.map(str::trim).filter(|u| !u.is_empty()).ok_or("Firmware-URL fehlt")?;
@@ -343,7 +346,11 @@ impl Tool {
                 answers.push(("Wollen Sie wirklich fortfahren".into(), "j".into()));
                 answers.push(("automatisch neu gestartet".into(), if reboot { "j" } else { "n" }.into()));
                 answers.push(("Conductor als 'Down'".into(), "n".into()));
-                Tool { script: "ap_swarm_update.py", prefix: "update_", args: vec!["-f".into(), url.to_string(), "--log".into()], answers, write: true }
+                Tool { script: "ap_swarm_update.py", prefix: "update_", args: vec!["-f".into(), url.to_string(), "--log".into()], answers, write: true, csv: None }
+            }
+            "offline_delete" => {
+                answers.push(("Wollen Sie wirklich fortfahren".into(), "j".into()));
+                Tool { script: "ap_offline_delete.py", prefix: "ap_offline_delete_", args: vec!["--log".into()], answers, write: true, csv: None }
             }
             other => return Err(format!("Unbekanntes Werkzeug „{other}“")),
         })
@@ -465,6 +472,15 @@ pub struct Task {
     pub dest: PathBuf,
 }
 
+/// Importdatei für `ap_offline_delete.py`: Kopfzeile, dann je MAC eine Zeile mit der Adresse des Conductors.
+fn offline_csv(conductor: &str, macs: &[&str]) -> String {
+    let mut s = String::from("Conductor IP,Offline AP MAC\n");
+    for m in macs {
+        s.push_str(&format!("{conductor},{}\n", m.to_ascii_lowercase()));
+    }
+    s
+}
+
 /// Dateiname aus einem Namen im Baum (keine Pfadtrenner oder unter Windows verbotenen Zeichen).
 pub fn file_name(s: &str) -> String {
     let t: String = s.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() { '_' } else { c }).collect();
@@ -555,7 +571,22 @@ pub fn run_tool(root: &Path, tool: &Tool, tasks: Vec<Task>, known: rj_ssh::known
         let before = dirs(&coll);
         let hosts: Vec<&str> = vcs.iter().map(|v| v.host.as_str()).collect();
         let mut cmd = command(&py);
-        cmd.arg("-u").arg(&starter).arg(tool.script).arg(hosts.join(",")).args(&tool.args).current_dir(&coll).env("PYTHONIOENCODING", "utf-8").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.arg("-u").arg(&starter).arg(tool.script);
+        // Offline-APs löschen: Importdatei statt Adressen (nur für diesen Lauf, danach gelöscht).
+        let import = tool.csv.as_ref().map(|csv| (coll.join("remotejoe_offline_import.csv"), csv));
+        match &import {
+            Some((path, csv)) => {
+                if let Err(e) = std::fs::write(path, csv) {
+                    append(&run.out, &format!("Importdatei nicht schreibbar: {e}\n"));
+                    continue;
+                }
+                cmd.arg("--importfile").arg(path);
+            }
+            None => {
+                cmd.arg(hosts.join(","));
+            }
+        }
+        cmd.args(&tool.args).current_dir(&coll).env("PYTHONIOENCODING", "utf-8").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -639,6 +670,9 @@ pub fn run_tool(root: &Path, tool: &Tool, tasks: Vec<Task>, known: rj_ssh::known
             let _ = t.join();
         }
         let code = run.child.lock().unwrap_or_else(|e| e.into_inner()).take().and_then(|mut c| c.wait().ok()).and_then(|s| s.code());
+        if let Some((path, _)) = &import {
+            let _ = std::fs::remove_file(path);
+        }
         append(&run.out, &format!("----- beendet (Code {}) -----\n", code.map_or("?".into(), |c| c.to_string())));
         for d in dirs(&coll).into_iter().filter(|d| !before.contains(d)) {
             let to = task.dest.join(d.file_name().unwrap_or_default());
@@ -746,6 +780,12 @@ impl App {
         out
     }
 
+    /// Wie [`aptools_targets`], aber nur als Aruba-AP erkannte Ziele, auch wenn ein Ziel direkt gewählt ist
+    /// (Sammelabfrage „Cluster abfragen“).
+    pub(crate) fn aruba_targets_under(&self, ids: &[Uuid]) -> Vec<Uuid> {
+        self.aptools_targets(ids).into_iter().filter(|t| self.overview.devices.get(t) == Some(&"aruba-ap")).collect()
+    }
+
     fn aptools_targets_of(&self, id: Uuid) -> Vec<Uuid> {
         fn walk(n: &rj_core::Node, devices: &std::collections::HashMap<Uuid, &'static str>, out: &mut Vec<Uuid>) {
             match n {
@@ -819,6 +859,16 @@ impl App {
         }
         let (spec, ids) = target_ids(c)?;
         let (vcs, problems) = self.aptools_vcs(&ids);
+        // Offline-APs löschen: genau ein Controller, die MACs aus der Clusterkarte als Importdatei.
+        let mut tool = tool;
+        if tool.script == "ap_offline_delete.py" {
+            let [(_, vc)] = vcs.as_slice() else { return Err("Offline-APs löschen geht nur für einen Controller".into()) };
+            let macs: Vec<&str> = c.get("macs").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).filter(|m| crate::aruba::is_mac(m)).collect();
+            if macs.is_empty() {
+                return Err("Keine Offline-APs zum Löschen".into());
+            }
+            tool.csv = Some(offline_csv(&vc.host, &macs));
+        }
         if vcs.is_empty() {
             return Err(if problems.is_empty() {
                 "Keine Aruba-Controller gefunden (Ziele mit Aruba-Symbol, erkannt über „Inventar abfragen“)".to_string()
@@ -929,6 +979,13 @@ fn target_ids(c: &Value) -> Result<(String, Vec<Uuid>), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offline_import_lists_each_mac_with_its_conductor() {
+        assert_eq!(offline_csv("192.0.2.4", &["02:00:5E:00:00:01", "02:00:5e:00:00:02"]), "Conductor IP,Offline AP MAC\n192.0.2.4,02:00:5e:00:00:01\n192.0.2.4,02:00:5e:00:00:02\n");
+        let t = Tool::by_name("offline_delete", None, false).unwrap();
+        assert!(t.write && t.script == "ap_offline_delete.py" && t.answers.iter().any(|(k, v)| k.contains("fortfahren") && v == "j"));
+    }
 
     #[test]
     fn pip_route_names_the_way() {

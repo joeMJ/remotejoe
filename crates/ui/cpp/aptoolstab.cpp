@@ -536,7 +536,40 @@ bool ArubaWriteTab::confirm(RjBackend* backend, QWidget* parent, const QString& 
 	return true;
 }
 
-ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QString& name, const QString& tool, const QString& url, bool reboot, QWidget* parent)
+bool ArubaWriteTab::confirmOfflineDelete(RjBackend* backend, QWidget* parent, const QString& id, const QString& name, const QStringList& macs)
+{
+	auto T = [backend](const char* k) { return backend->text(QString::fromLatin1(k)); };
+	const QJsonObject r = QJsonDocument::fromJson(backend->edit(QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("op"), QStringLiteral("aptools_targets") }, { QStringLiteral("id"), id } }).toJson(QJsonDocument::Compact))).toUtf8()).object();
+	if (r.contains(QStringLiteral("error")))
+	{
+		QMessageBox::warning(parent, T("aruba.offline.delete"), r.value(QStringLiteral("error")).toString());
+		return false;
+	}
+	if (r.value(QStringLiteral("write_running")).toBool())
+	{
+		QMessageBox::information(parent, T("aruba.offline.delete"), T("aruba.write.running"));
+		return false;
+	}
+	// Stand für schreibende Werkzeuge aus „Cluster abfragen“: Admin-Konto Pflicht, Verwaltung nur mit Rückfrage.
+	const QJsonArray targets = r.value(QStringLiteral("targets")).toArray();
+	const QJsonObject w = targets.isEmpty() ? QJsonObject() : targets.first().toObject().value(QStringLiteral("write")).toObject();
+	if (!w.isEmpty() && !w.value(QStringLiteral("ok")).toBool())
+	{
+		QMessageBox::warning(parent, T("aruba.offline.delete"), T("aruba.write.blocked").arg(w.value(QStringLiteral("reason")).toString()));
+		return false;
+	}
+	QMessageBox box(QMessageBox::Warning, T("aruba.offline.delete") + QStringLiteral(" · ") + name,
+	                T("aruba.offline.delete.ask").arg(macs.size()).arg(name), QMessageBox::NoButton, parent);
+	box.setDetailedText(macs.join(QLatin1Char('\n')));
+	box.setInformativeText(w.value(QStringLiteral("warn")).isString() ? T("aruba.write.warn").arg(w.value(QStringLiteral("warn")).toString()) + QStringLiteral("\n\n") + T("aruba.offline.delete.note")
+	                                                                    : T("aruba.offline.delete.note"));
+	auto* yes = box.addButton(T("aruba.offline.delete.yes"), QMessageBox::AcceptRole);
+	box.setDefaultButton(box.addButton(T("aruba.write.cancel"), QMessageBox::RejectRole));
+	box.exec();
+	return box.clickedButton() == yes;
+}
+
+ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QString& name, const QString& tool, const QString& url, bool reboot, QWidget* parent, const QStringList& macs)
   : ToolTab(parent)
   , m_backend(backend)
   , m_id(id)
@@ -563,7 +596,11 @@ ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QStrin
 	// Die URL darf nach jedem „/“ umbrechen (unsichtbares Leerzeichen), sonst bestimmt sie die Mindestbreite des Tabs.
 	QString breakable = url;
 	breakable.replace(QLatin1Char('/'), QStringLiteral("/\u200B"));
-	auto* sub = new QLabel(update ? T("aruba.update.sub").arg(breakable, T(reboot ? "aruba.update.sub.reboot" : "aruba.update.sub.noreboot")) : T("aruba.reload.sub"), head);
+	const bool offline = tool == QLatin1String("offline_delete");
+	auto* sub = new QLabel(update    ? T("aruba.update.sub").arg(breakable, T(reboot ? "aruba.update.sub.reboot" : "aruba.update.sub.noreboot"))
+	                       : offline ? T("aruba.offline.delete.sub").arg(macs.size()).arg(macs.join(QStringLiteral(", ")))
+	                                 : T("aruba.reload.sub"),
+	                       head);
 	sub->setObjectName(QStringLiteral("rjMuted"));
 	sub->setWordWrap(true);
 	sub->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -643,6 +680,8 @@ ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QStrin
 		cmd.insert(QStringLiteral("url"), url);
 		cmd.insert(QStringLiteral("reboot"), reboot);
 	}
+	if (offline)
+		cmd.insert(QStringLiteral("macs"), QJsonArray::fromStringList(macs));
 	const QJsonObject r = call(cmd);
 	if (r.contains(QStringLiteral("error")))
 	{
@@ -658,7 +697,8 @@ ArubaWriteTab::ArubaWriteTab(RjBackend* backend, const QString& id, const QStrin
 
 QString ArubaWriteTab::title() const
 {
-	return m_backend->text(QString::fromLatin1(m_tool == QLatin1String("update") ? "aruba.update" : "aruba.reload")) + QStringLiteral(" · ") + m_name;
+	const char* key = m_tool == QLatin1String("update") ? "aruba.update" : m_tool == QLatin1String("offline_delete") ? "aruba.offline.delete" : "aruba.reload";
+	return m_backend->text(QString::fromLatin1(key)) + QStringLiteral(" · ") + m_name;
 }
 
 QJsonObject ArubaWriteTab::call(const QJsonObject& cmd) const
@@ -693,6 +733,7 @@ void ArubaWriteTab::poll()
 	{
 		m_poll->stop();
 		m_stop->setEnabled(false);
+		emit finished();
 		const int failed = int(run.value(QStringLiteral("failed")).toArray().size());
 		m_state->setText(run.value(QStringLiteral("stopped")).toBool() ? m_backend->text(QStringLiteral("aptools.stopped"))
 		                 : failed > 0                                    ? m_backend->text(QStringLiteral("aruba.write.done.failed")).arg(failed).arg(results.size())
