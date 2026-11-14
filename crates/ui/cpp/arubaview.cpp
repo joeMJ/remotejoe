@@ -143,6 +143,9 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 	tiles->addWidget(m_offlineTile);
 	// Rechtsklick auf die Kachel „Offline“: Offline-MACs kopieren, Anzahl merken, alle offline-APs aus dem VC löschen.
 	m_offlineTile->setContextMenuPolicy(Qt::CustomContextMenu);
+	// Die Beschriftungen haben sonst ein eigenes Menü (Text kopieren) und fangen den Rechtsklick ab.
+	for (QLabel* l : m_offlineTile->findChildren<QLabel*>())
+		l->setContextMenuPolicy(Qt::NoContextMenu);
 	connect(m_offlineTile, &QWidget::customContextMenuRequested, this, [this, T](const QPoint& pos) {
 		const bool known = m_cluster.value(QStringLiteral("allowed_known")).toBool();
 		const bool any = known && !offlineMacs(m_cluster).isEmpty();
