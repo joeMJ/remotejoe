@@ -342,7 +342,7 @@ der Schlüsseldatenbank.
   IP- oder MAC-Adresse. Umbenannte APs ordnet remotejoe über die AP-Tabelle von `show summary` ihrer MAC zu. Ab wie
   vielen Anwendern je AP die Zahl gelb bzw. rot wird, steht unter Einstellungen → Zusatzfunktionen (Vorgabe 30 und
   64; 0 = aus). Das Ergebnis wird im Datenordner gespeichert (`aruba/`) und steht nach einem Neustart wieder da.
-- **Offline-APs** (Rechtsklick auf eine offline-Kachel): **Offline-MAC-Adressen kopieren** legt Clustername, Segment,
+- **Offline-APs** (Rechtsklick auf die Kachel „Offline“): **Offline-MAC-Adressen kopieren** legt Clustername, Segment,
   VC-IP und alle offline-MACs untereinander in die Zwischenablage, etwa für den Chat mit der Netzwerkabteilung.
   **Anzahl Offline-APs merken** hält die aktuelle Zahl fest; ab der nächsten Abfrage steht sie in der Kachel
   „Offline“ in Klammern daneben („3 (zuvor 5)“), bis erneut gemerkt wird. **Offline-APs löschen** entfernt alle

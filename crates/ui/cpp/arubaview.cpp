@@ -24,8 +24,7 @@ namespace
 class ApTile : public rjui::ClickRow
 {
 public:
-	/// `extra`: weitere Einträge im Kontextmenü (offline-APs: Offline-MACs kopieren, Anzahl merken, löschen).
-	ApTile(const QJsonObject& ap, const std::function<QString(const char*)>& T, int warn, int crit, const std::function<void(QMenu*)>& extra, QWidget* parent)
+	ApTile(const QJsonObject& ap, const std::function<QString(const char*)>& T, int warn, int crit, QWidget* parent)
 	  : rjui::ClickRow(parent)
 	{
 		setObjectName(QStringLiteral("rjApTile"));
@@ -80,18 +79,13 @@ public:
 		setContextMenuPolicy(Qt::CustomContextMenu);
 		const QString mac = ap.value(QStringLiteral("mac")).isString() ? ap.value(QStringLiteral("mac")).toString() : QString();
 		const QStringList copy = { T("aruba.copy.name"), T("aruba.copy.ip"), T("aruba.copy.mac") };
-		connect(this, &QWidget::customContextMenuRequested, this, [this, full, ip, mac, copy, extra](const QPoint& pos) {
+		connect(this, &QWidget::customContextMenuRequested, this, [this, full, ip, mac, copy](const QPoint& pos) {
 			QMenu menu(this);
 			menu.addAction(copy[0], [full] { QGuiApplication::clipboard()->setText(full); });
 			if (!ip.isEmpty())
 				menu.addAction(copy[1], [ip] { QGuiApplication::clipboard()->setText(ip); });
 			if (!mac.isEmpty() && mac != full)
 				menu.addAction(copy[2], [mac] { QGuiApplication::clipboard()->setText(mac); });
-			if (extra)
-			{
-				menu.addSeparator();
-				extra(&menu);
-			}
 			menu.exec(mapToGlobal(pos));
 		});
 		// Einheitliche Breite (Raster) aus dem Bedarf der Inhalte: Oktett, Stern, MAC, dreistellige Zahl.
@@ -147,6 +141,18 @@ ArubaClusterView::ArubaClusterView(RjBackend* backend, QWidget* parent)
 	tiles->addWidget(rjui::tile(T("aruba.online"), &m_online, this));
 	m_offlineTile = rjui::tile(T("aruba.offline"), &m_offline, this);
 	tiles->addWidget(m_offlineTile);
+	// Rechtsklick auf die Kachel „Offline“: Offline-MACs kopieren, Anzahl merken, alle offline-APs aus dem VC löschen.
+	m_offlineTile->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_offlineTile, &QWidget::customContextMenuRequested, this, [this, T](const QPoint& pos) {
+		const bool known = m_cluster.value(QStringLiteral("allowed_known")).toBool();
+		const bool any = known && !offlineMacs(m_cluster).isEmpty();
+		QMenu menu(this);
+		menu.addAction(T("aruba.offline.copy"), this, [this] { QGuiApplication::clipboard()->setText(offlineText(m_backend, m_name, m_cluster)); })->setEnabled(any);
+		menu.addAction(T("aruba.offline.mark"), this, &ArubaClusterView::markRequested)->setEnabled(known);
+		menu.addSeparator();
+		menu.addAction(T("aruba.offline.delete"), this, [this] { emit offlineDeleteRequested(offlineMacs(m_cluster)); })->setEnabled(any);
+		menu.exec(m_offlineTile->mapToGlobal(pos));
+	});
 	tiles->addWidget(rjui::tile(T("aruba.clients"), &m_clients, this));
 	v->addLayout(tiles);
 
@@ -340,16 +346,7 @@ void ArubaClusterView::render()
 		const bool online = ap.value(QStringLiteral("online")).toBool();
 		if ((f == 1 && !online) || (f == 2 && online) || (f == 3 && ap.value(QStringLiteral("in_segment")).toBool(true)))
 			continue;
-		// Offline-APs: Offline-MACs kopieren, Anzahl merken, alle offline-APs aus dem VC löschen.
-		std::function<void(QMenu*)> extra;
-		if (!online)
-			extra = [this, T](QMenu* menu) {
-				menu->addAction(T("aruba.offline.copy"), this, [this] { QGuiApplication::clipboard()->setText(offlineText(m_backend, m_name, m_cluster)); });
-				menu->addAction(T("aruba.offline.mark"), this, &ArubaClusterView::markRequested);
-				menu->addSeparator();
-				menu->addAction(T("aruba.offline.delete"), this, [this] { emit offlineDeleteRequested(offlineMacs(m_cluster)); });
-			};
-		auto* tile = new ApTile(ap, T, warn, crit, extra, m_box);
+		auto* tile = new ApTile(ap, T, warn, crit, m_box);
 		const QString ip = ap.value(QStringLiteral("ip")).toString();
 		QString tip = ap.value(QStringLiteral("name")).toString() + QStringLiteral(" · ") + (ip.isEmpty() ? T("aruba.ip.unknown") : ip);
 		if (ap.value(QStringLiteral("clients")).isDouble())
