@@ -30,6 +30,7 @@
 #include <QtWidgets/QCompleter>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFontComboBox>
+#include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QSpinBox>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QGroupBox>
@@ -112,6 +113,7 @@ private:
 	QString m_title, m_unit;
 	QVector<double> m_values;
 };
+
 
 QLabel* errorLabel(QWidget* parent)
 {
@@ -417,6 +419,10 @@ QString PropertiesTab::areaSummary(const QString& key) const
 			macros += v.toObject().value(QStringLiteral("linked")).toBool() ? 1 : 0;
 		return T("area.tasks").arg(tasks).arg(macros);
 	}
+#ifdef RJ_STANDORTE
+	if (key == QLatin1String("site"))
+		return siteSummary(d);
+#endif
 	if (key == QLatin1String("clipboard"))
 	{
 		if (kind == QLatin1String("target"))
@@ -653,6 +659,10 @@ void PropertiesTab::build()
 		addPage(key, label, (this->*make)());
 	};
 	page(QStringLiteral("general"), "edit.cat.general", &PropertiesTab::pageGeneral);
+#ifdef RJ_STANDORTE
+	if (m_data.value(QStringLiteral("site")).isObject())
+		page(QStringLiteral("site"), "edit.cat.site", &PropertiesTab::pageSite);
+#endif
 	page(QStringLiteral("connection"), "edit.cat.connection", &PropertiesTab::pageConnection);
 	if (target)
 		page(QStringLiteral("ways"), "edit.cat.ways", &PropertiesTab::pageWays);
@@ -1388,6 +1398,7 @@ QWidget* PropertiesTab::pageTasks()
 	return w;
 }
 
+
 QWidget* PropertiesTab::pageClipboard()
 {
 	auto* w = new QWidget;
@@ -1533,6 +1544,9 @@ QJsonObject PropertiesTab::collect() const
 		f.insert(QStringLiteral("name"), m_name->text());
 	if (m_dirty.contains(QStringLiteral("description")))
 		f.insert(QStringLiteral("description"), m_desc->text());
+#ifdef RJ_STANDORTE
+	saveSite(f);
+#endif
 	if (m_ways && m_dirty.contains(QStringLiteral("ways")))
 	{
 		f.insert(QStringLiteral("ways"), m_ways->ways());

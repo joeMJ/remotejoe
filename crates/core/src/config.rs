@@ -46,7 +46,7 @@ pub struct Config {
     pub update: UpdateSettings,
     /// Farbschema und Fokusrahmen.
     pub appearance: AppearanceSettings,
-    /// Zuschaltbare Zusatzfunktionen.
+    /// Zuschaltbare Funktionen.
     pub features: FeatureSettings,
     /// Sicherungen der KDBX.
     pub backup: BackupSettings,
@@ -81,15 +81,56 @@ impl BackupSettings {
     }
 }
 
-/// Zuschaltbare Zusatzfunktionen (Vorgabe: alle aus).
+/// Zuschaltbare Funktionen (Vorgabe: alle aus).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FeatureSettings {
-    /// Aruba-Werkzeuge: Cluster-Übersicht am virtuellen Controller, AP-Seiten, ap_check.
+    /// Werkzeuge eines Moduls (nur mit dem Modul wirksam).
     pub aruba: bool,
     /// Anwender je AP, ab denen die Zahl auf der Kachel gelb bzw. rot wird (0 = aus).
     pub aruba_clients_warn: u32,
     pub aruba_clients_crit: u32,
+    /// Kabelprüfung: CRC- bzw. Empfangsfehler pro Tag, ab denen ein Port gelb bzw. rot wird.
+    pub cable_warn_day: u32,
+    pub cable_err_day: u32,
+    /// Kabelprüfung: Fehler je Million empfangener Frames, ab denen ein Port gelb bzw. rot wird.
+    pub cable_warn_ppm: u32,
+    pub cable_err_ppm: u32,
+    /// STP: letzte Änderung vor weniger als so vielen Minuten = orange bzw. rot (0 = aus).
+    pub stp_tc_warn_min: u32,
+    pub stp_tc_err_min: u32,
+    /// Glasfaser: Dämpfung einer Strecke (Sendeleistung − Empfangsleistung) in Zehntel-dB, ab der orange bzw. rot
+    /// (0 = aus).
+    pub optic_warn_tenths: u32,
+    pub optic_err_tenths: u32,
+    /// Glasfaser: Hinweis (gelb) ab dieser Dämpfung in Zehntel-dB, unterhalb der Warnung (0 = aus).
+    pub optic_hint_tenths: u32,
+    /// Erlaubte Geschwindigkeiten der AP-Ports in Mbit/s (Vorgabe; je Ordner überschreibbar).
+    pub ap_speeds: Vec<u32>,
+    /// Gewünschte Geschwindigkeiten der übrigen Klassen (`LINK_SPEED_CLASSES`) in Mbit/s; fehlend bzw. leer = nicht prüfen.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub link_speeds: std::collections::BTreeMap<String, Vec<u32>>,
+    /// Firmware-Repository (Verzeichnis mit einem Unterordner je Version), für Netzgeräte.
+    #[serde(default)]
+    pub firmware_repo_wifi: String,
+    #[serde(default)]
+    pub firmware_repo_switch: String,
+    /// Darstellung: Switches mit mehr als N APs eingeklappt zeigen (0 = nie).
+    #[serde(default = "default_collapse_aps")]
+    pub collapse_aps: u32,
+    /// Darstellung: Höhe des Aufbau-Kastens in Pixeln (0 = Vorgabe).
+    #[serde(default)]
+    pub topo_height: u32,
+    /// Switchports schalten: Uplinks gesperrt (Vorgabe an).
+    #[serde(default = "default_true")]
+    pub port_uplink_lock: bool,
+    /// Kaltstart: Pause zwischen PoE aus und an in Sekunden.
+    #[serde(default = "default_cold_pause")]
+    pub port_cold_pause: u32,
+    /// Neue Ordner dieser Art: Standard-Anmeldeobjekte je Art (`SITE_LOGIN_KINDS`): „template“ (aus der Vorlage in
+    /// `Templates/Loginobjects`), „empty“ (leer) oder fehlend = keins.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub site_logins: std::collections::BTreeMap<String, String>,
     /// Claude-Anbindung (MCP), Vorgabe aus.
     pub mcp: bool,
     /// Adressen (IP, MAC) bzw. Seriennummern gegenüber Claude ausblenden.
@@ -102,12 +143,46 @@ pub struct FeatureSettings {
     pub mcp_logins: std::collections::BTreeMap<String, Vec<String>>,
 }
 
+/// Klassen der gewünschten Geschwindigkeiten neben den APs: Telefone, sonstige Endgeräte, Uplinks (eigener Port
+/// eines Switches zur Wurzel), Downlinks (Port am oberen Switch) und Router-Ports.
+pub const LINK_SPEED_CLASSES: [&str; 5] = ["phone", "device", "uplink", "downlink", "router"];
+
+fn default_collapse_aps() -> u32 {
+    12
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_cold_pause() -> u32 {
+    10
+}
+
 impl Default for FeatureSettings {
     fn default() -> Self {
         FeatureSettings {
             aruba: false,
             aruba_clients_warn: 30,
             aruba_clients_crit: 64,
+            cable_warn_day: 10,
+            cable_err_day: 100,
+            cable_warn_ppm: 1,
+            cable_err_ppm: 10,
+            stp_tc_warn_min: 60,
+            stp_tc_err_min: 5,
+            optic_warn_tenths: 60,
+            optic_err_tenths: 100,
+            optic_hint_tenths: 0,
+            ap_speeds: vec![1000],
+            link_speeds: Default::default(),
+            firmware_repo_wifi: String::new(),
+            firmware_repo_switch: String::new(),
+            collapse_aps: default_collapse_aps(),
+            topo_height: 0,
+            port_uplink_lock: true,
+            port_cold_pause: default_cold_pause(),
+            site_logins: Default::default(),
             mcp: false,
             mcp_hide_addresses: false,
             mcp_hide_serials: false,

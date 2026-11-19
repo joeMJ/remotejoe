@@ -50,6 +50,11 @@ Daraus baut `scripts/build-msi.ps1` mit WiX 3.14 die signierte MSI unter `target
 .\scripts\build-msi.ps1 -WixDir "C:\Program Files (x86)\WiX Toolset v3.14\bin"
 ```
 
+Testbaue tragen eine Vorabversion wie `0.1.35-beta.3` in `Cargo.toml`. Das MSI heißt dann
+`remotejoe-0.1.35-beta.3-windows-x86_64.msi`, bekommt intern aber die Kernversion `0.1.35`, weil der Windows
+Installer nur Zahlen kennt. So lassen sich die Betas einer Version nacheinander und schließlich die fertige
+Version darüber installieren. Veröffentlicht werden nur fertige Versionen.
+
 ## Schritt für Schritt unter Windows
 
 Anleitung für Windows 10/11 (x64). Das Skript `scripts/build-windows.ps1` führt die Schritte 5

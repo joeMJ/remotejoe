@@ -198,7 +198,10 @@ fn pw_str(s: &Secret) -> Result<String, SshError> {
 }
 
 /// Verfahren, die wir anbieten: die Standardliste, dazu `ecdh-sha2-nistp256/384/521` (kein Mangel,
-/// aber manche Geräte können nur diese). Mit `legacy` zusätzlich ältere Verfahren, ganz hinten.
+/// aber manche Geräte können nur diese). Mit `legacy` zusätzlich ältere Verfahren, ganz hinten; außerdem kommt
+/// ECDH dann vor alle DH-Verfahren und der Gruppenaustausch (`diffie-hellman-group-exchange-*`) ans Ende: Manche
+/// Geräte (z. B. ältere Switches) schicken beim Gruppenaustausch eine Gruppe, die die Bibliothek
+/// ablehnt („Key exchange init failed“), während ECDH mit ihnen funktioniert.
 fn preferred(legacy: bool) -> russh::Preferred {
     use russh::{cipher, kex, mac};
     fn add<T: Clone + PartialEq>(list: &mut Vec<T>, extra: impl IntoIterator<Item = T>) {
@@ -213,6 +216,23 @@ fn preferred(legacy: bool) -> russh::Preferred {
     add(&mut k, [kex::ECDH_SHA2_NISTP256, kex::ECDH_SHA2_NISTP384, kex::ECDH_SHA2_NISTP521]);
     if legacy {
         add(&mut k, [kex::DH_GEX_SHA1, kex::DH_G14_SHA1, kex::DH_G1_SHA1]);
+        // Reihenfolge: hybride bzw. curve25519 wie bisher, dann ECDH, feste DH-Gruppen, Gruppenaustausch, group1.
+        let rank = |n: &kex::Name| -> u8 {
+            if [kex::ECDH_SHA2_NISTP256, kex::ECDH_SHA2_NISTP384, kex::ECDH_SHA2_NISTP521].contains(n) {
+                1
+            } else if [kex::DH_GEX_SHA256, kex::DH_GEX_SHA1].contains(n) {
+                3
+            } else if *n == kex::DH_G1_SHA1 {
+                4
+            } else if n.as_ref().starts_with("diffie-hellman") {
+                2
+            } else if n.as_ref().starts_with("ext-info") || n.as_ref().starts_with("kex-strict") {
+                5
+            } else {
+                0
+            }
+        };
+        k.sort_by_key(rank);
         let mut c = p.cipher.to_vec();
         add(&mut c, [cipher::AES_128_CBC, cipher::AES_192_CBC, cipher::AES_256_CBC]);
         p.cipher = c.into();
@@ -454,5 +474,23 @@ mod preferred_tests {
         let l = preferred(true);
         assert!(l.kex.contains(&kex::DH_G14_SHA1) && l.cipher.contains(&cipher::AES_128_CBC));
         assert_eq!(l.kex.iter().position(|k| *k == kex::MLKEM768X25519_SHA256), p.kex.iter().position(|k| *k == kex::MLKEM768X25519_SHA256), "Reihenfolge der sicheren bleibt");
+    }
+
+    #[test]
+    fn second_attempt_prefers_ecdh_over_group_exchange() {
+        let pos = |l: &russh::Preferred, n: kex::Name| l.kex.iter().position(|k| *k == n).unwrap();
+        // Erster Versuch unverändert: Gruppenaustausch vor ECDH (Standardliste der Bibliothek, ECDH angehängt).
+        let p = preferred(false);
+        assert!(pos(&p, kex::DH_GEX_SHA256) < pos(&p, kex::ECDH_SHA2_NISTP256));
+        // Zweiter Versuch: curve25519 vor ECDH vor festen DH-Gruppen vor Gruppenaustausch vor group1.
+        let l = preferred(true);
+        assert!(pos(&l, kex::CURVE25519) < pos(&l, kex::ECDH_SHA2_NISTP256));
+        assert!(pos(&l, kex::ECDH_SHA2_NISTP521) < pos(&l, kex::DH_G14_SHA256));
+        assert!(pos(&l, kex::DH_G14_SHA1) < pos(&l, kex::DH_GEX_SHA256));
+        assert!(pos(&l, kex::DH_GEX_SHA1) < pos(&l, kex::DH_G1_SHA1));
+        assert!(pos(&l, kex::DH_G1_SHA1) < pos(&l, kex::EXTENSION_SUPPORT_AS_CLIENT));
+        // Gegen die Liste eines älteren Switches: erstes gemeinsames Verfahren ist ecdh-sha2-nistp256.
+        let server = ["ecdh-sha2-nistp256", "ecdh-sha2-nistp384", "ecdh-sha2-nistp521", "diffie-hellman-group-exchange-sha256", "diffie-hellman-group14-sha1"];
+        assert_eq!(l.kex.iter().find(|k| server.contains(&k.as_ref())).map(|k| k.as_ref()), Some("ecdh-sha2-nistp256"));
     }
 }

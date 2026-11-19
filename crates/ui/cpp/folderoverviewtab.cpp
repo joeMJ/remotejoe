@@ -165,5 +165,5 @@ void FolderOverviewTab::applyFilter()
 		m_table->setRowHidden(r, !hit);
 		shown += hit ? 1 : 0;
 	}
-	m_count->setText(m_backend->text(QStringLiteral("aruba.users.count")).arg(shown).arg(m_table->rowCount()));
+	m_count->setText(m_backend->text(QStringLiteral("table.count")).arg(shown).arg(m_table->rowCount()));
 }

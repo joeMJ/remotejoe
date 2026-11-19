@@ -18,7 +18,15 @@ fn offscreen_screenshots_and_start_time() {
     let out = cmd.output().unwrap();
     let log = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{log}");
-    for f in ["hauptfenster-hell.png", "hauptfenster-dunkel.png", "hauptfenster-kompakt-ohne-baum.png", "suche.png", "hypervisor.png", "verbinden-zugangsdaten.png", "hostschluessel-unbekannt.png", "hostschluessel-geaendert.png", "import-vorschau.png", "patchday.png", "abgerissenes-fenster.png", "eigenschaften.png", "zugangsdaten-auswahl.png", "hinzufuegen-menue.png", "entsperren.png", "mehrere-ziele.png", "zusammenfassen.png", "aruba-cluster.png", "aruba-ap.png", "aruba-clusteraufbrueche.png", "aruba-clusteruebersicht.png"] {
+    let mut files = vec!["hauptfenster-hell.png", "hauptfenster-dunkel.png", "hauptfenster-kompakt-ohne-baum.png", "suche.png", "hypervisor.png", "verbinden-zugangsdaten.png", "hostschluessel-unbekannt.png", "hostschluessel-geaendert.png", "import-vorschau.png", "patchday.png", "abgerissenes-fenster.png", "eigenschaften.png", "zugangsdaten-auswahl.png", "hinzufuegen-menue.png", "entsperren.png", "mehrere-ziele.png", "zusammenfassen.png"];
+    // Bilder der Module nur in der Fassung mit ihnen.
+    if cfg!(feature = "aruba") {
+        files.extend(["aruba-cluster.png", "aruba-ap.png", "aruba-clusteraufbrueche.png", "aruba-clusteruebersicht.png"]);
+    }
+    if cfg!(feature = "standorte") {
+        files.extend(["standort.png", "standorte.png"]);
+    }
+    for f in files {
         let len = std::fs::metadata(dir.path().join(f)).map(|m| m.len()).unwrap_or(0);
         assert!(len > 5000, "{f} fehlt oder ist leer ({len} Bytes)\n{log}");
     }

@@ -25,7 +25,7 @@ class FlowBox;
 
 /// Objektübersicht beim Einfachklick auf ein Ziel oder einen Gast, im Kartenstil: Kopfkarte (Symbol, Name,
 /// Kurzzeile, Verbinden), Kennzahlen als Kacheln (von Hand korrigierbar, neue Werte zum Übernehmen),
-/// angebotene Dienste als Plaketten, Notizen, Prüfungen (Ping, Traceroute) und – bei Aruba – eine eigene Karte.
+/// angebotene Dienste als Plaketten, Notizen und Prüfungen (Ping, Traceroute).
 /// Es gibt nur einen solchen Tab; ein Klick auf ein anderes Ziel zeigt dieses im selben Tab.
 class OverviewTab : public ToolTab
 {
@@ -51,17 +51,6 @@ signals:
 	void connectWayRequested(const QJsonObject& subject, const QString& way);
 	/// Inventar abgefragt: die Geräteart (Symbol im Baum) kann sich geändert haben.
 	void inventoryChanged();
-	/// Aruba-Werkzeuge: Kachel eines APs im Cluster angeklickt (`subject` = der VC, `ap` aus der Cluster-Abfrage).
-	void arubaApRequested(const QJsonObject& subject, const QJsonObject& ap);
-	/// Aruba-Werkzeug („analyse“, „inventar“, „reload“, „update“) für dieses Ziel.
-	void arubaToolsRequested(const QString& id, const QString& name, const QString& tool);
-	/// Aruba-Log anzeigen (`ip` leer: am VC).
-	void arubaLogRequested(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
-	/// Aruba: Anwender des Clusters anzeigen.
-	void arubaUsersRequested(const QJsonObject& subject, const QString& where);
-	void arubaBreakoutsRequested(const QJsonObject& subject, const QString& where);
-	/// „Offline-APs löschen“ für den VC `id` (alle offline-MACs aus der Clusterkarte).
-	void arubaOfflineDeleteRequested(const QString& id, const QString& name, const QStringList& macs);
 	/// Kurze Meldung für die Statusleiste.
 	void statusMessage(const QString& text);
 
@@ -80,10 +69,10 @@ private:
 	void renderServices(const QJsonValue& s);
 	void renderInventory(const QJsonArray& fields);
 	void updateSub();
-	/// Inventar eines Aruba-Geräts (System „Aruba …“).
-	static bool isAruba(const QJsonArray& fields);
-	/// Cluster-Karte nur bei Aruba-Geräten und eingeschalteten Aruba-Werkzeugen.
-	void updateAruba(const QJsonObject& r);
+	/// Netzgerät mit eigener Kachelbelegung (Laufzeit, Seriennummer, Version statt vCPU und Speicher)?
+	static bool isNetworkDevice(const QJsonArray& fields);
+	/// System eines Netzgeräts in Kopfzeile und Version teilen.
+	static std::pair<QString, QString> splitDeviceVersion(const QString& system);
 	QString fieldLabel(const QString& key) const;
 
 	RjBackend* m_backend;
@@ -104,7 +93,7 @@ private:
 	bool m_hasWays = false;
 	QLabel* m_tileValue[4] = {};
 	QLabel* m_tileCap[4] = {};
-	/// Felder der vier Kacheln; bei Aruba-Geräten Laufzeit und Seriennummer statt vCPU und Speicher.
+	/// Felder der vier Kacheln; bei Netzgeräten Laufzeit und Seriennummer statt vCPU und Speicher.
 	QStringList m_tileKeys;
 	QLabel* m_inventorySource;
 	QWidget* m_pendingBox;
@@ -128,7 +117,15 @@ private:
 	QPushButton* m_trace;
 	QPushButton* m_stop;
 	QPlainTextEdit* m_output;
-	QWidget* m_arubaCard;
-	class ArubaClusterView* m_cluster = nullptr;
+	// Beiträge der Module (nur mit dem jeweiligen Modul gebaut).
+#ifndef Q_MOC_RUN
+#ifdef RJ_STANDORTE
+#include "modules/standorte/overview_standorte_members.h"
+#endif
+#ifdef RJ_ARUBA
+#include "modules/aruba/overview_aruba_members.h"
+#endif
+#endif
+private:
 	QTimer* m_poll;
 };

@@ -167,6 +167,9 @@ if ($Test) {
     foreach ($p in $pakete) { $testArgs += @('-p', $p) }
     Ausfuehren 'cargo test' { cargo test @buildProfile @testArgs }
     Ausfuehren 'cargo test (Logik der Oberfläche)' { cargo test @buildProfile -p remotejoe-ui --lib }
+    # Die Tests übersetzen Programme mit anderen Schaltern; die Programme des Pakets danach neu ablegen.
+    Ausfuehren 'cargo build' { cargo build @buildProfile --workspace }
+    Ausfuehren 'cargo build (Web-Worker mit WebView2)' { cargo build @buildProfile -p remotejoe-worker-web --features webview }
 }
 
 Schritt 'Paket zusammenstellen'
@@ -192,6 +195,7 @@ Ausfuehren 'windeployqt' { & (Join-Path $qtBins 'windeployqt.exe') --translation
 $versionLine = Select-String -Path (Join-Path $Root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
 $commit = (git -C $Root rev-parse HEAD).Trim()
 $geaendert = [bool](git -C $Root status --porcelain --untracked-files=no)
-Set-Content -Path (Join-Path $paket 'paket-ok.txt') -Encoding utf8 -Value @(
-    "version=$($versionLine.Matches[0].Groups[1].Value)", "commit=$commit", "geaendert=$($geaendert.ToString().ToLower())")
+$marke = @("version=$($versionLine.Matches[0].Groups[1].Value)", "commit=$commit", "geaendert=$($geaendert.ToString().ToLower())")
+Set-Content -Path (Join-Path $paket 'paket-ok.txt') -Encoding utf8 -Value ($marke + 'fassung=core')
 Write-Host "Fertig: $paket" -ForegroundColor Green
+

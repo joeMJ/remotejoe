@@ -19,15 +19,21 @@ fn tools() -> Value {
         { "name": "ordner_liste", "description": "Die für Claude freigegebenen Ordner in remotejoe (ID und Pfad).", "inputSchema": { "type": "object", "properties": {} } },
         { "name": "ziele_suchen", "description": "Ziele (Verbindungen) in den freigegebenen Ordnern suchen: Teil von Name, Adresse oder Ordnerpfad; leer = alle. Liefert ID, Name, Typ, Ordner, Version, je nach Einstellung Adresse und Seriennummer.", "inputSchema": { "type": "object", "properties": { "text": { "type": "string" }, "limit": { "type": "integer", "description": "höchstens so viele (Vorgabe 50, max. 500)" } } } },
         { "name": "ziel_uebersicht", "description": "Übersicht eines Ziels: Typ, Ordner, Zugangswege und gespeichertes Inventar (System, CPUs, Speicher, Laufzeit, je nach Einstellung Adressen und Seriennummer). Nie Zugangsdaten.", "inputSchema": id("Ziel-ID aus ziele_suchen") },
-        { "name": "ordner_inventar", "description": "Gespeichertes Inventar aller Ziele unter einem freigegebenen Ordner (z. B. alle APs eines Standorts mit Version).", "inputSchema": id("Ordner-ID aus ordner_liste") },
+        { "name": "ordner_inventar", "description": "Gespeichertes Inventar aller Ziele unter einem freigegebenen Ordner (z. B. alle Server eines Ordners mit Version).", "inputSchema": id("Ordner-ID aus ordner_liste") },
         { "name": "ziele_abgleichen", "description": "Abgleich mit einer externen Liste: je Wert (IP-Adresse, MAC, Seriennummer oder Name) die passenden Ziele in remotejoe; meldet, was nicht gefunden wurde.", "inputSchema": { "type": "object", "properties": { "werte": { "type": "array", "items": { "type": "string" }, "description": "bis zu 2000 Werte" } }, "required": ["werte"] } },
-        { "name": "aruba_cluster", "description": "Zuletzt in remotejoe abgefragter Stand eines Aruba-Instant-Clusters (APs, online/offline, Anwender je AP). Ohne neue Abfrage.", "inputSchema": id("Ziel-ID des virtuellen Controllers") },
         { "name": "sitzungen", "description": "Offene Sitzungen in remotejoe zu freigegebenen Zielen.", "inputSchema": { "type": "object", "properties": {} } },
         { "name": "verbinden", "description": "Öffnet in remotejoe eine Verbindung zum Ziel. Nur bei Zielen mit für Claude freigegebenem Anmeldeobjekt; der Nutzer muss jede Aktion in remotejoe freigeben.", "inputSchema": id("Ziel-ID") },
         { "name": "inventar_abfragen", "description": "Startet in remotejoe eine neue Inventarabfrage (Anmeldung am Ziel). Freigabe wie bei verbinden; Ergebnis danach mit ziel_uebersicht.", "inputSchema": id("Ziel-ID") },
-        { "name": "cluster_abfragen", "description": "Startet in remotejoe eine neue Abfrage eines Aruba-Clusters. Freigabe wie bei verbinden; Ergebnis danach mit aruba_cluster.", "inputSchema": id("Ziel-ID des virtuellen Controllers") },
-        { "name": "nutzer_anzeigen", "description": "Öffnet in remotejoe die Liste der Anwender eines Aruba-Clusters. Freigabe wie bei verbinden.", "inputSchema": id("Ziel-ID des virtuellen Controllers") }
     ])
+}
+
+/// Werkzeuge: die allgemeinen, dazu die Werkzeuge der Module, die das laufende remotejoe meldet.
+fn tools_for(call: &dyn Fn(&Value) -> Result<Value, String>) -> Value {
+    let mut all: Vec<Value> = tools().as_array().cloned().unwrap_or_default();
+    if let Ok(f) = call(&json!({ "tool": "fassung" })) {
+        all.extend(f.get("werkzeuge").and_then(Value::as_array).cloned().unwrap_or_default());
+    }
+    Value::Array(all)
 }
 
 /// Kanal zum laufenden remotejoe aus der Datei `mcp-kanal` im Datenordner.
@@ -79,11 +85,11 @@ fn handle(msg: &Value, call: &dyn Fn(&Value) -> Result<Value, String>) -> Option
                 "protocolVersion": version,
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "remotejoe", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Zugriff auf remotejoe (Verbindungsmanager): Ziele, gespeichertes Inventar und Aruba-Clusterdaten aus den vom Nutzer freigegebenen Ordnern. Zugangsdaten gibt es nie. Aktionen muss der Nutzer in remotejoe einzeln freigeben."
+                "instructions": "Zugriff auf remotejoe (Verbindungsmanager): Ziele und gespeichertes Inventar aus den vom Nutzer freigegebenen Ordnern. Zugangsdaten gibt es nie. Aktionen muss der Nutzer in remotejoe einzeln freigeben."
             }))
         }
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tools() })),
+        "tools/list" => Ok(json!({ "tools": tools_for(call) })),
         "tools/call" => {
             let name = msg.pointer("/params/name").and_then(Value::as_str).unwrap_or_default();
             let args = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
@@ -136,7 +142,7 @@ mod tests {
         assert_eq!(init["result"]["serverInfo"]["name"], "remotejoe");
         assert!(handle(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }), &none).is_none());
         let list = handle(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }), &none).unwrap();
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 11);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 8);
         let call = handle(&json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "ziele_suchen", "arguments": {} } }), &none).unwrap();
         assert_eq!(call["result"]["isError"], true);
         assert!(call["result"]["content"][0]["text"].as_str().unwrap().contains("läuft nicht"));
@@ -144,6 +150,9 @@ mod tests {
         let call = handle(&json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "sitzungen" } }), &ok).unwrap();
         assert_eq!(call["result"]["isError"], false);
         assert!(call["result"]["content"][0]["text"].as_str().unwrap().contains("sitzungen"));
+        let more = |r: &Value| -> Result<Value, String> { if r["tool"] == "fassung" { Ok(json!({ "fassung": "x", "werkzeuge": [{ "name": "zusatz" }] })) } else { Err("x".into()) } };
+        let list = handle(&json!({ "jsonrpc": "2.0", "id": 6, "method": "tools/list" }), &more).unwrap();
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 9, "Werkzeuge der Module kommen vom laufenden Programm");
         let err = handle(&json!({ "jsonrpc": "2.0", "id": 5, "method": "gibtsnicht" }), &none).unwrap();
         assert_eq!(err["error"]["code"], -32601);
     }

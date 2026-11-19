@@ -1,6 +1,8 @@
 //! Direkte Verweise auf KDBX-Einträge: am Knoten eingetragene Zugangsdatensätze und eigene Zugangsdaten an
 //! Zugangswegen. Verweist mehr als ein solcher Verweis auf denselben Eintrag, ist er geteilt – so entsteht es z. B.
-//! beim Duplizieren. Gewolltes Teilen über Anmeldeobjekte oder über das Erben vom Ordner zählt nicht.
+//! beim Duplizieren. Gewolltes Teilen über Anmeldeobjekte oder über das Erben vom Ordner zählt nicht – auch nicht,
+//! wenn ein benannter Zugangsdatensatz (z. B. „Switch CX“ in einem Ordner) direkt auf den Eintrag eines Anmeldeobjekts
+//! zeigt.
 
 use std::collections::BTreeMap;
 
@@ -52,10 +54,13 @@ fn settings(node: Uuid, s: &Settings, out: &mut BTreeMap<Uuid, Vec<Use>>) {
     }
 }
 
-/// Alle direkten Verweise je KDBX-Eintrag.
+/// Alle direkten Verweise je KDBX-Eintrag (ohne Einträge von Anmeldeobjekten).
 pub fn direct_uses(index: &Index) -> BTreeMap<Uuid, Vec<Use>> {
     let mut out = BTreeMap::new();
     walk(&index.root, &mut out);
+    for l in &index.logins {
+        out.remove(&l.entry.entry);
+    }
     out
 }
 
@@ -128,6 +133,26 @@ mod tests {
         assert!(is_shared(&idx, e1) && !is_shared(&idx, e2));
         let e3 = Uuid::new_v4();
         assert!(replace(&mut idx, &s[0].1[1], CredentialRef { entry: e3, last_title: None }));
+        assert!(shared(&idx).is_empty());
+    }
+
+    #[test]
+    fn named_sets_pointing_to_a_login_are_not_shared() {
+        // Zwei Ordner wählen dasselbe Anmeldeobjekt als „Switch CX“: gewollt geteilt.
+        let mut idx = Index::default();
+        let root = idx.root.id;
+        let e = Uuid::new_v4();
+        idx.logins.push(Login { id: Uuid::new_v4(), name: "Switch CX".into(), folder: root, entry: CredentialRef { entry: e, last_title: None } });
+        let mut ids = Vec::new();
+        for name in ["Standort A", "Standort B"] {
+            let mut f = Folder::new(name);
+            f.settings.credentials.insert(SITE_CRED_CX.into(), CredentialRef { entry: e, last_title: None });
+            ids.push(edit::insert(&mut idx, root, Node::Folder(f), None).unwrap());
+        }
+        assert!(shared(&idx).is_empty());
+        assert!(!is_shared(&idx, e));
+        // Duplizieren eines Ordners: der Verweis auf das Anmeldeobjekt bleibt ebenfalls ungeteilt gezählt.
+        edit::duplicate(&mut idx, ids[0], " (Kopie)").unwrap();
         assert!(shared(&idx).is_empty());
     }
 }

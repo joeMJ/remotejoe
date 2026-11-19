@@ -96,7 +96,41 @@ pub struct Folder {
     pub meta: Meta,
     #[serde(default)]
     pub children: Vec<Node>,
+    /// Gesetzt: Der Ordner trägt Angaben eines Moduls (eigenes Symbol und eigene Karte). Ältere Fassungen
+    /// kennen das Feld nicht und lassen es beim Speichern weg; der Ordner bleibt dann ein gewöhnlicher Ordner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<Site>,
+    /// Besondere Rolle des Ordners (eigenes Symbol, Vorlagen ganz oben). Ältere Fassungen kennen das Feld nicht und
+    /// lassen es beim Speichern weg; der Ordner bleibt dann ein gewöhnlicher Ordner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<FolderRole>,
 }
+
+/// Rolle eines Ordners: Vorlagenordner (`Templates`, im Root immer oben), darin die Vorlagen der Anmeldeobjekte
+/// (`Loginobjects`), sowie Unterordner für Netzwerk- und Serverkomponenten.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderRole {
+    Templates,
+    LoginTemplates,
+    Network,
+    Servers,
+}
+
+impl FolderRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FolderRole::Templates => "templates",
+            FolderRole::LoginTemplates => "login_templates",
+            FolderRole::Network => "network",
+            FolderRole::Servers => "servers",
+        }
+    }
+}
+
+/// Arten der Standard-Anmeldeobjekte eines solchen Ordners: Schlüssel, Anzeigename (zugleich Name der Vorlage in
+/// `Templates/Loginobjects`), Netzwerkkomponente (sonst Server).
+pub const SITE_LOGIN_KINDS: [(&str, &str, bool); 5] = [("rdp", "RDP", false), ("ssh", "SSH", false), ("cx", "AOS-CX", true), ("legacy", "Legacy-Switch", true), ("wifi", "WiFi", true)];
 
 impl Folder {
     pub fn new(name: impl Into<String>) -> Self {
@@ -106,7 +140,76 @@ impl Folder {
             settings: Settings::default(),
             meta: Meta::default(),
             children: Vec::new(),
+            site: None,
+            role: None,
         }
+    }
+}
+
+/// Angaben eines solchen Ordners. Die Zugangsdaten für Switches stehen als benannte Zugangsdatensätze in den
+/// Einstellungen ([`SITE_CRED_LEGACY`], [`SITE_CRED_CX`]) und vererben sich wie alle anderen.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Site {
+    /// Darstellung der Karte.
+    #[serde(default, skip_serializing_if = "SiteLayout::is_auto")]
+    pub layout: SiteLayout,
+    /// Managementnetze für die Suche nach Switches (z. B. `192.0.2.0/24`); leer = Subnetze der VCs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mgmt_nets: Vec<String>,
+    /// Root bzw. Gateway von Hand (Adresse); `None` = was STP festlegt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// Zugangsdaten an Switches nur nach erfolgreicher SNMP-Vorprüfung senden.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub snmp_required: bool,
+    /// Erlaubte Geschwindigkeiten der AP-Ports in Mbit/s (Kabelprüfung); `None` = Vorgabe aus den Einstellungen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ap_speeds: Option<Vec<u32>>,
+    /// Eigene gewünschte Geschwindigkeiten der übrigen Klassen (Telefone, Endgeräte, Uplinks, Downlinks, Router);
+    /// fehlende Klasse = Vorgabe aus den Einstellungen.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub link_speeds: std::collections::BTreeMap<String, Vec<u32>>,
+    /// Eigene Grenzen der Glasfaser-Dämpfung in Zehntel-dB (orange, rot); fehlt = Vorgabe aus den Einstellungen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optic_tenths: Option<(u32, u32)>,
+    /// Weitere VLANs, die jeder AP hier braucht (z. B. von RADIUS zugewiesen, ohne Regel in der VC-Konfiguration).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_vlans: Vec<u32>,
+    /// Virtuelle Switches: benannte Sammlungen von Switchports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vswitches: Vec<VSwitch>,
+}
+
+/// Virtueller Switch: Name und Ports als „Switch-ID|Port“.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VSwitch {
+    /// Kennung für den Baum (ältere Einträge ohne Kennung bekommen beim Laden eine neue).
+    #[serde(default = "Uuid::new_v4")]
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub ports: Vec<String>,
+}
+
+/// Name des Zugangsdatensatzes für Switches der älteren Serie.
+pub const SITE_CRED_LEGACY: &str = "Switch Legacy";
+/// Name des Zugangsdatensatzes für Switches der CX-Serie.
+pub const SITE_CRED_CX: &str = "Switch CX";
+
+/// Darstellung: automatisch (segmentiert, sobald Unterordner eigene VCs haben), normal oder
+/// segmentiert.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SiteLayout {
+    #[default]
+    Auto,
+    Normal,
+    Segmented,
+}
+
+impl SiteLayout {
+    pub fn is_auto(&self) -> bool {
+        *self == SiteLayout::Auto
     }
 }
 
@@ -933,5 +1036,54 @@ mod web_repair_tests {
         assert_eq!(got[1].1, "host-b.example.test");
         assert_eq!(got[2].1, "ssh://nicht-anfassen", "andere Protokolle bleiben unberührt");
         assert_eq!(idx.repair_web_targets(), 0, "zweiter Lauf ändert nichts");
+    }
+}
+
+#[cfg(test)]
+mod site_tests {
+    use super::*;
+
+    #[test]
+    fn site_survives_a_round_trip_and_plain_folders_stay_unchanged() {
+        let mut f = Folder::new("Standort A");
+        f.site = Some(Site { layout: SiteLayout::Segmented, mgmt_nets: vec!["192.0.2.0/24".into()], root: None, snmp_required: true, ap_speeds: Some(vec![1000, 2500]), link_speeds: [("uplink".to_string(), vec![10000])].into(), optic_tenths: Some((40, 80)), extra_vlans: vec![77], vswitches: vec![VSwitch { id: Uuid::nil(), name: "APs Haus A".into(), ports: vec!["00000000-0000-0000-0000-000000000001|12".into()] }] });
+        let json = serde_json::to_string(&Node::Folder(f.clone())).unwrap();
+        let Node::Folder(back) = serde_json::from_str::<Node>(&json).unwrap() else { panic!("kein Ordner") };
+        assert_eq!(back.site, f.site);
+        // Gewöhnlicher Ordner: kein Feld „site“ im gespeicherten Index (ältere Fassungen sehen keinen Unterschied).
+        let plain = serde_json::to_string(&Node::Folder(Folder::new("B"))).unwrap();
+        assert!(!plain.contains("site"));
+        // Mit Vorgaben: nur das leere Objekt.
+        let mut d = Folder::new("C");
+        d.site = Some(Site::default());
+        assert!(serde_json::to_string(&Node::Folder(d)).unwrap().contains("\"site\":{}"));
+    }
+
+    #[test]
+    fn folder_role_survives_a_round_trip_and_is_omitted_when_unset() {
+        let mut f = Folder::new("Templates");
+        f.role = Some(FolderRole::LoginTemplates);
+        let json = serde_json::to_string(&Node::Folder(f.clone())).unwrap();
+        assert!(json.contains("\"role\":\"login_templates\""));
+        let Node::Folder(back) = serde_json::from_str::<Node>(&json).unwrap() else { panic!("kein Ordner") };
+        assert_eq!(back.role, Some(FolderRole::LoginTemplates));
+        assert!(!serde_json::to_string(&Node::Folder(Folder::new("B"))).unwrap().contains("role"));
+    }
+
+    #[test]
+    fn older_index_without_site_and_unknown_fields_still_loads() {
+        // So sieht eine ältere Fassung einen solchen Ordner: Das unbekannte Feld wird ignoriert, der Ordner bleibt.
+        #[derive(serde::Deserialize)]
+        struct OldFolder {
+            name: String,
+            #[serde(default)]
+            children: Vec<serde_json::Value>,
+        }
+        let mut f = Folder::new("Standort A");
+        f.site = Some(Site::default());
+        let json = serde_json::to_value(&f).unwrap();
+        let old: OldFolder = serde_json::from_value(json).unwrap();
+        assert_eq!(old.name, "Standort A");
+        assert!(old.children.is_empty());
     }
 }

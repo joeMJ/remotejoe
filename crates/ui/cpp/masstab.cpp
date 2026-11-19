@@ -174,7 +174,12 @@ void MassInventoryTab::refresh()
 	const int done = r.value(QStringLiteral("done")).toInt();
 	const int total = r.value(QStringLiteral("total")).toInt();
 	const bool running = r.value(QStringLiteral("running")).toBool();
-	m_state->setText(T(running ? "mass.progress" : "mass.summary").arg(done).arg(total).arg(found).arg(aruba).arg(failed).arg(skipped));
+#ifdef RJ_ARUBA
+	m_state->setText(T(running ? "mass.progress.aruba" : "mass.summary.aruba").arg(done).arg(total).arg(found).arg(aruba).arg(failed).arg(skipped));
+#else
+	Q_UNUSED(aruba);
+	m_state->setText(T(running ? "mass.progress" : "mass.summary").arg(done).arg(total).arg(found).arg(failed).arg(skipped));
+#endif
 	m_cancel->setEnabled(running);
 	m_retry->setEnabled(!running && !m_failed.isEmpty());
 	m_retry->setText(m_failed.isEmpty() ? T("mass.retry") : T("mass.retry.n").arg(m_failed.size()));

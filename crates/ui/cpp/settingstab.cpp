@@ -26,6 +26,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
+#include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QSpinBox>
 #include <QtGui/QStandardItemModel>
 #include <QtWidgets/QStackedWidget>
@@ -93,7 +94,17 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 	auto* areas = rjui::card(this, &ain);
 	areas->setFixedWidth(300);
 	ain->addWidget(rjui::section(T("edit.areas"), areas));
-	m_areaList = ain;
+	// Die Liste rollt, statt die Zeilen zu quetschen (viele Bereiche, kleine Fenster).
+	auto* areaScroll = new QScrollArea(areas);
+	areaScroll->setWidgetResizable(true);
+	areaScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	auto* areaInner = new QWidget;
+	m_areaList = new QVBoxLayout(areaInner);
+	m_areaList->setContentsMargins(0, 0, 0, 0);
+	m_areaList->setSpacing(ain->spacing());
+	areaScroll->setWidget(areaInner);
+	cardBackground(areaScroll);
+	ain->addWidget(areaScroll, 1);
 	QVBoxLayout* pin = nullptr;
 	auto* pageCard = rjui::card(this, &pin);
 	m_pageTitle = rjui::section(QString(), pageCard);
@@ -119,15 +130,29 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 	});
 	addArea(QStringLiteral("snmp"), T("snmp.title"), m_snmp, false);
 	addArea(QStringLiteral("backup"), T("settings.backup"), pageBackup(), true);
-	addArea(QStringLiteral("features"), T("settings.features"), pageFeatures(), true);
+#ifdef RJ_STANDORTE
+	addModuleAreas();
+#endif
+	addArea(QStringLiteral("license"), T("settings.license"), pageLicense(), true);
 	addArea(QStringLiteral("mcp"), T("settings.mcp"), pageMcp(), true);
-	ain->addStretch(1);
+	m_areaList->addStretch(1);
 	m_loading = false;
 	reload();
 	showSection(QStringLiteral("lock"));
 }
 
-void SettingsTab::addArea(const QString& key, const QString& title, QWidget* page, bool scroll)
+void SettingsTab::addGroup(const QString& title, int indent)
+{
+	auto* l = new QLabel(title);
+	QFont bf = l->font();
+	bf.setBold(true);
+	l->setFont(bf);
+	l->setObjectName(QStringLiteral("rjMuted"));
+	l->setContentsMargins(8 + indent * 16, 8, 8, 2);
+	m_areaList->addWidget(l);
+}
+
+void SettingsTab::addArea(const QString& key, const QString& title, QWidget* page, bool scroll, int indent)
 {
 	QWidget* holder = page;
 	if (scroll)
@@ -143,7 +168,7 @@ void SettingsTab::addArea(const QString& key, const QString& title, QWidget* pag
 
 	auto* row = new rjui::ClickRow;
 	auto* h = new QHBoxLayout(row);
-	h->setContentsMargins(8, 6, 8, 6);
+	h->setContentsMargins(8 + indent * 16, 6, 8, 6);
 	auto* v = new QVBoxLayout;
 	v->setSpacing(1);
 	auto* t = new QLabel(title, row);
@@ -301,47 +326,21 @@ QWidget* SettingsTab::pageKeys()
 	return w;
 }
 
-QWidget* SettingsTab::pageFeatures()
+
+
+QWidget* SettingsTab::pageLicense()
 {
 	auto T = [this](const char* k) { return rjText(m_backend, k); };
 	auto* w = new QWidget;
 	auto* v = new QVBoxLayout(w);
-	auto* f = new QFormLayout;
-	m_aruba = new QCheckBox(T("settings.features.aruba"), w);
-	f->addRow(QString(), m_aruba);
-	f->addRow(QString(), hint(T("settings.features.aruba.hint"), w));
-	// Anwender je AP: Farbe der Zahl auf der Kachel (0 = aus).
-	auto clients = [&](const char* label) {
-		auto* s = new QSpinBox(w);
-		s->setRange(0, 1000);
-		s->setSpecialValueText(T("settings.aruba.clients.off"));
-		s->setSuffix(T("settings.aruba.clients.suffix"));
-		f->addRow(T(label), s);
-		return s;
-	};
-	m_clientsWarn = clients("settings.aruba.clients.warn");
-	m_clientsCrit = clients("settings.aruba.clients.crit");
-	m_clientsHint = hint(T("settings.aruba.clients.hint"), w);
-	f->addRow(QString(), m_clientsHint);
-	v->addLayout(f);
+#ifdef RJ_ARUBA
+	// Mit Modulen.
+	v->addWidget(hint(T("settings.license.hint"), w));
+#else
+	// remotejoe basic: Verweis auf die Fassung mit Modulen.
+	v->addWidget(hint(T("settings.license.advanced"), w));
+#endif
 	v->addStretch(1);
-	auto saveClients = [this] {
-		const int warn = m_clientsWarn->value(), crit = m_clientsCrit->value();
-		const bool bad = warn > 0 && crit > 0 && crit <= warn;
-		m_clientsHint->setText(rjText(m_backend, bad ? "settings.aruba.clients.bad" : "settings.aruba.clients.hint"));
-		if (m_loading)
-			return;
-		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("aruba_clients_warn"), warn }, { QStringLiteral("aruba_clients_crit"), crit } });
-	};
-	connect(m_clientsWarn, &QSpinBox::valueChanged, this, saveClients);
-	connect(m_clientsCrit, &QSpinBox::valueChanged, this, saveClients);
-	connect(m_aruba, &QCheckBox::toggled, this, [this](bool on) {
-		if (m_loading)
-			return;
-		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("aruba_tools"), on } });
-		emit featuresChanged();
-		refreshSummaries();
-	});
 	return w;
 }
 
@@ -367,7 +366,11 @@ QWidget* SettingsTab::pageMcp()
 	m_mcpFolders->setMinimumHeight(160);
 	v->addWidget(m_mcpFolders);
 	v->addWidget(rjui::section(T("settings.mcp.logins"), w));
+#ifdef RJ_ARUBA
+	v->addWidget(hint(T("settings.mcp.logins.hint.aruba"), w));
+#else
 	v->addWidget(hint(T("settings.mcp.logins.hint"), w));
+#endif
 	m_mcpLogins = new QListWidget(w);
 	m_mcpLogins->setMinimumHeight(100);
 	v->addWidget(m_mcpLogins);
@@ -620,9 +623,9 @@ void SettingsTab::reload()
 	if (const int i = m_adminLayout->findData(s.value(QStringLiteral("admin_keys_layout")).toString()); i >= 0)
 		m_adminLayout->setCurrentIndex(i);
 	m_adminTimeout->setValue(s.value(QStringLiteral("admin_keys_timeout_mins")).toInt(10));
-	m_aruba->setChecked(s.value(QStringLiteral("aruba_tools")).toBool());
-	m_clientsWarn->setValue(s.value(QStringLiteral("aruba_clients_warn")).toInt(30));
-	m_clientsCrit->setValue(s.value(QStringLiteral("aruba_clients_crit")).toInt(64));
+#ifdef RJ_STANDORTE
+	loadModuleSettings(s);
+#endif
 	reloadBackup();
 	reloadMcp();
 	if (m_appearance)
@@ -656,7 +659,10 @@ void SettingsTab::refreshSummaries()
 	                                       : T("settings.backup.sum.off"));
 	if (m_mcp)
 		set("mcp", T(m_mcp->isChecked() ? "settings.mcp.sum.on" : "settings.mcp.sum.off"));
-	set("features", T(m_aruba->isChecked() ? "settings.features.sum.aruba" : "settings.features.sum.none"));
+#ifdef RJ_STANDORTE
+	moduleSummaries([&set](const char* key, const QString& text) { set(key, text); });
+#endif
+	set("license", T("settings.license.sum"));
 }
 
 void SettingsTab::wipeSecrets()

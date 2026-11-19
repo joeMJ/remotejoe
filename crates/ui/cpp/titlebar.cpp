@@ -333,7 +333,7 @@ AboutDialog::AboutDialog(RjBackend* backend, const QString& version, QWidget* pa
 	text->setTextInteractionFlags(Qt::TextBrowserInteraction);
 	text->setOpenExternalLinks(true);
 	text->setWordWrap(true);
-	text->setText(QStringLiteral("<h2>remotejoe</h2>"
+	text->setText(QStringLiteral("<h2>%8</h2>"
 	                             "<p><b>%1</b></p>"
 	                             "<p>%2</p>"
 	                             "<p>%3<br>%4</p>"
@@ -341,7 +341,7 @@ AboutDialog::AboutDialog(RjBackend* backend, const QString& version, QWidget* pa
 	                             "<a href=\"https://github.com/joeMJ/remotejoe/blob/main/THIRD_PARTY.md\">%6</a></p>"
 	                             "<p><small>Qt %7</small></p>")
 	                  .arg(T("about.version").arg(version), T("about.description"), T("about.copyright"), T("about.license"), T("about.source"), T("about.third_party"),
-	                       QString::fromLatin1(qVersion())));
+	                       QString::fromLatin1(qVersion()), backend->appEdition().toHtmlEscaped()));
 	top->addWidget(logo);
 	top->addSpacing(12);
 	top->addWidget(text, 1);

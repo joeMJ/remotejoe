@@ -19,7 +19,7 @@ in remotejoe?“ selbst beantworten – mit den Daten aus remotejoe, aber ohne j
 - Claude sieht nur Ziele in den dort **freigegebenen Ordnern** (je Schlüsseldatenbank). Ziele direkt auf oberster
   Ebene des Baums lassen sich nicht freigeben; lege sie dafür in einen Ordner. Adressen und Seriennummern lassen
   sich ausblenden.
-- **Aktionen** (Verbinden, Inventar oder Cluster abfragen, Nutzer anzeigen) gehen nur bei Zielen, deren Zugangsdaten
+- **Aktionen** (Verbinden, Inventar abfragen) gehen nur bei Zielen, deren Zugangsdaten
   aus einem **für Claude freigegebenen Anmeldeobjekt** stammen – zum Beispiel ein Konto mit wenig Rechten eigens für
   Claude. Zusätzlich fragt remotejoe bei **jeder** Aktion nach („Erlauben“ / „Ablehnen“; ohne Antwort nach 2 Minuten
   abgelehnt).
@@ -34,9 +34,8 @@ in remotejoe?“ selbst beantworten – mit den Daten aus remotejoe, aber ohne j
 | `ziel_uebersicht` | Typ, Ordner, Zugangswege, gespeichertes Inventar eines Ziels |
 | `ordner_inventar` | gespeichertes Inventar aller Ziele eines Ordners (z. B. Versionen) |
 | `ziele_abgleichen` | Abgleich mit einer externen Liste (Adressen, MACs, Seriennummern oder Namen) |
-| `aruba_cluster` | zuletzt abgefragter Stand eines Aruba-Clusters |
 | `sitzungen` | offene Sitzungen |
-| `verbinden`, `inventar_abfragen`, `cluster_abfragen`, `nutzer_anzeigen` | Aktionen mit Freigabe |
+| `verbinden`, `inventar_abfragen` | Aktionen mit Freigabe |
 
 Abgefragt wird bei den lesenden Werkzeugen nichts neu; sie zeigen den gespeicherten Stand.
 

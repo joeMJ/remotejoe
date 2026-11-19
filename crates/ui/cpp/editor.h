@@ -269,6 +269,12 @@ private:
 	QPlainTextEdit* m_taskBody = nullptr;
 	// Zwischenablage
 	QComboBox* m_clip = nullptr;
+	// Beiträge der Module (nur mit dem jeweiligen Modul gebaut).
+#ifndef Q_MOC_RUN
+#ifdef RJ_STANDORTE
+#include "modules/standorte/editor_standorte_members.h"
+#endif
+#endif
 	// Organisation
 	QPlainTextEdit* m_notes = nullptr;
 	QTableWidget* m_fields = nullptr;

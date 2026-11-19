@@ -1,4 +1,4 @@
-//! Inventar mit Anmeldung: Linux und Aruba über SSH, Windows über PowerShell (WinRM bzw. SSH).
+//! Inventar mit Anmeldung: Linux über SSH, Windows über PowerShell (WinRM bzw. SSH).
 //! Zugangsdaten kommen aus der KDBX (`JobSpec`); unbekannte Host-Schlüssel werden abgelehnt.
 
 use std::time::Duration;
@@ -9,6 +9,13 @@ use rj_ssh::known_hosts::KnownHosts;
 
 use super::inventory::format_bytes;
 use crate::patch::JobSpec;
+
+// Inventar eines Moduls.
+#[cfg(feature = "aruba")]
+#[path = "../modules/aruba/apinventory.rs"]
+mod aruba_inv;
+#[cfg(feature = "aruba")]
+pub use aruba_inv::{parse_aruba, parse_aruba_aps, parse_aruba_serial, ArubaAp};
 
 /// Gefundene Werte: (Feld, Wert).
 pub type Found = Vec<(&'static str, String)>;
@@ -64,7 +71,7 @@ fn precise_os(os: &str, full: Option<&str>) -> String {
     words.join(" ")
 }
 
-/// Laufzeit wie bei Aruba: Tage nur ab einem Tag, Stunden ab einer Stunde („2 T 0 Std 5 Min“, „3 Std 56 Min“, „4 Min“).
+/// Laufzeit kurz: Tage nur ab einem Tag, Stunden ab einer Stunde („2 T 0 Std 5 Min“, „3 Std 56 Min“, „4 Min“).
 fn uptime_text(secs: u64) -> String {
     let (days, hours, mins) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60);
     if days > 0 {
@@ -133,115 +140,6 @@ pub fn parse_linux(out: &str, ip: Option<&str>) -> Option<Found> {
     Some(f)
 }
 
-/// Auswertung von `show version` einer Aruba-Instant-AP/VC. `prompt`: zuletzt gesehene Eingabeaufforderung.
-pub fn parse_aruba(out: &str) -> Option<Found> {
-    if !out.contains("ArubaOS") && !out.contains("Aruba Operating System") {
-        return None;
-    }
-    let mut f: Found = Vec::new();
-    // „ArubaOS (MODEL: 315), Version 8.10.0.6“
-    if let Some(l) = out.lines().find(|l| l.contains("ArubaOS") && l.contains("Version")) {
-        let model = l.split("MODEL:").nth(1).and_then(|r| r.split(')').next()).map(str::trim);
-        let ver = l.split("Version").nth(1).map(|v| v.trim().trim_start_matches(':').trim());
-        let mut sys = "Aruba Instant".to_string();
-        if let Some(v) = ver.filter(|v| !v.is_empty()) {
-            sys.push_str(&format!(" {v}"));
-        }
-        if let Some(m) = model.filter(|m| !m.is_empty()) {
-            sys.push_str(&format!(" (Modell {m})"));
-        }
-        f.push(("system", sys));
-    } else {
-        f.push(("system", "Aruba Instant".into()));
-    }
-    // „AP uptime is 2 days 12 hours 29 minutes 34 seconds“ → „2 T 12 Std 29 Min“.
-    if let Some(l) = out.lines().find(|l| l.contains("uptime is")) {
-        if let Some(rest) = l.split("uptime is").nth(1) {
-            let words: Vec<&str> = rest.split_whitespace().collect();
-            // Wochen zählen als Tage („10 weeks 4 days“ → „74 T“).
-            let (mut days, mut hours, mut mins) = (None::<u64>, None::<u64>, None::<u64>);
-            for pair in words.chunks(2) {
-                if let [n, unit] = pair {
-                    let Ok(n) = n.parse::<u64>() else { continue };
-                    match unit.trim_end_matches(',') {
-                        "week" | "weeks" => days = Some(days.unwrap_or(0) + 7 * n),
-                        "day" | "days" => days = Some(days.unwrap_or(0) + n),
-                        "hour" | "hours" => hours = Some(n),
-                        "minute" | "minutes" => mins = Some(n),
-                        _ => {}
-                    }
-                }
-            }
-            let mut parts = Vec::new();
-            for (v, u) in [(days, "T"), (hours, "Std"), (mins, "Min")] {
-                if let Some(v) = v {
-                    parts.push(format!("{v} {u}"));
-                }
-            }
-            if !parts.is_empty() {
-                f.push(("uptime", parts.join(" ")));
-            }
-        }
-    }
-    // Name aus der Eingabeaufforderung „name# “ (letzte Zeile mit '#').
-    if let Some(p) = out.lines().rev().map(|l| l.trim()).find(|l| l.ends_with('#') && !l.contains(' ')) {
-        let n = p.trim_end_matches('#');
-        if !n.is_empty() {
-            f.push(("name", n.to_string()));
-        }
-    }
-    Some(f)
-}
-
-/// Ein AP aus der Tabelle von `show aps` (Aruba Instant, alle APs des Schwarms).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArubaAp {
-    pub name: String,
-    /// IP-Adresse ohne den Stern des Conductors (Masters).
-    pub ip: String,
-    pub conductor: bool,
-    pub serial: Option<String>,
-}
-
-/// Alle APs aus `show aps`. Die Seriennummer steht in der Spalte „Serial #“; sind die Spalten verschoben, gilt wie in
-/// den Aruba-Werkzeugen das erste seriennummerartige Wort nach dem AP-Typ (z. B. `515(indoor)`).
-pub fn parse_aruba_aps(out: &str) -> Vec<ArubaAp> {
-    let lines: Vec<&str> = out.lines().collect();
-    let Some(h) = lines.iter().position(|l| l.contains("Serial #") && l.contains("IP Address")) else { return Vec::new() };
-    let col = lines[h].find("Serial #").unwrap_or(usize::MAX);
-    let is_serial = |s: &&str| s.len() >= 8 && s.chars().all(|c| c.is_ascii_digit() || c.is_ascii_uppercase()) && s.chars().any(|c| c.is_ascii_uppercase());
-    let is_ipv4 = |s: &str| s.split('.').count() == 4 && s.split('.').all(|p| !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit()));
-    lines[h + 1..]
-        .iter()
-        .filter_map(|row| {
-            let words: Vec<&str> = row.split_whitespace().collect();
-            let ip_raw = *words.get(1)?;
-            let ip = ip_raw.trim_end_matches('*');
-            if !is_ipv4(ip) {
-                return None;
-            }
-            let serial = row.get(col..).and_then(|r| r.split_whitespace().next()).filter(is_serial).map(str::to_string).or_else(|| {
-                let t = words.iter().position(|w| w.ends_with(')') && w.split('(').next().is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())))?;
-                words[t + 1..].iter().find(|w| is_serial(w)).map(|s| s.to_string())
-            });
-            Some(ArubaAp { name: words[0].to_string(), ip: ip.to_string(), conductor: ip_raw.ends_with('*'), serial })
-        })
-        .collect()
-}
-
-/// Seriennummer des abgefragten APs aus `show aps`. Welche Zeile: 1. Name wie in der Eingabeaufforderung (der AP, auf
-/// dem die Sitzung läuft), 2. die Adresse, über die verbunden wurde, 3. der Conductor (Stern) – über die virtuelle
-/// Controller-IP landet man auf ihm, die Tabelle führt aber seine eigene IP.
-pub fn parse_aruba_serial(out: &str, ip: &str) -> Option<String> {
-    let aps = parse_aruba_aps(out);
-    let prompt = out.lines().filter_map(|l| l.trim().split_once("# show aps").map(|(name, _)| name.trim().to_string())).next_back();
-    prompt
-        .and_then(|p| aps.iter().find(|a| a.name == p))
-        .or_else(|| aps.iter().find(|a| a.ip == ip))
-        .or_else(|| aps.iter().find(|a| a.conductor))
-        .and_then(|a| a.serial.clone())
-}
-
 /// Auswertung der JSON-Zeile des Windows-Skripts (Felder nach Schlüsseln).
 pub fn parse_windows(line: &str, ip: Option<&str>) -> Option<Found> {
     let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
@@ -295,7 +193,7 @@ fn windows_command() -> String {
 }
 
 /// SSH mit den Zugangsdaten aus der KDBX: Linux-Befehl und Windows-PowerShell (über OpenSSH), Reihenfolge nach
-/// `prefer_windows`; liefert beides nichts, `show version` in einer Shell (Aruba).
+/// `prefer_windows`; liefert beides nichts, `show version` in einer Shell.
 pub fn ssh_inventory(spec: &JobSpec, port: u16, ip: Option<&str>, known: KnownHosts, prefer_windows: bool) -> Result<(Found, &'static str, Option<String>), String> {
     let (rt, conn, note, params, ask) = ssh_open(spec, port, known.clone())?;
     ssh_inventory_on(spec, port, rt, conn, note, params, ask, known, ip, prefer_windows)
@@ -332,7 +230,11 @@ pub fn ssh_open(spec: &JobSpec, port: u16, known: KnownHosts) -> Result<(tokio::
     let mut connected = rt.block_on(SshConnection::connect(&params, known.clone(), ask.clone()));
     // Ältere Geräte (z. B. KVM-Konsolen) bieten nur alte Verfahren an: für diese lesende Abfrage einmal mit ihnen versuchen.
     let mut legacy_used = false;
-    if !params.legacy && connected.as_ref().err().is_some_and(|e| e.to_string().contains("No common")) {
+    // Manche Switches melden statt „No common …“ oft nur „Key exchange init failed“.
+    if !params.legacy && connected.as_ref().err().is_some_and(|e| {
+        let e = e.to_string().to_lowercase();
+        e.contains("no common") || e.contains("key exchange") || e.contains("kex")
+    }) {
         params.legacy = true;
         legacy_used = true;
         connected = rt.block_on(SshConnection::connect(&params, known.clone(), ask.clone()));
@@ -382,6 +284,7 @@ fn ssh_inventory_on(
     ip: Option<&str>,
     prefer_windows: bool,
 ) -> Result<(Found, &'static str, Option<String>), String> {
+    let known_switch = known.clone();
     // Windows mit OpenSSH zuerst, wenn es danach aussieht; sonst Linux zuerst.
     let order: [bool; 2] = if prefer_windows { [true, false] } else { [false, true] };
     for windows in order {
@@ -396,40 +299,39 @@ fn ssh_inventory_on(
             }
         }
     }
-    // Geräte-CLI (z. B. Aruba Instant): Shell öffnen, `show version` senden, bis zur nächsten Eingabeaufforderung lesen.
-    // Aruba Instant lehnt Einzelbefehle ab und beendet danach den Kanal bzw. die Verbindung („Channel send error“);
-    // scheitert die Shell auf der bisherigen Verbindung, darum einmal auf einer frischen versuchen.
-    let mut text = rt.block_on(cli_show_version(&conn));
-    if text.as_ref().map_or(true, |t| parse_aruba(t).is_none()) {
+    #[cfg(feature = "aruba")]
+    return aruba_inv::device_cli_inventory(spec, port, &rt, conn, params, known, ask, ip, note, &known_switch);
+    #[cfg(not(feature = "aruba"))]
+    {
+        let _ = (spec, port, params, known, ask, known_switch);
         rt.block_on(conn.disconnect());
-        // Gleiche Regeln wie oben; den Schlüssel kennt die Ablage nach der ersten Verbindung bereits.
-        match rt.block_on(SshConnection::connect(&params, known, ask)) {
-            Ok(fresh) => {
-                text = rt.block_on(cli_show_version(&fresh));
-                rt.block_on(fresh.disconnect());
-            }
-            Err(e) => text = Err(e.to_string()),
-        }
-    } else {
-        rt.block_on(conn.disconnect());
+        Err(format!("Keine verwertbare Antwort über SSH (weder Linux noch Windows-PowerShell){}", note.map(|n| format!(". {n}")).unwrap_or_default()))
     }
-    let text = text?;
-    match parse_aruba(&text) {
-        Some(mut f) => {
-            // Seriennummer aus „show aps“: Zeile mit der Adresse des Ziels.
-            // Ohne bekannte IP (Masseninventar, Rechnername als Adresse): Namen auflösen.
-            let addr = ip.map(str::to_string).unwrap_or_else(|| {
-                use std::net::ToSocketAddrs;
-                (spec.host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.find(|x| x.is_ipv4())).map(|a| a.ip().to_string()).unwrap_or_else(|| spec.host.clone())
-            });
-            if let Some(sn) = parse_aruba_serial(&text, &addr) {
-                f.push(("serial", sn));
-            }
-            Ok((f, "SSH (show version)", note))
-        }
-        // Auch ohne verwertbare Antwort melden, dass ein Schlüssel übernommen wurde.
-        None => Err(format!("Keine verwertbare Antwort über SSH (weder Linux, Windows-PowerShell noch Aruba){}", note.map(|n| format!(". {n}")).unwrap_or_default())),
-    }
+}
+
+/// Switch über seine CLI abfragen (gemeinsame Funktion `switches::switch_system`); Fehler, wenn es keiner ist.
+#[cfg(not(feature = "standorte"))]
+pub(crate) fn switch_inventory(_spec: &JobSpec, _port: u16, _known: &KnownHosts) -> Result<Found, String> {
+    Err("Keine verwertbare Antwort über SSH".into())
+}
+
+#[cfg(feature = "standorte")]
+pub(crate) fn switch_inventory(spec: &JobSpec, port: u16, known: &KnownHosts) -> Result<Found, String> {
+    use std::net::ToSocketAddrs;
+    let ip = match spec.host.trim().parse::<std::net::Ipv4Addr>() {
+        Ok(ip) => ip,
+        Err(_) => (spec.host.as_str(), port)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut a| a.find_map(|a| match a.ip() {
+                std::net::IpAddr::V4(v) => Some(v),
+                _ => None,
+            }))
+            .ok_or_else(|| format!("{}: keine IPv4-Adresse", spec.host))?,
+    };
+    let c = crate::switches::Cred { name: "Ziel", payload: spec.credentials.clone() };
+    let f = crate::switches::switch_found(&crate::switches::switch_system(ip, &c, known)?);
+    if f.is_empty() { Err("Keine Angaben in „show system“".into()) } else { Ok(f) }
 }
 
 /// Windows über PowerShell-Remoting mit dem Transport des Ziels.
@@ -448,13 +350,6 @@ pub fn ps_inventory(spec: &JobSpec, ip: Option<&str>) -> Result<(Found, &'static
     })
     .map_err(|e| rj_psrp::explain(e.to_string()))?;
     lines.iter().find_map(|l| parse_windows(l, ip)).map(|f| (f, "PowerShell", None)).ok_or_else(|| errors.first().cloned().unwrap_or_else(|| "Keine Antwort des Inventarskripts".into()))
-}
-
-/// Lesende Befehle für das Aruba-Inventar.
-const SHOW_VERSION_COMMANDS: [&str; 3] = ["no paging", "show version", "show aps"];
-
-async fn cli_show_version(conn: &SshConnection) -> Result<String, String> {
-    cli_session(conn, &SHOW_VERSION_COMMANDS).await.map(|r| r.raw)
 }
 
 /// Ergebnis einer CLI-Sitzung: Rohtext (mit Eingabeaufforderungen und Echos) und je gesendetem Befehl dessen Ausgabe
@@ -484,7 +379,7 @@ fn command_done(seg: &str, cmd: &str) -> Option<String> {
     (last > echo && is_prompt(lines[last])).then(|| lines[echo + 1..last].join("\n"))
 }
 
-/// Interaktive Shell wie in den Aruba-Instant-Werkzeugen (`ap_show.py`): auf die Eingabeaufforderung warten, dann
+/// Interaktive Shell: auf die Eingabeaufforderung warten, dann
 /// je Befehl senden (nur `\n` – `\r\n` wertet die CLI als zwei Eingaben) und lesen, bis nach seinem Echo die nächste
 /// Eingabeaufforderung kommt. Breites Terminal, weil die Tabelle von `show aps` mehrere hundert Zeichen breit ist.
 /// Nur lesende Befehle; Gesamtfrist 30 s.
@@ -541,7 +436,7 @@ pub async fn cli_session(conn: &SshConnection, cmds: &[&str]) -> Result<CliResul
         outputs.push(lines[start..].join("\n"));
     }
     let raw = String::from_utf8_lossy(&buf).into_owned();
-    // Diagnose: Rohantwort der Aruba-Sitzung anhängen (nur mit RJ_ARUBA_DUMP=<Datei>; enthält keine Kennwörter).
+    // Diagnose: Rohantwort der Sitzung anhängen (nur mit RJ_ARUBA_DUMP=<Datei>; enthält keine Kennwörter).
     if let Some(path) = std::env::var_os("RJ_ARUBA_DUMP") {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -623,57 +518,6 @@ mod tests {
         // „Serial #“ in der Kopfzeile von show aps ist keine Eingabeaufforderung.
         assert!(command_done("show aps\r\nName  IP Address  Serial #\r\n", "show aps").is_none());
         assert!(!is_prompt("Name  IP Address  Serial #") && is_prompt("ap-flur-1#") && !is_prompt("#"));
-    }
-
-    #[test]
-    fn aruba_uptime_and_serial_from_show_version_and_show_aps() {
-        let out = "02:00:5e:00:53:12# show version\r\nArubaOS (MODEL: 515), Version 8.10.0.23 LSR\r\n\
-                   AP uptime is 2 days 12 hours 29 minutes 34 seconds\r\n02:00:5e:00:53:12# show aps\r\n\
-                   2 Access Points\r\n---------------\r\n\
-                   Name               IP Address     Mode    Clients  Type  Serial #    Uptime\r\n\
-                   ----               ----------     ----    -------  ----  --------    ------\r\n\
-                   02:00:5e:00:53:12  192.0.2.4*     access  0        515   CNQXK9X123  2d:12h:29m\r\n\
-                   ap-kueche          192.0.2.5      access  3        505   CNQXK9X999  1d:01h:02m\r\n02:00:5e:00:53:12#";
-        let f = parse_aruba(out).unwrap();
-        assert!(f.contains(&("uptime", "2 T 12 Std 29 Min".to_string())), "{f:?}");
-        let w = parse_aruba("ArubaOS (MODEL: 555), Version 8.10.0.23 LSR\nAP uptime is 10 weeks 4 days 9 hours 45 minutes 14 seconds\nap#").unwrap();
-        assert!(w.contains(&("uptime", "74 T 9 Std 45 Min".to_string())), "Wochen als Tage: {w:?}");
-        assert_eq!(parse_aruba_serial(out, "192.0.2.4").as_deref(), Some("CNQXK9X123"));
-        // Andere APs des Schwarms stehen in der Liste.
-        assert_eq!(parse_aruba_aps(out).iter().find(|a| a.ip == "192.0.2.5").and_then(|a| a.serial.as_deref()), Some("CNQXK9X999"));
-        assert_eq!(parse_aruba_serial("keine Tabelle", "192.0.2.4"), None);
-    }
-
-    #[test]
-    fn aruba_serial_from_show_aps_table() {
-        // Aufbau wie Aruba Instant 8.10 (`show aps`, gekürzt um hintere Spalten); zweite Zeile mit verschobenen Spalten.
-        let out = "MASTER# show aps\r\n\r\n2 Access Points\r\n----------------\r\n\
-                   Name                  IP Address      Mode    Spectrum  Clients  Type         IPv6 Address  Mesh Role  Zone  Serial #    radio0 Channel\r\n\
-                   ----                  ----------      ----    --------  -------  ----         ------------  ---------  ----  --------    --------------\r\n\
-                   MASTER                192.0.2.239*    access  enable    3        515(indoor)  --            N/A        -     CNZZQX0101  36\r\n\
-                   02:00:5e:00:53:fe-lang-ap  192.0.2.225     access  enable    0        505(indoor)  --            N/A        -     CNZZQX0102  40\r\nMASTER#";
-        assert_eq!(parse_aruba_serial(out, "192.0.2.239").as_deref(), Some("CNZZQX0101"));
-        assert_eq!(parse_aruba_aps(out).iter().find(|a| a.ip == "192.0.2.225").and_then(|a| a.serial.as_deref()), Some("CNZZQX0102"), "verschobene Spalten");
-        // Virtuelle Controller-IP: keine Zeile mit dieser Adresse, der Name aus der Eingabeaufforderung entscheidet.
-        let vc = "02:00:5e:00:53:12# show aps\r\n\r\n1 Access Point\r\n--------------\r\n\
-                  Name               IP Address       Mode    Spectrum  Clients  Type         IPv6 Address  Mesh Role  Zone  Serial #    radio0 Channel\r\n\
-                  ----               ----------       ----    --------  -------  ----         ------------  ---------  ----  --------    --------------\r\n\
-                  02:00:5e:00:53:12  192.0.2.108*     access  disable   0        515(indoor)  --            N/A        -     CNZZQX0001  52E\r\n\
-                  02:00:5e:00:53:12#";
-        assert_eq!(parse_aruba_serial(vc, "192.0.2.4").as_deref(), Some("CNZZQX0001"));
-        let aps = parse_aruba_aps(out);
-        assert_eq!(aps.len(), 2);
-        assert!(aps[0].conductor && !aps[1].conductor);
-    }
-
-    #[test]
-    fn aruba_show_version_names_system_model_and_prompt() {
-        let out = "\r\nAP-EG-01# show version\r\nAruba Operating System Software.\r\nArubaOS (MODEL: 315), Version 8.10.0.6\r\n\
-                   Website: http://www.arubanetworks.com\r\nAP uptime is 3 days 4 hours\r\nAP-EG-01#";
-        let f = parse_aruba(out).unwrap();
-        assert_eq!(f[0], ("system", "Aruba Instant 8.10.0.6 (Modell 315)".to_string()));
-        assert!(f.contains(&("name", "AP-EG-01".to_string())), "{f:?}");
-        assert!(parse_aruba("Linux web01 6.8.0\n$ ").is_none());
     }
 
     #[test]

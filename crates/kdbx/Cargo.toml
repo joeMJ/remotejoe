@@ -10,6 +10,10 @@ publish.workspace = true
 [lib]
 name = "rj_kdbx"
 
+[features]
+# Eigener Speicher für ein Modul der Oberfläche.
+configstore = []
+
 [dependencies]
 remotejoe-core = { path = "../core" }
 keepass = { version = "0.15", features = ["save_kdbx4"] }

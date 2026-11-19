@@ -213,15 +213,13 @@ neu aufklappen.
   (TCP 22, 23, 53, 80, 443, 3389, 4343, 5900, 5985, 5986, 8006 und der Port des Ziels); Kennzahlen (CPUs, Speicher,
   IP, MAC, Rechnername, System) mit Quelle und Zeitpunkt, von Hand korrigierbar, neue abweichende Werte zum Übernehmen;
   Notizen des Ziels; Ping und Traceroute. Ohne Anmeldung kommen Adresse, MAC (im selben Netz) und – bei RDP mit NLA –
-  der Rechnername; **Inventar abfragen** liest den Rest mit den Zugangsdaten des Ziels (Linux und Aruba über SSH,
+  der Rechnername; **Inventar abfragen** liest den Rest mit den Zugangsdaten des Ziels (Linux über SSH,
   Windows über PowerShell per OpenSSH bzw. WinRM). Ein noch unbekannter SSH-Host-Schlüssel wird dabei übernommen und
   gemeldet, ein geänderter nie (außer mit „Bei Schlüsselfehlern trotzdem fortfahren“, siehe Einstellungen). Gäste von Proxmox und Hyper-V zeigen ihr Inventar vom Hypervisor. Das Inventar liegt
   als Datei im Datenordner (`inventar/`), nicht in der Schlüsseldatenbank.
   Ob sich das Inventar an einem Ziel anmelden darf, ist je Ziel bzw. Ordner einstellbar („Abfragen erlaubt“ in der
   Übersicht, Einstellungen → Allgemein → Inventar). Web-Ziele sind ohne eigene Festlegung aus; ein „an“ am Ordner
-  schaltet sie nicht ein. Aruba-Instant-APs fragt das Inventar über eine interaktive Sitzung ab (`show version`);
-  erkannte APs bekommen im Baum ein eigenes Symbol. Bei ihnen zeigen die Kennzahlen Laufzeit, IP-Adresse und
-  hervorgehoben die Seriennummer; die MAC steht in der Kurzzeile.
+  schaltet sie nicht ein.
 - **Ordnerübersicht beim Einfachklick auf einen Ordner:** die Elemente direkt im Ordner als Tabelle mit Typ (Symbol wie
   im Baum), Name, Adresse und den Werten aus dem gespeicherten Inventar (Version, System, CPUs, Speicher, Laufzeit,
   Seriennummer, MAC, Stand). Unterordner stehen am Ende. Suchfeld, sortier- und kopierbar; ein Klick öffnet die
@@ -242,15 +240,15 @@ neu aufklappen.
 - **Startzustand des Baums:** Kontextmenü **Aufklappzustand als Start speichern** – so öffnet der Baum bei jedem Start
   (je Schlüsseldatenbank); **Startzustand zurücksetzen** stellt die Vorgabe wieder her.
 - **Claude-Anbindung (MCP, zuschaltbar):** Claude Desktop kann remotejoe abfragen – Ziele, gespeichertes Inventar,
-  Aruba-Clusterdaten, Abgleich mit externen Listen – nur für freigegebene Ordner und ohne je Zugangsdaten zu sehen;
+  Abgleich mit externen Listen – nur für freigegebene Ordner und ohne je Zugangsdaten zu sehen;
   Aktionen nur mit freigegebenem Anmeldeobjekt und nach Freigabe je Aktion. Siehe [`docs/MCP.md`](docs/MCP.md).
 - **Zugangswege:** Ein Ziel kann neben dem Hauptweg weitere Wege haben (z. B. SSH und die Web-Oberfläche auf
   4343), jeder mit eigenem Protokoll, Adresse, Port, Optionen und Zugangsdaten (die des Ziels, ein Anmeldeobjekt,
   eigene Zugangsdaten direkt am Weg oder keine). Die Optionen gelten je Weg: bei RDP Grafikkanal, Größe, Tastatur,
   Zwischenablage und Zertifikat, bei SSH Terminaltyp, Keepalive und ältere Verfahren, bei VNC Zwischenablage und
   Nur-Ansehen, bei Web die Anmeldefelder und das Zertifikat; sie werden beim Speichern geprüft.
-  Die Übersicht zeigt je Weg einen Knopf; welcher Weg beim Doppelklick öffnet, ist wählbar. „Hinzufügen → Aruba-AP“
-  legt SSH und Web (4343) in einem Schritt an; „Vorschlagen“ übernimmt die in der Übersicht gefundenen Dienste.
+  Die Übersicht zeigt je Weg einen Knopf; welcher Weg beim Doppelklick öffnet, ist wählbar. „Vorschlagen“
+  übernimmt die in der Übersicht gefundenen Dienste.
 - **Gleiche Adressen zusammenfassen:** Rechtsklick auf einen Ordner oder eine Auswahl → **Gleiche Adressen
   zusammenfassen …** zeigt die Ziele mit gleicher Adresse (bei Web-Zielen der Rechner aus der URL) als Gruppen. Je
   Gruppe lassen sich Hauptziel, Name und die beteiligten Ziele wählen; die übrigen Ziele werden Zugangswege des
@@ -324,89 +322,6 @@ neu aufklappen.
   Standby werden abgebrochene Verbindungen sofort neu aufgebaut, Tunnel zuerst.
 - Jede Verbindung läuft in einem eigenen Prozess: Absturz oder Hänger einer Sitzung betrifft
   die anderen nicht.
-
-## Aruba-Werkzeuge (zuschaltbar)
-
-Für Aruba-Instant-Cluster gibt es eine Zusatzfunktion, standardmäßig aus: **Extras → Einstellungen →
-Zusatzfunktionen → Aruba-Werkzeuge**. Abgefragt wird per SSH am virtuellen Controller (VC) mit dessen Zugangsdaten aus
-der Schlüsseldatenbank.
-
-- **Cluster-Karte** in der Übersicht eines als Aruba-AP erkannten Ziels: „Cluster abfragen“ liest `show aps`, die
-  freigegebenen APs (`allowed-ap`), `show summary` und `show version`. Angezeigt werden die Verwaltung (nicht
-  verwaltet, Central, AirWave), der letzte Neustart des Conductors mit Zeitpunkt und Grund (etwa Stromunterbrechung
-  oder Befehl „reload all“; fehlt der Zeitpunkt, wird er aus der Laufzeit zurückgerechnet), die Zahl der APs im
-  Cluster, online, offline (rot hinterlegt, sobald ein AP offline ist) und der angemeldeten Anwender sowie je AP eine
-  Kachel „.Oktett | Name bzw. MAC“ mit der Anwenderzahl, nach IP-Adresse geordnet (APs anderer Segmente danach,
-  offline-APs zuletzt); der Conductor trägt einen Stern, APs außerhalb des Segments zeigen die volle Adresse. Lange
-  Namen werden in der Mitte gekürzt (der volle Name steht im Tooltip); ein Rechtsklick auf eine Kachel kopiert Name,
-  IP- oder MAC-Adresse. Umbenannte APs ordnet remotejoe über die AP-Tabelle von `show summary` ihrer MAC zu. Ab wie
-  vielen Anwendern je AP die Zahl gelb bzw. rot wird, steht unter Einstellungen → Zusatzfunktionen (Vorgabe 30 und
-  64; 0 = aus). Das Ergebnis wird im Datenordner gespeichert (`aruba/`) und steht nach einem Neustart wieder da.
-- **Offline-APs** (Rechtsklick auf die Kachel „Offline“): **Offline-MAC-Adressen kopieren** legt Clustername, Segment,
-  VC-IP und alle offline-MACs untereinander in die Zwischenablage, etwa für den Chat mit der Netzwerkabteilung.
-  **Anzahl Offline-APs merken** hält die aktuelle Zahl fest; ab der nächsten Abfrage steht sie in der Kachel
-  „Offline“ in Klammern daneben („3 (zuvor 5)“), bis erneut gemerkt wird. **Offline-APs löschen** entfernt alle
-  offline-MACs aus der Liste der freigegebenen APs (`ap_offline_delete`: `no allowed-ap`, `commit apply`) – nach
-  Bestätigung mit allen MACs, mit Admin-Konto und bei verwaltetem Cluster mit Rückfrage; danach wird der Cluster neu
-  abgefragt.
-
-  <img src="docs/screenshots/aruba-cluster.png" alt="Aruba-Cluster-Karte mit Verwaltung, Zählern und AP-Kacheln" width="760">
-
-- **AP-Seite:** Ein Klick auf eine Kachel zeigt Seriennummer, MAC, Laufzeit, die SSIDs (`show network`) und die
-  Anwender (`show clients`) dieses APs; „SSH-Sitzung“ öffnet eine Sitzung zum AP mit den Zugangsdaten des VC.
-
-  <img src="docs/screenshots/aruba-ap.png" alt="Seite eines APs mit Kennzahlen, SSIDs und Anwendern" width="760">
-
-- **Nutzer anzeigen** in der Cluster-Karte: alle Anwender des Clusters (`show clients` am VC) mit IP, MAC, SSID, AP,
-  Signal und Geschwindigkeit. Das Suchfeld filtert sofort nach Anmeldename, IP, MAC oder jedem anderen Feld; beim
-  Roaming taucht ein Anwender an jedem AP auf, an dem er gerade angemeldet ist. Ein Klick auf den AP öffnet dessen Seite.
-  Für den gewählten Anwender zeigen drei Knöpfe (auch im Kontextmenü) an seinem AP: **Anmeldeprobleme**
-  (`show ap debug auth-trace-buf | include <MAC>`), **Systemereignisse** (`show log system | include <MAC>`) und
-  **Firewallereignisse** (`show log security | include <IP>`), jeweils im Protokoll-Tab mit änderbarem Filter.
-- **Clusteraufbrüche suchen** in der Cluster-Karte: Ein AP, der die Verbindung zum Conductor verliert (etwa wegen
-  falscher Uhrzeit oder eines Kabelproblems), fällt aus dem Schwarm, bleibt aber per IP erreichbar und beansprucht
-  selbst die VC-IP. remotejoe prüft das Segment des Schwarms auf Port 4343 – ohne die online-APs und die VC-IP – und
-  listet in einem eigenen Tab die Geräte, die antworten, dazu die offline gemeldeten APs. **Erkennen** fragt einen
-  Treffer per SSH mit den Zugangsdaten des VC ab (`show summary`, `show version`, `show interface`): Name, MAC,
-  Firmware, die VC-IP, die er für sich beansprucht, und wie viele APs er sieht. Passt die MAC zu einem offline
-  gemeldeten AP, steht er als **aufgebrochen** in der Liste; ein Gerät, das die VC-IP dieses Schwarms beansprucht,
-  wird ebenfalls hervorgehoben. **SSH-Sitzung** und **Web-Oberfläche** öffnen den Treffer mit den Zugangsdaten des VC.
-
-  <img src="docs/screenshots/aruba-clusteraufbrueche.png" alt="Suche nach Clusteraufbrüchen mit erkanntem, aufgebrochenem AP" width="760">
-
-- **Tabellen** (Nutzer, SSIDs, Anwender der AP-Seite) lassen sich sortieren und kopieren: Strg+C oder Kontextmenü,
-  tabulatorgetrennt mit Kopfzeile. Auf der AP-Seite teilen sich SSIDs und Anwender die Höhe über einen ziehbaren Trenner.
-- **Protokolle** in der Cluster-Karte (am VC) und auf der AP-Seite (an diesem AP): Systemlog (`show log system`) und
-  Sicherheitslog (`show log security`), ganz oder gefiltert mit `| include <Begriff>`. Die Anzeige läuft in einem eigenen
-  Tab, dort lässt sich der Filter ändern und neu laden; gespeichert wird nichts.
-- **Cluster abfragen für mehrere Controller** (Rechtsklick auf Ziele oder Ordner → **Aruba → Cluster abfragen**):
-  fragt alle als Aruba-AP erkannten Ziele der Auswahl ab (Ordner mit Unterordnern), höchstens so viele gleichzeitig
-  wie bei „Alle verbinden“, und zeigt eine **Clusterübersicht** mit einer Zeile je Controller: Verwaltung, Zähler,
-  Offline-APs (rot hinterlegt), letzter Neustart, Zeitpunkt der Abfrage. **Aruba → Clusterübersicht** öffnet sie mit
-  dem gespeicherten Stand, ohne neu abzufragen. Rechtsklick auf eine Zeile kopiert die offline-MACs; „Anzahl
-  Offline-APs merken“ gilt für die markierten Zeilen (ohne Markierung für alle); ein Doppelklick öffnet die Übersicht
-  des Controllers.
-
-  <img src="docs/screenshots/aruba-clusteruebersicht.png" alt="Clusterübersicht mehrerer Controller mit Offline-APs" width="760">
-
-- **Werkzeuge** aus den [Aruba Instant Python Tools](https://github.com/joeMJ/aruba-instant-python-tools), für einen
-  Controller, alle Controller eines Ordners oder mehrerer markierter Ziele und Ordner (Rechtsklick → **Aruba**):
-  - **Analyse** (`ap_check`) und **Inventar** (`ap_list`, mit AP-Namen) – lesend.
-  - **Cluster neustarten** (`ap_swarm_reload`) und **Cluster aktualisieren** (`ap_swarm_update` mit dem Verzeichnis
-    der Firmware als URL, wahlweise mit Neustart danach). Beide setzen ein Admin-Konto voraus (`mgmt-user` bzw.
-    `hash-mgmt-user` in der Konfiguration); remotejoe prüft das vor dem Start bei jedem Controller und lässt nicht
-    passende mit Grund aus. Wird ein Cluster über Central oder AirWave verwaltet (oder ist die Verwaltung unbekannt),
-    fragt remotejoe vor dem Start ausdrücklich nach, weil der Vorgang dort fehlschlagen oder von der Verwaltung
-    rückgängig gemacht werden kann; das Protokoll vermerkt solche Controller. Jede dieser
-    Aktionen läuft in einem eigenen Tab mit Statustafel und Protokoll (die Höhe beider ist per Trenner verstellbar).
-    Fehler, die das Werkzeug meldet, und ein am Controller schon laufendes Upgrade („The other drt/image Upgrade or
-    sync is in process“) erscheinen in der Statustafel; die Kopfzeile meldet dann „Fertig, mit Fehlern“.
-- **Einrichten:** Die Sammlung wird von GitHub in den Datenordner geladen (`aptools/sammlung`), dazu eine eigene
-  Python-Umgebung (`aptools/python`). Fehlt Python unter Windows, bietet remotejoe die Installation von python.org an
-  (nur für den Benutzer, Signatur der Python Software Foundation geprüft); unter Ubuntu werden `python3` und
-  `python3-venv` gebraucht. Zugangsdaten gibt remotejoe den Werkzeugen nur über die Eingabe mit; sie werden nirgends
-  gespeichert. Die Ergebnisse liegen dem Baum folgend unter `aptools/<Ordner>/<Ziel>/` und öffnen sich mit dem
-  Standardprogramm.
 
 ## Das Hybridmodell: KDBX und Index
 

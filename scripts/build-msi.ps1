@@ -12,7 +12,7 @@
     des Bau-Rechners in den Programmen).
 
 .PARAMETER PaketDir
-    Paketordner aus dem Bau (Vorgabe: target\release\remotejoe-paket).
+    Paketordner aus dem Bau (Vorgabe target\release\remotejoe-paket).
 
 .PARAMETER WixDir
     Ordner mit candle.exe und light.exe (Vorgabe: Umgebungsvariable WIX bzw. deren bin, sonst
@@ -54,16 +54,22 @@ function Ausfuehren([string]$Was, [scriptblock]$Block) {
 }
 
 $Root = Split-Path -Parent $PSScriptRoot
+$Fassung = 'core'
 if (-not $PaketDir) { $PaketDir = Join-Path $Root 'target\release\remotejoe-paket' }
+$ProductName = 'remotejoe basic'
 $Out = Join-Path $Root 'target\msi'
-$Stage = Join-Path $Out 'stage'
+$Stage = Join-Path $Out "stage-$Fassung"
 
 Schritt 'Version und Werkzeuge'
 $versionLine = Select-String -Path (Join-Path $Root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
 if (-not $versionLine) { Fehler 'Version in Cargo.toml nicht gefunden.' }
 $Version = $versionLine.Matches[0].Groups[1].Value
-if ($Version -notmatch '^\d+\.\d+\.\d+$') { Fehler "Version „$Version“ passt nicht zu einer MSI (nur a.b.c)." 'Für Vorabversionen keine MSI bauen.' }
-Write-Host "Version $Version"
+# Vorabversionen (Testbaue, z. B. 0.1.35-beta.3): Der Windows Installer kennt nur Zahlen. Das MSI bekommt die
+# Kernversion (0.1.35), der Dateiname die volle Version; Betas derselben Kernversion ersetzen sich gegenseitig
+# (AllowSameVersionUpgrades), die fertige Version später ebenso. Betas nur für msi-ablage, nie für GitHub.
+if ($Version -notmatch '^(\d+\.\d+\.\d+)(-beta\.\d+)?$') { Fehler "Version „$Version“ passt nicht zu einer MSI (a.b.c oder a.b.c-beta.N)." 'Version in Cargo.toml prüfen.' }
+$MsiVersion = $Matches[1]
+Write-Host "Version $Version (MSI-Version $MsiVersion)"
 
 if (-not $WixDir) {
     if ($env:WIX -and (Test-Path (Join-Path $env:WIX 'bin\candle.exe'))) { $WixDir = Join-Path $env:WIX 'bin' }
@@ -96,6 +102,9 @@ if (Test-Path $marke) {
     foreach ($z in Get-Content $marke) { if ($z -match '^(\w+)=(.*)$') { $bauStand[$Matches[1]] = $Matches[2].Trim() } }
 }
 $head = (git -C $Root rev-parse HEAD).Trim()
+if ($bauStand['fassung'] -and $bauStand['fassung'] -ne $Fassung) {
+    Fehler "Paket $PaketDir ist die Fassung „$($bauStand['fassung'])“, nicht „$Fassung“." 'Passenden Paketordner angeben.'
+}
 if ($bauStand['version'] -ne $Version -or $bauStand['commit'] -ne $head) {
     Fehler "Paket stammt nicht aus einem erfolgreichen Bau dieses Stands (Paket: Version $($bauStand['version']), Commit $($bauStand['commit']); hier: Version $Version, Commit $head)." 'scripts\build-windows.ps1 ohne Fehler durchlaufen lassen.'
 }
@@ -198,26 +207,26 @@ Ordner $Stage '' 'INSTALLDIR'
 foreach ($c in $comps) { [void]$sb.AppendLine("<ComponentRef Id=`"$c`" />") }
 [void]$sb.AppendLine('</ComponentGroup>')
 [void]$sb.AppendLine('</Fragment></Wix>')
-$filesWxs = Join-Path $Out 'files.wxs'
+$filesWxs = Join-Path $Out "files-$Fassung.wxs"
 [IO.File]::WriteAllText($filesWxs, $sb.ToString(), (New-Object Text.UTF8Encoding $false))
 Write-Host "$((Get-ChildItem $Stage -Recurse -File).Count) Dateien in $($comps.Count) Ordnern"
 
 Schritt 'MSI bauen (candle, light)'
 $wxs = Join-Path $Root 'packaging\windows\remotejoe.wxs'
 $ico = Join-Path $Root 'packaging\windows\remotejoe.ico'
-$obj = Join-Path $Out 'obj'
+$obj = Join-Path $Out "obj-$Fassung"
 New-Item -ItemType Directory -Force $obj | Out-Null
 $msiName = "remotejoe-$Version-windows-x86_64.msi"
 $msi = Join-Path $Out $msiName
 # WixUtilExtension: util:CloseApplication (laufende remotejoe-Programme vor dem Ersetzen beenden).
-Ausfuehren 'candle' { & $candle -nologo -arch x64 -ext WixUtilExtension "-dVersion=$Version" "-dIconFile=$ico" -out "$obj\" $wxs $filesWxs }
+Ausfuehren 'candle' { & $candle -nologo -arch x64 -ext WixUtilExtension "-dVersion=$MsiVersion" "-dProductName=$ProductName" "-dIconFile=$ico" -out "$obj\" $wxs $filesWxs }
 # ICE91: Dateien im Benutzerprofil bei einer Installation pro Benutzer (gewollt).
 # ICE61: Dieselbe Version ersetzt sich selbst (AllowSameVersionUpgrades, neu gebaute MSI; gewollt).
-Ausfuehren 'light' { & $light -nologo -spdb -ext WixUtilExtension -sice:ICE91 -sice:ICE61 -out $msi "$obj\remotejoe.wixobj" "$obj\files.wixobj" }
+Ausfuehren 'light' { & $light -nologo -spdb -ext WixUtilExtension -sice:ICE91 -sice:ICE61 -out $msi "$obj\remotejoe.wixobj" "$obj\files-$Fassung.wixobj" }
 
 if (-not $NoSign) {
     Schritt 'MSI signieren'
-    Ausfuehren 'signtool sign (MSI)' { & $signtool sign /sha1 $Thumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 /d "remotejoe $Version" $msi }
+    Ausfuehren 'signtool sign (MSI)' { & $signtool sign /sha1 $Thumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 /d "$ProductName $Version" $msi }
 }
 
 Schritt 'Prüfsumme'

@@ -14,6 +14,8 @@
 #include <QtWidgets/QTabWidget>
 #include <QtWidgets/QTreeView>
 #include <cstdint>
+#include <functional>
+#include <vector>
 
 class RjBackend;
 class SessionPane;
@@ -80,27 +82,12 @@ public:
 	PropertiesTab* openProperties(const QString& id, const QString& category = QString());
 	/// Anmeldeobjekt öffnen (`id` leer: neu im Ordner `folder` bzw. im Ordner des Ziels `folder`).
 	void openLogin(const QString& id, const QString& folder);
-	/// Aruba-Werkzeuge (ap_check) für ein Ziel oder einen Ordner.
-	void openApTools(const QString& id, const QString& name, const QString& tool);
-	/// Aruba-Log (system/security, wahlweise gefiltert) am VC oder an einem AP anzeigen.
-	void openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered);
-	/// Clusterübersicht für mehrere VCs (Auswahl im Baum); `query`: gleich alle abfragen.
-	void openArubaSummary(const QStringList& ids, const QString& where, bool query);
-	/// Offline-APs eines VC löschen (ap_offline_delete), danach Cluster neu abfragen.
-	void openArubaOfflineDelete(const QString& id, const QString& name, const QStringList& macs);
-	/// Clusteraufbrüche suchen (Tab je VC).
-	void openArubaBreakouts(const QJsonObject& subject, const QString& where);
-	void openArubaUserLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, const QString& filter);
 	/// Gleiche Zugangsdaten zusammenführen (leer: ganzer Baum).
 	void openCredMerge(const QStringList& scope);
 	/// Übersicht eines Ordners (ein Tab, beim nächsten Ordner neu befüllt).
 	void openFolderOverview(const QModelIndex& folder, bool activate = true);
 	/// Kontextmenü des Baums: Aufklappzustand als Start speichern / zurücksetzen.
 	void addTreeStartActions(class QMenu* menu);
-	/// Seite eines APs (je AP ein Tab; ein vorhandener wird neu abgefragt).
-	void openArubaAp(const QJsonObject& subject, const QJsonObject& ap);
-	/// Anwender eines Clusters (je VC ein Tab; ein vorhandener fragt neu ab).
-	void openArubaUsers(const QJsonObject& subject, const QString& where);
 	/// Über einen Zugangsweg verbinden (`way`: „main“, Weg-ID oder `ssh:<IP>`).
 	void connectWay(const QJsonObject& subject, const QString& way);
 	/// Objektübersicht des Ziels (ein Tab für alle, Einfachklick im Baum).
@@ -108,12 +95,6 @@ public:
 	/// Ist `id` ein Anmeldeobjekt im Baum?
 	bool isLogin(const QString& id) const;
 	/// Für Bildschirmfotos: Eigenschaften des ersten Ziels, Hinzufügen-Menü, Entsperren.
-	/// Bildschirmfotos: Aruba-Werkzeuge mit erfundenem Cluster am ersten SSH-Ziel; Übersicht oder AP-Seite.
-	QWidget* arubaForScreenshot(bool apPage);
-	/// Nur Vorführung: Suche nach Clusteraufbrüchen im erfundenen Cluster (Tab mit fertigem Ergebnis).
-	QWidget* arubaBreakoutsForScreenshot();
-	/// Nur Vorführung: Clusterübersicht über erfundene Controller.
-	QWidget* arubaSummaryForScreenshot();
 	PropertiesTab* openFirstTargetProperties(const QString& protocol = QStringLiteral("rdp"));
 	QMenu* popupAddMenu();
 	BulkAddTab* openBulkAdd(const QString& parentId);
@@ -131,7 +112,7 @@ public:
 	void appearanceForScreenshot() { openAppearance(); }
 	/// Extras → Einstellungen beim Bereich `section` (lock, keys, terminal, appearance, snmp).
 	void settingsForScreenshot(const QString& section) { openSettings(section); }
-	/// Bildschirmfoto: Übersicht des ersten Unterordners (Standort → erster Ordner).
+	/// Bildschirmfoto: Übersicht des ersten Unterordners (→ erster Ordner).
 	void folderForScreenshot() { openFolderOverview(m_model->index(0, 0, m_model->index(0, 0))); }
 	QWidget* aboutForScreenshot();
 	/// Update-Tab mit einer Prüfung gegen `base` (lokale Attrappe).
@@ -161,7 +142,57 @@ public:
 	/// Sperren (von Hand oder nach Leerlauf): Abdeckung zeigen, Fenster verbergen.
 	void lockNow(bool alreadyLocked);
 
+	// Beiträge der Module (nur mit dem jeweiligen Modul gebaut).
+#ifndef Q_MOC_RUN
+#ifdef RJ_STANDORTE
+#include "modules/standorte/mainwindow_standorte_members.h"
+#endif
+#ifdef RJ_ARUBA
+#include "modules/aruba/mainwindow_aruba_members.h"
+#endif
+#endif
+
 private:
+	/// Beiträge der Module zu Menüs und Klicks; angemeldet in register…Ui() (cpp/modules/…), in
+	/// dieser Reihenfolge an den bisherigen Stellen der Menüs.
+	struct ModuleHooks
+	{
+		/// Einfachklick vor allem anderen (z. B. virtueller Switch); `true` = erledigt.
+		std::vector<std::function<bool(const QModelIndex&)>> clickTop;
+		/// Einfachklick auf einen Ordner (eines Moduls); `true` = erledigt, sonst Ordnerübersicht.
+		std::vector<std::function<bool(const QModelIndex&)>> clickFolder;
+		/// Kontextmenü eines Baumeintrags, nach „Löschen“ (Eintrag, Kennung, Ordner).
+		std::vector<std::function<void(QMenu&, const QModelIndex&, const QString&, bool)>> treeMenu;
+		/// Kontextmenü der Auswahl, nach „Inventar mehrerer Ziele“.
+		std::vector<std::function<void(QMenu&)>> selectionMenu;
+		/// Hinzufügen-Menü, ganz oben (übergeordneter Ordner).
+		std::vector<std::function<void(QMenu*, const QString&)>> addMenu;
+		/// Menü Extras, an der bisherigen Stelle.
+		std::vector<std::function<void(QMenu*)>> extrasMenu;
+		/// Ergebnis eines Hintergrundauftrags (Art, Ziel, Ergebnis); `true` = erledigt. Alle Module werden gefragt,
+		/// erledigt ist es, sobald eines `true` meldet.
+		std::vector<std::function<bool(const QString&, const QString&, const QJsonObject&)>> jobResult;
+		/// Eintrag öffnen (Eingabetaste/Doppelklick), Kontextmenü, Umbenennen, Löschen; `true` = erledigt.
+		std::vector<std::function<bool(const QModelIndex&)>> activate;
+		std::vector<std::function<bool(const QModelIndex&, const QPoint&)>> contextMenu;
+		std::vector<std::function<bool(const QModelIndex&)>> rename;
+		std::vector<std::function<bool(const QModelIndex&)>> remove;
+		/// Freigegebene Aktion der Claude-Anbindung (Aktion, Ziel-ID); `true` = erledigt.
+		std::vector<std::function<bool(const QString&, const QString&)>> mcpAction;
+		/// Bildschirmfotos der Vorführung (warten, Bild speichern unter Name).
+		std::vector<std::function<void(const std::function<void(int)>&, const std::function<void(const QString&)>&)>> screenshots;
+	} m_modules;
+
+public:
+	/// Bildschirmfotos der Module (Vorführung).
+	void moduleScreenshots(const std::function<void(int)>& pump, const std::function<void(const QString&)>& shot)
+	{
+		for (const auto& h : m_modules.screenshots)
+			h(pump, shot);
+	}
+
+private:
+
 	void buildMenus();
 	void placeBrand();
 	void syncStripHeight();

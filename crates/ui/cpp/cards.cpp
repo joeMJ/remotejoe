@@ -1,4 +1,7 @@
+#include <array>
 #include "cards.h"
+
+#include <QtGui/QPixmap>
 
 #include <cmath>
 
@@ -210,6 +213,182 @@ public:
 			p->drawPath(body);
 			break;
 		}
+		case Glyph::Topology:
+		{
+			// Ein Knoten oben, Linie zu zwei Knoten unten.
+			p->drawRect(QRectF(P(0.36, 0.08), P(0.64, 0.30)));
+			p->drawRect(QRectF(P(0.06, 0.70), P(0.34, 0.92)));
+			p->drawRect(QRectF(P(0.66, 0.70), P(0.94, 0.92)));
+			p->drawLine(P(0.5, 0.30), P(0.5, 0.50));
+			p->drawLine(P(0.2, 0.50), P(0.8, 0.50));
+			p->drawLine(P(0.2, 0.50), P(0.2, 0.70));
+			p->drawLine(P(0.8, 0.50), P(0.8, 0.70));
+			break;
+		}
+		case Glyph::Cable:
+		{
+			// Stecker mit zwei Kontakten, Kabel nach unten.
+			p->drawRoundedRect(QRectF(P(0.26, 0.28), P(0.74, 0.62)), s * 0.06, s * 0.06);
+			p->drawLine(P(0.38, 0.08), P(0.38, 0.28));
+			p->drawLine(P(0.62, 0.08), P(0.62, 0.28));
+			QPainterPath cable;
+			cable.moveTo(P(0.5, 0.62));
+			cable.cubicTo(P(0.5, 0.80), P(0.22, 0.78), P(0.22, 0.95));
+			p->drawPath(cable);
+			break;
+		}
+		case Glyph::Layers:
+		{
+			// Drei gestapelte Ebenen (VLANs).
+			for (int i = 0; i < 3; ++i)
+			{
+				const qreal y = 0.24 + 0.22 * i;
+				QPolygonF d;
+				d << P(0.5, y - 0.14) << P(0.92, y) << P(0.5, y + 0.14) << P(0.08, y);
+				if (i == 0)
+					p->drawPolygon(d);
+				else
+				{
+					p->drawLine(P(0.08, y), P(0.5, y + 0.14));
+					p->drawLine(P(0.5, y + 0.14), P(0.92, y));
+				}
+			}
+			break;
+		}
+		case Glyph::Route:
+		{
+			// Start, geschwungener Weg, Ziel.
+			p->drawEllipse(P(0.2, 0.8), s * 0.09, s * 0.09);
+			p->drawEllipse(P(0.8, 0.2), s * 0.09, s * 0.09);
+			QPainterPath w;
+			w.moveTo(P(0.29, 0.8));
+			w.cubicTo(P(0.9, 0.8), P(0.1, 0.2), P(0.71, 0.2));
+			p->drawPath(w);
+			break;
+		}
+		case Glyph::Devices:
+		{
+			// Bildschirm mit Fuß und daneben ein Telefon.
+			p->drawRect(QRectF(P(0.04, 0.16), P(0.66, 0.62)));
+			p->drawLine(P(0.35, 0.62), P(0.35, 0.80));
+			p->drawLine(P(0.20, 0.82), P(0.50, 0.82));
+			p->drawRoundedRect(QRectF(P(0.72, 0.36), P(0.96, 0.86)), s * 0.04, s * 0.04);
+			break;
+		}
+		case Glyph::Rows:
+		{
+			for (int i = 0; i < 3; ++i)
+				p->drawRect(QRectF(P(0.10, 0.12 + 0.28 * i), P(0.90, 0.30 + 0.28 * i)));
+			break;
+		}
+		case Glyph::Tag:
+		{
+			// Etikett mit Loch.
+			QPolygonF t;
+			t << P(0.08, 0.10) << P(0.50, 0.10) << P(0.92, 0.52) << P(0.52, 0.92) << P(0.08, 0.50);
+			p->drawPolygon(t);
+			p->drawEllipse(P(0.30, 0.31), s * 0.07, s * 0.07);
+			break;
+		}
+		case Glyph::Fit:
+		{
+			// Vier Ecken nach außen.
+			for (auto [cx, cy, dx, dy] : { std::array<qreal, 4>{ 0.1, 0.1, 1, 1 }, { 0.9, 0.1, -1, 1 }, { 0.1, 0.9, 1, -1 }, { 0.9, 0.9, -1, -1 } })
+			{
+				p->drawLine(P(cx, cy), P(cx + dx * 0.28, cy));
+				p->drawLine(P(cx, cy), P(cx, cy + dy * 0.28));
+			}
+			p->drawRect(QRectF(P(0.34, 0.34), P(0.66, 0.66)));
+			break;
+		}
+		case Glyph::ActualSize:
+		{
+			// Lupe mit „1:1“-Strichen.
+			const QPointF m = P(0.42, 0.42);
+			p->drawEllipse(m, s * 0.30, s * 0.30);
+			p->drawLine(onCircle(m, 0.31, -45), P(0.90, 0.90));
+			p->drawLine(P(0.32, 0.30), P(0.32, 0.54));
+			p->drawLine(P(0.52, 0.30), P(0.52, 0.54));
+			break;
+		}
+		case Glyph::Maximize:
+		{
+			// Fenster mit Pfeil nach rechts oben.
+			p->drawRect(QRectF(P(0.1, 0.3), P(0.7, 0.9)));
+			p->drawLine(P(0.45, 0.55), P(0.9, 0.1));
+			p->drawLine(P(0.9, 0.1), P(0.62, 0.1));
+			p->drawLine(P(0.9, 0.1), P(0.9, 0.38));
+			break;
+		}
+		case Glyph::ExpandAll:
+		{
+			// Zwei Kästchen mit Plus.
+			for (qreal y : { 0.08, 0.54 })
+			{
+				p->drawRect(QRectF(P(0.2, y), P(0.58, y + 0.38)));
+				p->drawLine(P(0.29, y + 0.19), P(0.49, y + 0.19));
+				p->drawLine(P(0.39, y + 0.09), P(0.39, y + 0.29));
+			}
+			p->drawLine(P(0.66, 0.27), P(0.9, 0.27));
+			p->drawLine(P(0.66, 0.73), P(0.9, 0.73));
+			break;
+		}
+		case Glyph::CollapseAll:
+		{
+			// Zwei Kästchen mit Minus.
+			for (qreal y : { 0.08, 0.54 })
+			{
+				p->drawRect(QRectF(P(0.2, y), P(0.58, y + 0.38)));
+				p->drawLine(P(0.29, y + 0.19), P(0.49, y + 0.19));
+			}
+			p->drawLine(P(0.66, 0.27), P(0.9, 0.27));
+			p->drawLine(P(0.66, 0.73), P(0.9, 0.73));
+			break;
+		}
+		case Glyph::Backup:
+		{
+			// Datenbank-Zylinder, daneben Pfeil nach unten.
+			p->drawEllipse(QRectF(P(0.06, 0.08), P(0.62, 0.26)));
+			p->drawLine(P(0.06, 0.17), P(0.06, 0.8));
+			p->drawLine(P(0.62, 0.17), P(0.62, 0.8));
+			p->drawArc(QRectF(P(0.06, 0.71), P(0.62, 0.89)), 180 * 16, 180 * 16);
+			p->drawArc(QRectF(P(0.06, 0.4), P(0.62, 0.58)), 180 * 16, 180 * 16);
+			p->drawLine(P(0.82, 0.3), P(0.82, 0.86));
+			p->drawLine(P(0.82, 0.86), P(0.7, 0.72));
+			p->drawLine(P(0.82, 0.86), P(0.94, 0.72));
+			break;
+		}
+		case Glyph::Octets:
+		{
+			// „.2.1“: zwei Ziffern mit Punkten davor.
+			QFont f = p->font();
+			f.setPixelSize(qMax(7, int(s * 0.5)));
+			f.setBold(true);
+			p->setFont(f);
+			p->drawText(QRectF(P(0.0, 0.0), P(1.0, 1.0)), Qt::AlignCenter, QStringLiteral(".2.1"));
+			break;
+		}
+		case Glyph::Report:
+		{
+			// Blatt mit Zeilen, unten rechts ein Haken.
+			p->drawRect(QRectF(P(0.16, 0.06), P(0.74, 0.94)));
+			p->drawLine(P(0.28, 0.24), P(0.62, 0.24));
+			p->drawLine(P(0.28, 0.40), P(0.62, 0.40));
+			p->drawLine(P(0.28, 0.56), P(0.50, 0.56));
+			p->drawLine(P(0.56, 0.76), P(0.68, 0.88));
+			p->drawLine(P(0.68, 0.88), P(0.94, 0.58));
+			break;
+		}
+		case Glyph::Print:
+		{
+			// Blatt oben, Gehäuse, ausgegebenes Blatt unten.
+			p->drawRect(QRectF(P(0.28, 0.08), P(0.72, 0.36)));
+			p->drawRoundedRect(QRectF(P(0.08, 0.36), P(0.92, 0.72)), 2, 2);
+			p->drawRect(QRectF(P(0.28, 0.58), P(0.72, 0.92)));
+			p->drawLine(P(0.36, 0.7), P(0.64, 0.7));
+			p->drawLine(P(0.36, 0.8), P(0.64, 0.8));
+			break;
+		}
 		case Glyph::Gear:
 		{
 			const QPointF m = P(0.5, 0.5);
@@ -246,6 +425,45 @@ private:
 QIcon glyphIcon(Glyph g)
 {
 	return QIcon(new GlyphEngine(g));
+}
+
+QIcon plugIcon(const QColor& c)
+{
+	QIcon icon;
+	for (int px : { 16, 32, 64 })
+	{
+		QPixmap pm(px, px);
+		pm.fill(Qt::transparent);
+		QPainter p(&pm);
+		p.setRenderHint(QPainter::Antialiasing);
+		const qreal s = px;
+		auto P = [s](qreal x, qreal y) { return QPointF(x * s, y * s); };
+		QPen pen(c, qMax<qreal>(1.2, s / 9.0));
+		pen.setCapStyle(Qt::RoundCap);
+		pen.setJoinStyle(Qt::RoundJoin);
+		p.setPen(pen);
+		// Kontakte oben, Gehäuse, Kabel nach unten.
+		p.drawLine(P(0.37, 0.06), P(0.37, 0.3));
+		p.drawLine(P(0.63, 0.06), P(0.63, 0.3));
+		p.setBrush(c);
+		p.drawRoundedRect(QRectF(P(0.22, 0.3), P(0.78, 0.62)), s * 0.08, s * 0.08);
+		p.setBrush(Qt::NoBrush);
+		p.drawLine(P(0.5, 0.62), P(0.5, 0.94));
+		p.end();
+		icon.addPixmap(pm);
+	}
+	return icon;
+}
+
+QString poeStage(const QJsonObject& port)
+{
+	const double w = port.value(QStringLiteral("poe_w")).toDouble();
+	const int cls = port.value(QStringLiteral("poe_class")).toInt(-1);
+	if (port.value(QStringLiteral("poe_pp")).toBool() || cls >= 5 || w > 30.0)
+		return QStringLiteral("++");
+	if (cls == 4 || w > 15.4)
+		return QStringLiteral("+");
+	return QString();
 }
 
 void makeCopyable(QTableWidget* t, const std::function<QString(const char*)>& text, const std::function<void(QMenu*, int row)>& extra)
@@ -291,23 +509,6 @@ void makeCopyable(QTableWidget* t, const std::function<QString(const char*)>& te
 	});
 }
 
-QPushButton* logMenuButton(const std::function<QString(const char*)>& text, QWidget* parent, const std::function<void(const QString& kind, bool filtered)>& pick)
-{
-	auto* b = new QPushButton(glyphIcon(Glyph::Note), text("aruba.log.menu"), parent);
-	auto* menu = new QMenu(b);
-	for (const char* key : { "system", "system.filtered", static_cast<const char*>(nullptr), "security", "security.filtered" })
-	{
-		if (!key)
-		{
-			menu->addSeparator();
-			continue;
-		}
-		const QString k = QString::fromLatin1(key);
-		menu->addAction(text((QByteArray("aruba.log.") + key).constData()), b, [pick, k] { pick(k.section(QLatin1Char('.'), 0, 0), k.endsWith(QLatin1String(".filtered"))); });
-	}
-	b->setMenu(menu);
-	return b;
-}
 
 ClickRow::ClickRow(QWidget* parent)
   : QFrame(parent)

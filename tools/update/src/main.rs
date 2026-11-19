@@ -15,6 +15,13 @@
 //!     Zugriffsschlüssel aus der Umgebungsvariable RJ_GITEA_TOKEN
 //! rj-update packen-ohne-signatur <programmordner> <version> <plattform> <ausgabeordner>
 //!     wie „packen“, aber ohne Signatur (für die automatische Paketierung auf GitHub)
+//! rj-update packen-fassung <programmordner> <version> <plattform> <core|advanced> <ausgabeordner>
+//!     packt ohne Signatur remotejoe-<version>-<plattform>.tar.zst (core) bzw.
+//!     remotejoe-advanced-<version>-<plattform>.tar.zst (advanced) und trägt es in die SHA256SUMS des
+//!     Ordners ein (andere Einträge bleiben, eine alte SHA256SUMS.sig wird entfernt)
+//! rj-update signieren <ordner> [--schluessel <datei>] [--oeffentlich <datei>]
+//!     prüft alle Einträge der SHA256SUMS im Ordner und signiert sie (SHA256SUMS.sig) mit dem lokalen
+//!     privaten Schlüssel, nur wenn er zum eingebauten öffentlichen Schlüssel passt
 //! rj-update abschliessen <besitzer/name> <tag> [--minuten <n>] [--schluessel <datei>] [--oeffentlich <datei>]
 //!     GitHub: prüft den von der Paketierung angelegten Entwurf, signiert SHA256SUMS mit dem
 //!     lokalen privaten Schlüssel und veröffentlicht die Veröffentlichung. Zugriffsschlüssel aus
@@ -46,11 +53,13 @@ fn main() -> ExitCode {
         Some("schluessel") if args.len() == 2 => keys(Path::new(&args[1])),
         Some("packen") if args.len() == 6 => pack(Path::new(&args[1]), &args[2], &args[3], Some(Path::new(&args[4])), Path::new(&args[5])),
         Some("packen-ohne-signatur") if args.len() == 5 => pack(Path::new(&args[1]), &args[2], &args[3], None, Path::new(&args[4])),
+        Some("packen-fassung") if args.len() == 6 => pack_edition(Path::new(&args[1]), &args[2], &args[3], &args[4], Path::new(&args[5])),
+        Some("signieren") if args.len() >= 2 => sign_dir(Path::new(&args[1]), &args[2..]),
         Some("pruefen") if args.len() == 3 => check(Path::new(&args[1]), Path::new(&args[2])),
         Some("hochladen") if args.len() == 5 || args.len() == 6 => upload(&args[1], &args[2], &args[3], Path::new(&args[4]), args.get(5).map(PathBuf::from)),
         Some("abschliessen") if args.len() >= 3 => finish(&args[1], &args[2], &args[3..]),
         _ => {
-            eprintln!("Aufruf: rj-update schluessel [<ordner>] | packen <programmordner> <version> <plattform> <privater-schluessel> <ausgabeordner> | packen-ohne-signatur <programmordner> <version> <plattform> <ausgabeordner> | pruefen <ausgabeordner> <oeffentlicher-schluessel> | hochladen <gitea-adresse> <besitzer/name> <version> <ausgabeordner> [<aenderungstext-datei>] | abschliessen <besitzer/name> <tag> [--minuten <n>] [--schluessel <datei>] [--oeffentlich <datei>] [--zusatz <datei> …]");
+            eprintln!("Aufruf: rj-update schluessel [<ordner>] | packen <programmordner> <version> <plattform> <privater-schluessel> <ausgabeordner> | packen-ohne-signatur <programmordner> <version> <plattform> <ausgabeordner> | packen-fassung <programmordner> <version> <plattform> <core|advanced> <ausgabeordner> | signieren <ordner> [--schluessel <datei>] [--oeffentlich <datei>] | pruefen <ausgabeordner> <oeffentlicher-schluessel> | hochladen <gitea-adresse> <besitzer/name> <version> <ausgabeordner> [<aenderungstext-datei>] | abschliessen <besitzer/name> <tag> [--minuten <n>] [--schluessel <datei>] [--oeffentlich <datei>] [--zusatz <datei> …]");
             return ExitCode::from(2);
         }
     };
@@ -101,6 +110,66 @@ fn pack(src: &Path, version: &str, platform: &str, key: Option<&Path>, out: &Pat
         println!("{} ({} Bytes), {SUMS} (ohne Signatur) in {}", name, data.len(), out.display());
     }
     Ok(())
+}
+
+/// Archiv einer Fassung ohne Signatur packen und in die SHA256SUMS des Ordners eintragen.
+fn pack_edition(src: &Path, version: &str, platform: &str, edition: &str, out: &Path) -> Result<(), UpdateError> {
+    let v = Version::parse(version)?;
+    let base = asset_name(&v.to_string(), platform);
+    let name = match edition {
+        "core" => base,
+        "advanced" => base.replacen("remotejoe-", "remotejoe-advanced-", 1),
+        other => return Err(UpdateError::Url(format!("Fassung „{other}“ unbekannt (core oder advanced)"))),
+    };
+    let data = if name.ends_with(".zip") { archive::pack_zip(src)? } else { archive::pack_tar_zst(src)? };
+    fs::create_dir_all(out)?;
+    fs::write(out.join(&name), &data)?;
+    let mut entries: Vec<(String, String)> = match fs::read_to_string(out.join(SUMS)) {
+        Ok(t) => t.lines().filter_map(|l| l.split_once("  ").map(|(h, n)| (n.to_string(), h.to_string()))).filter(|(n, _)| n != &name).collect(),
+        Err(_) => Vec::new(),
+    };
+    entries.push((name.clone(), sign::sha256_hex(&data)));
+    entries.sort();
+    fs::write(out.join(SUMS), sign::sums_text(&entries))?;
+    // Die alte Signatur passt nicht mehr zur geänderten SHA256SUMS.
+    let _ = fs::remove_file(out.join(SIG));
+    println!("{} ({} Bytes), {SUMS} (ohne Signatur) in {}", name, data.len(), out.display());
+    Ok(())
+}
+
+/// Vorhandene SHA256SUMS eines Ordners prüfen und signieren.
+fn sign_dir(dir: &Path, opts: &[String]) -> Result<(), UpdateError> {
+    let (mut key_path, mut pub_path) = (default_key_dir().join("update-key.priv"), PathBuf::from("crates/ui/res/update-key.pub"));
+    let mut it = opts.iter();
+    while let Some(o) = it.next() {
+        let v = it.next().ok_or_else(|| UpdateError::Url(format!("Wert für {o} fehlt")))?;
+        match o.as_str() {
+            "--schluessel" => key_path = PathBuf::from(v),
+            "--oeffentlich" => pub_path = PathBuf::from(v),
+            other => return Err(UpdateError::Url(format!("Unbekannte Option {other}"))),
+        }
+    }
+    let sums = fs::read(dir.join(SUMS))?;
+    let mut n = 0;
+    for line in String::from_utf8_lossy(&sums).lines() {
+        let Some((hash, name)) = line.split_once("  ") else { continue };
+        let got = sign::sha256_hex(&fs::read(dir.join(name)).map_err(|e| UpdateError::Url(format!("{name}: {e}")))?);
+        if got != hash {
+            return Err(UpdateError::BadChecksum);
+        }
+        n += 1;
+    }
+    if n == 0 {
+        return Err(UpdateError::Url(format!("{SUMS} in {} ist leer", dir.display())));
+    }
+    let sk = sign::secret_key_from_text(&Zeroizing::new(fs::read_to_string(&key_path).map_err(|e| UpdateError::BadKey(format!("{}: {e}", key_path.display())))?))?;
+    let embedded = sign::public_key_from_text(&fs::read_to_string(&pub_path).map_err(|e| UpdateError::BadKey(format!("{}: {e}", pub_path.display())))?)?;
+    if sk.verifying_key() != embedded {
+        return Err(UpdateError::BadKey(format!("Der private Schlüssel gehört nicht zum eingebauten öffentlichen Schlüssel ({}).", pub_path.display())));
+    }
+    fs::write(dir.join(SIG), sign::sign(&sk, &sums))?;
+    println!("{SIG} geschrieben ({n} Pakete in {SUMS})");
+    check(dir, &pub_path)
 }
 
 fn check(dir: &Path, key: &Path) -> Result<(), UpdateError> {

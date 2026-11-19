@@ -8,6 +8,7 @@
 #include <QtWidgets/QLayout>
 #include <QtCore/QList>
 #include <QtGui/QIcon>
+#include <QtCore/QJsonObject>
 
 #include <functional>
 
@@ -40,15 +41,41 @@ enum class Glyph
 	Refresh,
 	Gear,
 	Person,
+	/// Leiste: Netzplan, Stecker, Ebenen, Weg, Geräte, Zeilen, Etikett, Einpassen, Originalgröße.
+	Topology,
+	Cable,
+	Layers,
+	Route,
+	Devices,
+	Rows,
+	Tag,
+	Fit,
+	ActualSize,
+	/// Maximieren (Rahmen mit Pfeil nach außen), alle aufklappen (Plus in Kästchen), alle einklappen (Minus in
+	/// Kästchen), Drucken (Drucker mit Blatt).
+	Maximize,
+	ExpandAll,
+	CollapseAll,
+	Print,
+	/// Sichern (Datenträger mit Pfeil nach unten).
+	Backup,
+	/// Kurzbeschriftung mit zwei Oktetten („.2.1“).
+	Octets,
+	/// Bericht (Blatt mit Zeilen und Haken).
+	Report,
 };
 QIcon glyphIcon(Glyph g);
-/// Knopf „Protokolle“ (Aruba) mit Zettel-Symbol und Menü: Systemlog und Sicherheitslog, ganz oder gefiltert.
+/// PoE-Symbol: Stecker (zwei Kontakte, Gehäuse, Kabel) in Farbe `c`.
+QIcon plugIcon(const QColor& c);
+/// PoE-Stufe eines Ports der Switch-Seite: „++“ PoE++ (Klasse 5 und höher bzw. über 30 W), „+“ PoE+ (Klasse 4 bzw.
+/// über 15,4 W), sonst leer.
+QString poeStage(const QJsonObject& port);
+/// Knopf „Protokolle“ mit Zettel-Symbol und Menü: Systemlog und Sicherheitslog, ganz oder gefiltert.
 /// `text` liefert die Beschriftungen, `pick` erhält „system“ bzw. „security“ und ob gefiltert.
 /// Tabelle zum Kopieren einrichten: Zeilen markierbar (auch mehrere), Strg+C und Kontextmenü „Kopieren“ bzw.
 /// „Alles kopieren“ geben tabulatorgetrennten Text mit Kopfzeile in die Zwischenablage. Ein Rechtsklick wählt die
 /// Zeile darunter; `extra` hängt weitere Einträge für diese Zeile (-1: keine) in dasselbe Menü.
 void makeCopyable(QTableWidget* t, const std::function<QString(const char*)>& text, const std::function<void(QMenu*, int row)>& extra = {});
-QPushButton* logMenuButton(const std::function<QString(const char*)>& text, QWidget* parent, const std::function<void(const QString& kind, bool filtered)>& pick);
 
 /// Zeile, die auf Klick reagiert (Bereichsliste); `selected` hebt sie hervor.
 class ClickRow : public QFrame

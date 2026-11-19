@@ -146,6 +146,7 @@ mitgelieferten C-Bibliotheken). Beide Dateien erzeugt `tools/third-party.py`.
 | dirs-sys | 0.5.0 | MIT OR Apache-2.0 |
 | dispatch2 | 0.3.1 | Zlib OR Apache-2.0 OR MIT |
 | displaydoc | 0.2.7 | MIT OR Apache-2.0 |
+| dns-lookup | 2.1.1 | MIT/Apache-2.0 |
 | dom_query | 0.28.0 | MIT |
 | dpi | 0.1.2 | Apache-2.0 AND MIT |
 | dtoa | 1.0.11 | MIT OR Apache-2.0 |
@@ -602,7 +603,7 @@ mitgelieferten C-Bibliotheken). Beide Dateien erzeugt `tools/third-party.py`.
 
 | Bibliothek | Lizenz | Verwendung |
 |---|---|---|
-| Qt 6 (Core, Gui, Widgets, Network, Svg; unter Linux DBus) | LGPL-3.0 (dynamisch gelinkt) | Oberfläche; DBus für die Meldung von logind zum Standby |
+| Qt 6 (Core, Gui, Widgets, Network, Svg, PrintSupport; unter Linux DBus) | LGPL-3.0 (dynamisch gelinkt) | Oberfläche; PrintSupport zum Drucken; DBus für die Meldung von logind zum Standby |
 | FreeRDP 3 (libfreerdp3, libfreerdp-client3, libwinpr3) | Apache-2.0 | RDP-Worker |
 | WebKitGTK 4.1, GTK 3 (Linux) | LGPL-2.1 (dynamisch gelinkt) | Web-Worker, Merkmal `webview` |
 | Microsoft Edge WebView2 Runtime (Windows) | Laufzeit von Microsoft, nicht mitgeliefert | Web-Worker, Merkmal `webview` |
@@ -614,7 +615,7 @@ Programmordner (dynamisch gelinkt, unverändert):
 
 | Bibliothek | Lizenz | Dateien |
 |---|---|---|
-| Qt 6 (Core, Gui, Widgets, Network, Svg) mit Plattform-, Stil-, Bildformat-, TLS- und Netzwerk-Plugins | LGPL-3.0 | `Qt6*.dll`, `platforms\`, `styles\`, `imageformats\`, `tls\`, `networkinformation\`, `iconengines\`, `generic\` |
+| Qt 6 (Core, Gui, Widgets, Network, Svg, PrintSupport) mit Plattform-, Stil-, Bildformat-, TLS- und Netzwerk-Plugins | LGPL-3.0 | `Qt6*.dll`, `platforms\`, `styles\`, `imageformats\`, `tls\`, `networkinformation\`, `iconengines\`, `generic\` |
 | Fremdkomponenten innerhalb von Qt (u. a. HarfBuzz, FreeType, libpng, libjpeg, zlib, PCRE2, md4c) | jeweils eigene Lizenzen, siehe [Licenses Used in Qt](https://doc.qt.io/qt-6/licenses-used-in-qt.html) | in den Qt-DLLs und -Plugins |
 | Mesa llvmpipe (Software-OpenGL von Qt) | MIT | `opengl32sw.dll` |
 | FreeRDP 3 (freerdp3, freerdp-client3, winpr3) | Apache-2.0 | `freerdp3.dll`, `freerdp-client3.dll`, `winpr3.dll` |
@@ -640,3 +641,9 @@ Die eingebauten Farbschemata und Symbolfarben übernehmen Farbwerte dieser Palet
 | Solarized | MIT | <https://github.com/altercation/solarized> |
 | Gruvbox | MIT | <https://github.com/morhetz/gruvbox> |
 | Dracula | MIT | <https://github.com/dracula/dracula-theme> |
+
+## Herstellerliste (MAC-Präfixe)
+
+`crates/ui/res/oui.txt` ist eine gekürzte Fassung der öffentlichen OUI-Liste (MA-L) der IEEE Registration Authority
+(<https://standards-oui.ieee.org/oui/oui.txt>): je Präfix der Name des Herstellers, häufige Namen abgekürzt. Sie dient
+nur der Anzeige des Herstellers zu einer MAC-Adresse.

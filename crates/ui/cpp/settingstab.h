@@ -9,6 +9,7 @@
 
 #include <QtCore/QMap>
 #include <QtCore/QString>
+#include <functional>
 
 class AppearanceTab;
 class QCheckBox;
@@ -47,8 +48,10 @@ signals:
 	/// Strg+Umschalt+W: neuer Modus (outside, always, never).
 	void closeTabKeyChanged(const QString& mode);
 	void findKeyChanged(const QString& mode);
-	/// Zusatzfunktionen ein- oder ausgeschaltet (z. B. Aruba-Werkzeuge).
+	/// Zuschaltbare Funktionen ein- oder ausgeschaltet.
 	void featuresChanged();
+	/// Baum geändert (z. B. Vorlagenordner angelegt).
+	void treeChanged();
 
 private:
 	struct Area
@@ -57,10 +60,12 @@ private:
 		QLabel* summary;
 		int page;
 	};
-	void addArea(const QString& key, const QString& title, QWidget* page, bool scroll);
+	void addArea(const QString& key, const QString& title, QWidget* page, bool scroll, int indent = 0);
+	/// Überschrift ohne eigene Seite (z. B. eine Gruppe), eingerückt um indent Stufen.
+	void addGroup(const QString& title, int indent);
 	QWidget* pageLock();
 	QWidget* pageKeys();
-	QWidget* pageFeatures();
+	QWidget* pageLicense();
 	QWidget* pageBackup();
 	QWidget* pageMcp();
 	void saveMcp();
@@ -88,10 +93,6 @@ private:
 	QComboBox* m_findKey = nullptr;
 	QComboBox* m_adminLayout = nullptr;
 	QSpinBox* m_adminTimeout = nullptr;
-	QCheckBox* m_aruba = nullptr;
-	QSpinBox* m_clientsWarn = nullptr;
-	QSpinBox* m_clientsCrit = nullptr;
-	QLabel* m_clientsHint = nullptr;
 	// Claude-Anbindung
 	QCheckBox* m_mcp = nullptr;
 	QCheckBox* m_mcpHideAddr = nullptr;
@@ -111,6 +112,15 @@ private:
 	QLabel* m_bkKeyFile = nullptr;
 	QPushButton* m_bkNow = nullptr;
 	QString m_bkLocalDir;
+	// Beiträge der Module (nur mit dem jeweiligen Modul gebaut).
+#ifndef Q_MOC_RUN
+#ifdef RJ_STANDORTE
+#include "modules/standorte/settingstab_standorte_members.h"
+#endif
+#ifdef RJ_ARUBA
+#include "modules/aruba/settingstab_aruba_members.h"
+#endif
+#endif
 	// Eingebettete Bereiche
 	AppearanceTab* m_appearance = nullptr;
 	SnmpTab* m_snmp = nullptr;

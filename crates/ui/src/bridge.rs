@@ -39,6 +39,10 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "appVersion"]
         fn app_version(self: &RjBackend) -> QString;
+        /// Name der Fassung (Fenstertitel, Über-Dialog).
+        #[qinvokable]
+        #[cxx_name = "appEdition"]
+        fn app_edition(self: &RjBackend) -> QString;
         /// Ist eine Schlüsseldatenbank entsperrt (oder läuft die Vorführung)?
         /// Ungespeicherte Änderungen in der Schlüsseldatenbank (Index, Zugangsdaten, Import).
         /// Benutzername oder Kennwort eines Ziels für die Zwischenablage (JSON mit `text` oder `error`).
@@ -287,6 +291,10 @@ impl qobject::RjBackend {
 
     fn app_version(&self) -> QString {
         q(env!("CARGO_PKG_VERSION").to_string())
+    }
+
+    fn app_edition(&self) -> QString {
+        q(crate::modules::EDITION.to_string())
     }
 
     fn credential_copy(&self, id: &QString, kind: &QString) -> QString {

@@ -3,7 +3,7 @@
 //!
 //! Ohne Anmeldung (beim Anzeigen): Namensauflösung, Portprüfung, MAC aus der Nachbartabelle und
 //! – bei offenem RDP mit NLA – der Rechnername. Mit Anmeldung nur auf Knopfdruck:
-//! SSH (Linux, Aruba `show version`) oder PowerShell (Windows). Notizen sind die Notizen des Ziels
+//! SSH (Linux, `show version`) oder PowerShell (Windows). Notizen sind die Notizen des Ziels
 //! (Index in der KDBX); das Inventar liegt als Datei im Datenordner.
 
 pub mod inventory;
@@ -11,6 +11,12 @@ pub mod mass;
 pub mod probe;
 pub mod rdpname;
 pub mod remote;
+#[cfg(feature = "aruba")]
+#[path = "../modules/aruba/ops.rs"]
+mod aruba_ops;
+#[cfg(feature = "standorte")]
+#[path = "../modules/standorte/store.rs"]
+mod site_store;
 #[cfg(not(windows))]
 mod sys_linux;
 #[cfg(windows)]
@@ -76,28 +82,41 @@ pub struct OverviewState {
     run: Option<Run>,
     /// Laufende Abfragen je Ziel bzw. Gast (keine doppelten Starts).
     busy: HashMap<String, u64>,
-    /// Geräteart je Ziel aus dem Inventar (eigenes Symbol im Baum, z. B. Aruba-AP).
+    /// Geräteart je Ziel aus dem Inventar (eigenes Symbol im Baum).
     pub devices: HashMap<Uuid, &'static str>,
-    /// Zuletzt abgefragter Aruba-Cluster je Ziel (VC); liegt auch im Datenordner (`aruba/<Ziel>.json`) und übersteht
-    /// so einen Neustart. Darin ggf. `mark`: gemerkte Zahl der offline-APs (`offline`, `at`).
-    pub aruba: HashMap<String, Value>,
-    /// Ordner der gespeicherten Cluster (`None`: nichts speichern, z. B. ohne Datenordner).
-    pub aruba_dir: Option<std::path::PathBuf>,
+    /// Gespeicherte Stände eines Moduls.
+    #[cfg(feature = "aruba")]
+    pub wifi: aruba_ops::ArubaStore,
     /// Nur Vorführung: Inventar im Speicher statt im Datenordner.
     pub demo_inventory: HashMap<String, inventory::Inventory>,
+    /// Gespeicherte Stände eines Moduls.
+    #[cfg(feature = "standorte")]
+    pub site: site_store::SiteStore,
 }
+
+
 
 impl Default for OverviewState {
     fn default() -> Self {
         let store = Store::default_location();
         let devices = store.scan_devices();
-        let aruba_dir = rj_core::config::data_dir().map(|d| d.join("aruba"));
-        let aruba = aruba_dir.as_deref().map(load_clusters).unwrap_or_default();
-        OverviewState { store, services: HashMap::new(), run: None, busy: HashMap::new(), devices, aruba, aruba_dir, demo_inventory: HashMap::new() }
+        OverviewState {
+            store,
+            services: HashMap::new(),
+            run: None,
+            busy: HashMap::new(),
+            devices,
+            #[cfg(feature = "aruba")]
+            wifi: aruba_ops::ArubaStore::load(),
+            demo_inventory: HashMap::new(),
+            #[cfg(feature = "standorte")]
+            site: site_store::SiteStore::load(),
+        }
     }
 }
 
-/// Gespeicherte Cluster aus dem Ordner laden (Dateiname = Ziel-ID).
+/// Gespeicherte Stände aus einem Ordner laden (Dateiname = Ziel-ID).
+#[cfg(any(feature = "aruba", feature = "standorte"))]
 fn load_clusters(dir: &std::path::Path) -> HashMap<String, Value> {
     std::fs::read_dir(dir)
         .map(|rd| {
@@ -115,15 +134,6 @@ fn load_clusters(dir: &std::path::Path) -> HashMap<String, Value> {
 }
 
 impl OverviewState {
-    /// Cluster eines VC merken und speichern (Fehler beim Schreiben bleiben ohne Folgen für die Anzeige).
-    pub fn put_cluster(&mut self, key: &str, v: Value) {
-        if let (Some(dir), Ok(_)) = (&self.aruba_dir, Uuid::parse_str(key)) {
-            let _ = std::fs::create_dir_all(dir);
-            let _ = rj_core::fsutil::atomic_write_with_backup(&dir.join(format!("{key}.json")), &serde_json::to_vec_pretty(&v).unwrap_or_default());
-        }
-        self.aruba.insert(key.to_string(), v);
-    }
-
     /// Zuletzt bei der Dienstprüfung aufgelöste Adresse eines Ziels.
     pub fn services_ip(&self, key: &str) -> Option<String> {
         self.services.get(key).and_then(|(_, v)| v["ip"].as_str().map(str::to_string))
@@ -201,6 +211,17 @@ fn str_of<'a>(c: &'a Value, k: &str) -> Option<&'a str> {
 }
 
 impl App {
+    /// Gespeicherter Cluster eines VC für die Übersicht (ohne das Modul nie).
+    fn aruba_cluster_view(&self, key: &str) -> Option<Value> {
+        #[cfg(feature = "aruba")]
+        return self.overview.cluster_view(key);
+        #[cfg(not(feature = "aruba"))]
+        {
+            let _ = key;
+            None
+        }
+    }
+
     fn ov_subject(&self, c: &Value) -> Result<Subject, String> {
         if let Some(hv) = str_of(c, "hv") {
             let hv = Uuid::parse_str(hv).map_err(|_| "Hypervisor ungültig")?;
@@ -244,9 +265,10 @@ impl App {
         let mut v = json!({
             "key": key,
             "inventory": inventory_json(&inv),
-            "aruba": inv.value("system").is_some_and(|s| s.starts_with("Aruba")),
-            "aruba_tools": self.config.features.aruba,
-            "aruba_cluster": self.overview.aruba.get(&key),
+            // Werkzeuge des Moduls nur für APs bzw. VCs, nie für Switches.
+            "aruba": cfg!(feature = "aruba") && inv.value("system").is_some_and(|s| s.starts_with("Aruba") && !s.starts_with("ArubaOS-Switch")) && !Uuid::parse_str(&key).is_ok_and(|id| inventory::is_switch_kind(self.overview.devices.get(&id).copied())),
+            "aruba_tools": cfg!(feature = "aruba") && self.config.features.aruba,
+            "aruba_cluster": self.aruba_cluster_view(&key),
             "services": services,
             "busy": self.overview.busy.contains_key(&key),
             "run": self.overview_output_key(&key),
@@ -377,7 +399,7 @@ impl App {
         Ok(json!({ "pending": job }))
     }
 
-    /// Mit Anmeldung am Ziel: SSH (Linux, Aruba) oder PowerShell (Windows), Zugangsdaten aus der KDBX.
+    /// Mit Anmeldung am Ziel: SSH (Linux) oder PowerShell (Windows), Zugangsdaten aus der KDBX.
     pub fn overview_query(&mut self, c: &Value) -> Result<Value, String> {
         let Subject::Target(t) = self.ov_subject(c)? else { return Err("Gäste liefern ihr Inventar über den Hypervisor".into()) };
         if !rj_core::inherit::resolve_inventory(&self.index, t.id).map(|(on, _)| on).unwrap_or(false) {
@@ -388,6 +410,36 @@ impl App {
         }
         let (t, r) = self.inventory_view(&t)?;
         let key = t.id.to_string();
+        // Switch: `show system` über die Switch-CLI, bei Bedarf mit älteren SSH-Verfahren.
+        let switch = inventory::is_switch_kind(self.overview.devices.get(&t.id).copied());
+        #[cfg(not(feature = "standorte"))]
+        let _ = switch;
+        #[cfg(feature = "standorte")]
+        if let (true, Ok(ip)) = (switch, t.host.trim().parse::<std::net::Ipv4Addr>()) {
+            let cred = crate::switches::Cred { name: "Ziel", payload: self.credential_payload(&r, Protocol::Ssh)? };
+            let known = self.known_hosts_ref();
+            let job_key = key.clone();
+            let job = self.jobs.spawn("Inventar abfragen", move |job| {
+                // Gemeinsame Switch-Abfrage (auch im Masseninventar).
+                let res = crate::switches::switch_system(ip, &cred, &known);
+                Box::new(move |app: &mut App, cancelled| {
+                    app.overview.busy.remove(&job_key);
+                    if cancelled {
+                        return Vec::new();
+                    }
+                    let json = match res {
+                        Ok(sys) => {
+                            app.offer_switch_system(&job_key, &sys, "Switch-CLI (show system)");
+                            json!({ "inventory": inventory_json(&app.overview.store.load_key(&job_key)) })
+                        }
+                        Err(e) => json!({ "error": e }),
+                    };
+                    vec![UiEvent::JobResult { job, kind: "ov_query".into(), target: job_key, json: json.to_string() }]
+                })
+            });
+            self.overview.busy.insert(key, job);
+            return Ok(json!({ "pending": job }));
+        }
         let open = |p: u16| {
             self.overview.services.get(&key).and_then(|(_, v)| v["list"].as_array().map(|l| l.iter().any(|s| s["port"] == p && s["open"] == true)))
         };
@@ -443,130 +495,6 @@ impl App {
         Ok(json!({ "pending": job }))
     }
 
-    /// Aruba-Werkzeuge: Cluster am virtuellen Controller abfragen (`show aps`, `allowed-ap` aus der Konfiguration),
-    /// per SSH mit den Zugangsdaten des Ziels. Ergebnis „ov_aruba_cluster“.
-    pub fn aruba_cluster(&mut self, c: &Value) -> Result<Value, String> {
-        if !self.config.features.aruba {
-            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
-        }
-        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
-        if self.demo {
-            return Err("In der Vorführung nicht verfügbar".into());
-        }
-        let (t, r) = self.inventory_view(&t)?;
-        let key = t.id.to_string();
-        let spec = crate::patch::JobSpec {
-            protocol: Protocol::Ssh,
-            host: t.host.clone(),
-            port: t.effective_port(),
-            credentials: self.credential_payload(&r, Protocol::Ssh)?,
-            transport: None,
-            legacy: self.target_legacy_of(t.id),
-        };
-        let port = if t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
-        let known = self.known_hosts_ref();
-        let vc = self.overview.services.get(&key).and_then(|(_, v)| v["ip"].as_str().map(str::to_string)).unwrap_or_else(|| t.host.clone());
-        let user = spec.credentials.username.clone();
-        let job_key = key.clone();
-        let job = self.jobs.spawn("Aruba-Cluster abfragen", move |job| {
-            let res = (|| {
-                let (rt, conn, note, _, _) = remote::ssh_open(&spec, port, known)?;
-                let r = rt.block_on(remote::cli_session(&conn, &crate::aruba::CLUSTER_COMMANDS));
-                rt.block_on(conn.disconnect());
-                let r = r?;
-                // show summary (Verwaltung) ist eine Zugabe; show aps und die Konfiguration sind Pflicht.
-                if r.outputs.len() < 3 {
-                    return Err("Keine vollständige Antwort des Controllers (Zeitlimit 30 s)".to_string());
-                }
-                let mut v = crate::aruba::cluster_json(&r.outputs[1], &r.outputs[2], r.outputs.get(3).map_or("", String::as_str), &vc);
-                v["reboot"] = json!(r.outputs.get(4).and_then(|s| crate::aruba::reboot_info(s, now())));
-                let managed = r.outputs.get(3).and_then(|s| crate::aruba::management(s));
-                v["managed"] = json!(managed);
-                // Schreibende Werkzeuge (Neustart, Update): nur mit Admin-Konto; bei Verwaltung mit Warnung.
-                v["write"] = match crate::aruba::write_check(managed, &crate::aruba::admin_users(&r.outputs[2]), &user) {
-                    Ok(warn) => json!({ "ok": true, "warn": warn }),
-                    Err(reason) => json!({ "ok": false, "reason": reason }),
-                };
-                Ok((v, note))
-            })();
-            drop(spec);
-            Box::new(move |app: &mut App, cancelled| {
-                if cancelled {
-                    return Vec::new();
-                }
-                let json = match res {
-                    Ok((mut v, note)) => {
-                        v["at"] = json!(now());
-                        v["note"] = json!(note);
-                        // Gemerkte Zahl der offline-APs bleibt bis zum nächsten „merken“.
-                        if let Some(mark) = app.overview.aruba.get(&job_key).map(|old| old["mark"].clone()).filter(|m| !m.is_null()) {
-                            v["mark"] = mark;
-                        }
-                        app.overview.put_cluster(&job_key, v.clone());
-                        v
-                    }
-                    Err(e) => json!({ "error": e }),
-                };
-                vec![UiEvent::JobResult { job, kind: "ov_aruba_cluster".into(), target: job_key, json: json.to_string() }]
-            })
-        });
-        Ok(json!({ "pending": job }))
-    }
-
-    /// Aruba-Werkzeuge: Log anzeigen (`kind`: system, security oder auth, `filter` optional) – am VC (`id`) oder an einem
-    /// AP (`ip`), mit den Zugangsdaten des VC. Nur Anzeige, nichts wird gespeichert. Ergebnis „aruba_log“, Ziel `tag`.
-    pub fn aruba_log(&mut self, c: &Value) -> Result<Value, String> {
-        if !self.config.features.aruba {
-            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
-        }
-        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
-        if self.demo {
-            return Err("In der Vorführung nicht verfügbar".into());
-        }
-        let cmd = crate::aruba::log_command(c.get("kind").and_then(Value::as_str).unwrap_or("system"), c.get("filter").and_then(Value::as_str))?;
-        let tag = c.get("tag").and_then(Value::as_str).unwrap_or_default().to_string();
-        let ap: Option<std::net::IpAddr> = c.get("ip").and_then(Value::as_str).filter(|s| !s.is_empty()).map(|s| s.parse().map_err(|_| "IP-Adresse ungültig")).transpose()?;
-        let (t, r) = self.inventory_view(&t)?;
-        let key = t.id.to_string();
-        let host = match ap {
-            Some(ip) => ip.to_string(),
-            None => self.overview.services_ip(&key).unwrap_or_else(|| t.host.clone()),
-        };
-        let port = if ap.is_none() && t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
-        let spec = crate::patch::JobSpec {
-            protocol: Protocol::Ssh,
-            host: host.clone(),
-            port,
-            credentials: self.credential_payload(&r, Protocol::Ssh)?,
-            transport: None,
-            legacy: self.target_legacy_of(t.id),
-        };
-        let known = self.known_hosts_ref();
-        let shown = cmd.clone();
-        let job = self.jobs.spawn(&format!("Log von {host}"), move |job| {
-            let res = (|| {
-                let (rt, conn, note, _, _) = remote::ssh_open(&spec, port, known)?;
-                let r = rt.block_on(remote::cli_session(&conn, &["no paging", &cmd]));
-                rt.block_on(conn.disconnect());
-                let r = r?;
-                let complete = r.outputs.len() == 2;
-                Ok::<_, String>(json!({ "text": r.outputs.get(1).cloned().unwrap_or_default(), "complete": complete, "note": note }))
-            })();
-            drop(spec);
-            Box::new(move |_app: &mut App, cancelled| {
-                if cancelled {
-                    return Vec::new();
-                }
-                let mut json = res.unwrap_or_else(|e| json!({ "error": e }));
-                json["command"] = json!(shown);
-                json["host"] = json!(host);
-                json["at"] = json!(now());
-                vec![UiEvent::JobResult { job, kind: "aruba_log".into(), target: tag, json: json.to_string() }]
-            })
-        });
-        Ok(json!({ "pending": job }))
-    }
-
     /// Ordnerübersicht: gespeichertes Inventar mehrerer Ziele (`ids`), ohne Abfrage. Je Ziel die Felder, die Version
     /// aus „System“ und der Zeitpunkt der jüngsten Abfrage.
     pub fn inventory_many(&self, c: &Value) -> Value {
@@ -588,291 +516,6 @@ impl App {
             out.insert(id.to_string(), Value::Object(row));
         }
         Value::Object(out)
-    }
-
-    /// „Nutzer anzeigen“ bzw. „Nutzer finden“: `show clients` und `show aps` am VC (Ergebnis `aruba_clients` mit `tag`).
-    /// Gefiltert wird in der Oberfläche, damit sich der Suchbegriff ohne neue Abfrage ändern lässt.
-    pub fn aruba_clients(&mut self, c: &Value) -> Result<Value, String> {
-        if !self.config.features.aruba {
-            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
-        }
-        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
-        if self.demo {
-            return Err("In der Vorführung nicht verfügbar".into());
-        }
-        let tag = c.get("tag").and_then(Value::as_str).unwrap_or_default().to_string();
-        let (t, r) = self.inventory_view(&t)?;
-        let key = t.id.to_string();
-        let host = self.overview.services_ip(&key).unwrap_or_else(|| t.host.clone());
-        let port = if t.protocol == Protocol::Ssh { t.effective_port() } else { 22 };
-        let spec = crate::patch::JobSpec {
-            protocol: Protocol::Ssh,
-            host: host.clone(),
-            port,
-            credentials: self.credential_payload(&r, Protocol::Ssh)?,
-            transport: None,
-            legacy: self.target_legacy_of(t.id),
-        };
-        let known = self.known_hosts_ref();
-        let vc = host.clone();
-        let job = self.jobs.spawn(&format!("Nutzer von {host}"), move |job| {
-            let res = (|| {
-                let (rt, conn, note, _, _) = remote::ssh_open(&spec, port, known)?;
-                let r = rt.block_on(remote::cli_session(&conn, &crate::aruba::CLIENT_COMMANDS));
-                rt.block_on(conn.disconnect());
-                let r = r?;
-                if r.outputs.len() < 2 {
-                    return Err("Keine vollständige Antwort des Controllers (Zeitlimit 30 s)".to_string());
-                }
-                let mut v = crate::aruba::clients_json(&r.outputs[1], r.outputs.get(2).map_or("", String::as_str), &vc);
-                v["complete"] = json!(r.outputs.len() == 3);
-                v["note"] = json!(note);
-                Ok(v)
-            })();
-            drop(spec);
-            Box::new(move |_app: &mut App, cancelled| {
-                if cancelled {
-                    return Vec::new();
-                }
-                let mut json = res.unwrap_or_else(|e| json!({ "error": e }));
-                json["host"] = json!(host);
-                json["at"] = json!(now());
-                vec![UiEvent::JobResult { job, kind: "aruba_clients".into(), target: tag, json: json.to_string() }]
-            })
-        });
-        Ok(json!({ "pending": job }))
-    }
-
-    /// „Anzahl offline-APs merken“ für einen VC (`id`) oder mehrere (`ids`): die aktuelle Zahl aus dem zuletzt
-    /// abgefragten Cluster; die Karte zeigt sie nach der nächsten Abfrage als „(zuvor N)“.
-    pub fn aruba_mark(&mut self, c: &Value) -> Result<Value, String> {
-        let ids: Vec<String> = match c.get("ids").and_then(Value::as_array) {
-            Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
-            None => vec![c.get("id").and_then(Value::as_str).unwrap_or_default().to_string()],
-        };
-        let mut marked = 0;
-        for key in ids {
-            let Some(mut v) = self.overview.aruba.get(&key).cloned() else { continue };
-            if v["allowed_known"] != true {
-                continue;
-            }
-            v["mark"] = json!({ "offline": v["offline"], "at": now() });
-            if self.demo {
-                self.overview.aruba.insert(key, v);
-            } else {
-                self.overview.put_cluster(&key, v);
-            }
-            marked += 1;
-        }
-        if marked == 0 {
-            return Err("Kein abgefragter Cluster mit bekannter Offline-Zahl – erst „Cluster abfragen“".into());
-        }
-        Ok(json!({ "marked": marked }))
-    }
-
-    /// Übersicht für die Sammelabfrage: alle als Aruba-AP erkannten Ziele unter `ids` (Ordner mit Unterordnern) mit
-    /// dem zuletzt gespeicherten Cluster (oder `null`).
-    pub fn aruba_summary(&self, c: &Value) -> Result<Value, String> {
-        if !self.config.features.aruba {
-            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
-        }
-        let ids: Vec<Uuid> = c.get("ids").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).filter_map(|s| Uuid::parse_str(s).ok()).collect();
-        let rows: Vec<Value> = self
-            .aruba_targets_under(&ids)
-            .into_iter()
-            .filter_map(|tid| {
-                let t = self.target(tid)?;
-                Some(json!({ "id": tid.to_string(), "name": t.name, "host": t.host, "cluster": self.overview.aruba.get(&tid.to_string()) }))
-            })
-            .collect();
-        Ok(json!({ "rows": rows }))
-    }
-
-    /// „Clusteraufbrüche suchen“: im Segment des Schwarms (aus „Cluster abfragen“) alle Adressen auf TCP 4343
-    /// prüfen, ohne die online-APs und die VC-IP. Antwortet dort ein Gerät, ist es nicht im Schwarm – etwa ein AP,
-    /// der die PAPI-Verbindung zum Conductor verloren hat und selbst die VC-IP beansprucht. Nur Anzeige, nichts wird
-    /// gespeichert. Ergebnis „aruba_breakouts“, Ziel `tag`.
-    pub fn aruba_breakouts(&mut self, c: &Value) -> Result<Value, String> {
-        if !self.config.features.aruba {
-            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
-        }
-        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
-        let tag = c.get("tag").and_then(Value::as_str).unwrap_or_default().to_string();
-        let key = t.id.to_string();
-        let Some(cluster) = self.overview.aruba.get(&key).cloned() else {
-            return Err("Erst „Cluster abfragen“: die Suche braucht das Segment und die APs des Schwarms".into());
-        };
-        if self.demo {
-            let mut v = crate::aruba::demo_breakouts(&cluster);
-            v["host"] = json!(cluster["vc"]);
-            return Ok(json!({ "demo": v }));
-        }
-        let segment = cluster["segment"].as_str().unwrap_or_default().to_string();
-        let vc = cluster["vc"].as_str().unwrap_or_default().to_string();
-        let aps = cluster["aps"].as_array().cloned().unwrap_or_default();
-        let mut exclude: Vec<String> = aps.iter().filter(|a| a["online"] == true).filter_map(|a| a["ip"].as_str().map(str::to_string)).collect();
-        exclude.push(vc.clone());
-        let offline: Vec<String> = aps.iter().filter(|a| a["online"] == false).filter_map(|a| a["name"].as_str().map(str::to_string)).collect();
-        let hosts = crate::aruba::breakout_hosts(&segment, &exclude).ok_or_else(|| format!("Segment „{segment}“ unbekannt – erst „Cluster abfragen“"))?;
-        let ips: Vec<std::net::IpAddr> = hosts.iter().filter_map(|h| h.parse().ok()).collect();
-        let job = self.jobs.spawn_cancellable(&format!("Clusteraufbrüche in {segment}"), move |job, stop| {
-            let hits = probe::sweep(&ips, 4343, std::time::Duration::from_millis(900), 48, &|| stop.load(std::sync::atomic::Ordering::SeqCst));
-            let complete = !stop.load(std::sync::atomic::Ordering::SeqCst);
-            Box::new(move |_app: &mut App, cancelled| {
-                if cancelled {
-                    return Vec::new();
-                }
-                let json = json!({
-                    "segment": segment,
-                    "vc": vc,
-                    "host": vc,
-                    "offline": offline,
-                    "scanned": ips.len(),
-                    "hits": hits.iter().map(|(ip, ms)| json!({ "ip": ip.to_string(), "ms": ms })).collect::<Vec<_>>(),
-                    "complete": complete,
-                    "at": now(),
-                });
-                vec![UiEvent::JobResult { job, kind: "aruba_breakouts".into(), target: tag, json: json.to_string() }]
-            })
-        });
-        Ok(json!({ "pending": job }))
-    }
-
-    /// „Erkennen“ eines Treffers der Suche nach Clusteraufbrüchen: per SSH am Gerät (`ip`) mit den Zugangsdaten des
-    /// VC `show summary`, `show version` und `show interface`; Abgleich mit den offline gemeldeten APs des Schwarms.
-    /// Ergebnis „aruba_breakout_id“, Ziel `tag`.
-    pub fn aruba_breakout_identify(&mut self, c: &Value) -> Result<Value, String> {
-        if !self.config.features.aruba {
-            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
-        }
-        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
-        if self.demo {
-            return Err("In der Vorführung nicht verfügbar".into());
-        }
-        let tag = c.get("tag").and_then(Value::as_str).unwrap_or_default().to_string();
-        let ip: std::net::IpAddr = c.get("ip").and_then(Value::as_str).unwrap_or_default().parse().map_err(|_| "IP-Adresse ungültig")?;
-        let (t, r) = self.inventory_view(&t)?;
-        let cluster = self.overview.aruba.get(&t.id.to_string()).cloned().unwrap_or_default();
-        let vc = cluster["vc"].as_str().unwrap_or_default().to_string();
-        let offline: Vec<String> = cluster["aps"].as_array().into_iter().flatten().filter(|a| a["online"] == false).filter_map(|a| a["name"].as_str().map(str::to_string)).collect();
-        let spec = crate::patch::JobSpec {
-            protocol: Protocol::Ssh,
-            host: ip.to_string(),
-            port: 22,
-            credentials: self.credential_payload(&r, Protocol::Ssh)?,
-            transport: None,
-            legacy: self.target_legacy_of(t.id),
-        };
-        let known = self.known_hosts_ref();
-        let host = ip.to_string();
-        let job = self.jobs.spawn(&format!("Erkennen {host}"), move |job| {
-            let res = (|| {
-                let (rt, conn, note, _, _) = remote::ssh_open(&spec, 22, known)?;
-                let r = rt.block_on(remote::cli_session(&conn, &crate::aruba::BREAKOUT_COMMANDS));
-                rt.block_on(conn.disconnect());
-                let r = r?;
-                let mut v = crate::aruba::breakout_json(&r.outputs, &ip.to_string(), &offline, &vc);
-                v["complete"] = json!(r.outputs.len() == crate::aruba::BREAKOUT_COMMANDS.len());
-                v["note"] = json!(note);
-                Ok::<_, String>(v)
-            })();
-            drop(spec);
-            Box::new(move |_app: &mut App, cancelled| {
-                if cancelled {
-                    return Vec::new();
-                }
-                let mut json = res.unwrap_or_else(|e| json!({ "error": e }));
-                json["ip"] = json!(host);
-                vec![UiEvent::JobResult { job, kind: "aruba_breakout_id".into(), target: tag, json: json.to_string() }]
-            })
-        });
-        Ok(json!({ "pending": job }))
-    }
-
-    /// Nur Vorführung (Bildschirmfotos): Aruba-Werkzeuge einschalten und dem Ziel `id` einen erfundenen Cluster geben.
-    /// Liefert die erfundene AP-Seite (`ap`) und den zugehörigen Eintrag aus dem Cluster (`entry`).
-    pub fn aruba_demo(&mut self, c: &Value) -> Result<Value, String> {
-        if !self.demo {
-            return Err("Nur in der Vorführung".into());
-        }
-        let key = self.ov_subject(c)?.key();
-        self.config.features.aruba = true;
-        let (cluster, ap) = crate::aruba::demo();
-        let mut inv = self.overview.store.load_key(&key);
-        let at = now();
-        inv.offer("system", "Aruba Instant 8.10.0.23 LSR (Modell 515)", "SSH (show version)", at);
-        inv.offer("uptime", "3 T 4 Std 12 Min", "SSH (show version)", at);
-        inv.offer("serial", "CNZZQX0001", "SSH (show version)", at);
-        // Nur im Speicher: die Vorführung schreibt nichts in den Datenordner.
-        self.overview.demo_inventory.insert(key.clone(), inv);
-        let entry = cluster["aps"].as_array().and_then(|a| a.iter().find(|x| x["ip"] == "192.0.2.182").cloned());
-        self.overview.aruba.insert(key, cluster);
-        Ok(json!({ "ap": ap, "entry": entry }))
-    }
-
-    /// Nur Vorführung (Bildschirmfotos): die Ziele `ids` als Aruba-Controller mit erfundenen Clustern (Varianten).
-    pub fn aruba_demo_summary(&mut self, c: &Value) -> Result<Value, String> {
-        if !self.demo {
-            return Err("Nur in der Vorführung".into());
-        }
-        self.config.features.aruba = true;
-        let ids: Vec<Uuid> = c.get("ids").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).filter_map(|s| Uuid::parse_str(s).ok()).collect();
-        for (i, id) in ids.iter().enumerate() {
-            self.overview.devices.insert(*id, "aruba-ap");
-            self.overview.aruba.insert(id.to_string(), crate::aruba::demo_variant(i));
-        }
-        Ok(json!({ "ok": ids.len() }))
-    }
-
-    /// Aruba-Werkzeuge: Seite eines einzelnen APs (`ip`, `ap_name`) – per SSH am AP mit den Zugangsdaten des VC (`id`).
-    /// Ergebnis „aruba_ap“, Ziel `<VC-ID>|<IP>`.
-    pub fn aruba_ap(&mut self, c: &Value) -> Result<Value, String> {
-        if !self.config.features.aruba {
-            return Err("Aruba-Werkzeuge sind ausgeschaltet (Einstellungen → Zusatzfunktionen)".into());
-        }
-        let Subject::Target(t) = self.ov_subject(c)? else { return Err("Nur für Ziele".into()) };
-        if self.demo {
-            return Err("In der Vorführung nicht verfügbar".into());
-        }
-        let ip: std::net::IpAddr = c.get("ip").and_then(Value::as_str).and_then(|s| s.parse().ok()).ok_or("IP-Adresse des APs fehlt")?;
-        let name = c.get("ap_name").and_then(Value::as_str).unwrap_or_default().to_string();
-        let (t, r) = self.inventory_view(&t)?;
-        let spec = crate::patch::JobSpec {
-            protocol: Protocol::Ssh,
-            host: ip.to_string(),
-            port: 22,
-            credentials: self.credential_payload(&r, Protocol::Ssh)?,
-            transport: None,
-            legacy: self.target_legacy_of(t.id),
-        };
-        let known = self.known_hosts_ref();
-        let job_key = format!("{}|{ip}", t.id);
-        let ip_s = ip.to_string();
-        let job = self.jobs.spawn(&format!("AP {ip} abfragen"), move |job| {
-            let res = (|| {
-                let (rt, conn, note, _, _) = remote::ssh_open(&spec, 22, known)?;
-                let r = rt.block_on(remote::cli_session(&conn, &crate::aruba::AP_COMMANDS));
-                rt.block_on(conn.disconnect());
-                let r = r?;
-                if r.outputs.len() < 2 {
-                    return Err("Keine verwertbare Antwort des APs (Zeitlimit 30 s)".to_string());
-                }
-                let mut v = crate::aruba::ap_json(&r.outputs, &name, &ip_s);
-                v["note"] = json!(note);
-                v["complete"] = json!(r.outputs.len() == crate::aruba::AP_COMMANDS.len());
-                Ok(v)
-            })();
-            drop(spec);
-            Box::new(move |_app: &mut App, cancelled| {
-                if cancelled {
-                    return Vec::new();
-                }
-                let mut json = res.unwrap_or_else(|e| json!({ "error": e }));
-                json["at"] = json!(now());
-                vec![UiEvent::JobResult { job, kind: "aruba_ap".into(), target: job_key, json: json.to_string() }]
-            })
-        });
-        Ok(json!({ "pending": job }))
     }
 
     /// Inventarfeld von Hand setzen (`value`) oder einen vorgemerkten Wert übernehmen/verwerfen (`accept`).

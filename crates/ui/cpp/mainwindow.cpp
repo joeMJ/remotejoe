@@ -1,20 +1,15 @@
 #include "mainwindow.h"
+#include "mainwindow_p.h"
 #include "kbcapture.h"
 #include "titlebar.h"
 #include "exporttab.h"
 #include "overviewtab.h"
-#include "arubaaptab.h"
-#include "aptoolstab.h"
-#include "arubaclientstab.h"
 #include "folderoverviewtab.h"
 #include "orphantab.h"
 #include "credmergetab.h"
 #include "credchecktab.h"
 #include "mcpserver.h"
 #include "mcplogtab.h"
-#include "arubabreakouttab.h"
-#include "arubasummarytab.h"
-#include "arubalogtab.h"
 #include "appearance.h"
 #include "settingstab.h"
 #include "masstab.h"
@@ -59,6 +54,9 @@
 #include <QtCore/QPointer>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
+#include <QtWidgets/QDialog>
+#include <QtWidgets/QDialogButtonBox>
+#include <QtWidgets/QLineEdit>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QLabel>
@@ -92,31 +90,10 @@
 
 QElapsedTimer MainWindow::startClock;
 
+using namespace rjmw;
+
 namespace {
 
-constexpr int RoleId = Qt::UserRole + 1;
-constexpr int RoleFolder = Qt::UserRole + 2;
-/// Gast eines Hypervisors (Kennung), Ziel des Hypervisors, Konsolenadresse.
-constexpr int RoleGuest = Qt::UserRole + 3;
-constexpr int RoleGuestTarget = Qt::UserRole + 4;
-constexpr int RoleConsoleHost = Qt::UserRole + 5;
-/// Platzhalter unter einem Hypervisor, bis die Gäste geladen sind.
-constexpr int RolePlaceholder = Qt::UserRole + 6;
-constexpr int RoleProtocol = Qt::UserRole + 7;
-/// Ampelfarbe aus dem Baum (für das Neuzeichnen mit Sitzungspunkt).
-constexpr int RoleLight = Qt::UserRole + 8;
-/// Zuletzt gezeichneter Sitzungspunkt (0, 1, 2).
-constexpr int RoleSessionMark = Qt::UserRole + 9;
-/// Anmeldeobjekt (keine Verbindung; öffnet die Bearbeitung).
-constexpr int RoleLogin = Qt::UserRole + 10;
-/// Zustand eines Gasts (z. B. `running`), für die Übersicht.
-constexpr int RoleGuestState = Qt::UserRole + 11;
-/// Doppelklick öffnet einen anderen Zugangsweg als den Hauptweg.
-constexpr int RoleOtherWay = Qt::UserRole + 40;
-// Symbolart: Protokoll oder erkannte Geräteart (z. B. „aruba“ für einen Aruba-AP aus dem Inventar).
-constexpr int RoleIconKind = Qt::UserRole + 12;
-/// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
-constexpr int RoleMacro = Qt::UserRole + 20;
 
 QString T(RjBackend* b, const char* key)
 {
@@ -221,8 +198,18 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 		{ "hyperv", RJ_G("<rect x='4' y='5' width='24' height='9' rx='2'/><rect x='4' y='18' width='24' height='9' rx='2'/><path d='M8.5 9.5h.1M8.5 22.5h.1M14 9.5h10M14 22.5h10'/>"), "#3a4a8c" },
 		// Anmeldung: Schlüssel
 		{ "login", RJ_G("<circle cx='11' cy='16' r='6'/><path d='M17 16h11M24 16v5M28 16v4'/>"), "#6a1b9a" },
-		// Aruba-AP (aus dem Inventar erkannt): Deckenpunkt mit Statuslicht, darüber drei Funkbögen
+		// AP (Geräteart aus dem Inventar): Deckenpunkt mit Statuslicht, darüber drei Funkbögen
 		{ "aruba", RJ_G("<rect x='4' y='19' width='24' height='8' rx='4'/><path d='M16 23h.1'/><path d='M12.5 14.5a5 5 0 0 1 7 0'/><path d='M9 11a10 10 0 0 1 14 0'/><path d='M5.5 7.5a15 15 0 0 1 21 0'/>"), "#00897b" },
+		// Switch: flaches Gehäuse mit Portreihe und Statuslicht
+		{ "switch", RJ_G("<rect x='3' y='10' width='26' height='12' rx='2'/><path d='M7 16h1.5M11 16h1.5M15 16h1.5M19 16h1.5M24.5 16h.1'/>"), "#00695c" },
+		// Ordner eines Moduls: Bürogebäude mit Fenstern und Tür
+		{ "site", RJ_G("<rect x='6' y='4' width='20' height='24' rx='1.5'/><path d='M11 9.5h.1M16 9.5h.1M21 9.5h.1M11 14.5h.1M16 14.5h.1M21 14.5h.1M11 19.5h.1M21 19.5h.1M14 28v-5h4v5'/>"), "#6d4c41" },
+		// Vorlagenordner: zwei hintereinanderliegende Blätter mit Zeilen
+		{ "tplfolder", RJ_G("<rect x='10' y='4' width='17' height='21' rx='2'/><path d='M6 9v16a2 2 0 0 0 2 2h13'/><path d='M14 10h9M14 15h9M14 20h5'/>"), "#5c6bc0" },
+		// Netzwerkkomponenten: drei verbundene Knoten
+		{ "netfolder", RJ_G("<rect x='12' y='4' width='8' height='7' rx='1.5'/><rect x='3' y='21' width='8' height='7' rx='1.5'/><rect x='21' y='21' width='8' height='7' rx='1.5'/><path d='M16 11v5M7 21v-5h18v5'/>"), "#00695c" },
+		// Serverkomponenten: Gestell mit drei Einschüben
+		{ "srvfolder", RJ_G("<rect x='6' y='4' width='20' height='7' rx='1.5'/><rect x='6' y='12.5' width='20' height='7' rx='1.5'/><rect x='6' y='21' width='20' height='7' rx='1.5'/><path d='M10 7.5h.1M10 16h.1M10 24.5h.1M15 7.5h7M15 16h7M15 24.5h7'/>"), "#37474f" },
 		// Mehrere Zugangswege: zwei hintereinanderliegende Fenster
 		{ "multi", RJ_G("<path d='M10 10V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3'/><rect x='4' y='12' width='19' height='15' rx='2'/><path d='M4 17h19'/>"), "#0b5cad" },
 		// Makro: Abspielzeichen
@@ -296,6 +283,25 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 	return icon;
 }
 
+} // namespace
+
+/// Symbol eines virtuellen Switches: Switch in Gelb (Baum, Netzwerkgeräte).
+QIcon rjVirtualSwitchIcon()
+{
+	QPixmap px(36, 36);
+	px.fill(Qt::transparent);
+	QPainter p(&px);
+	p.setRenderHint(QPainter::Antialiasing);
+	p.setPen(QPen(QColor(133, 79, 11), 2));
+	p.setBrush(QColor(239, 159, 39));
+	p.drawRoundedRect(QRectF(3, 11, 30, 14), 3, 3);
+	for (int i = 0; i < 6; ++i)
+		p.fillRect(QRectF(7 + i * 4, 16, 2.5, 4), QColor(99, 56, 6));
+	return QIcon(px);
+}
+
+namespace
+{
 void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 {
 	for (const QJsonValue& v : nodes)
@@ -306,13 +312,34 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		item->setEditable(false);
 		item->setData(n.value(QStringLiteral("id")).toString(), RoleId);
 		item->setData(folder, RoleFolder);
-		// Symbol: erkannte Geräteart (Aruba-AP) vor „mehrere Zugangswege“ vor dem Protokoll.
-		const QString iconKind = n.value(QStringLiteral("device")).toString() == QLatin1String("aruba-ap") ? QStringLiteral("aruba")
+		// Symbol: erkannte Geräteart vor „mehrere Zugangswege“ vor dem Protokoll.
+		const bool site = n.value(QStringLiteral("site")).toBool();
+		const QString device = n.value(QStringLiteral("device")).toString();
+		// Ordner mit Rolle (Vorlagen, Netzwerk-, Serverkomponenten): eigenes Piktogramm statt des Ordners.
+		const QString role = n.value(QStringLiteral("role")).toString();
+		const QString roleKind = role == QLatin1String("network")   ? QStringLiteral("netfolder")
+		                         : role == QLatin1String("servers") ? QStringLiteral("srvfolder")
+		                         : !role.isEmpty()                  ? QStringLiteral("tplfolder")
+		                                                            : QString();
+		const QString iconKind = site                                                                         ? QStringLiteral("site")
+		                         : !roleKind.isEmpty()                                                       ? roleKind
+		                         : device == QLatin1String("aruba-cx") || device == QLatin1String("aruba-switch") ? QStringLiteral("switch")
+		                         : device == QLatin1String("aruba-ap")                                       ? QStringLiteral("aruba")
 		                         : n.value(QStringLiteral("multi")).toBool()                                ? QStringLiteral("multi")
 		                                                                                                    : n.value(QStringLiteral("protocol")).toString();
 		item->setData(iconKind, RoleIconKind);
-		item->setIcon(protocolIcon(iconKind, n.value(QStringLiteral("light")).toString(), folder));
+		item->setData(site, RoleSite);
+		item->setIcon(protocolIcon(iconKind, n.value(QStringLiteral("light")).toString(), folder && !site && roleKind.isEmpty()));
 		item->setData(n.value(QStringLiteral("light")).toString(), RoleLight);
+		if (n.value(QStringLiteral("vswitch")).toBool())
+		{
+			item->setData(n.value(QStringLiteral("name")).toString(), RoleVSwitch);
+			item->setText(n.value(QStringLiteral("name")).toString() + QStringLiteral(" (virtuell)"));
+			item->setIcon(rjVirtualSwitchIcon());
+			item->setForeground(QColor(133, 79, 11));
+			item->setDragEnabled(false);
+			item->setDropEnabled(false);
+		}
 		if (n.value(QStringLiteral("login")).toBool())
 		{
 			item->setData(true, RoleLogin);
@@ -558,6 +585,12 @@ QStringList selectedTargets(QTreeView* tree, QStandardItemModel* model)
 
 } // namespace
 
+/// Symbol wie im Baum (Geräteart, Ampel) – auch für Tabellen der Module.
+QIcon rjDeviceIcon(const QString& kind, const QString& light)
+{
+	return protocolIcon(kind, light, false);
+}
+
 void MainWindow::openPatchday(const QStringList& ids)
 {
 	const QString res = m_backend->startPatchday(QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(ids)).toJson(QJsonDocument::Compact)), false);
@@ -677,6 +710,13 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
   : QMainWindow(parent)
   , m_backend(backend)
 {
+	// Module melden ihre Menüeinträge und ihr Klickverhalten an (vor dem Aufbau der Menüs).
+#ifdef RJ_STANDORTE
+	registerStandorteUi();
+#endif
+#ifdef RJ_ARUBA
+	registerArubaUi();
+#endif
 	const QString version = m_backend->appVersion();
 	setWindowTitle(QStringLiteral("%1 V %2").arg(T(m_backend, "app.title"), version));
 	resize(1280, 800);
@@ -959,6 +999,9 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(m_tree, &QTreeView::clicked, this, [this](const QModelIndex& i) {
 		if (QGuiApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier))
 			return; // Mehrfachauswahl
+		for (const auto& h : m_modules.clickTop)
+			if (h(i))
+				return;
 		if (i.data(RoleGuest).isValid())
 		{
 			openOverview(QJsonObject{ { QStringLiteral("hv"), i.data(RoleGuestTarget).toString() },
@@ -976,6 +1019,10 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		}
 		if (i.data(RoleFolder).toBool() && i.data(RoleMacro).toInt() == 0 && !i.data(RolePlaceholder).toBool())
 		{
+			// Module zuerst, sonst die Ordnerübersicht.
+			for (const auto& h : m_modules.clickFolder)
+				if (h(i))
+					return;
 			openFolderOverview(i);
 			return;
 		}
@@ -1231,18 +1278,10 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 				openOverview(subject);
 				edit({ { QStringLiteral("op"), QStringLiteral("ov_query") }, { QStringLiteral("id"), id } });
 			}
-			else if (action == QLatin1String("cluster_abfragen"))
-			{
-				openOverview(subject);
-				edit({ { QStringLiteral("op"), QStringLiteral("aruba_cluster") }, { QStringLiteral("id"), id } });
-			}
-			else if (action == QLatin1String("nutzer_anzeigen"))
-			{
-				QJsonObject s = subject;
-				const QString name = m_tree->currentIndex().isValid() ? m_tree->currentIndex().data().toString() : QString();
-				s.insert(QStringLiteral("vc_name"), name);
-				openArubaUsers(s, name);
-			}
+			else
+				for (const auto& h : m_modules.mcpAction)
+					if (h(action, id))
+						break;
 			statusBar()->showMessage(T(m_backend, "mcp.action.done"), 8000);
 		});
 	}
@@ -1329,6 +1368,8 @@ void MainWindow::buildMenus()
 	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] { openSettings(QStringLiteral("snmp")); });
 	extras->addAction(T(m_backend, "menu.extras.shared"), this, [this] { openSharedCheck(); });
 	extras->addAction(T(m_backend, "menu.extras.credmerge"), this, [this] { openCredMerge({}); });
+	for (const auto& h : m_modules.extrasMenu)
+		h(extras);
 	extras->addAction(T(m_backend, "menu.extras.mcplog"), this, [this] {
 		if (auto* old = findChild<McpLogTab*>())
 		{
@@ -1617,6 +1658,7 @@ void MainWindow::applyTheme(bool dark)
 	  "QLabel#paneNotice { color: %1; padding: 4px; }"
 	  "QPushButton { min-height: 30px; padding: 2px 12px; }"
 	  "QPushButton#paneBtn { min-height: 16px; padding: 0 8px; }"
+	  "QPushButton[rjCompact=\"true\"] { min-height: 20px; padding: 1px 9px; }"
 	  "QStatusBar { padding: 0; margin: 0; } QStatusBar::item { border: none; }"
 	  "QStatusBar QLabel { padding: 0; margin: 0; }"
 	  "QStatusBar QPushButton { min-height: 12px; padding: 0 6px; }"
@@ -1977,6 +2019,10 @@ QSize MainWindow::contentSize(bool terminal) const
 
 void MainWindow::connectSelected(const QString& credential, bool remember)
 {
+	// Module (z. B. Einträge, die keine Ziele sind): öffnen statt verbinden.
+	for (const auto& h : m_modules.activate)
+		if (h(m_tree->currentIndex()))
+			return;
 	// Anmeldeobjekt: Bearbeitung statt Verbindung.
 	if (m_tree->currentIndex().data(RoleLogin).toBool() && m_tree->selectionModel()->selectedIndexes().size() <= 1)
 	{
@@ -2425,6 +2471,9 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		macroContextMenu(i, m_tree->viewport()->mapToGlobal(pos));
 		return;
 	}
+	for (const auto& h : m_modules.contextMenu)
+		if (h(i, pos))
+			return;
 	if (i.data(RoleLogin).toBool())
 	{
 		m_tree->setCurrentIndex(i);
@@ -2499,6 +2548,8 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 	menu.addAction(T(m_backend, "ctx.duplicate") + QStringLiteral("\tCtrl+D"), this, [this] { duplicateSelected(); });
 	menu.addAction(T(m_backend, "ctx.move") + QStringLiteral("\tCtrl+Shift+M"), this, [this] { moveSelected(); });
 	menu.addAction(T(m_backend, "ctx.delete") + QStringLiteral("\tEntf"), this, [this] { deleteSelected(); });
+	for (const auto& h : m_modules.treeMenu)
+		h(menu, i, id, folder);
 	const bool fav = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), id } })).value(QStringLiteral("favorite")).toBool();
 	menu.addAction(T(m_backend, fav ? "ctx.favorite.off" : "ctx.favorite.on") + QStringLiteral("\tCtrl+B"), this, [this] { toggleFavorite(); });
 	QMenu* viewsM = menu.addMenu(T(m_backend, "ctx.view.add"));
@@ -2544,29 +2595,8 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		connect(t, &MassInventoryTab::finished, this, [this] { reloadTree(); });
 		addToolTab(t, T(m_backend, "mass.tab"));
 	});
-	// Aruba-Werkzeuge (zuschaltbar): für einen Controller, alle Controller eines Ordners oder mehrere markierte Ziele und Ordner.
-	if (!selectedIds().isEmpty() && parseObject(m_backend->edit(QStringLiteral("{\"op\":\"settings\"}"))).value(QStringLiteral("aruba_tools")).toBool())
-	{
-		QMenu* aruba = menu.addMenu(T(m_backend, "ctx.aptools"));
-		// Clusterabfrage für alle VCs der Auswahl, mit Übersicht (auch ohne neue Abfrage: gespeicherter Stand).
-		for (const bool query : { true, false })
-			aruba->addAction(T(m_backend, query ? "ctx.aruba.query" : "ctx.aruba.summary"), this, [this, query] {
-				const QStringList ids = selectedIds();
-				if (!ids.isEmpty())
-					openArubaSummary(ids, ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size()), query);
-			});
-		aruba->addSeparator();
-		for (const char* tool : { "analyse", "inventar", "reload", "update" })
-		{
-			const QString name = QString::fromLatin1(tool);
-			aruba->addAction(T(m_backend, (QByteArray("ctx.aruba.") + tool).constData()), this, [this, name] {
-				// Mehrere markierte Ziele bzw. Ordner: alle Controller darunter in einem Lauf.
-				const QStringList ids = selectedIds();
-				if (!ids.isEmpty())
-					openApTools(ids.join(QLatin1Char(',')), ids.size() == 1 ? m_tree->currentIndex().data().toString() : T(m_backend, "mass.title.n").arg(ids.size()), name);
-			});
-		}
-	}
+	for (const auto& h : m_modules.selectionMenu)
+		h(menu);
 	menu.addAction(T(m_backend, "ctx.credcheck"), this, [this] {
 		const QStringList ids = selectedIds();
 		if (ids.isEmpty())
@@ -3204,6 +3234,7 @@ void MainWindow::openSettings(const QString& section)
 		connect(t, &SettingsTab::appearanceChanged, this, [this] { applyAppearance(); });
 		connect(t, &SettingsTab::closeTabKeyChanged, this, [this](const QString& mode) { m_closeTabKey = mode; });
 		connect(t, &SettingsTab::findKeyChanged, this, [this](const QString& mode) { m_findKey = mode; });
+		connect(t, &SettingsTab::treeChanged, this, [this] { reloadTree(); });
 		connect(t, &SettingsTab::featuresChanged, this, [this] {
 			if (auto* o = findChild<OverviewTab*>())
 				o->refreshInventorySwitch();
@@ -3548,18 +3579,20 @@ void MainWindow::handleEvents(const QString& json)
 			{
 				const QString kind = e.value(QStringLiteral("kind")).toString();
 				const QJsonObject r = parseObject(e.value(QStringLiteral("json")).toString());
-				if (kind.startsWith(QLatin1String("update_")))
+				// Module zuerst; erledigt eines das Ergebnis, ist es fertig.
+				bool byModule = false;
+				for (const auto& h : m_modules.jobResult)
+					byModule = h(kind, e.value(QStringLiteral("target")).toString(), r) || byModule;
+				if (byModule)
+				{
+				}
+				else if (kind.startsWith(QLatin1String("update_")))
 				{
 					if (auto* u = findChild<UpdateTab*>())
 						u->handleResult(kind, r);
 					else if (kind == QLatin1String("update_check") && r.value(QStringLiteral("state")).toString() == QLatin1String("newer"))
 						// Prüfung beim Start: nur ein Hinweis in der Fußzeile.
 						statusBar()->showMessage(T(m_backend, "update.available").arg(r.value(QStringLiteral("found")).toObject().value(QStringLiteral("version")).toString()), 15000);
-				}
-				else if (kind == QLatin1String("aptools_setup"))
-				{
-					if (auto* a = findChild<ApToolsTab*>())
-						a->handleSetup(r);
 				}
 				else if (kind == QLatin1String("backup"))
 				{
@@ -3570,53 +3603,10 @@ void MainWindow::handleEvents(const QString& json)
 					for (auto* st : findChildren<SettingsTab*>())
 						st->reloadBackup();
 				}
-				else if (kind == QLatin1String("aruba_clients"))
-				{
-					for (auto* c : findChildren<ArubaClientsTab*>())
-						if (c->tag() == e.value(QStringLiteral("target")).toString())
-							c->handleResult(r);
-				}
-				else if (kind == QLatin1String("ov_aruba_cluster") && !findChildren<ArubaSummaryTab*>().isEmpty())
-				{
-					// Clusterübersichten bekommen jedes Ergebnis; die Übersicht des Ziels ebenso.
-					for (auto* s : findChildren<ArubaSummaryTab*>())
-						s->handleResult(e.value(QStringLiteral("target")).toString(), r);
-					if (auto* o = findChild<OverviewTab*>())
-						o->handleResult(kind, e.value(QStringLiteral("target")).toString(), r);
-				}
-				else if (kind == QLatin1String("aruba_breakouts") || kind == QLatin1String("aruba_breakout_id"))
-				{
-					for (auto* b : findChildren<ArubaBreakoutTab*>())
-						if (b->tag() == e.value(QStringLiteral("target")).toString())
-						{
-							if (kind == QLatin1String("aruba_breakouts"))
-								b->handleResult(r);
-							else
-								b->handleIdentify(r);
-						}
-				}
-				else if (kind == QLatin1String("aruba_log"))
-				{
-					for (auto* l : findChildren<ArubaLogTab*>())
-						if (l->tag() == e.value(QStringLiteral("target")).toString())
-							l->handleResult(r);
-				}
-				else if (kind == QLatin1String("aruba_ap"))
-				{
-					for (auto* a : findChildren<ArubaApTab*>())
-						if (a->key() == e.value(QStringLiteral("target")).toString())
-							a->handleResult(r);
-				}
 				else if (kind.startsWith(QLatin1String("ov_")))
 				{
 					if (auto* o = findChild<OverviewTab*>())
 						o->handleResult(kind, e.value(QStringLiteral("target")).toString(), r);
-					// Inventur hat einen Weg angelegt (Aruba-AP): Baum und Wege-Knöpfe nachziehen.
-					if (r.value(QStringLiteral("ways_changed")).toBool())
-					{
-						reloadTree();
-						statusBar()->showMessage(T(m_backend, "ov.aruba.way"), 8000);
-					}
 				}
 				else if (kind == QLatin1String("guests"))
 					applyGuests(e.value(QStringLiteral("target")).toString(), r);
@@ -4409,7 +4399,7 @@ void MainWindow::buildAddMenu(QMenu* menu, const QString& parentId)
 {
 	const char* kinds[][2] = { { "folder", "add.folder" }, { "rdp", "add.rdp" },         { "ssh", "add.ssh" },     { "vnc", "add.vnc" },
 		                       { "web", "add.web" },       { "proxmox", "add.proxmox" }, { "hyperv", "add.hyperv" }, { "psrp", "add.psrp" },
-		                       { "aruba", "add.aruba" },   { "task", "add.task" },       { "macro", "add.macro" } };
+		                       { "task", "add.task" },     { "macro", "add.macro" } };
 	auto run = [this, parentId](QJsonObject cmd) {
 		if (!parentId.isEmpty())
 			cmd.insert(QStringLiteral("parent"), parentId);
@@ -4424,6 +4414,8 @@ void MainWindow::buildAddMenu(QMenu* menu, const QString& parentId)
 		else if ((r.contains(QStringLiteral("task")) || r.contains(QStringLiteral("macro"))))
 			openProperties(parentId.isEmpty() ? QString() : parentId, QStringLiteral("tasks"));
 	};
+	for (const auto& h : m_modules.addMenu)
+		h(menu, parentId);
 	{
 		// Anmeldeobjekt im gewählten Ordner (bzw. im Ordner des gewählten Ziels).
 		QAction* a = menu->addAction(T(m_backend, "add.login"), this, [this, parentId] { openLogin(QString(), parentId); });
@@ -4488,23 +4480,6 @@ bool MainWindow::isLogin(const QString& id) const
 	return hit;
 }
 
-void MainWindow::openArubaLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, bool filtered)
-{
-	QString filter;
-	if (filtered && !ArubaLogTab::askFilter(m_backend, this, kind, &filter))
-		return;
-	// Je Abruf ein Tab (nichts wird gespeichert); im Tab lässt sich der Filter ändern.
-	auto* t = new ArubaLogTab(m_backend, subject, ip, where, kind, filter, m_tabs);
-	addToolTab(t, t->title());
-}
-
-void MainWindow::openArubaUserLog(const QJsonObject& subject, const QString& ip, const QString& where, const QString& kind, const QString& filter)
-{
-	// Diagnose für einen Anwender: Filter (seine MAC bzw. IP) steht schon fest, keine Rückfrage.
-	auto* t = new ArubaLogTab(m_backend, subject, ip, where, kind, filter, m_tabs);
-	addToolTab(t, t->title());
-}
-
 void MainWindow::openCredMerge(const QStringList& scope)
 {
 	// Ein Tab; ein neuer Aufruf ersetzt ihn (anderer Bereich).
@@ -4522,15 +4497,19 @@ void MainWindow::openFolderOverview(const QModelIndex& folder, bool activate)
 		static const QMap<QString, QString> names = { { QStringLiteral("rdp"), QStringLiteral("RDP") },        { QStringLiteral("ssh"), QStringLiteral("SSH") },
 			                                          { QStringLiteral("vnc"), QStringLiteral("VNC") },        { QStringLiteral("web"), QStringLiteral("Web") },
 			                                          { QStringLiteral("proxmox"), QStringLiteral("Proxmox") }, { QStringLiteral("hyperv"), QStringLiteral("Hyper-V") },
-			                                          { QStringLiteral("psrp"), QStringLiteral("PowerShell") }, { QStringLiteral("aruba"), QStringLiteral("Aruba") },
+			                                          { QStringLiteral("psrp"), QStringLiteral("PowerShell") },
 			                                          { QStringLiteral("task"), QStringLiteral("Aufgabe") },   { QStringLiteral("multi"), QStringLiteral("Mehrere Wege") } };
+#ifdef RJ_ARUBA
+		if (kind == QLatin1String("aruba"))
+			return QStringLiteral("Aruba");
+#endif
 		return names.value(kind, kind.toUpper());
 	};
 	QList<FolderOverviewTab::Item> items;
 	for (int r = 0; r < m_model->rowCount(folder); ++r)
 	{
 		const QModelIndex c = m_model->index(r, 0, folder);
-		if (c.data(RolePlaceholder).toBool() || c.data(RoleMacro).toInt() != 0 || c.data(RoleLogin).toBool() || c.data(RoleId).toString().isEmpty())
+		if (c.data(RolePlaceholder).toBool() || c.data(RoleMacro).toInt() != 0 || c.data(RoleLogin).toBool() || !c.data(RoleVSwitch).toString().isEmpty() || c.data(RoleId).toString().isEmpty())
 			continue;
 		FolderOverviewTab::Item it;
 		it.id = c.data(RoleId).toString();
@@ -4570,115 +4549,6 @@ void MainWindow::openFolderOverview(const QModelIndex& folder, bool activate)
 		m_tabs->setCurrentWidget(t);
 }
 
-void MainWindow::openArubaAp(const QJsonObject& s, const QJsonObject& ap)
-{
-	const QString key = s.value(QStringLiteral("id")).toString() + QLatin1Char('|') + ap.value(QStringLiteral("ip")).toString();
-	for (auto* a : findChildren<ArubaApTab*>())
-		if (a->key() == key)
-		{
-			m_tabs->setCurrentWidget(a);
-			a->query();
-			return;
-		}
-	auto* a = new ArubaApTab(m_backend, s, ap, m_tabs);
-	connect(a, &ArubaApTab::connectWayRequested, this, &MainWindow::connectWay);
-	connect(a, &ArubaApTab::logRequested, this, &MainWindow::openArubaLog);
-	connect(a, &ArubaApTab::userLogRequested, this, &MainWindow::openArubaUserLog);
-	addToolTab(a, a->title());
-}
-
-void MainWindow::openArubaUsers(const QJsonObject& subject, const QString& where)
-{
-	// Je VC ein Tab: ein vorhandener fragt neu ab, der Suchbegriff bleibt.
-	for (auto* c : findChildren<ArubaClientsTab*>())
-		if (c->vcId() == subject.value(QStringLiteral("id")).toString())
-		{
-			m_tabs->setCurrentWidget(c);
-			c->reload();
-			return;
-		}
-	auto* t = new ArubaClientsTab(m_backend, subject, where, m_tabs);
-	connect(t, &ArubaClientsTab::apRequested, this, &MainWindow::openArubaAp);
-	connect(t, &ArubaClientsTab::logRequested, this, &MainWindow::openArubaUserLog);
-	addToolTab(t, t->title());
-}
-
-void MainWindow::openArubaBreakouts(const QJsonObject& subject, const QString& where)
-{
-	// Je VC ein Tab: ein vorhandener sucht neu.
-	for (auto* b : findChildren<ArubaBreakoutTab*>())
-		if (b->vcId() == subject.value(QStringLiteral("id")).toString())
-		{
-			m_tabs->setCurrentWidget(b);
-			b->search();
-			return;
-		}
-	auto* t = new ArubaBreakoutTab(m_backend, subject, where, m_tabs);
-	connect(t, &ArubaBreakoutTab::connectWayRequested, this, &MainWindow::connectWay);
-	addToolTab(t, t->title());
-}
-
-void MainWindow::openArubaSummary(const QStringList& ids, const QString& where, bool query)
-{
-	// Je Auswahl ein Tab: ein vorhandener zeigt den Stand und fragt auf Wunsch neu ab.
-	for (auto* s : findChildren<ArubaSummaryTab*>())
-		if (s->selection() == ids.join(QLatin1Char(',')))
-		{
-			m_tabs->setCurrentWidget(s);
-			if (query)
-				s->queryAll();
-			return;
-		}
-	auto* t = new ArubaSummaryTab(m_backend, ids, where, query, m_tabs);
-	connect(t, &ArubaSummaryTab::openTarget, this, [this](const QString& id) {
-		selectId(id);
-		openOverview(QJsonObject{ { QStringLiteral("id"), id } });
-	});
-	addToolTab(t, t->title());
-}
-
-void MainWindow::openArubaOfflineDelete(const QString& id, const QString& name, const QStringList& macs)
-{
-	// Schreibend: Bestätigung mit allen MACs (und dem Stand für schreibende Werkzeuge), dann eigener Tab mit Protokoll;
-	// danach wird der Cluster neu abgefragt.
-	if (macs.isEmpty())
-		return;
-	if (!ArubaWriteTab::confirmOfflineDelete(m_backend, this, id, name, macs))
-		return;
-	auto* w = new ArubaWriteTab(m_backend, id, name, QStringLiteral("offline_delete"), QString(), false, m_tabs, macs);
-	connect(w, &ArubaWriteTab::finished, this, [this, id] {
-		edit({ { QStringLiteral("op"), QStringLiteral("aruba_cluster") }, { QStringLiteral("id"), id } });
-	});
-	addToolTab(w, w->title());
-}
-
-void MainWindow::openApTools(const QString& id, const QString& name, const QString& tool)
-{
-	// Schreibend: Bestätigung, dann je Aktion ein eigener Tab mit dem Protokoll.
-	if (tool == QLatin1String("reload") || tool == QLatin1String("update"))
-	{
-		QString url;
-		bool reboot = false;
-		if (!ArubaWriteTab::confirm(m_backend, this, id, name, tool, &url, &reboot))
-			return;
-		auto* w = new ArubaWriteTab(m_backend, id, name, tool, url, reboot, m_tabs);
-		addToolTab(w, w->title());
-		return;
-	}
-	// Lesend: ein Tab (ein Lauf zur Zeit); für ein anderes Ziel oder Werkzeug wird er ersetzt.
-	if (auto* old = findChild<ApToolsTab*>())
-	{
-		if (old->id() == id && old->tool() == tool)
-		{
-			m_tabs->setCurrentWidget(old);
-			return;
-		}
-		closeToolTab(old);
-	}
-	auto* t = new ApToolsTab(m_backend, id, name, tool, m_tabs);
-	addToolTab(t, t->title());
-}
-
 void MainWindow::connectWay(const QJsonObject& s, const QString& way)
 {
 	const QString id = s.value(QStringLiteral("id")).toString();
@@ -4713,18 +4583,11 @@ void MainWindow::openOverview(const QJsonObject& subject, const QIcon& icon)
 			selectId(s.value(QStringLiteral("id")).toString());
 			connectSelected();
 		});
-		// Nach einer Inventarabfrage: Symbol im Baum nachziehen (z. B. Aruba-AP erkannt).
+		// Nach einer Inventarabfrage: Symbol im Baum nachziehen (z. B. neue Geräteart erkannt).
 		connect(t, &OverviewTab::inventoryChanged, this, [this] { QTimer::singleShot(0, this, [this] { reloadTree(); }); });
 		// Knopf eines Zugangswegs: Ziel wählen und über diesen Weg verbinden.
 		connect(t, &OverviewTab::connectWayRequested, this, &MainWindow::connectWay);
-		// Aruba-Werkzeuge: Kachel eines APs öffnet seine Seite (je AP ein Tab).
-		connect(t, &OverviewTab::arubaApRequested, this, &MainWindow::openArubaAp);
-		connect(t, &OverviewTab::arubaUsersRequested, this, &MainWindow::openArubaUsers);
-		connect(t, &OverviewTab::arubaBreakoutsRequested, this, &MainWindow::openArubaBreakouts);
-		connect(t, &OverviewTab::arubaOfflineDeleteRequested, this, &MainWindow::openArubaOfflineDelete);
 		connect(t, &OverviewTab::statusMessage, this, [this](const QString& m) { statusBar()->showMessage(m, 8000); });
-		connect(t, &OverviewTab::arubaToolsRequested, this, &MainWindow::openApTools);
-		connect(t, &OverviewTab::arubaLogRequested, this, &MainWindow::openArubaLog);
 		addToolTab(t, T(m_backend, "ov.title").arg(QString()));
 	}
 	else
@@ -4832,75 +4695,6 @@ BulkAddTab* MainWindow::openBulkAdd(const QString& parentId)
 	return t;
 }
 
-QWidget* MainWindow::arubaForScreenshot(bool apPage)
-{
-	std::function<QString(const QModelIndex&)> walk = [&](const QModelIndex& parent) -> QString {
-		for (int r = 0; r < m_model->rowCount(parent); ++r)
-		{
-			const QModelIndex i = m_model->index(r, 0, parent);
-			if (!i.data(RoleFolder).toBool() && i.data(RoleProtocol).toString() == QLatin1String("ssh"))
-				return i.data(RoleId).toString();
-			const QString f = walk(i);
-			if (!f.isEmpty())
-				return f;
-		}
-		return QString();
-	};
-	const QString id = walk(QModelIndex());
-	if (id.isEmpty())
-		return nullptr;
-	const QJsonObject subject{ { QStringLiteral("id"), id } };
-	QJsonObject cmd = subject;
-	cmd.insert(QStringLiteral("op"), QStringLiteral("aruba_demo"));
-	const QJsonObject r = parseObject(m_backend->edit(QString::fromUtf8(QJsonDocument(cmd).toJson(QJsonDocument::Compact))));
-	if (r.contains(QStringLiteral("error")))
-		return nullptr;
-	selectId(id);
-	openOverview(subject);
-	auto* o = findChild<OverviewTab*>();
-	if (!apPage)
-		return o;
-	QJsonObject s = subject;
-	s.insert(QStringLiteral("vc_name"), o ? o->targetName() : QString());
-	auto* a = new ArubaApTab(m_backend, s, r.value(QStringLiteral("entry")).toObject(), m_tabs);
-	a->setObjectName(QStringLiteral("arubaApTab"));
-	addToolTab(a, a->title());
-	a->handleResult(r.value(QStringLiteral("ap")).toObject());
-	return a;
-}
-
-QWidget* MainWindow::arubaBreakoutsForScreenshot()
-{
-	auto* o = qobject_cast<OverviewTab*>(arubaForScreenshot(false));
-	const QString id = currentId();
-	if (!o || id.isEmpty())
-		return nullptr;
-	openArubaBreakouts(QJsonObject{ { QStringLiteral("id"), id }, { QStringLiteral("vc_name"), o->targetName() } }, o->targetName());
-	return findChild<ArubaBreakoutTab*>();
-}
-
-QWidget* MainWindow::arubaSummaryForScreenshot()
-{
-	// Die ersten fünf SSH-Ziele als Controller mit erfundenen Clustern.
-	QStringList ids;
-	std::function<void(const QModelIndex&)> walk = [&](const QModelIndex& parent) {
-		for (int r = 0; r < m_model->rowCount(parent) && ids.size() < 5; ++r)
-		{
-			const QModelIndex i = m_model->index(r, 0, parent);
-			if (!i.data(RoleFolder).toBool() && i.data(RoleProtocol).toString() == QLatin1String("ssh"))
-				ids << i.data(RoleId).toString();
-			walk(i);
-		}
-	};
-	walk(QModelIndex());
-	if (ids.isEmpty())
-		return nullptr;
-	if (parseObject(edit({ { QStringLiteral("op"), QStringLiteral("aruba_demo_summary") }, { QStringLiteral("ids"), QJsonArray::fromStringList(ids) } })).contains(QStringLiteral("error")))
-		return nullptr;
-	openArubaSummary(ids, T(m_backend, "mass.title.n").arg(ids.size()), false);
-	return findChild<ArubaSummaryTab*>();
-}
-
 PropertiesTab* MainWindow::openFirstTargetProperties(const QString& protocol)
 {
 	std::function<QString(const QModelIndex&)> walk = [&](const QModelIndex& parent) -> QString {
@@ -4922,6 +4716,9 @@ PropertiesTab* MainWindow::openFirstTargetProperties(const QString& protocol)
 
 void MainWindow::renameSelected()
 {
+	for (const auto& h : m_modules.rename)
+		if (h(m_tree->currentIndex()))
+			return;
 	const QString id = currentId();
 	if (id.isEmpty())
 		return;
@@ -4935,6 +4732,8 @@ void MainWindow::renameSelected()
 
 void MainWindow::moveSelected()
 {
+	if (!m_tree->currentIndex().data(RoleVSwitch).toString().isEmpty())
+		return; // virtueller Switch: bleibt beim Standort
 	const QString id = currentId();
 	if (id.isEmpty())
 		return;
@@ -4965,6 +4764,9 @@ void MainWindow::moveSelected()
 
 void MainWindow::deleteSelected()
 {
+	for (const auto& h : m_modules.remove)
+		if (h(m_tree->currentIndex()))
+			return;
 	const QStringList ids = selectedIds();
 	if (ids.isEmpty())
 		return;
@@ -4998,6 +4800,8 @@ void MainWindow::deleteSelected()
 
 void MainWindow::duplicateSelected()
 {
+	if (!m_tree->currentIndex().data(RoleVSwitch).toString().isEmpty())
+		return;
 	const QString id = currentId();
 	if (id.isEmpty())
 		return;
@@ -5123,3 +4927,23 @@ void MainWindow::saveAll(const QString& choice)
 	showEditResult(r, r.value(QStringLiteral("notice")).toString(T(m_backend, "status.saved")));
 	reloadViews();
 }
+
+namespace rjmw {
+
+QString text(RjBackend* b, const char* key)
+{
+	return T(b, key);
+}
+
+QJsonObject parseJson(const QString& s)
+{
+	return parseObject(s);
+}
+
+QIcon icon(const QString& kind, const QString& light, bool folder, int session)
+{
+	return protocolIcon(kind, light, folder, session);
+}
+
+} // namespace rjmw
+

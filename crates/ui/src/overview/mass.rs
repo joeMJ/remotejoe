@@ -19,7 +19,7 @@ use super::remote;
 use crate::app::App;
 use crate::patch::JobSpec;
 
-/// Höchstens so viele Abfragen gleichzeitig (Netz an den Standorten nicht belasten).
+/// Höchstens so viele Abfragen gleichzeitig (Netz nicht belasten).
 pub const PARALLEL: usize = 8;
 
 #[derive(Debug, Clone)]
@@ -57,6 +57,8 @@ struct Work {
     ssh_port: u16,
     /// Windows-Ziel (RDP/PowerShell): SSH mit PowerShell bevorzugen; ohne offenen SSH-Port unter Windows WinRM.
     windows: bool,
+    /// Bekannter Switch: gleich über die Switch-CLI (ohne vorher Linux und Windows zu versuchen).
+    switch: bool,
 }
 
 impl App {
@@ -111,7 +113,8 @@ impl App {
                                     legacy: self.target_legacy_of(id),
                                 };
                                 let ssh_port = if view.protocol == Protocol::Ssh { view.effective_port() } else { 22 };
-                                queue.push_back(Work { row: rows.len(), target: id, spec, ssh_port, windows });
+                                let switch = crate::overview::inventory::is_switch_kind(self.overview.devices.get(&id).copied());
+                                queue.push_back(Work { row: rows.len(), target: id, spec, ssh_port, windows, switch });
                             }
                             Err(e) => skip(&mut row, &e),
                         }
@@ -141,7 +144,7 @@ impl App {
                         None => app.overview.devices.remove(&r.target),
                     };
                 }
-                // Neu erkannte Aruba-APs: Weg zur Web-Oberfläche anlegen.
+                // Neu erkannte Geräteart: Weg zur Web-Oberfläche anlegen.
                 let found: Vec<Uuid> = shared.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|r| r.state == "erkannt").map(|r| r.target).collect();
                 for id in found {
                     app.aruba_web_way(id);
@@ -195,7 +198,9 @@ fn run(queue: VecDeque<Work>, rows: Arc<Mutex<Vec<MassRow>>>, done: Arc<AtomicUs
                 }
                 set("läuft", String::new(), false);
                 let ssh_open = w.spec.protocol == Protocol::Ssh || port_open(&w.spec.host, w.ssh_port);
-                let res = if ssh_open {
+                let res = if w.switch {
+                    remote::switch_inventory(&w.spec, w.ssh_port, &known).map(|f| (f, "SSH (show system)", None))
+                } else if ssh_open {
                     remote::ssh_inventory(&w.spec, w.ssh_port, None, known.clone(), w.windows)
                 } else if w.windows && cfg!(windows) {
                     remote::ps_inventory(&w.spec, None)

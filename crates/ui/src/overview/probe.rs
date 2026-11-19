@@ -11,7 +11,7 @@ pub const PORTS: [(u16, &str); 11] = [
     (80, "HTTP"),
     (443, "HTTPS"),
     (3389, "RDP"),
-    (4343, "Aruba"),
+    (4343, if cfg!(feature = "aruba") { "Aruba" } else { "HTTPS" }),
     (5900, "VNC"),
     (5985, "WinRM"),
     (5986, "WinRM (TLS)"),

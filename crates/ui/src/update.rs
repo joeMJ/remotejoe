@@ -46,6 +46,10 @@ pub struct UpdateState {
 const PAGE_ONLY: bool = cfg!(windows);
 
 /// Die einzige Quelle: die öffentlichen Veröffentlichungen von remotejoe auf GitHub.
+/// Fassung mit Modulen: Meldung statt einer Update-Prüfung bei GitHub.
+#[cfg(feature = "advanced")]
+pub const ADVANCED_UPDATES: &str = "remotejoe advanced bekommt Updates über die interne Ablage (GitHub führt nur remotejoe basic).";
+
 pub fn github_source() -> Source {
     Source { kind: SourceKind::Github, base_url: String::new(), repo: "joeMJ/remotejoe".into() }
 }
@@ -162,6 +166,11 @@ impl App {
     pub fn update_check(&mut self) -> Result<Value, String> {
         if self.update.job.is_some_and(|j| self.jobs.is_pending(j)) {
             return Err("Es läuft bereits eine Update-Prüfung oder -Installation.".into());
+        }
+        // GitHub führt nur die Fassung ohne Module.
+        #[cfg(feature = "advanced")]
+        if self.update.source_override.is_none() {
+            return Err(ADVANCED_UPDATES.into());
         }
         let src = self.update_source();
         let current = Version::parse(rj_update::CURRENT_VERSION).map_err(|e| e.to_string())?;
@@ -286,7 +295,7 @@ impl App {
 
     /// Prüfung beim Start (wenn eingeschaltet): einmal, im Hintergrund.
     pub fn maybe_auto_check(&mut self) {
-        if self.update.auto_done || self.demo || !self.config.update.check_on_start {
+        if self.update.auto_done || self.demo || !self.config.update.check_on_start || (cfg!(feature = "advanced") && self.update.source_override.is_none()) {
             return;
         }
         self.update.auto_done = true;

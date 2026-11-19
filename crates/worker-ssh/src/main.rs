@@ -70,7 +70,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<ToWorker>, out: rj_ipc::worker::Sen
     let (ask_tx, mut ask_rx) = mpsc::unbounded_channel();
     let mut pending: HashMap<u32, oneshot::Sender<rj_ssh::client::HostKeyAnswer>> = HashMap::new();
     let mut next_q = 1u32;
-    let mut connecting: Option<tokio::task::JoinHandle<Result<(SshConnection, Shell), String>>> = None;
+    let mut connecting: Option<tokio::task::JoinHandle<Result<(SshConnection, Shell, bool), String>>> = None;
     let mut host = TermHost::default();
     // Hängt der Emulator, endet der Worker; der Supervisor meldet die Sitzung als abgestürzt.
     host.watchdog().spawn(watchdog_limit(), || {
@@ -162,7 +162,10 @@ async fn run(mut rx: mpsc::UnboundedReceiver<ToWorker>, out: rj_ipc::worker::Sen
             res = async { connecting.as_mut().unwrap().await }, if connecting.is_some() => {
                 connecting = None;
                 match res {
-                    Ok(Ok((c, s))) => {
+                    Ok(Ok((c, s, legacy_retry))) => {
+                        if legacy_retry {
+                            send(FromWorker::Log("Ältere SSH-Verfahren verwendet: der Schlüsselaustausch mit den üblichen ist gescheitert".into()));
+                        }
                         conn = Some(c);
                         shell = Some(s);
                         send(FromWorker::State(SessionState::Connected));
@@ -201,7 +204,7 @@ async fn establish(
     r: ConnectRequest,
     c: CredentialPayload,
     ask: rj_ssh::client::HostKeyAsk,
-) -> Result<(SshConnection, Shell), String> {
+) -> Result<(SshConnection, Shell, bool), String> {
     let opts: Options = serde_json::from_str(&r.options_json).unwrap_or_default();
     let known = opts
         .known_hosts
@@ -226,18 +229,31 @@ async fn establish(
         keepalive: Duration::from_secs(r.keepalive_secs.max(1) as u64),
         legacy: opts.legacy_algorithms,
     };
-    let conn = match opts.host_key_alias.as_deref().and_then(|a| a.rsplit_once(':')).and_then(|(h, p)| Some((h.to_string(), p.parse::<u16>().ok()?))) {
-        Some((alias_host, alias_port)) => {
-            let stream = tokio::time::timeout(params.connect_timeout, tokio::net::TcpStream::connect((params.host.as_str(), params.port)))
-                .await
-                .map_err(|_| "Zeitüberschreitung beim Verbindungsaufbau".to_string())?
-                .map_err(|e| e.to_string())?;
-            let alias = SshParams { host: alias_host, port: alias_port, ..params.clone() };
-            SshConnection::connect_stream(&alias, stream, known, ask).await.map_err(|e| e.to_string())?
+    let alias = opts.host_key_alias.as_deref().and_then(|a| a.rsplit_once(':')).and_then(|(h, p)| Some((h.to_string(), p.parse::<u16>().ok()?)));
+    let attempt = |params: SshParams, known: KnownHosts, ask: rj_ssh::client::HostKeyAsk, alias: Option<(String, u16)>| async move {
+        match alias {
+            Some((alias_host, alias_port)) => {
+                let stream = tokio::time::timeout(params.connect_timeout, tokio::net::TcpStream::connect((params.host.as_str(), params.port)))
+                    .await
+                    .map_err(|_| "Zeitüberschreitung beim Verbindungsaufbau".to_string())?
+                    .map_err(|e| e.to_string())?;
+                let alias = SshParams { host: alias_host, port: alias_port, ..params.clone() };
+                SshConnection::connect_stream(&alias, stream, known, ask).await.map_err(|e| e.to_string())
+            }
+            None => SshConnection::connect(&params, known, ask).await.map_err(|e| e.to_string()),
         }
-        None => SshConnection::connect(&params, known, ask).await.map_err(|e| e.to_string())?,
+    };
+    // Scheitert schon der Schlüsselaustausch (alte Geräte), einmal mit älteren Verfahren – nur für diese Verbindung.
+    let mut legacy_retry = false;
+    let conn = match attempt(params.clone(), known.clone(), ask.clone(), alias.clone()).await {
+        Ok(c) => c,
+        Err(e) if !params.legacy && (e.contains("Key exchange init failed") || e.contains("No common")) => {
+            legacy_retry = true;
+            attempt(SshParams { legacy: true, ..params.clone() }, known, ask, alias).await.map_err(|e2| format!("{e2} (auch mit älteren Verfahren)"))?
+        }
+        Err(e) => return Err(e),
     };
     let term = opts.term.unwrap_or_else(|| "xterm-256color".into());
     let shell = conn.open_shell(&term, r.width, r.height).await.map_err(|e| e.to_string())?;
-    Ok((conn, shell))
+    Ok((conn, shell, legacy_retry))
 }

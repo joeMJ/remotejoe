@@ -18,9 +18,6 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
   ohne Anmeldung) und fragt bei offenem RDP mit NLA den Rechnernamen ab (ohne Zugangsdaten). Ping und Traceroute laufen
   nur auf Knopfdruck, ebenso „Inventar abfragen“ und das Masseninventar mit den Zugangsdaten des Ziels (nur bei
   Zielen, deren Inventar erlaubt ist). Es geht nichts an Dritte.
-- **Aruba-Werkzeuge** (nur wenn eingeschaltet): „Einrichten“ lädt die Aruba Instant Python Tools von GitHub und die
-  Python-Bibliotheken über pip, unter Windows bei Bedarf Python von python.org. Abfragen und Werkzeuge verbinden sich
-  nur mit den Aruba-Controllern bzw. APs; beim Firmware-Update lädt der AP die Firmware selbst von der angegebenen URL.
 - **Claude-Anbindung (MCP)** (nur wenn eingeschaltet, ab Werk aus): Claude Desktop fragt remotejoe über einen
   lokalen Kanal ab. Was Claude dabei liest – Ziel- und Ordnernamen, je nach Einstellung Adressen und Seriennummern,
   gespeichertes Inventar –, geht als Gesprächsinhalt an den Claude-Dienst von Anthropic. Nur freigegebene Ordner sind

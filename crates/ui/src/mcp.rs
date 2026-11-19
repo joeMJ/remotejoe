@@ -1,6 +1,6 @@
 //! Claude-Anbindung (MCP): Antworten auf Werkzeugaufrufe, die `rj-mcp` über den lokalen Kanal weiterreicht.
 //!
-//! - Ab Werk aus (Einstellungen → Zusatzfunktionen). Antworten gibt es nur bei entsperrter Schlüsseldatenbank.
+//! - Ab Werk aus (Einstellungen). Antworten gibt es nur bei entsperrter Schlüsseldatenbank.
 //! - Claude sieht nur Ziele in freigegebenen Ordnern (je Schlüsseldatenbank). Adressen und Seriennummern lassen
 //!   sich ausblenden. Zugangsdaten, Benutzernamen, Notizen und andere Inhalte der KDBX gehen nie hinaus.
 //! - Aktionen (Verbinden, Inventar, Cluster, Nutzer) nur bei Zielen, deren wirksame Zugangsdaten aus einem für
@@ -29,7 +29,19 @@ fn log(tool: &str, args: &Value, result: &str) {
 }
 
 /// Werkzeuge, die etwas auslösen (Freigabe je Aktion nötig).
+#[cfg(feature = "aruba")]
 pub const ACTIONS: [&str; 4] = ["verbinden", "inventar_abfragen", "cluster_abfragen", "nutzer_anzeigen"];
+#[cfg(not(feature = "aruba"))]
+pub const ACTIONS: [&str; 2] = ["verbinden", "inventar_abfragen"];
+
+/// Zusätzliche Werkzeuge der Module für die Werkzeugliste von rj-mcp (Name, Beschreibung, Eingabe).
+fn module_tools() -> Vec<Value> {
+    #[allow(unused_mut)]
+    let mut v = Vec::new();
+    #[cfg(feature = "aruba")]
+    v.extend(crate::modules::aruba::mcp_tools());
+    v
+}
 
 /// Feldnamen des Inventars, die Adressen bzw. Seriennummern enthalten.
 fn hidden_field(key: &str, hide_addr: bool, hide_serial: bool) -> bool {
@@ -68,7 +80,7 @@ impl App {
         let mut v = json!({
             "id": t.id,
             "name": t.name,
-            "typ": self.overview.devices.get(&t.id).map(|d| if *d == "aruba-ap" { "Aruba-AP" } else { *d }).unwrap_or(t.protocol.label()),
+            "typ": self.overview.devices.get(&t.id).map(|d| if cfg!(feature = "aruba") && *d == "aruba-ap" { "Aruba-AP" } else { *d }).unwrap_or(t.protocol.label()),
             "ordner": self.mcp_path(t.id),
             "version": inv.value("system").and_then(crate::overview::inventory::version_of),
         });
@@ -136,6 +148,11 @@ impl App {
     /// Ein Werkzeugaufruf von Claude. `confirmed`: die Oberfläche hat die Aktion freigegeben.
     pub fn mcp_call(&mut self, c: &Value) -> Result<Value, String> {
         let tool = c.get("tool").and_then(Value::as_str).unwrap_or_default().to_string();
+        // Fassung und Module (für die Werkzeugliste von rj-mcp); ohne Protokolleintrag und ohne Freigaben.
+        if tool == "fassung" {
+            let module: Vec<&str> = crate::modules::all().iter().map(|m| m.id()).collect();
+            return Ok(json!({ "fassung": crate::modules::EDITION, "module": module, "werkzeuge": module_tools() }));
+        }
         let args = c.get("args").cloned().unwrap_or(json!({}));
         let r = self.mcp_dispatch(&tool, &args, c.get("confirmed").and_then(Value::as_bool).unwrap_or(false));
         let summary = match &r {
@@ -224,30 +241,10 @@ impl App {
                 let missing = result.iter().filter(|r| r["gefunden"] == false).count();
                 Ok(json!({ "geprueft": werte.len(), "nicht_gefunden": missing, "ergebnis": result }))
             }
+            #[cfg(feature = "aruba")]
             "aruba_cluster" => {
                 let t = self.mcp_target_arg(args)?;
-                let mut c = self.overview.aruba.get(&t.id.to_string()).cloned().ok_or("Für diesen Controller liegt noch keine Cluster-Abfrage vor (in remotejoe „Cluster abfragen“ bzw. Werkzeug cluster_abfragen)")?;
-                let s = &self.config.features;
-                if let Some(aps) = c.get_mut("aps").and_then(Value::as_array_mut) {
-                    for ap in aps {
-                        if let Some(o) = ap.as_object_mut() {
-                            if s.mcp_hide_addresses {
-                                o.remove("ip");
-                                o.remove("mac");
-                            }
-                            if s.mcp_hide_serials {
-                                o.remove("serial");
-                            }
-                        }
-                    }
-                }
-                if s.mcp_hide_addresses {
-                    if let Some(o) = c.as_object_mut() {
-                        o.remove("vc");
-                        o.remove("segment");
-                    }
-                }
-                Ok(c)
+                crate::modules::aruba::mcp_cluster(self, &t.id.to_string())
             }
             "sitzungen" => {
                 let list: Vec<Value> = self
@@ -268,13 +265,16 @@ impl App {
                     let what = match a {
                         "verbinden" => "eine Verbindung öffnen zu",
                         "inventar_abfragen" => "das Inventar abfragen von",
+                        #[cfg(feature = "aruba")]
                         "cluster_abfragen" => "den Cluster abfragen an",
-                        _ => "die Anwender anzeigen von",
+                        #[cfg(feature = "aruba")]
+                        "nutzer_anzeigen" => "die Anwender anzeigen von",
+                        _ => "eine Aktion ausführen für",
                     };
                     return Ok(json!({ "needs_confirm": true, "prompt": format!("Claude möchte {what} „{}“ (mit Anmeldeobjekt „{login}“).", t.name), "target": t.id, "action": a }));
                 }
                 // Ausführen übernimmt die Oberfläche (sie öffnet Tabs bzw. startet die Abfrage).
-                Ok(json!({ "freigegeben": true, "action": a, "target": t.id, "hinweis": "Gestartet. Ergebnisse von Abfragen später mit ziel_uebersicht bzw. aruba_cluster abrufen." }))
+                Ok(json!({ "freigegeben": true, "action": a, "target": t.id, "hinweis": if cfg!(feature = "aruba") { "Gestartet. Ergebnisse von Abfragen später mit ziel_uebersicht bzw. aruba_cluster abrufen." } else { "Gestartet. Ergebnisse von Abfragen später mit ziel_uebersicht abrufen." } }))
             }
             other => Err(format!("Unbekanntes Werkzeug „{other}“")),
         }

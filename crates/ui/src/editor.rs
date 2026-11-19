@@ -18,6 +18,14 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::app::App;
+
+// Beiträge der Module.
+#[cfg(feature = "aruba")]
+#[path = "modules/aruba/editor_aruba.rs"]
+mod editor_aruba;
+#[cfg(feature = "standorte")]
+#[path = "modules/standorte/editor_standorte.rs"]
+mod editor_standorte;
 use crate::workspace::SessionId;
 
 /// Gestaffelter Verbindungsaufbau für „Alle im Ordner verbinden“.
@@ -225,7 +233,8 @@ impl App {
 
     /// Übernimmt den geänderten Index in den Tresor und merkt den vorherigen
     /// Zustand für „Rückgängig“.
-    fn commit(&mut self, label: &str, before: Index) {
+    pub(crate) fn commit(&mut self, label: &str, before: Index) {
+        crate::sitesetup::pin_templates(&mut self.index);
         self.history.record(label, &before);
         self.push_index();
     }
@@ -285,6 +294,10 @@ impl App {
                 v["tunnel_effective"] = json!(format!("{name} ({})", self.origin_text(origin, true)));
             }
         } else {
+            #[cfg(feature = "standorte")]
+            if let Some(Node::Folder(f)) = node {
+                v["site"] = self.site_editor_json(f);
+            }
             v["clipboard"] = json!(settings.clipboard.map(clip_str).unwrap_or("inherit"));
             v["clipboard_effective"] = json!(clip_str(edit::folder_clipboard(&self.index, id)));
         }
@@ -632,7 +645,8 @@ impl App {
                 }
             }
             "export" => self.export_run(&c),
-            "settings" => Ok(json!({
+            "settings" => Ok({
+                let mut v = json!({
                 "lock_after_idle_mins": self.config.security.lock_after_idle_mins,
                 "disconnect_on_lock": self.config.security.disconnect_on_lock,
                 "accept_key_errors": self.config.security.accept_key_errors,
@@ -643,11 +657,14 @@ impl App {
                 "admin_keys_layout": self.config.connection.admin_keys_layout,
                 "admin_keys_timeout_mins": self.config.connection.admin_keys_timeout_mins,
                 "admin_keys_layouts": crate::adminkeys::NAMES.iter().map(|(k, n)| json!({ "klid": k, "name": n, "available": crate::adminkeys::Layout::find(crate::adminkeys::builtin(), k).is_some() })).collect::<Vec<_>>(),
-                "aruba_tools": self.config.features.aruba,
-                "aruba_clients_warn": self.config.features.aruba_clients_warn,
-                "aruba_clients_crit": self.config.features.aruba_clients_crit,
                 "backup": self.backup_settings_json(),
-            })),
+                });
+                // Einstellungen der Module.
+                if let Some(m) = v.as_object_mut() {
+                    crate::modules::settings_json(self, m);
+                }
+                v
+            }),
             "set_settings" => {
                 if let Some(m) = c.get("lock_after_idle_mins").and_then(Value::as_u64) {
                     self.config.security.lock_after_idle_mins = m.min(24 * 60) as u32;
@@ -678,15 +695,7 @@ impl App {
                 if let Some(n) = c.get("admin_keys_timeout_mins").and_then(Value::as_u64) {
                     self.config.connection.admin_keys_timeout_mins = n.min(24 * 60) as u32;
                 }
-                if let Some(b) = c.get("aruba_tools").and_then(Value::as_bool) {
-                    self.config.features.aruba = b;
-                }
-                if let Some(n) = c.get("aruba_clients_warn").and_then(Value::as_u64) {
-                    self.config.features.aruba_clients_warn = n.min(1000) as u32;
-                }
-                if let Some(n) = c.get("aruba_clients_crit").and_then(Value::as_u64) {
-                    self.config.features.aruba_clients_crit = n.min(1000) as u32;
-                }
+                crate::modules::set_settings(self, &c);
                 self.backup_apply_settings(&c);
                 match &self.config_path {
                     Some(p) => self.config.save(p).map(|_| json!({ "ok": true })).map_err(|e| e.to_string()),
@@ -719,23 +728,7 @@ impl App {
             "ov_probe" => self.overview_probe(&c),
             "inventory_many" => Ok(self.inventory_many(&c)),
             "ov_query" => self.overview_query(&c),
-            "aruba_cluster" => self.aruba_cluster(&c),
-            "aruba_ap" => self.aruba_ap(&c),
-            "aruba_log" => self.aruba_log(&c),
-            "aruba_clients" => self.aruba_clients(&c),
-            "aruba_breakouts" => self.aruba_breakouts(&c),
-            "aruba_mark" => self.aruba_mark(&c),
-            "aruba_summary" => self.aruba_summary(&c),
-            "aruba_demo_summary" => self.aruba_demo_summary(&c),
-            "aruba_breakout_identify" => self.aruba_breakout_identify(&c),
-            "aruba_demo" => self.aruba_demo(&c),
-            "aptools_status" => self.aptools_status(),
-            "aptools_setup" => self.aptools_setup(&c),
-            "aptools_run" => self.aptools_run(&c),
-            "aptools_output" => Ok(self.aptools_output(&c)),
-            "aptools_stop" => Ok(self.aptools_stop(&c)),
-            "aptools_targets" => self.aptools_targets_json(&c),
-            "aptools_folder" => self.aptools_folder(&c),
+            "templates_folder_create" => self.templates_folder_create(),
             "ov_field" => self.overview_field(&c),
             "ov_run" => self.overview_run(&c),
             "ov_stop" => {
@@ -903,7 +896,8 @@ impl App {
                     None => Err("Befehl fehlt".into()),
                 }
             }
-            _ => Err(format!("Unbekannter Befehl „{op}“")),
+            // Operationen der Module, sonst unbekannt.
+            other => crate::modules::dispatch(self, other, &c).unwrap_or_else(|| Err(format!("Unbekannter Befehl „{op}“"))),
         };
         match r {
             Ok(v) => ok(v),
@@ -1089,7 +1083,7 @@ impl App {
         r
     }
 
-    fn simple(&mut self, label: &str, f: impl FnOnce(&mut Index) -> Result<Value, EditError>) -> Result<Value, String> {
+    pub(crate) fn simple(&mut self, label: &str, f: impl FnOnce(&mut Index) -> Result<Value, EditError>) -> Result<Value, String> {
         let before = self.index.clone();
         match f(&mut self.index) {
             Ok(v) => {
@@ -1121,8 +1115,9 @@ impl App {
                 self.index.tasks.push(t);
                 link(&mut self.index, parent, |m| m.tasks.push(tid)).map(|_| json!({ "task": tid }))
             }
-            // Aruba-AP: die Web-Oberfläche auf 4343 als Hauptweg, dazu SSH mit denselben Zugangsdaten (Inventar,
-            // Cluster, Aruba-Werkzeuge suchen sich diesen Weg). Der SSH-Weg ohne eigene Adresse folgt der des Ziels.
+            // Modul: die Web-Oberfläche auf 4343 als Hauptweg, dazu SSH mit denselben Zugangsdaten (Inventar,
+            // Werkzeuge suchen sich diesen Weg). Der SSH-Weg ohne eigene Adresse folgt der des Ziels.
+            #[cfg(feature = "aruba")]
             "aruba" => {
                 let name = str_of(c, "name").filter(|n| !n.is_empty()).unwrap_or("Neuer Aruba-AP");
                 let mut t = edit::new_target(&self.index, parent, Protocol::Web, name, None);
@@ -1426,10 +1421,10 @@ impl App {
                             }
                         }
                     }
-                    // Aruba-AP: Web-Weg auf 4343 ohne Adresse bekommt die URL, sobald das Ziel eine Adresse hat
+                    // Web-Weg auf 4343 ohne Adresse bekommt die URL, sobald das Ziel eine Adresse hat
                     // (nach der Übernahme der Adresse aus dem Formular, damit es schon beim ersten Speichern greift).
                     let host = t.host.trim().to_string();
-                    if !host.is_empty() {
+                    if cfg!(feature = "aruba") && !host.is_empty() {
                         let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host };
                         for w in t.ways.iter_mut().filter(|w| w.protocol == Protocol::Web && w.host.trim().is_empty() && w.port == Some(4343)) {
                             w.host = format!("https://{h}:4343/");
@@ -1442,6 +1437,10 @@ impl App {
                     }
                 }
                 None => return Err("Objekt nicht gefunden".into()),
+            }
+            #[cfg(feature = "standorte")]
+            if let Some(s) = f.get("site").filter(|s| s.is_object()) {
+                self.site_apply(id, s)?;
             }
             if let Some(p) = id_of(&f, "parent") {
                 if edit::parent_of(&self.index, id) != Some(p) {
@@ -1628,48 +1627,14 @@ impl App {
         }
     }
 
-    /// Nach einer Inventur: beim ersten Erkennen als Aruba-AP den Weg „Web-Oberfläche“ (https, 4343) anlegen, sofern das
+    /// Nach einer Inventur: beim ersten Erkennen der Geräteart den Weg „Web-Oberfläche“ (https, 4343) anlegen, sofern das
     /// Ziel noch keinen Web-Zugang hat. Gespeichert wird sofort, wenn sonst nichts ungespeichert ist. Liefert, ob ein Weg
     /// angelegt wurde.
-    pub(crate) fn aruba_web_way(&mut self, id: Uuid) -> bool {
-        if self.demo || self.vault.as_ref().map_or(true, |v| v.index().read_only) {
-            return false;
-        }
-        let mut inv = self.overview.store.load(id);
-        if inv.aruba_web_way || crate::overview::inventory::device_kind(&inv) != Some("aruba-ap") {
-            return false;
-        }
-        inv.aruba_web_way = true;
-        let _ = self.overview.store.save(id, &inv);
-        let Some(t) = self.target(id) else { return false };
-        if t.protocol == Protocol::Web || t.ways.iter().any(|w| w.protocol == Protocol::Web) {
-            return false;
-        }
-        let was_dirty = self.has_unsaved_changes();
-        let r = self.simple("Aruba-Web-Oberfläche anlegen", |idx| match rj_core::inherit::find_node_mut(&mut idx.root, id) {
-            Some(Node::Target(t)) => {
-                let mut w = rj_core::model::AccessWay::new(Protocol::Web);
-                w.name = "Web-Oberfläche".into();
-                w.port = Some(4343);
-                // Adresse sichtbar als URL eintragen (leer wirkte der Weg unbrauchbar).
-                let host = t.host.trim();
-                if !host.is_empty() {
-                    let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
-                    w.host = format!("https://{h}:4343/");
-                }
-                t.ways.push(w);
-                Ok(json!({ "ok": true }))
-            }
-            _ => Err(EditError::NotFound),
-        });
-        if r.is_err() {
-            return false;
-        }
-        if !was_dirty {
-            let _ = self.save_with(None);
-        }
-        true
+    #[cfg(not(feature = "aruba"))]
+    pub(crate) fn aruba_web_way(&mut self, _id: Uuid) -> bool {
+        false
     }
+
 
     /// Gleiche Zugangsdaten zusammenführen: direkt hinterlegte Zugangsdaten (Hauptdatensatz von Zielen und Ordnern,
     /// eigene Zugangsdaten an Wegen) mit gleichem Benutzer und Kennwort, dazu ein vorhandenes Anmeldeobjekt mit
@@ -2165,7 +2130,7 @@ impl App {
                 });
             }
             // HTTPS-Dienste des Geräts: offen laut Dienstprüfung der Übersicht (443, 4343, 8443), bei einem erkannten
-            // Aruba-AP immer 4343 (dorthin leitet die Web-Oberfläche weiter). Gleiches Browserprofil wie das Ziel, damit
+            // Geräteart mit 4343 (dorthin leitet die Web-Oberfläche weiter). Gleiches Browserprofil wie das Ziel, damit
             // der Web-Tab das Zertifikat danach kennt; antwortet dort niemand, entfällt die Zeile.
             let mut https: Vec<u16> = self.overview.open_ports(&id.to_string()).into_iter().filter(|p| matches!(p, 443 | 4343 | 8443)).collect();
             if self.overview.devices.get(&id) == Some(&"aruba-ap") && !https.contains(&4343) {
@@ -2400,11 +2365,11 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use rj_kdbx::{KdfChoice, MasterKey, Vault};
 
-    fn app_with_vault(dir: &std::path::Path) -> (App, std::path::PathBuf, MasterKey) {
+    pub(crate) fn app_with_vault(dir: &std::path::Path) -> (App, std::path::PathBuf, MasterKey) {
         let path = dir.join("t.kdbx");
         let key = MasterKey::password("Prüf ✓");
         let mut v = Vault::create(&path, key.clone(), KdfChoice::Weak, rj_core::config::IndexStorage::KdbxCustomData);
@@ -2419,7 +2384,7 @@ mod tests {
         serde_json::from_str(&s).unwrap()
     }
 
-    fn cmd(app: &mut App, v: Value) -> Value {
+    pub(crate) fn cmd(app: &mut App, v: Value) -> Value {
         j(app.edit(&v.to_string()))
     }
 
@@ -2683,33 +2648,8 @@ mod tests {
         assert!(e["errors"]["ways"].as_str().is_some_and(|m| m.starts_with("Weg 1") && m.contains("Breite muss eine ganze Zahl")), "{e}");
     }
 
-    #[test]
-    fn aruba_ap_has_web_main_way_and_ssh_way() {
-        let mut app = App::new(false);
-        let root = app.index.root.id;
-        let id = Uuid::parse_str(cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "aruba" }))["id"].as_str().unwrap()).unwrap();
-        let r = cmd(&mut app, json!({ "op": "update", "id": id, "fields": { "options": { "url": "https://192.0.2.4:4343/" } } }));
-        assert!(r.get("error").is_none(), "{r}");
-        let t = app.target(id).unwrap().clone();
-        assert_eq!((t.protocol, t.host.as_str(), t.effective_port()), (Protocol::Web, "192.0.2.4", 4343));
-        assert_eq!((t.ways.len(), t.ways[0].protocol), (1, Protocol::Ssh));
-        // Inventar und Aruba-Werkzeuge gehen über den SSH-Weg zur Adresse des Ziels.
-        let view = t.via(t.ways[0].id).unwrap();
-        assert_eq!((view.protocol, view.host.as_str(), view.effective_port()), (Protocol::Ssh, "192.0.2.4", 22));
-    }
 
-    #[test]
-    fn aruba_web_way_gets_url_on_first_save() {
-        let mut app = App::new(false);
-        let root = app.index.root.id;
-        let id = cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "AP" }))["id"].as_str().unwrap().to_string();
-        let wid = Uuid::new_v4().to_string();
-        // Wie „Hinzufügen → Aruba-AP“: Adresse und Web-Weg (4343, ohne Adresse) im selben Speichern.
-        let r = cmd(&mut app, json!({ "op": "update", "id": id, "fields": { "host": "192.0.2.60", "ways": [{ "id": wid, "protocol": "web", "port": "4343", "host": "" }] } }));
-        assert!(r.get("errors").is_none(), "{r}");
-        let t = app.target(Uuid::parse_str(&id).unwrap()).unwrap();
-        assert_eq!(t.ways[0].host, "https://192.0.2.60:4343/");
-    }
+
 
     #[test]
     fn report_removes_target_names_and_addresses() {
@@ -2792,31 +2732,6 @@ mod tests {
         assert_eq!(rj_core::schema::written_version(&app.index), rj_core::model::SCHEMA_VERSION_WAYS);
     }
 
-    #[test]
-    fn aruba_detection_adds_the_web_way_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let (mut app, _path, _key) = app_with_vault(dir.path());
-        app.overview.store.dir = Some(dir.path().join("inventar"));
-        let root = app.index.root.id;
-        let id = Uuid::parse_str(cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "ssh", "name": "AP" }))["id"].as_str().unwrap()).unwrap();
-        if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut app.index.root, id) {
-            t.host = "192.0.2.4".into();
-        }
-        assert!(!app.aruba_web_way(id), "ohne Inventar kein Weg");
-        let mut inv = app.overview.store.load(id);
-        inv.offer("system", "Aruba Instant 8.10.0.23 LSR (Modell 515)", "SSH", 1);
-        app.overview.store.save(id, &inv).unwrap();
-        assert!(app.aruba_web_way(id));
-        let t = app.target(id).unwrap();
-        assert_eq!((t.ways.len(), t.ways[0].protocol, t.ways[0].port), (1, Protocol::Web, Some(4343)));
-        assert_eq!(t.ways[0].host, "https://192.0.2.4:4343/", "URL sichtbar eingetragen");
-        // Weg gelöscht: Die nächste Inventur legt ihn nicht wieder an.
-        if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut app.index.root, id) {
-            t.ways.clear();
-        }
-        assert!(!app.aruba_web_way(id));
-        assert!(app.target(id).unwrap().ways.is_empty());
-    }
 
     #[test]
     fn merge_same_address_preview_apply_and_undo() {

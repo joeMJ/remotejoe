@@ -1,6 +1,5 @@
 #include "overviewtab.h"
 
-#include "arubaview.h"
 
 #include "cards.h"
 #include "remotejoe-ui/src/bridge.cxxqt.h"
@@ -108,7 +107,11 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	m_editToggle = new QPushButton(T("ov.inventory.edit"), inv);
 	m_editToggle->setCheckable(true);
 	m_query = new QPushButton(T("ov.inventory.query"), inv);
+#ifdef RJ_ARUBA
+	m_query->setToolTip(T("ov.inventory.query.tip.aruba"));
+#else
 	m_query->setToolTip(T("ov.inventory.query.tip"));
+#endif
 	// Schalter: darf sich das Inventar am Ziel anmelden (SSH/PowerShell)? Bei Web-Zielen ohne Festlegung aus.
 	m_inventoryOn = new QCheckBox(T("ov.inventory.allowed"), inv);
 	m_inventoryOn->setToolTip(T("ov.inventory.allowed.tip"));
@@ -161,6 +164,10 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 		applyInventorySwitch(r);
 	});
 	connect(m_editToggle, &QPushButton::toggled, m_inventoryBox, &QWidget::setVisible);
+
+#ifdef RJ_STANDORTE
+	createSwitchPanel(lay, page);
+#endif
 
 	// Dienste
 	auto* svc = rjui::card(page, &in);
@@ -228,48 +235,12 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 		pollRun();
 	});
 
-	// Aruba-Werkzeuge: Cluster am virtuellen Controller
-	m_arubaCard = rjui::card(page, &in);
-	in->addWidget(rjui::section(T("ov.aruba"), m_arubaCard));
-	m_cluster = new ArubaClusterView(m_backend, m_arubaCard);
-	in->addWidget(m_cluster);
-	connect(m_cluster, &ArubaClusterView::queryRequested, this, [this] {
-		const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("aruba_cluster") } });
-		if (r.contains(QStringLiteral("error")))
-			m_cluster->setError(r.value(QStringLiteral("error")).toString());
-		else
-			m_cluster->setBusy(true);
-	});
-	connect(m_cluster, &ArubaClusterView::toolRequested, this, [this](const QString& tool) { emit arubaToolsRequested(m_subject.value(QStringLiteral("id")).toString(), m_name, tool); });
-	connect(m_cluster, &ArubaClusterView::logRequested, this, [this](const QString& kind, bool filtered) {
-		QJsonObject s = m_subject;
-		s.insert(QStringLiteral("vc_name"), m_name);
-		emit arubaLogRequested(s, QString(), m_name, kind, filtered);
-	});
-	connect(m_cluster, &ArubaClusterView::usersRequested, this, [this] {
-		QJsonObject s = m_subject;
-		s.insert(QStringLiteral("vc_name"), m_name);
-		emit arubaUsersRequested(s, m_name);
-	});
-	connect(m_cluster, &ArubaClusterView::breakoutsRequested, this, [this] {
-		QJsonObject s = m_subject;
-		s.insert(QStringLiteral("vc_name"), m_name);
-		emit arubaBreakoutsRequested(s, m_name);
-	});
-	connect(m_cluster, &ArubaClusterView::markRequested, this, [this] {
-		const QJsonObject r = call({ { QStringLiteral("op"), QStringLiteral("aruba_mark") } });
-		emit statusMessage(r.contains(QStringLiteral("error")) ? r.value(QStringLiteral("error")).toString() : m_backend->text(QStringLiteral("aruba.offline.marked")));
-	});
-	connect(m_cluster, &ArubaClusterView::offlineDeleteRequested, this, [this](const QStringList& macs) {
-		emit arubaOfflineDeleteRequested(m_subject.value(QStringLiteral("id")).toString(), m_name, macs);
-	});
-	connect(m_cluster, &ArubaClusterView::apClicked, this, [this](const QJsonObject& ap) {
-		QJsonObject s = m_subject;
-		s.insert(QStringLiteral("vc_name"), m_name);
-		emit arubaApRequested(s, ap);
-	});
-	m_arubaCard->hide();
-	lay->addWidget(m_arubaCard);
+#ifdef RJ_ARUBA
+	createArubaCard(lay, page);
+#endif
+#ifdef RJ_STANDORTE
+	createBackupCard(lay, page);
+#endif
 	lay->addStretch(1);
 
 	m_poll = new QTimer(this);
@@ -349,7 +320,9 @@ void OverviewTab::refreshInventorySwitch()
 	{
 		applyInventorySwitch(r);
 		renderWays(r);
-		updateAruba(r);
+	#ifdef RJ_ARUBA
+	updateArubaCard(r);
+#endif
 	}
 	else if (!m_subject.contains(QStringLiteral("hv")))
 	{
@@ -410,7 +383,14 @@ void OverviewTab::load()
 	m_notes->setReadOnly(!m_notesEditable);
 	m_notesSave->setEnabled(false);
 	m_notesState->clear();
-	updateAruba(r);
+#ifdef RJ_ARUBA
+	updateArubaCard(r);
+#endif
+#ifdef RJ_STANDORTE
+	loadSiteCards(guest);
+#else
+	Q_UNUSED(guest);
+#endif
 	if (r.value(QStringLiteral("run")).isObject())
 	{
 		m_output->show();
@@ -444,29 +424,14 @@ void OverviewTab::query()
 	setQueryState(m_backend->text(QStringLiteral("ov.inventory.running")).toHtmlEscaped());
 }
 
-void OverviewTab::updateAruba(const QJsonObject& r)
-{
-	const bool on = r.value(QStringLiteral("aruba")).toBool() && r.value(QStringLiteral("aruba_tools")).toBool();
-	m_arubaCard->setVisible(on);
-	if (on)
-	{
-		m_cluster->setName(m_name);
-		m_cluster->setCluster(r.value(QStringLiteral("aruba_cluster")).toObject());
-	}
-}
-
 void OverviewTab::handleResult(const QString& kind, const QString& target, const QJsonObject& r)
 {
 	if (target != m_key)
 		return;
-	if (kind == QLatin1String("ov_aruba_cluster"))
-	{
-		if (r.value(QStringLiteral("error")).isString())
-			m_cluster->setError(r.value(QStringLiteral("error")).toString());
-		else
-			m_cluster->setCluster(r);
+#ifdef RJ_ARUBA
+	if (handleArubaResult(kind, r))
 		return;
-	}
+#endif
 	if (kind == QLatin1String("ov_probe"))
 	{
 		m_servicesAgain->setEnabled(true);
@@ -484,8 +449,10 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 			if (r.value(QStringLiteral("note")).isString())
 				done += QStringLiteral("<br><b>%1</b>").arg(r.value(QStringLiteral("note")).toString().toHtmlEscaped());
 			setQueryState(done);
-			// Aruba erst nach der Abfrage bekannt.
-			updateAruba(call({ { QStringLiteral("op"), QStringLiteral("overview") } }));
+#ifdef RJ_ARUBA
+			// Die Geräteart ist erst nach der Abfrage bekannt.
+			updateArubaCard(call({ { QStringLiteral("op"), QStringLiteral("overview") } }));
+#endif
 			emit inventoryChanged();
 		}
 		if (r.value(QStringLiteral("error")).isString())
@@ -525,25 +492,18 @@ void OverviewTab::renderServices(const QJsonValue& s)
 	m_chipsBox->relayout();
 }
 
-// Aruba: „Aruba Instant 8.10.0.23 LSR (Modell 515)“ → Kopfzeile „Aruba Instant (Modell 515)“, Kachel „8.10.0.23 LSR“.
-static std::pair<QString, QString> splitArubaVersion(const QString& system)
+#ifndef RJ_ARUBA
+std::pair<QString, QString> OverviewTab::splitDeviceVersion(const QString& system)
 {
-	static const QRegularExpression re(QStringLiteral("^(Aruba\\s+\\S+)\\s+(\\d[\\w.\\-]*(?:\\s+[A-Z]{2,4}\\b(?!\\)))?)\\s*(.*)$"));
-	const QRegularExpressionMatch m = re.match(system);
-	if (!m.hasMatch())
-		return { system, QString() };
-	const QString rest = m.captured(3).trimmed();
-	return { rest.isEmpty() ? m.captured(1) : m.captured(1) + QLatin1Char(' ') + rest, m.captured(2) };
+	return { system, QString() };
 }
 
-bool OverviewTab::isAruba(const QJsonArray& fields)
+bool OverviewTab::isNetworkDevice(const QJsonArray& fields)
 {
-	for (const QJsonValue& v : fields)
-		if (v.toObject().value(QStringLiteral("key")).toString() == QLatin1String("system") &&
-		    v.toObject().value(QStringLiteral("value")).toString().startsWith(QLatin1String("Aruba")))
-			return true;
+	Q_UNUSED(fields);
 	return false;
 }
+#endif
 
 void OverviewTab::updateSub()
 {
@@ -560,25 +520,25 @@ void OverviewTab::updateSub()
 		else if (f.value(QStringLiteral("key")).toString() == QLatin1String("mac"))
 			mac = f.value(QStringLiteral("value")).toString();
 	}
-	// Aruba: die Version steht auf der eigenen Kachel.
-	if (isAruba(m_inventory))
-		system = splitArubaVersion(system).first;
+	// Mit eigener Geräteart: die Version steht auf der eigenen Kachel.
+	if (isNetworkDevice(m_inventory))
+		system = splitDeviceVersion(system).first;
 	if (!system.isEmpty())
 		parts << system;
 	if (!name.isEmpty() && name.compare(m_name, Qt::CaseInsensitive) != 0)
 		parts << m_backend->text(QStringLiteral("ov.machine")).arg(name);
-	// Aruba: die MAC steht hier statt auf einer Kachel.
-	if (isAruba(m_inventory) && !mac.isEmpty())
+	// Mit eigener Geräteart: die MAC steht hier statt auf einer Kachel.
+	if (isNetworkDevice(m_inventory) && !mac.isEmpty())
 		parts << QStringLiteral("MAC ") + mac;
 	m_sub->setText(parts.join(QStringLiteral(" · ")));
 }
 
 void OverviewTab::renderInventory(const QJsonArray& fields)
 {
-	// Aruba-Gerät (System „Aruba …“): Laufzeit, IP-Adresse und – hervorgehoben – Seriennummer und Version; die MAC
+	// Gerät mit eigener Geräteart: Laufzeit, IP-Adresse und – hervorgehoben – Seriennummer und Version; die MAC
 	// steht in der Kopfzeile.
-	const bool aruba = isAruba(fields);
-	const QStringList keys = aruba ? QStringList{ QStringLiteral("uptime"), QStringLiteral("ip"), QStringLiteral("serial"), QStringLiteral("version") }
+	const bool device = isNetworkDevice(fields);
+	const QStringList keys = device ? QStringList{ QStringLiteral("uptime"), QStringLiteral("ip"), QStringLiteral("serial"), QStringLiteral("version") }
 	                               : QStringList{ QString::fromLatin1(kTiles[0]), QString::fromLatin1(kTiles[1]), QString::fromLatin1(kTiles[2]), QString::fromLatin1(kTiles[3]) };
 	if (keys != m_tileKeys)
 	{
@@ -591,15 +551,15 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 				m_tileCap[i]->parentWidget()->setToolTip(keys.at(i) == QLatin1String("vcpu") ? m_backend->text(QStringLiteral("ov.field.vcpu.tip")) : QString());
 			}
 		QFont f = m_tileValue[0]->font();
-		if (aruba)
+		if (device)
 		{
 			f.setFamily(QFontDatabase::systemFont(QFontDatabase::FixedFont).family());
 			f.setPointSizeF(m_tileValue[0]->font().pointSizeF() * 1.15);
 		}
 		for (int i : { 2, 3 })
 		{
-			m_tileValue[i]->setFont(aruba ? f : m_tileValue[0]->font());
-			m_tileValue[i]->setTextInteractionFlags(aruba ? Qt::TextSelectableByMouse : Qt::NoTextInteraction);
+			m_tileValue[i]->setFont(device ? f : m_tileValue[0]->font());
+			m_tileValue[i]->setTextInteractionFlags(device ? Qt::TextSelectableByMouse : Qt::NoTextInteraction);
 		}
 	}
 	m_inventory = fields;
@@ -624,8 +584,8 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 				m_tileValue[i]->setText(value.isEmpty() ? QStringLiteral("–") : value);
 				m_tileValue[i]->setToolTip(f.value(QStringLiteral("source")).toString());
 			}
-		if (aruba && key == QLatin1String("system"))
-			if (const QString version = splitArubaVersion(f.value(QStringLiteral("value")).toString()).second; !version.isEmpty())
+		if (device && key == QLatin1String("system"))
+			if (const QString version = splitDeviceVersion(f.value(QStringLiteral("value")).toString()).second; !version.isEmpty())
 			{
 				m_tileValue[3]->setText(version);
 				m_tileValue[3]->setToolTip(f.value(QStringLiteral("source")).toString());

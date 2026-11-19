@@ -6,6 +6,8 @@
 //! Datenbank-`CustomData` (siehe [`index_store`]) oder als eigene Datei
 //! neben der KDBX (siehe [`index_file`]).
 
+#[cfg(feature = "configstore")]
+pub mod configstore;
 pub mod index_file;
 pub mod index_store;
 
@@ -126,6 +128,9 @@ pub enum KdfChoice {
     Aes(u64),
     /// Sehr schwache Ableitung, nur für Tests.
     Weak,
+    /// Für Dateien mit einem langen Zufallskennwort (eigene Speicher): Argon2id, 8 MiB, 2 Durchläufe. Die
+    /// Ableitung muss dort kein Raten erschweren (256 Bit Zufall) und soll das Öffnen nicht bremsen.
+    RandomKey,
 }
 
 impl KdfChoice {
@@ -138,6 +143,12 @@ impl KdfChoice {
                 version: argon2::Version::Version13,
             },
             KdfChoice::Aes(rounds) => KdfConfig::Aes { rounds },
+            KdfChoice::RandomKey => KdfConfig::Argon2id {
+                iterations: 2,
+                memory: 8 * 1024 * 1024,
+                parallelism: 1,
+                version: argon2::Version::Version13,
+            },
             KdfChoice::Weak => KdfConfig::Argon2id {
                 iterations: 1,
                 memory: 1024 * 1024,

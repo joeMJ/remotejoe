@@ -7,12 +7,13 @@
   - Startmenü-Verknüpfung, Eintrag in „Apps und Features“; die Deinstallation entfernt nur den
     Programmordner. Der Datenordner %USERPROFILE%\remotejoe bleibt unberührt.
   - Der UpgradeCode ist fest und darf sich nie ändern: Jede neue MSI ersetzt die alte (MajorUpgrade).
+  - ProductName setzt build-msi.ps1.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
-  <Product Id="*" Name="remotejoe" Language="1031" Codepage="1252" Version="$(var.Version)" Manufacturer="John Lose (joeMJ)"
+  <Product Id="*" Name="$(var.ProductName)" Language="1031" Codepage="1252" Version="$(var.Version)" Manufacturer="John Lose (joeMJ)"
            UpgradeCode="DB4709D5-54F6-4A98-AB02-E96A60D16CE1">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited" Platform="x64"
-             Languages="1031" SummaryCodepage="1252" Description="remotejoe $(var.Version)"
+             Languages="1031" SummaryCodepage="1252" Description="$(var.ProductName) $(var.Version)"
              Comments="Verbindungsmanager für SSH, RDP, VNC, Web und PowerShell" />
 
     <!-- Gleiche Version erneut installieren ersetzt sie ebenfalls (neu gebaute MSI). -->
@@ -40,7 +41,7 @@
       <Component Id="StartMenuShortcut" Guid="6C1E2B8A-3F57-4C1D-9E2A-7B0D5F4A1C93">
         <!-- Symbol aus remotejoe.exe (fester Ort), nicht aus dem Symbol-Zwischenspeicher der MSI: der gehört zur
              Produktkennung, die jedes Update wechselt; angeheftete Taskleisten-Einträge zeigten danach ein leeres Symbol. -->
-        <Shortcut Id="AppShortcut" Name="remotejoe" Description="Verbindungsmanager für SSH, RDP, VNC, Web und PowerShell"
+        <Shortcut Id="AppShortcut" Name="$(var.ProductName)" Description="Verbindungsmanager für SSH, RDP, VNC, Web und PowerShell"
                   Target="[INSTALLDIR]remotejoe.exe" WorkingDirectory="INSTALLDIR" />
         <!-- Ordner „Programs“ nur entfernen, wenn er danach leer ist (Windows Installer prüft das). -->
         <RemoveFolder Id="RemoveProgramsDir" Directory="ProgramsDir" On="uninstall" />
@@ -61,7 +62,7 @@
     <util:CloseApplication Id="CloseWorkerPsrp" Target="rj-worker-psrp.exe" Sequence="6" TerminateProcess="0" RebootPrompt="no" />
     <util:CloseApplication Id="CloseMcp" Target="rj-mcp.exe" Sequence="7" TerminateProcess="0" RebootPrompt="no" />
 
-    <Feature Id="Main" Title="remotejoe" Level="1">
+    <Feature Id="Main" Title="$(var.ProductName)" Level="1">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>

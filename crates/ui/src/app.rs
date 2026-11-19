@@ -70,7 +70,7 @@ pub struct App {
     pub(crate) macro_runs: Vec<crate::macro_run::RunningMacro>,
     pub(crate) macro_input_tx: mpsc::Sender<(SessionId, Vec<u8>)>,
     macro_input_rx: Receiver<(SessionId, Vec<u8>)>,
-    lights: std::collections::HashMap<Uuid, Light>,
+    pub(crate) lights: std::collections::HashMap<Uuid, Light>,
     _rt: tokio::runtime::Runtime,
     /// Tunnel; aufgebaut wird in Hintergrundaufgaben.
     pub(crate) tunnels: std::sync::Arc<std::sync::Mutex<TunnelManager>>,
@@ -78,9 +78,11 @@ pub struct App {
     deferred_releases: Vec<(Uuid, String, u16)>,
     /// Hintergrundaufgaben und deren Ergebnis (Sitzung oder Fehler).
     pub jobs: crate::jobs::Jobs,
-    /// Aruba-Werkzeuge: laufender oder letzter Lauf eines Werkzeugs (ap_check).
+    /// Modul: laufender oder letzter Lauf eines Werkzeugs.
+    #[cfg(feature = "aruba")]
     pub(crate) aptools_run: Option<crate::aptools::Run>,
-    /// Aruba-Werkzeuge: laufender oder letzter schreibender Lauf (Neustart, Update).
+    /// Modul: laufender oder letzter schreibender Lauf.
+    #[cfg(feature = "aruba")]
     pub(crate) aptools_write: Option<crate::aptools::Run>,
     pub(crate) job_results: std::collections::HashMap<u64, Result<SessionId, String>>,
     /// Sperre nach Leerlauf und Erkennung des Aufwachens.
@@ -152,7 +154,9 @@ impl App {
             tunnels,
             deferred_releases: Vec::new(),
             jobs: Default::default(),
+            #[cfg(feature = "aruba")]
             aptools_run: None,
+            #[cfg(feature = "aruba")]
             aptools_write: None,
             job_results: Default::default(),
             idle,
@@ -1816,9 +1820,9 @@ pub enum WaySel {
     Main,
     /// Ein bestimmter weiterer Weg.
     Way(Uuid),
-    /// SSH zu einer anderen Adresse mit den Zugangsdaten des Ziels (Aruba: einzelner AP eines Clusters).
+    /// SSH zu einer anderen Adresse mit den Zugangsdaten des Ziels (z. B. ein einzelnes Gerät einer Gruppe).
     SshHost(std::net::IpAddr),
-    /// Web-Oberfläche (https, Port 4343) einer anderen Adresse mit den Zugangsdaten des Ziels (Aruba: Gerät aus der
+    /// Web-Oberfläche (https, Port 4343) einer anderen Adresse mit den Zugangsdaten des Ziels (z. B. Gerät aus der
     /// Suche nach Clusteraufbrüchen).
     WebHost(std::net::IpAddr),
 }

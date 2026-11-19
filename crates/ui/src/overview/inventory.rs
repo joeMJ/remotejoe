@@ -48,7 +48,7 @@ pub struct Field {
 pub struct Inventory {
     #[serde(default)]
     pub fields: BTreeMap<String, Field>,
-    /// Als Aruba-AP erkannt und der Weg zur Web-Oberfläche (4343) geprüft bzw. angelegt; danach nie wieder,
+    /// Geräteart erkannt und der Weg zur Web-Oberfläche (4343) geprüft bzw. angelegt; danach nie wieder,
     /// damit ein gelöschter Weg nicht zurückkommt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub aruba_web_way: bool,
@@ -109,7 +109,7 @@ impl Inventory {
 }
 
 /// Versionsnummer aus dem Feld „System“: das erste Wort aus Ziffern und Punkten mit mindestens einem Punkt, auch
-/// mit vorangestelltem „v“ („Aruba Instant 8.10.0.24 LSR (Modell 335)“ → „8.10.0.24“, „Ubuntu 24.04.1 LTS“ →
+/// mit vorangestelltem „v“ („Gerät 8.10.0.24 LSR (Modell 335)“ → „8.10.0.24“, „Ubuntu 24.04.1 LTS“ →
 /// „24.04.1“, „Alpine Linux v3.16“ → „3.16“). Debian nennt nur die Hauptversion („Debian GNU/Linux 13 (trixie)“ →
 /// „13“).
 pub fn version_of(system: &str) -> Option<&str> {
@@ -118,10 +118,29 @@ pub fn version_of(system: &str) -> Option<&str> {
     words().find(|w| w.contains('.') && number(w)).or_else(|| if system.starts_with("Debian") { words().find(|w| number(w)) } else { None })
 }
 
-/// Geräteart aus dem Inventar, für ein eigenes Symbol im Baum: `aruba-ap`, sobald das Inventar ein Aruba-Gerät
-/// meldet (System „Aruba Instant …“ aus `show version`).
+/// Geräteart aus dem Inventar, für ein eigenes Symbol im Baum: eine Kennung, sobald das Inventar ein passendes Gerät
+/// meldet (System aus `show version`).
 pub fn device_kind(inv: &Inventory) -> Option<&'static str> {
-    inv.value("system").filter(|s| s.starts_with("Aruba")).map(|_| "aruba-ap")
+    // Gerätearten gibt es nur mit den Modulen.
+    #[cfg(not(feature = "aruba"))]
+    {
+        let _ = inv;
+        None
+    }
+    #[cfg(feature = "aruba")]
+    {
+        let s = inv.value("system")?;
+        // Switches vor den APs: beide beginnen gleich.
+        if !cfg!(feature = "standorte") && (s.starts_with("AOS-CX") || s.starts_with("ArubaOS-CX") || s.starts_with("ArubaOS-Switch")) {
+            None
+        } else if s.starts_with("AOS-CX") || s.starts_with("ArubaOS-CX") {
+            Some("aruba-cx")
+        } else if s.starts_with("ArubaOS-Switch") {
+            Some("aruba-switch")
+        } else {
+            s.starts_with("Aruba").then_some("aruba-ap")
+        }
+    }
 }
 
 /// Ablage der Inventardateien.
@@ -237,6 +256,7 @@ mod tests {
         assert_eq!(inv.value("uptime"), Some("von Hand"));
     }
 
+    #[cfg(feature = "aruba")]
     #[test]
     fn aruba_system_marks_the_device_kind() {
         let mut inv = Inventory::default();
@@ -326,4 +346,10 @@ mod tests {
         assert_eq!(format_bytes(8 * 1024 * 1024 * 1024), "8,0 GiB");
         assert_eq!(format_bytes(8_253_000 * 1024), "7,9 GiB");
     }
+}
+
+/// Gerätearten, die als Switch gelten (Module, Netzwerkgeräte, Inventar). Weitere Hersteller kommen hier
+/// dazu.
+pub fn is_switch_kind(kind: Option<&str>) -> bool {
+    matches!(kind, Some("aruba-cx") | Some("aruba-switch"))
 }

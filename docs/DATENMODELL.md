@@ -64,7 +64,7 @@ Beispiel (gekürzt, erfundene Daten):
       {
         "kind": "folder",
         "id": "6f1c0000-0000-4000-8000-000000000010",
-        "name": "Standort Nord",
+        "name": "Niederlassung Nord",
         "settings": {
           "credentials": {
             "default": { "entry": "0b0b0000-0000-4000-8000-000000000002", "last_title": "Admin Nord" }

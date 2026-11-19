@@ -43,6 +43,9 @@ uninstall() {
 }
 
 FROM_DIR=""
+# Paket- und Anzeigename.
+PKGNAME="remotejoe"
+SHOWNAME="remotejoe basic"
 while [ $# -gt 0 ]; do
     case "$1" in
         --uninstall) uninstall ;;
@@ -75,8 +78,8 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 if [ -n "$FROM_DIR" ]; then
     say "Verwende Dateien aus $FROM_DIR"
     cp "$FROM_DIR"/SHA256SUMS "$FROM_DIR"/SHA256SUMS.sig "$TMP/"
-    ARCHIVE_NAME="$(awk '{print $2}' "$TMP/SHA256SUMS" | grep -E "^remotejoe-[0-9][^-]*(-[A-Za-z0-9.]+)?-linux-x86_64${VARIANT}\\.tar\\.zst$" | head -1)"
-    [ -n "$ARCHIVE_NAME" ] || die "Kein Linux-Paket in SHA256SUMS."
+    ARCHIVE_NAME="$(awk '{print $2}' "$TMP/SHA256SUMS" | grep -E "^${PKGNAME}-[0-9][^-]*(-[A-Za-z0-9.]+)?-linux-x86_64${VARIANT}\\.tar\\.zst$" | head -1)"
+    [ -n "$ARCHIVE_NAME" ] || die "Kein Linux-Paket ${PKGNAME}-…-linux-x86_64${VARIANT}.tar.zst in SHA256SUMS."
     cp "$FROM_DIR/$ARCHIVE_NAME" "$TMP/"
 else
     say "Suche die neueste Veröffentlichung …"
@@ -90,7 +93,7 @@ else
         curl -fsSL --proto '=https' -o "$TMP/$f" "$url" || die "Download von '$f' fehlgeschlagen."
     done
 fi
-VERSION="${ARCHIVE_NAME#remotejoe-}"; VERSION="${VERSION%-linux-x86_64${VARIANT}.tar.zst}"
+VERSION="${ARCHIVE_NAME#${PKGNAME}-}"; VERSION="${VERSION%-linux-x86_64${VARIANT}.tar.zst}"
 
 # 1. Signatur von SHA256SUMS mit dem eingebauten Schlüssel (Ed25519, über OpenSSL ≥ 3).
 KEYTEXT="${REMOTEJOE_UPDATE_KEY:-$UPDATE_KEY}"
@@ -143,7 +146,7 @@ ln -sf "$PREFIX/remotejoe" "$BINDIR/remotejoe"
 sed -e "s|@EXEC@|$PREFIX/remotejoe|" -e "s|^Icon=.*|Icon=$PREFIX/share/icons/remotejoe-256.png|" "$PREFIX/share/remotejoe.desktop.in" > "$APPDIR/remotejoe.desktop"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPDIR" 2>/dev/null || true
 
-say "remotejoe $VERSION ist installiert: $PREFIX"
-say "Start: im Anwendungsmenü „remotejoe“ oder im Terminal: remotejoe"
+say "$SHOWNAME $VERSION ist installiert: $PREFIX"
+say "Start: im Anwendungsmenü „$SHOWNAME“ oder im Terminal: remotejoe"
 case ":$PATH:" in *":$BINDIR:"*) ;; *) say "Hinweis: $BINDIR ist nicht im PATH; das Programm startet trotzdem über das Anwendungsmenü." ;; esac
 [ ! -e "$PREFIX.alt" ] || say "Die bisherige Fassung liegt noch unter $PREFIX.alt (kann gelöscht werden)."

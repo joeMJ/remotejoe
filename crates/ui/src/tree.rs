@@ -34,7 +34,7 @@ pub struct UiNode {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<UiNode>,
     pub folder: bool,
-    /// Geräteart aus dem Inventar (eigenes Symbol, z. B. `aruba-ap`).
+    /// Geräteart aus dem Inventar (eigenes Symbol).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<&'static str>,
     /// Ziel mit weiteren Zugangswegen (eigenes Symbol).
@@ -46,6 +46,15 @@ pub struct UiNode {
     /// Anmeldeobjekt (keine Verbindung, öffnet die Bearbeitung).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub login: bool,
+    /// Ordner eines Moduls (eigenes Symbol, eigene Karte).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub site: bool,
+    /// Virtueller Switch (kein Ziel; öffnet den Tab „Virtueller Switch“).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub vswitch: bool,
+    /// Rolle eines Ordners (eigenes Symbol): templates, login_templates, network, servers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<&'static str>,
 }
 
 fn matches(name: &str, host: Option<&str>, q: &[String]) -> bool {
@@ -76,6 +85,10 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         multi: false,
                         other_way: false,
                         login: false,
+                        // Eigenes Symbol nur mit dem Modul.
+                        site: cfg!(feature = "standorte") && sub.site.is_some(),
+                        vswitch: false,
+                        role: sub.role.map(|r| r.as_str()),
                     });
                 }
             }
@@ -95,9 +108,36 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         multi: !t.ways.is_empty(),
                         other_way: t.open_with.is_some_and(|w| t.ways.iter().any(|x| x.id == w)),
                         login: false,
+                        site: false,
+                        vswitch: false,
+                        role: None,
                     });
                 }
             }
+        }
+    }
+    // Virtuelle Switches nach den Einträgen des Ordners.
+    // Ohne das Modul bleiben sie verborgen (die Daten in der KDBX bleiben unverändert).
+    for v in f.site.iter().filter(|_| cfg!(feature = "standorte")).flat_map(|s| s.vswitches.iter()) {
+        if q.is_empty() || matches(&v.name, None, q) {
+            let display = mark_visible(&v.name, false);
+            out.push(UiNode {
+                id: v.id,
+                suspicious: display != v.name,
+                name: display.into_owned(),
+                protocol: None,
+                host: None,
+                light: None,
+                children: Vec::new(),
+                folder: false,
+                device: None,
+                multi: false,
+                other_way: false,
+                login: false,
+                site: false,
+                vswitch: true,
+                role: None,
+            });
         }
     }
     // Anmeldeobjekte dieses Ordners nach seinen Einträgen.
@@ -117,6 +157,9 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         multi: false,
                         other_way: false,
                 login: true,
+                site: false,
+                vswitch: false,
+                role: None,
             });
         }
     }
@@ -166,7 +209,7 @@ pub fn demo_index(targets: usize) -> Index {
                 }
                 let p = protos[n % protos.len()];
                 let name = if n == 7 { "versteckt\u{200B}name".to_string() } else { format!("{}-{:03}", p.as_str(), i) };
-                // Standort Nord → Netz: drei Ziele (verschiedene Protokolle) unter einer Adresse, für
+                // Ordner Nord → Netz: drei Ziele (verschiedene Protokolle) unter einer Adresse, für
                 // „Gleiche Adressen zusammenfassen“.
                 let host_nr = if si == 0 && g == 2 && (1..3).contains(&i) { n - i } else { n };
                 let t = rj_core::Target::new(name, p, format!("h{host_nr}.site{si}.example.test"));
@@ -193,6 +236,20 @@ mod tests {
         let all = serde_json::to_string(&t).unwrap();
         assert!(all.contains("versteckt⟦U+200B⟧name"));
         assert_eq!(count(&t), 40 + 20 + 5, "40 Ziele, 20 Gruppen, 5 Standorte");
+    }
+
+    #[cfg(feature = "standorte")]
+    #[test]
+    fn virtual_switches_appear_under_their_site() {
+        let mut idx = Index::default();
+        let mut f = Folder::new("Standort");
+        f.site = Some(rj_core::Site { vswitches: vec![rj_core::VSwitch { id: Uuid::nil(), name: "APs Haus A".into(), ports: Vec::new() }], ..Default::default() });
+        idx.root.children.push(Node::Folder(f));
+        let t = tree(&idx, "", &|_| None);
+        let v = &t[0].children[0];
+        assert!(v.vswitch && !v.folder && v.protocol.is_none());
+        assert_eq!(v.name, "APs Haus A");
+        assert!(tree(&idx, "haus", &|_| None)[0].children[0].vswitch);
     }
 
     #[test]

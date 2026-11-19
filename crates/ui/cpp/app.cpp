@@ -146,36 +146,8 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.tabs()->removeTab(w.tabs()->indexOf(t));
 		t->deleteLater();
 	}
-	// Aruba-Werkzeuge: Cluster-Karte (Übersicht, ans Ende gerollt) und Seite eines APs.
-	if (QWidget* o = w.arubaForScreenshot(false))
-	{
-		pump(500);
-		if (auto* sa = o->findChild<QScrollArea*>())
-			sa->verticalScrollBar()->setValue(sa->verticalScrollBar()->maximum());
-		pump(200);
-		save(&w, dir, QStringLiteral("aruba-cluster.png"));
-	}
-	if (QWidget* a = w.arubaForScreenshot(true))
-	{
-		pump(400);
-		save(&w, dir, QStringLiteral("aruba-ap.png"));
-		w.tabs()->removeTab(w.tabs()->indexOf(a));
-		a->deleteLater();
-	}
-	if (QWidget* s = w.arubaSummaryForScreenshot())
-	{
-		pump(400);
-		save(&w, dir, QStringLiteral("aruba-clusteruebersicht.png"));
-		w.tabs()->removeTab(w.tabs()->indexOf(s));
-		s->deleteLater();
-	}
-	if (QWidget* b = w.arubaBreakoutsForScreenshot())
-	{
-		pump(400);
-		save(&w, dir, QStringLiteral("aruba-clusteraufbrueche.png"));
-		w.tabs()->removeTab(w.tabs()->indexOf(b));
-		b->deleteLater();
-	}
+	// Module (nur mit dem jeweiligen Modul gebaut).
+	w.moduleScreenshots(pump, [&](const QString& name) { save(&w, dir, name); });
 	w.patchdayForFirstTargets(25);
 	pump(1500);
 	QString patchday;
