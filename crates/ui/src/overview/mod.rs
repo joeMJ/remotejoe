@@ -214,12 +214,11 @@ impl App {
     /// Gespeicherter Cluster eines VC für die Übersicht (ohne das Modul nie).
     fn aruba_cluster_view(&self, key: &str) -> Option<Value> {
         #[cfg(feature = "aruba")]
-        return self.overview.cluster_view(key);
-        #[cfg(not(feature = "aruba"))]
-        {
-            let _ = key;
-            None
+        if crate::modules::aktiv() {
+            return self.overview.cluster_view(key);
         }
+        let _ = key;
+        None
     }
 
     fn ov_subject(&self, c: &Value) -> Result<Subject, String> {
@@ -266,8 +265,8 @@ impl App {
             "key": key,
             "inventory": inventory_json(&inv),
             // Werkzeuge des Moduls nur für APs bzw. VCs, nie für Switches.
-            "aruba": cfg!(feature = "aruba") && inv.value("system").is_some_and(|s| s.starts_with("Aruba") && !s.starts_with("ArubaOS-Switch")) && !Uuid::parse_str(&key).is_ok_and(|id| inventory::is_switch_kind(self.overview.devices.get(&id).copied())),
-            "aruba_tools": cfg!(feature = "aruba") && self.config.features.aruba,
+            "aruba": cfg!(feature = "aruba") && crate::modules::aktiv() && inv.value("system").is_some_and(|s| s.starts_with("Aruba") && !s.starts_with("ArubaOS-Switch")) && !Uuid::parse_str(&key).is_ok_and(|id| inventory::is_switch_kind(self.overview.devices.get(&id).copied())),
+            "aruba_tools": cfg!(feature = "aruba") && crate::modules::aktiv() && self.config.features.aruba,
             "aruba_cluster": self.aruba_cluster_view(&key),
             "services": services,
             "busy": self.overview.busy.contains_key(&key),
@@ -415,7 +414,7 @@ impl App {
         #[cfg(not(feature = "standorte"))]
         let _ = switch;
         #[cfg(feature = "standorte")]
-        if let (true, Ok(ip)) = (switch, t.host.trim().parse::<std::net::Ipv4Addr>()) {
+        if let (true, true, Ok(ip)) = (switch, crate::modules::aktiv(), t.host.trim().parse::<std::net::Ipv4Addr>()) {
             let cred = crate::switches::Cred { name: "Ziel", payload: self.credential_payload(&r, Protocol::Ssh)? };
             let known = self.known_hosts_ref();
             let job_key = key.clone();

@@ -86,7 +86,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         other_way: false,
                         login: false,
                         // Eigenes Symbol nur mit dem Modul.
-                        site: cfg!(feature = "standorte") && sub.site.is_some(),
+                        site: cfg!(feature = "standorte") && crate::modules::aktiv() && sub.site.is_some(),
                         vswitch: false,
                         role: sub.role.map(|r| r.as_str()),
                     });
@@ -118,7 +118,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
     }
     // Virtuelle Switches nach den Einträgen des Ordners.
     // Ohne das Modul bleiben sie verborgen (die Daten in der KDBX bleiben unverändert).
-    for v in f.site.iter().filter(|_| cfg!(feature = "standorte")).flat_map(|s| s.vswitches.iter()) {
+    for v in f.site.iter().filter(|_| cfg!(feature = "standorte") && crate::modules::aktiv()).flat_map(|s| s.vswitches.iter()) {
         if q.is_empty() || matches(&v.name, None, q) {
             let display = mark_visible(&v.name, false);
             out.push(UiNode {

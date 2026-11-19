@@ -300,8 +300,9 @@ fn ssh_inventory_on(
         }
     }
     #[cfg(feature = "aruba")]
-    return aruba_inv::device_cli_inventory(spec, port, &rt, conn, params, known, ask, ip, note, &known_switch);
-    #[cfg(not(feature = "aruba"))]
+    if crate::modules::aktiv() {
+        return aruba_inv::device_cli_inventory(spec, port, &rt, conn, params, known, ask, ip, note, &known_switch);
+    }
     {
         let _ = (spec, port, params, known, ask, known_switch);
         rt.block_on(conn.disconnect());

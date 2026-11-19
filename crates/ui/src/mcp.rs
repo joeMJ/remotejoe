@@ -35,11 +35,13 @@ pub const ACTIONS: [&str; 4] = ["verbinden", "inventar_abfragen", "cluster_abfra
 pub const ACTIONS: [&str; 2] = ["verbinden", "inventar_abfragen"];
 
 /// Zusätzliche Werkzeuge der Module für die Werkzeugliste von rj-mcp (Name, Beschreibung, Eingabe).
-fn module_tools() -> Vec<Value> {
+pub(crate) fn module_tools() -> Vec<Value> {
     #[allow(unused_mut)]
     let mut v = Vec::new();
     #[cfg(feature = "aruba")]
-    v.extend(crate::modules::aruba::mcp_tools());
+    if crate::modules::aktiv() {
+        v.extend(crate::modules::aruba::mcp_tools());
+    }
     v
 }
 
@@ -80,7 +82,7 @@ impl App {
         let mut v = json!({
             "id": t.id,
             "name": t.name,
-            "typ": self.overview.devices.get(&t.id).map(|d| if cfg!(feature = "aruba") && *d == "aruba-ap" { "Aruba-AP" } else { *d }).unwrap_or(t.protocol.label()),
+            "typ": self.overview.devices.get(&t.id).map(|d| if cfg!(feature = "aruba") && crate::modules::aktiv() && *d == "aruba-ap" { "Aruba-AP" } else { *d }).unwrap_or(t.protocol.label()),
             "ordner": self.mcp_path(t.id),
             "version": inv.value("system").and_then(crate::overview::inventory::version_of),
         });
@@ -242,7 +244,7 @@ impl App {
                 Ok(json!({ "geprueft": werte.len(), "nicht_gefunden": missing, "ergebnis": result }))
             }
             #[cfg(feature = "aruba")]
-            "aruba_cluster" => {
+            "aruba_cluster" if crate::modules::aktiv() => {
                 let t = self.mcp_target_arg(args)?;
                 crate::modules::aruba::mcp_cluster(self, &t.id.to_string())
             }
@@ -274,7 +276,7 @@ impl App {
                     return Ok(json!({ "needs_confirm": true, "prompt": format!("Claude möchte {what} „{}“ (mit Anmeldeobjekt „{login}“).", t.name), "target": t.id, "action": a }));
                 }
                 // Ausführen übernimmt die Oberfläche (sie öffnet Tabs bzw. startet die Abfrage).
-                Ok(json!({ "freigegeben": true, "action": a, "target": t.id, "hinweis": if cfg!(feature = "aruba") { "Gestartet. Ergebnisse von Abfragen später mit ziel_uebersicht bzw. aruba_cluster abrufen." } else { "Gestartet. Ergebnisse von Abfragen später mit ziel_uebersicht abrufen." } }))
+                Ok(json!({ "freigegeben": true, "action": a, "target": t.id, "hinweis": if cfg!(feature = "aruba") && crate::modules::aktiv() { "Gestartet. Ergebnisse von Abfragen später mit ziel_uebersicht bzw. aruba_cluster abrufen." } else { "Gestartet. Ergebnisse von Abfragen später mit ziel_uebersicht abrufen." } }))
             }
             other => Err(format!("Unbekanntes Werkzeug „{other}“")),
         }

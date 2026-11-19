@@ -1545,7 +1545,8 @@ QJsonObject PropertiesTab::collect() const
 	if (m_dirty.contains(QStringLiteral("description")))
 		f.insert(QStringLiteral("description"), m_desc->text());
 #ifdef RJ_STANDORTE
-	saveSite(f);
+	if (m_backend->modulesActive())
+		saveSite(f);
 #endif
 	if (m_ways && m_dirty.contains(QStringLiteral("ways")))
 	{

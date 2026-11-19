@@ -119,6 +119,7 @@ pub struct App {
 
 impl App {
     pub fn new(demo: bool) -> Self {
+        crate::modules::set_demo(demo);
         let config_path = rj_core::config::default_config_path();
         let config = config_path.as_deref().map(Config::load).and_then(Result::ok).unwrap_or_default();
         crate::keyerrors::set(config.security.accept_key_errors);

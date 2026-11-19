@@ -129,6 +129,9 @@ pub fn device_kind(inv: &Inventory) -> Option<&'static str> {
     }
     #[cfg(feature = "aruba")]
     {
+        if !crate::modules::aktiv() {
+            return None;
+        }
         let s = inv.value("system")?;
         // Switches vor den APs: beide beginnen gleich.
         if !cfg!(feature = "standorte") && (s.starts_with("AOS-CX") || s.starts_with("ArubaOS-CX") || s.starts_with("ArubaOS-Switch")) {

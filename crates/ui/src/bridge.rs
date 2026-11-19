@@ -43,6 +43,18 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "appEdition"]
         fn app_edition(self: &RjBackend) -> QString;
+        /// Sind die Module zur Laufzeit aktiv (gültige Lizenz, Vorführung)? Ohne Module immer `false`.
+        #[qinvokable]
+        #[cxx_name = "modulesActive"]
+        fn modules_active(self: &RjBackend) -> bool;
+        /// Lizenz für Einstellungen → Lizenz (JSON: status, lizenz, neustart …; Kennwort nie im Klartext).
+        #[qinvokable]
+        #[cxx_name = "lizenzJson"]
+        fn lizenz_json(self: &RjBackend) -> QString;
+        /// Eingefügte Lizenz prüfen und ablegen (JSON mit `ok` bzw. `error`); gilt ab dem nächsten Start.
+        #[qinvokable]
+        #[cxx_name = "lizenzSpeichern"]
+        fn lizenz_speichern(self: &RjBackend, text: &QString) -> QString;
         /// Ist eine Schlüsseldatenbank entsperrt (oder läuft die Vorführung)?
         /// Ungespeicherte Änderungen in der Schlüsseldatenbank (Index, Zugangsdaten, Import).
         /// Benutzername oder Kennwort eines Ziels für die Zwischenablage (JSON mit `text` oder `error`).
@@ -295,6 +307,21 @@ impl qobject::RjBackend {
 
     fn app_edition(&self) -> QString {
         q(crate::modules::EDITION.to_string())
+    }
+
+    fn modules_active(&self) -> bool {
+        crate::modules::aktiv()
+    }
+
+    fn lizenz_json(&self) -> QString {
+        q(crate::modules::lizenz_json().to_string())
+    }
+
+    fn lizenz_speichern(&self, text: &QString) -> QString {
+        q(match crate::modules::lizenz_speichern(&text.to_string()) {
+            Ok(v) => v.to_string(),
+            Err(e) => serde_json::json!({ "error": e }).to_string(),
+        })
     }
 
     fn credential_copy(&self, id: &QString, kind: &QString) -> QString {

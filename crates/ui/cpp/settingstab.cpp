@@ -131,7 +131,8 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 	addArea(QStringLiteral("snmp"), T("snmp.title"), m_snmp, false);
 	addArea(QStringLiteral("backup"), T("settings.backup"), pageBackup(), true);
 #ifdef RJ_STANDORTE
-	addModuleAreas();
+	if (m_backend->modulesActive())
+		addModuleAreas();
 #endif
 	addArea(QStringLiteral("license"), T("settings.license"), pageLicense(), true);
 	addArea(QStringLiteral("mcp"), T("settings.mcp"), pageMcp(), true);
@@ -334,8 +335,8 @@ QWidget* SettingsTab::pageLicense()
 	auto* w = new QWidget;
 	auto* v = new QVBoxLayout(w);
 #ifdef RJ_ARUBA
-	// Mit Modulen.
-	v->addWidget(hint(T("settings.license.hint"), w));
+	Q_UNUSED(T);
+	buildLicensePage(v, w);
 #else
 	// remotejoe basic: Verweis auf die Fassung mit Modulen.
 	v->addWidget(hint(T("settings.license.advanced"), w));
@@ -367,7 +368,7 @@ QWidget* SettingsTab::pageMcp()
 	v->addWidget(m_mcpFolders);
 	v->addWidget(rjui::section(T("settings.mcp.logins"), w));
 #ifdef RJ_ARUBA
-	v->addWidget(hint(T("settings.mcp.logins.hint.aruba"), w));
+	v->addWidget(hint(T(m_backend->modulesActive() ? "settings.mcp.logins.hint.aruba" : "settings.mcp.logins.hint"), w));
 #else
 	v->addWidget(hint(T("settings.mcp.logins.hint"), w));
 #endif
@@ -624,7 +625,8 @@ void SettingsTab::reload()
 		m_adminLayout->setCurrentIndex(i);
 	m_adminTimeout->setValue(s.value(QStringLiteral("admin_keys_timeout_mins")).toInt(10));
 #ifdef RJ_STANDORTE
-	loadModuleSettings(s);
+	if (m_backend->modulesActive())
+		loadModuleSettings(s);
 #endif
 	reloadBackup();
 	reloadMcp();
@@ -660,9 +662,14 @@ void SettingsTab::refreshSummaries()
 	if (m_mcp)
 		set("mcp", T(m_mcp->isChecked() ? "settings.mcp.sum.on" : "settings.mcp.sum.off"));
 #ifdef RJ_STANDORTE
-	moduleSummaries([&set](const char* key, const QString& text) { set(key, text); });
+	if (m_backend->modulesActive())
+		moduleSummaries([&set](const char* key, const QString& text) { set(key, text); });
 #endif
+#ifdef RJ_ARUBA
+	set("license", licenseSummary());
+#else
 	set("license", T("settings.license.sum"));
+#endif
 }
 
 void SettingsTab::wipeSecrets()

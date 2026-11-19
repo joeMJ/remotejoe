@@ -4,6 +4,8 @@
 
 #[cfg(feature = "aruba")]
 pub mod aruba;
+#[cfg(any(feature = "standorte", feature = "aruba"))]
+pub mod lizenz;
 #[cfg(feature = "standorte")]
 pub mod standorte;
 
@@ -17,10 +19,58 @@ pub trait Module: Sync {
     fn handle(&self, app: &mut App, op: &str, c: &Value) -> Option<Result<Value, String>>;
 }
 
-/// Angemeldete Module dieser Fassung (je nach Bauschaltern).
+/// Sind die Module zur Laufzeit aktiv? Ohne Module nie; mit Modulen bei gültiger Lizenz (sonst Rückfall auf die
+/// Funktionen ohne Module, gespeicherte Daten bleiben unberührt).
+pub fn aktiv() -> bool {
+    #[cfg(any(feature = "standorte", feature = "aruba"))]
+    {
+        lizenz::aktiv()
+    }
+    #[cfg(not(any(feature = "standorte", feature = "aruba")))]
+    {
+        false
+    }
+}
+
+/// Beim Anlegen der App: Vorführung merken.
+#[allow(unused_variables)]
+pub fn set_demo(demo: bool) {
+    #[cfg(any(feature = "standorte", feature = "aruba"))]
+    lizenz::set_demo(demo);
+}
+
+/// Angaben für Einstellungen → Lizenz.
+pub fn lizenz_json() -> Value {
+    #[cfg(any(feature = "standorte", feature = "aruba"))]
+    {
+        lizenz::json()
+    }
+    #[cfg(not(any(feature = "standorte", feature = "aruba")))]
+    {
+        serde_json::json!({ "status": "ohne" })
+    }
+}
+
+/// Eingefügte Lizenz prüfen und ablegen (gilt ab dem nächsten Start).
+#[allow(unused_variables)]
+pub fn lizenz_speichern(text: &str) -> Result<Value, String> {
+    #[cfg(any(feature = "standorte", feature = "aruba"))]
+    {
+        lizenz::save(text)
+    }
+    #[cfg(not(any(feature = "standorte", feature = "aruba")))]
+    {
+        Err("Diese Fassung hat keine Lizenz.".into())
+    }
+}
+
+/// Angemeldete Module dieser Fassung (je nach Bauschaltern), nur wenn sie aktiv sind.
 pub fn all() -> Vec<&'static dyn Module> {
     #[allow(unused_mut)]
     let mut v: Vec<&'static dyn Module> = Vec::new();
+    if !aktiv() {
+        return v;
+    }
     #[cfg(feature = "standorte")]
     v.push(&standorte::Ops);
     #[cfg(feature = "aruba")]
@@ -34,6 +84,10 @@ pub const EDITION: &str = if cfg!(feature = "advanced") { "remotejoe advanced" }
 /// Einstellungen der Module in die Antwort „settings“.
 #[allow(unused_variables)]
 pub fn settings_json(app: &App, m: &mut serde_json::Map<String, Value>) {
+    m.insert("module_aktiv".into(), Value::Bool(aktiv()));
+    if !aktiv() {
+        return;
+    }
     #[cfg(feature = "standorte")]
     standorte::settings_json(app, m);
     #[cfg(feature = "aruba")]
@@ -43,6 +97,9 @@ pub fn settings_json(app: &App, m: &mut serde_json::Map<String, Value>) {
 /// Einstellungen der Module aus „set_settings“ übernehmen.
 #[allow(unused_variables)]
 pub fn set_settings(app: &mut App, c: &Value) {
+    if !aktiv() {
+        return;
+    }
     #[cfg(feature = "standorte")]
     standorte::set_settings(app, c);
     #[cfg(feature = "aruba")]

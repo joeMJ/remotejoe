@@ -711,12 +711,17 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
   , m_backend(backend)
 {
 	// Module melden ihre Menüeinträge und ihr Klickverhalten an (vor dem Aufbau der Menüs).
+	// Module nur bei gültiger Lizenz (bzw. in der Vorführung); sonst die Funktionen ohne Module.
+	const bool modules = m_backend->modulesActive();
 #ifdef RJ_STANDORTE
-	registerStandorteUi();
+	if (modules)
+		registerStandorteUi();
 #endif
 #ifdef RJ_ARUBA
-	registerArubaUi();
+	if (modules)
+		registerArubaUi();
 #endif
+	Q_UNUSED(modules);
 	const QString version = m_backend->appVersion();
 	setWindowTitle(QStringLiteral("%1 V %2").arg(T(m_backend, "app.title"), version));
 	resize(1280, 800);

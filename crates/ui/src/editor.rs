@@ -295,7 +295,7 @@ impl App {
             }
         } else {
             #[cfg(feature = "standorte")]
-            if let Some(Node::Folder(f)) = node {
+            if let (true, Some(Node::Folder(f))) = (crate::modules::aktiv(), node) {
                 v["site"] = self.site_editor_json(f);
             }
             v["clipboard"] = json!(settings.clipboard.map(clip_str).unwrap_or("inherit"));
@@ -1118,7 +1118,7 @@ impl App {
             // Modul: die Web-Oberfläche auf 4343 als Hauptweg, dazu SSH mit denselben Zugangsdaten (Inventar,
             // Werkzeuge suchen sich diesen Weg). Der SSH-Weg ohne eigene Adresse folgt der des Ziels.
             #[cfg(feature = "aruba")]
-            "aruba" => {
+            "aruba" if crate::modules::aktiv() => {
                 let name = str_of(c, "name").filter(|n| !n.is_empty()).unwrap_or("Neuer Aruba-AP");
                 let mut t = edit::new_target(&self.index, parent, Protocol::Web, name, None);
                 t.port = Some(4343);
@@ -1424,7 +1424,7 @@ impl App {
                     // Web-Weg auf 4343 ohne Adresse bekommt die URL, sobald das Ziel eine Adresse hat
                     // (nach der Übernahme der Adresse aus dem Formular, damit es schon beim ersten Speichern greift).
                     let host = t.host.trim().to_string();
-                    if cfg!(feature = "aruba") && !host.is_empty() {
+                    if cfg!(feature = "aruba") && crate::modules::aktiv() && !host.is_empty() {
                         let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host };
                         for w in t.ways.iter_mut().filter(|w| w.protocol == Protocol::Web && w.host.trim().is_empty() && w.port == Some(4343)) {
                             w.host = format!("https://{h}:4343/");
@@ -1439,7 +1439,7 @@ impl App {
                 None => return Err("Objekt nicht gefunden".into()),
             }
             #[cfg(feature = "standorte")]
-            if let Some(s) = f.get("site").filter(|s| s.is_object()) {
+            if let Some(s) = f.get("site").filter(|s| s.is_object() && crate::modules::aktiv()) {
                 self.site_apply(id, s)?;
             }
             if let Some(p) = id_of(&f, "parent") {

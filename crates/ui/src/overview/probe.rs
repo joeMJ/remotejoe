@@ -46,7 +46,8 @@ pub fn resolve(host: &str) -> Result<IpAddr, String> {
 
 /// Liste der zu prüfenden Ports: die bekannten und – falls abweichend – der Port des Ziels.
 pub fn port_list(extra: Option<(u16, &str)>) -> Vec<(u16, String)> {
-    let mut v: Vec<(u16, String)> = PORTS.iter().map(|(p, n)| (*p, n.to_string())).collect();
+    // Beschriftung eines Moduls nur, wenn es aktiv ist.
+    let mut v: Vec<(u16, String)> = PORTS.iter().map(|(p, n)| (*p, if *n == "Aruba" && !crate::modules::aktiv() { "HTTPS".to_string() } else { n.to_string() })).collect();
     if let Some((p, n)) = extra {
         if !v.iter().any(|(q, _)| *q == p) {
             v.push((p, n.to_string()));

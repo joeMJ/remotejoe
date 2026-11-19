@@ -12,6 +12,11 @@ use serde_json::{json, Value};
 use crate::app::App;
 use crate::sessions::UiEvent;
 
+// Fassung mit Modulen: Updates aus der Ablage (Lizenz).
+#[cfg(feature = "advanced")]
+#[path = "modules/lizenz/update_ablage.rs"]
+mod update_ablage;
+
 /// Eingebauter öffentlicher Schlüssel für die Signatur der Pakete.
 pub const UPDATE_KEY: &str = include_str!("../res/update-key.pub");
 
@@ -38,6 +43,9 @@ pub struct UpdateState {
     total: u64,
     /// Windows, nur Tests: Installation über die MSI annehmen bzw. ausschließen (sonst nach dem Programmordner).
     pub msi_override: Option<bool>,
+    /// Fassung mit Modulen: in der Ablage gefundene neuere Version.
+    #[cfg(feature = "advanced")]
+    pub(crate) ablage: update_ablage::AblageFund,
 }
 
 /// Windows: Das Programm ersetzt sich nicht selbst. Als MSI installiert lädt „Nach Updates suchen“ die MSI,
@@ -46,15 +54,24 @@ pub struct UpdateState {
 const PAGE_ONLY: bool = cfg!(windows);
 
 /// Die einzige Quelle: die öffentlichen Veröffentlichungen von remotejoe auf GitHub.
-/// Fassung mit Modulen: Meldung statt einer Update-Prüfung bei GitHub.
-#[cfg(feature = "advanced")]
-pub const ADVANCED_UPDATES: &str = "remotejoe advanced bekommt Updates über die interne Ablage (GitHub führt nur remotejoe basic).";
 
 pub fn github_source() -> Source {
     Source { kind: SourceKind::Github, base_url: String::new(), repo: "joeMJ/remotejoe".into() }
 }
 
 impl App {
+    /// Fassung mit Modulen: automatische Prüfung in der Ablage möglich (gültige Lizenz mit Wartung)?
+    fn ablage_auto() -> bool {
+        #[cfg(feature = "advanced")]
+        {
+            update_ablage::auto_moeglich()
+        }
+        #[cfg(not(feature = "advanced"))]
+        {
+            false
+        }
+    }
+
     fn program_dir(&self) -> Option<PathBuf> {
         self.update.dir_override.clone().or_else(|| std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())))
     }
@@ -167,10 +184,10 @@ impl App {
         if self.update.job.is_some_and(|j| self.jobs.is_pending(j)) {
             return Err("Es läuft bereits eine Update-Prüfung oder -Installation.".into());
         }
-        // GitHub führt nur die Fassung ohne Module.
+        // GitHub führt nur die Fassung ohne Module; die Fassung mit Modulen sucht in der Ablage (Lizenz).
         #[cfg(feature = "advanced")]
         if self.update.source_override.is_none() {
-            return Err(ADVANCED_UPDATES.into());
+            return self.update_check_ablage();
         }
         let src = self.update_source();
         let current = Version::parse(rj_update::CURRENT_VERSION).map_err(|e| e.to_string())?;
@@ -210,6 +227,10 @@ impl App {
     /// Lädt, prüft und installiert die gefundene Version. Bei offenen Sitzungen
     /// nur mit `confirm`; unter `/usr` nur ein Hinweis.
     pub fn update_install(&mut self, confirm: bool) -> Result<Value, String> {
+        #[cfg(feature = "advanced")]
+        if self.update.source_override.is_none() {
+            return self.update_install_ablage(confirm);
+        }
         // Windows: kein Ersetzen im laufenden Betrieb. Als MSI installiert: MSI laden und prüfen, installiert wird
         // nach dem Beenden (`update_apply`); sonst öffnet die Oberfläche die Release-Seite.
         if PAGE_ONLY {
@@ -295,7 +316,7 @@ impl App {
 
     /// Prüfung beim Start (wenn eingeschaltet): einmal, im Hintergrund.
     pub fn maybe_auto_check(&mut self) {
-        if self.update.auto_done || self.demo || !self.config.update.check_on_start || (cfg!(feature = "advanced") && self.update.source_override.is_none()) {
+        if self.update.auto_done || self.demo || !self.config.update.check_on_start || (cfg!(feature = "advanced") && self.update.source_override.is_none() && !Self::ablage_auto()) {
             return;
         }
         self.update.auto_done = true;

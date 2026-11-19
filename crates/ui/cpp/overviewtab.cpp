@@ -108,7 +108,7 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	m_editToggle->setCheckable(true);
 	m_query = new QPushButton(T("ov.inventory.query"), inv);
 #ifdef RJ_ARUBA
-	m_query->setToolTip(T("ov.inventory.query.tip.aruba"));
+	m_query->setToolTip(T(m_backend->modulesActive() ? "ov.inventory.query.tip.aruba" : "ov.inventory.query.tip"));
 #else
 	m_query->setToolTip(T("ov.inventory.query.tip"));
 #endif
@@ -166,7 +166,8 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	connect(m_editToggle, &QPushButton::toggled, m_inventoryBox, &QWidget::setVisible);
 
 #ifdef RJ_STANDORTE
-	createSwitchPanel(lay, page);
+	if (m_backend->modulesActive())
+		createSwitchPanel(lay, page);
 #endif
 
 	// Dienste
@@ -236,10 +237,12 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	});
 
 #ifdef RJ_ARUBA
-	createArubaCard(lay, page);
+	if (m_backend->modulesActive())
+		createArubaCard(lay, page);
 #endif
 #ifdef RJ_STANDORTE
-	createBackupCard(lay, page);
+	if (m_backend->modulesActive())
+		createBackupCard(lay, page);
 #endif
 	lay->addStretch(1);
 
@@ -321,7 +324,8 @@ void OverviewTab::refreshInventorySwitch()
 		applyInventorySwitch(r);
 		renderWays(r);
 	#ifdef RJ_ARUBA
-	updateArubaCard(r);
+	if (m_backend->modulesActive())
+		updateArubaCard(r);
 #endif
 	}
 	else if (!m_subject.contains(QStringLiteral("hv")))
@@ -384,10 +388,12 @@ void OverviewTab::load()
 	m_notesSave->setEnabled(false);
 	m_notesState->clear();
 #ifdef RJ_ARUBA
-	updateArubaCard(r);
+	if (m_backend->modulesActive())
+		updateArubaCard(r);
 #endif
 #ifdef RJ_STANDORTE
-	loadSiteCards(guest);
+	if (m_backend->modulesActive())
+		loadSiteCards(guest);
 #else
 	Q_UNUSED(guest);
 #endif
@@ -429,7 +435,7 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 	if (target != m_key)
 		return;
 #ifdef RJ_ARUBA
-	if (handleArubaResult(kind, r))
+	if (m_backend->modulesActive() && handleArubaResult(kind, r))
 		return;
 #endif
 	if (kind == QLatin1String("ov_probe"))
@@ -451,7 +457,8 @@ void OverviewTab::handleResult(const QString& kind, const QString& target, const
 			setQueryState(done);
 #ifdef RJ_ARUBA
 			// Die Geräteart ist erst nach der Abfrage bekannt.
-			updateArubaCard(call({ { QStringLiteral("op"), QStringLiteral("overview") } }));
+			if (m_backend->modulesActive())
+				updateArubaCard(call({ { QStringLiteral("op"), QStringLiteral("overview") } }));
 #endif
 			emit inventoryChanged();
 		}
