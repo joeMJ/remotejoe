@@ -13,8 +13,6 @@ use crate::app::App;
 use crate::sessions::UiEvent;
 
 // Mit gültiger Lizenz (Wartung): Updates aus der Ablage der Lizenz, sonst von GitHub.
-#[path = "license/update_ablage.rs"]
-mod update_ablage;
 
 /// Eingebauter öffentlicher Schlüssel für die Signatur der Pakete.
 pub const UPDATE_KEY: &str = include_str!("../res/update-key.pub");
@@ -42,8 +40,6 @@ pub struct UpdateState {
     total: u64,
     /// Windows, nur Tests: Installation über die MSI annehmen bzw. ausschließen (sonst nach dem Programmordner).
     pub msi_override: Option<bool>,
-    /// Ablage der Lizenz: dort gefundene neuere Version.
-    pub(crate) ablage: update_ablage::AblageFund,
 }
 
 /// Windows: Das Programm ersetzt sich nicht selbst. Als MSI installiert lädt „Nach Updates suchen“ die MSI,
@@ -58,11 +54,6 @@ pub fn github_source() -> Source {
 }
 
 impl App {
-    /// Updates aus der Ablage der Lizenz (gültige Lizenz mit Wartung)? Sonst von GitHub.
-    fn ablage_auto() -> bool {
-        update_ablage::auto_moeglich()
-    }
-
     fn program_dir(&self) -> Option<PathBuf> {
         self.update.dir_override.clone().or_else(|| std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())))
     }
@@ -175,10 +166,8 @@ impl App {
         if self.update.job.is_some_and(|j| self.jobs.is_pending(j)) {
             return Err("Es läuft bereits eine Update-Prüfung oder -Installation.".into());
         }
-        // Mit Lizenz und Wartung kommt alles (Programm und Erweiterungen) aus der Ablage der Lizenz, sonst von GitHub.
-        if self.update.source_override.is_none() && Self::ablage_auto() {
-            return self.update_check_ablage();
-        }
+        // Programm-Updates kommen für alle nur von GitHub (Erweiterungen aus der Update-Quelle der Lizenz, siehe
+        // plugin_fetch.rs).
         let src = self.update_source();
         let current = Version::parse(rj_update::CURRENT_VERSION).map_err(|e| e.to_string())?;
         if PAGE_ONLY {
@@ -217,9 +206,6 @@ impl App {
     /// Lädt, prüft und installiert die gefundene Version. Bei offenen Sitzungen
     /// nur mit `confirm`; unter `/usr` nur ein Hinweis.
     pub fn update_install(&mut self, confirm: bool) -> Result<Value, String> {
-        if self.update.source_override.is_none() && Self::ablage_auto() {
-            return self.update_install_ablage(confirm);
-        }
         // Windows: kein Ersetzen im laufenden Betrieb. Als MSI installiert: MSI laden und prüfen, installiert wird
         // nach dem Beenden (`update_apply`); sonst öffnet die Oberfläche die Release-Seite.
         if PAGE_ONLY {
@@ -258,6 +244,10 @@ impl App {
                 let json = match r {
                     Ok(old) => {
                         app.update.found = None;
+                        // Erweiterungen passend zur neuen Version mitholen (liegen bis zum Neustart in `<id>.neu`).
+                        if let Ok(v) = Version::parse(&version) {
+                            app.plugin_fetch_for_update(&v);
+                        }
                         json!({ "state": "installed", "version": version, "dir": dir, "old": old, "program": dir.join(install::main_program()) })
                     }
                     Err(e) => json!({ "state": "error", "error": e.to_string() }),
@@ -396,6 +386,10 @@ impl App {
                 let json = match r {
                     Ok(()) => {
                         app.update.ready = Some((path.clone(), version.clone()));
+                        // Erweiterungen passend zur neuen Version schon jetzt holen (gelten nach dem Neustart).
+                        if let Ok(v) = Version::parse(&version) {
+                            app.plugin_fetch_for_update(&v);
+                        }
                         json!({ "state": "ready", "version": version, "path": path })
                     }
                     Err(e) => json!({ "state": "error", "error": e.to_string() }),

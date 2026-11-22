@@ -33,7 +33,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn safe_name(s: &str) -> String {
     let t: String = s.chars().map(|c| if "\\/:*?\"<>|".contains(c) || c.is_control() { '_' } else { c }).collect();
     let t = t.trim().trim_end_matches('.').to_string();
-    if t.is_empty() { "Ablage".into() } else { t }
+    if t.is_empty() { "Ordner".into() } else { t }
 }
 
 /// Datei des Ordners `folder` (Name `name`); eine vorhandene Datei mit derselben Kennung, aber altem Namen wird
@@ -75,7 +75,7 @@ impl CfgStores {
     pub fn call(&self, op: &str, a: &Value) -> Result<Value, String> {
         let handle = a["handle"].as_u64().unwrap_or(0);
         let mut tab = lock(&self.open);
-        let store = tab.get_mut(&handle).ok_or("Konfigablage nicht geöffnet")?;
+        let store = tab.get_mut(&handle).ok_or("Konfigurationsspeicher nicht geöffnet")?;
         let device = || a["device"].as_str().and_then(|s| Uuid::parse_str(s).ok()).ok_or_else(|| "Gerät fehlt".to_string());
         match op {
             "cfgstore_add" => {
