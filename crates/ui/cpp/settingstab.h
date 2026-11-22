@@ -107,6 +107,8 @@ private:
 	// Lizenzseite (veränderlicher Teil)
 	QWidget* m_licenseBox = nullptr;
 	QWidget* m_licenseRestart = nullptr;
+	QPushButton* m_licenseRemoveBtn = nullptr;
+	bool m_licenseRebuildPending = false;
 	QMap<QString, QLabel*> m_pluginState;
 	QMap<QString, QJsonObject> m_pluginRows;
 	QMap<QString, QJsonObject> m_pluginLast;

@@ -26,6 +26,7 @@
 #include <QtWidgets/QVBoxLayout>
 #include <cmath>
 #include <QtCore/QUrl>
+#include <QtCore/QTimer>
 #include <QtWidgets/QMessageBox>
 
 namespace
@@ -95,12 +96,104 @@ void SettingsTab::buildLicensePage(QVBoxLayout* v, QWidget* w)
 	bl->setContentsMargins(0, 0, 0, 0);
 	v->addWidget(m_licenseBox);
 	fillLicensePage();
+	// Einfügen der Lizenz: fest, nie neu aufgebaut (sonst verlöre ein offenes Kontextmenü sein Eingabefeld).
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	const QJsonObject j = QJsonDocument::fromJson(m_backend->lizenzJson().toUtf8()).object();
+	const QString st = j.value(QStringLiteral("status")).toString();
+	const QJsonObject l = j.value(QStringLiteral("lizenz")).toObject();
+	// Neue Lizenz einfügen: aufklappbar (ohne Lizenz gleich offen); daneben „Lizenz entfernen“.
+	auto* toggle = new QPushButton(T("settings.license.paste.toggle"), w);
+	auto* removeBtn = new QPushButton(T("settings.license.remove"), w);
+	removeBtn->setObjectName(QStringLiteral("licenseRemove"));
+	removeBtn->setVisible(st != QLatin1String("fehlt"));
+	m_licenseRemoveBtn = removeBtn;
+	auto* pasteBox = new QWidget(w);
+	auto* pb = new QVBoxLayout(pasteBox);
+	pb->setContentsMargins(0, 0, 0, 0);
+	auto* editBox = new QPlainTextEdit(pasteBox);
+	editBox->setPlaceholderText(QStringLiteral("-----BEGIN REMOTEJOE LIZENZ-----\n…\n-----END REMOTEJOE LIZENZ-----"));
+	editBox->setMinimumHeight(120);
+	pb->addWidget(editBox);
+	auto* row = new QHBoxLayout;
+	auto* apply = new QPushButton(T("settings.license.apply"), pasteBox);
+	auto* result = new QLabel(pasteBox);
+	result->setWordWrap(true);
+	row->addWidget(apply);
+	row->addWidget(result, 1);
+	pb->addLayout(row);
+	pasteBox->setVisible(l.isEmpty());
+	auto* tl = new QHBoxLayout;
+	tl->addWidget(toggle);
+	tl->addWidget(removeBtn);
+	tl->addStretch(1);
+	v->addSpacing(4);
+	v->addLayout(tl);
+	v->addWidget(pasteBox);
+	connect(toggle, &QPushButton::clicked, this, [pasteBox, editBox] {
+		pasteBox->setVisible(!pasteBox->isVisible());
+		if (pasteBox->isVisible())
+			editBox->setFocus();
+	});
+	connect(removeBtn, &QPushButton::clicked, this, [this, T] {
+		if (QMessageBox::question(this, T("settings.license.remove"), T("settings.license.remove.ask"), QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes)
+			return;
+		const QJsonObject r = QJsonDocument::fromJson(this->edit({ { QStringLiteral("op"), QStringLiteral("lizenz_entfernen") } }).toUtf8()).object();
+		if (r.contains(QStringLiteral("error")))
+		{
+			QMessageBox::warning(this, T("settings.license.remove"), r.value(QStringLiteral("error")).toString());
+			return;
+		}
+		m_licenseRemoved = true;
+		m_pluginLast.clear();
+		emit status(T("settings.license.removed"));
+		rebuildLicensePage();
+	});
+	connect(apply, &QPushButton::clicked, this, [this, editBox, result, T] {
+		const QJsonObject r = QJsonDocument::fromJson(m_backend->lizenzSpeichern(editBox->toPlainText()).toUtf8()).object();
+		if (r.contains(QStringLiteral("error")))
+		{
+			result->setText(T("settings.license.failed").arg(r.value(QStringLiteral("error")).toString()));
+			return;
+		}
+		editBox->clear();
+		const QString whoName = r.value(QStringLiteral("name")).toString();
+		QString msg;
+		if (r.value(QStringLiteral("abgelaufen")).toBool())
+			msg = T("settings.license.saved.expired").arg(whoName, r.value(QStringLiteral("version_bis")).toString());
+		else if (r.value(QStringLiteral("unbeschraenkt")).toBool())
+			msg = T("settings.license.saved.unlimited").arg(whoName);
+		else
+			msg = T("settings.license.saved").arg(whoName, r.value(QStringLiteral("version_bis")).toString());
+		// Download der Erweiterungen läuft an: Quelle merken, Fehler je Erweiterung (z. B. fehlende Oberfunktion) zeigen.
+		const QJsonObject ext = r.value(QStringLiteral("erweiterungen")).toObject();
+		m_pluginLast.clear();
+		m_pluginSource = ext.value(QStringLiteral("quelle")).toString(m_pluginSource);
+		for (const QJsonValue& e : ext.value(QStringLiteral("fehler")).toArray())
+			m_pluginLast.insert(e.toObject().value(QStringLiteral("id")).toString(), QJsonObject{ { QStringLiteral("state"), QStringLiteral("error") }, { QStringLiteral("error"), e.toObject().value(QStringLiteral("error")).toString() } });
+		m_licenseApplied = true;
+		emit status(msg);
+		rebuildLicensePage();
+	});
+	v->addWidget(hint(T("settings.license.hint"), w));
 }
 
 void SettingsTab::rebuildLicensePage()
 {
 	if (!m_licenseBox)
 		return;
+	// Nie unter einem offenen Menü oder Dialog neu aufbauen (deren Widgets wären sonst gelöscht): später erneut.
+	if (QApplication::activePopupWidget() || QApplication::activeModalWidget())
+	{
+		if (!m_licenseRebuildPending)
+		{
+			m_licenseRebuildPending = true;
+			QTimer::singleShot(400, this, [this] {
+				m_licenseRebuildPending = false;
+				rebuildLicensePage();
+			});
+		}
+		return;
+	}
 	m_pluginState.clear();
 	m_pluginRows.clear();
 	m_licenseRestart = nullptr;
@@ -186,8 +279,14 @@ void SettingsTab::licenseResult(const QJsonObject& r)
 		const QJsonObject j = QJsonDocument::fromJson(m_backend->lizenzJson().toUtf8()).object();
 		l->setText(pluginStateText(id, j, m_pluginRows.value(id)));
 	}
-	else
-		rebuildLicensePage();
+	else if (!m_licenseRebuildPending)
+	{
+		m_licenseRebuildPending = true;
+		QTimer::singleShot(0, this, [this] {
+			m_licenseRebuildPending = false;
+			rebuildLicensePage();
+		});
+	}
 }
 
 void SettingsTab::fillLicensePage()
@@ -458,79 +557,10 @@ void SettingsTab::fillLicensePage()
 		v->addWidget(upd);
 	}
 
-	// Neue Lizenz einfügen: aufklappbar (ohne Lizenz gleich offen); daneben „Lizenz entfernen“.
-	auto* toggle = new QPushButton(T("settings.license.paste.toggle"), w);
-	auto* removeBtn = new QPushButton(T("settings.license.remove"), w);
-	removeBtn->setObjectName(QStringLiteral("licenseRemove"));
-	removeBtn->setVisible(st != QLatin1String("fehlt"));
-	auto* pasteBox = new QWidget(w);
-	auto* pb = new QVBoxLayout(pasteBox);
-	pb->setContentsMargins(0, 0, 0, 0);
-	auto* editBox = new QPlainTextEdit(pasteBox);
-	editBox->setPlaceholderText(QStringLiteral("-----BEGIN REMOTEJOE LIZENZ-----\n…\n-----END REMOTEJOE LIZENZ-----"));
-	editBox->setMinimumHeight(120);
-	pb->addWidget(editBox);
-	auto* row = new QHBoxLayout;
-	auto* apply = new QPushButton(T("settings.license.apply"), pasteBox);
-	auto* result = new QLabel(pasteBox);
-	result->setWordWrap(true);
-	row->addWidget(apply);
-	row->addWidget(result, 1);
-	pb->addLayout(row);
-	pasteBox->setVisible(l.isEmpty());
-	auto* tl = new QHBoxLayout;
-	tl->addWidget(toggle);
-	tl->addWidget(removeBtn);
-	tl->addStretch(1);
-	v->addSpacing(4);
-	v->addLayout(tl);
-	v->addWidget(pasteBox);
-	connect(toggle, &QPushButton::clicked, this, [pasteBox, editBox] {
-		pasteBox->setVisible(!pasteBox->isVisible());
-		if (pasteBox->isVisible())
-			editBox->setFocus();
-	});
-	connect(removeBtn, &QPushButton::clicked, this, [this, T] {
-		if (QMessageBox::question(this, T("settings.license.remove"), T("settings.license.remove.ask"), QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes)
-			return;
-		const QJsonObject r = QJsonDocument::fromJson(this->edit({ { QStringLiteral("op"), QStringLiteral("lizenz_entfernen") } }).toUtf8()).object();
-		if (r.contains(QStringLiteral("error")))
-		{
-			QMessageBox::warning(this, T("settings.license.remove"), r.value(QStringLiteral("error")).toString());
-			return;
-		}
-		m_licenseRemoved = true;
-		m_pluginLast.clear();
-		emit status(T("settings.license.removed"));
-		rebuildLicensePage();
-	});
-	connect(apply, &QPushButton::clicked, this, [this, editBox, result, T] {
-		const QJsonObject r = QJsonDocument::fromJson(m_backend->lizenzSpeichern(editBox->toPlainText()).toUtf8()).object();
-		if (r.contains(QStringLiteral("error")))
-		{
-			result->setText(T("settings.license.failed").arg(r.value(QStringLiteral("error")).toString()));
-			return;
-		}
-		editBox->clear();
-		const QString whoName = r.value(QStringLiteral("name")).toString();
-		QString msg;
-		if (r.value(QStringLiteral("abgelaufen")).toBool())
-			msg = T("settings.license.saved.expired").arg(whoName, r.value(QStringLiteral("version_bis")).toString());
-		else if (r.value(QStringLiteral("unbeschraenkt")).toBool())
-			msg = T("settings.license.saved.unlimited").arg(whoName);
-		else
-			msg = T("settings.license.saved").arg(whoName, r.value(QStringLiteral("version_bis")).toString());
-		// Download der Erweiterungen läuft an: Quelle merken, Fehler je Erweiterung (z. B. fehlende Oberfunktion) zeigen.
-		const QJsonObject ext = r.value(QStringLiteral("erweiterungen")).toObject();
-		m_pluginLast.clear();
-		m_pluginSource = ext.value(QStringLiteral("quelle")).toString(m_pluginSource);
-		for (const QJsonValue& e : ext.value(QStringLiteral("fehler")).toArray())
-			m_pluginLast.insert(e.toObject().value(QStringLiteral("id")).toString(), QJsonObject{ { QStringLiteral("state"), QStringLiteral("error") }, { QStringLiteral("error"), e.toObject().value(QStringLiteral("error")).toString() } });
-		m_licenseApplied = true;
-		emit status(msg);
-		rebuildLicensePage();
-	});
-	v->addWidget(hint(T("settings.license.hint"), w));
+	// Der Bereich „Neue Lizenz einfügen“ steht fest unter diesem Kasten (buildLicensePage) und wird nie neu
+	// aufgebaut; hier nur, ob „Lizenz entfernen“ sichtbar ist.
+	if (m_licenseRemoveBtn)
+		m_licenseRemoveBtn->setVisible(st != QLatin1String("fehlt") && !j.value(QStringLiteral("entfernt")).toBool());
 	if (m_licenseApplied && m_licenseRestart)
 		m_licenseRestart->setVisible(true);
 }
