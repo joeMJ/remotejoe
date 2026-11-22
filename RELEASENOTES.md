@@ -1,3 +1,12 @@
+## 0.1.64 – Neuigkeiten und Tabs
+
+*Veröffentlicht am 22.11.2026*
+
+Fehlerbehebung zu 0.1.63.
+
+- Neuigkeiten: Der Tab lässt sich wieder schließen; der Hinweis unter dem Kopf entfällt.
+- Tabs: Kurze Titel werden nicht mehr in der Mitte gekürzt. Bei voller Leiste werden lange Titel höchstens auf 160 Pixel schmaler, danach blättert die Leiste mit den Pfeilen.
+
 ## 0.1.63 – Neues Aussehen
 
 *Veröffentlicht am 22.11.2026*

@@ -894,11 +894,14 @@ protected:
 	{
 		const int h = property("compact").toBool() ? 30 : 32;
 		const int text = fontMetrics().horizontalAdvance(tabText(index).remove(QLatin1Char('&')));
-		// Rand 12 + Symbol 16 + Abstand 8 + Text + Abstand 10 + Kreuz 16 + Rand 12.
-		const int w = qBound(130, 12 + 16 + 8 + text + 10 + 16 + 12, 240);
+		// Rand 12 + Symbol 16 + Abstand 8 + Text + Abstand 6 + Kreuz samt Rand (gemessen 33 px) + 3 Reserve.
+		// Vorher fehlte 1 px, dadurch wurden Titel wie „Neuigkeiten“ in der Mitte gekürzt.
+		const int w = qBound(130, 12 + 16 + 8 + text + 6 + 36, 240);
 		return QSize(w, h);
 	}
-	QSize minimumTabSizeHint(int index) const override { return QSize(qMin(120, tabSizeHint(index).width()), tabSizeHint(index).height()); }
+	// Bei voller Leiste: kurze Titel bleiben ungekürzt, lange werden höchstens auf 160 px schmaler; danach blättert die
+	// Leiste (Pfeile). Vorher schrumpfte jeder Tab auf 120 px („Ne…en“).
+	QSize minimumTabSizeHint(int index) const override { return QSize(qMin(160, tabSizeHint(index).width()), tabSizeHint(index).height()); }
 	void mouseMoveEvent(QMouseEvent* e) override
 	{
 		const int hover = tabAt(e->position().toPoint());
@@ -1764,6 +1767,13 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 			}
 			m_tabs->removeTab(i);
 			mt->deleteLater();
+			return;
+		}
+		if (m_tabs->widget(i)->objectName() == QLatin1String("newsTab"))
+		{
+			QWidget* news = m_tabs->widget(i);
+			m_tabs->removeTab(i);
+			news->deleteLater();
 			return;
 		}
 		if (auto* ts = qobject_cast<TerminalSettingsTab*>(m_tabs->widget(i)))
@@ -6000,8 +6010,8 @@ void MainWindow::openNews()
 		body = body.mid(start, end > start ? end - start : -1);
 		const QString head = QStringLiteral("<p align=\"center\"><img src=\":/logo/remotejoe-128.png\" width=\"96\" height=\"96\"></p>"
 		                                    "<p align=\"center\" style=\"font-size: x-large; font-weight: 600;\">%1</p>"
-		                                    "<p align=\"center\"><a href=\"https://github.com/joeMJ/remotejoe\">github.com/joeMJ/remotejoe</a><br>%2</p><hr>")
-		                       .arg(T(m_backend, "news.heading").toHtmlEscaped(), T(m_backend, "news.sub").toHtmlEscaped());
+		                                    "<p align=\"center\"><a href=\"https://github.com/joeMJ/remotejoe\">github.com/joeMJ/remotejoe</a></p><hr>")
+		                       .arg(T(m_backend, "news.heading").toHtmlEscaped());
 		view->setHtml(head + body);
 	}
 	const int i = m_tabs->addTab(view, faIcon(QStringLiteral("r-lightbulb")), T(m_backend, "news.title"));

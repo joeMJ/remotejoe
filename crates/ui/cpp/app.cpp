@@ -317,6 +317,19 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.openNews();
 		pump(400);
 		save(w.tabs()->currentWidget(), dir, QStringLiteral("neuigkeiten.png"));
+		save(&w, dir, QStringLiteral("neuigkeiten-fenster.png"));
+		// Schließen prüfen: das Kreuz löst tabCloseRequested aus.
+		const int before = w.tabs()->count();
+		emit w.tabs()->tabCloseRequested(w.tabs()->currentIndex());
+		pump(200);
+		std::fprintf(stderr, "[prüfbild] Neuigkeiten schließen: Tabs vorher %d, nachher %d\n", before, w.tabs()->count());
+	}
+	// Weitere Einstellungsbereiche als Prüfbilder (RJ_SHOT_AREAS=schluessel1,schluessel2,…), z. B. die der Erweiterungen.
+	for (const QString& key : qEnvironmentVariable("RJ_SHOT_AREAS").split(QLatin1Char(','), Qt::SkipEmptyParts))
+	{
+		w.settingsForScreenshot(key);
+		pump(300);
+		save(w.tabs()->currentWidget(), dir, QStringLiteral("bereich-%1.png").arg(key));
 	}
 	// Leser der Rechtstexte: Übersicht der Bibliotheken Dritter und ein Lizenztext (Prüfbilder).
 	if (qEnvironmentVariableIsSet("RJ_SHOT_LEGAL"))
