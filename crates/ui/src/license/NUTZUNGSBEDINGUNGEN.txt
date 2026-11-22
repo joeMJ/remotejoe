@@ -1,0 +1,19 @@
+NUTZUNGSBEDINGUNGEN FÜR DIE ERWEITERUNGEN VON REMOTEJOE
+
+1. Gegenstand. Erweiterungen sind Zusatzfunktionen des Verbindungsmanagers remotejoe, die nach der Eingabe einer Lizenz aus der Update-Quelle der Lizenz geladen werden. Rechteinhaber ist John Lose (joeMJ).
+
+2. Nutzung nur mit Lizenz. Die Erweiterungen dürfen nur mit einer gültigen, vom Rechteinhaber ausgestellten Lizenz genutzt werden, im Umfang der darin genannten Erweiterungen und Laufzeiten. Ohne gültige Lizenz arbeitet das Programm ohne Erweiterungen.
+
+3. Keine Weitergabe. Erweiterungen, Lizenzen und die Zugangsdaten zur Update-Quelle dürfen nicht an Dritte weitergegeben, veröffentlicht oder vermietet werden. Die Nutzung innerhalb der Organisation des Lizenznehmers ist nur der namentlich benannten Person erlaubt.
+
+4. Keine Umgehung. Die Lizenzprüfung darf nicht umgangen, entfernt oder verändert werden; die Erweiterungen dürfen nicht zurückentwickelt werden, soweit das Gesetz es nicht ausdrücklich erlaubt.
+
+5. Ohne Gewähr. Es wird keinerlei Gewähr übernommen – weder für Fehlerfreiheit, Verfügbarkeit, Eignung für einen bestimmten Zweck noch für Updates oder Unterstützung. Die Nutzung erfolgt auf eigenes Risiko; wichtige Daten (insbesondere die Schlüsseldatenbank) sind regelmäßig zu sichern.
+
+6. Haftung. Der Rechteinhaber haftet nur bei Vorsatz und grober Fahrlässigkeit sowie nach zwingenden gesetzlichen Vorschriften (z. B. Produkthaftungsgesetz, Verletzung von Leben, Körper, Gesundheit). Im Übrigen ist die Haftung ausgeschlossen.
+
+7. Bestandteile anderer Lizenzen. remotejoe selbst steht unter der Apache License 2.0 und enthält Komponenten Dritter unter eigenen Lizenzen (u. a. Qt unter LGPL-3.0, FreeRDP unter Apache License 2.0, MPL-2.0-Bibliotheken); siehe LICENSE, NOTICE, THIRD_PARTY.md und THIRD_PARTY_LICENSES.txt. Für diese Bestandteile gelten deren Lizenzen; die vorliegenden Bedingungen schränken die dort gewährten Rechte nicht ein.
+
+8. Ende. Das Nutzungsrecht an den Erweiterungen endet mit Ablauf der Lizenz oder bei Verstoß gegen diese Bedingungen.
+
+9. Recht. Es gilt deutsches Recht.

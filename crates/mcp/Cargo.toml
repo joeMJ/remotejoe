@@ -1,0 +1,19 @@
+[package]
+name = "remotejoe-mcp"
+description = "Claude-Anbindung (MCP über stdio): reicht Werkzeugaufrufe an das laufende remotejoe weiter"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "rj-mcp"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+remotejoe-core = { path = "../core" }
+
+[dev-dependencies]
+tempfile.workspace = true

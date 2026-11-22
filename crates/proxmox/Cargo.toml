@@ -1,0 +1,24 @@
+[package]
+name = "remotejoe-proxmox"
+description = "Proxmox VE: REST-Schnittstelle, VM-Liste, Aktionen, Konsole über VNC-Websocket"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_proxmox"
+
+[dependencies]
+remotejoe-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+base64 = "0.22"
+getrandom = "0.4"
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
+
+[dev-dependencies]
+remotejoe-worker-vnc = { path = "../worker-vnc" }

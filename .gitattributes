@@ -1,0 +1,15 @@
+# Einheitliche Zeilenenden: Quelltext, Doku und Skripte mit LF (Tests lesen Dokumentation und führen Skripte aus).
+* text=auto
+*.md text eol=lf
+*.sh text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.cpp text eol=lf
+*.yml text eol=lf
+crates/worker-psrp/tests/fake-pwsh text eol=lf
+install.sh text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf

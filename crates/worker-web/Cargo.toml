@@ -1,0 +1,54 @@
+[package]
+name = "remotejoe-worker-web"
+description = "Web-Worker: WebView ohne eigenes Fenster (Bild im geteilten Speicher), Formular-Anmeldung, eigenes Profil je Ziel, Zertifikatswarnung"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_web"
+
+[[bin]]
+name = "rj-worker-web"
+path = "src/main.rs"
+required-features = ["webview"]
+
+[features]
+# WebView (Linux: WebKitGTK 4.1 in einem GtkOffscreenWindow). Ohne dieses
+# Merkmal wird nur die plattformunabhängige Logik gebaut.
+webview = ["dep:remotejoe-ipc", "dep:webkit2gtk", "dep:gtk", "dep:javascriptcore-rs", "dep:wry", "dep:webview2-com", "dep:windows", "dep:windows-sys", "dep:raw-window-handle", "dep:base64"]
+
+[dependencies]
+remotejoe-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+remotejoe-ipc = { path = "../ipc", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0", optional = true, features = ["v2_40"] }
+gtk = { version = "0.18", optional = true }
+javascriptcore-rs = { version = "1.1", optional = true }
+
+# Windows: WebView2 (über wry) als Kindfenster im Tab-Bereich des Hauptfensters.
+[target.'cfg(windows)'.dependencies]
+wry = { version = "0.57", optional = true }
+webview2-com = { version = "0.39", optional = true }
+windows = { version = "0.62", optional = true, features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
+windows-sys = { version = "0.59", optional = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell"] }
+raw-window-handle = { version = "0.6", optional = true }
+base64 = { version = "0.22", optional = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+remotejoe-supervisor = { path = "../supervisor" }
+remotejoe-testkit = { path = "../testkit" }
+remotejoe-ipc = { path = "../ipc" }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }

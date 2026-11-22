@@ -1,0 +1,72 @@
+[package]
+name = "remotejoe-ui"
+description = "Qt-Oberfläche"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_ui"
+
+[[bin]]
+name = "remotejoe"
+path = "src/main.rs"
+
+[features]
+# Module. Vorgabe ohne Module (so baut auch GitHub).
+default = []
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+zeroize.workspace = true
+base64 = "0.22"
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
+remotejoe-core = { path = "../core" }
+remotejoe-plugin-api = { path = "../plugin-api", features = ["host"] }
+parking_lot = "0.12"
+remotejoe-kdbx = { path = "../kdbx", features = ["configstore"] }
+remotejoe-ipc = { path = "../ipc" }
+remotejoe-supervisor = { path = "../supervisor" }
+remotejoe-worker-ssh = { path = "../worker-ssh" }
+remotejoe-tunnel = { path = "../tunnel" }
+remotejoe-tasks = { path = "../tasks" }
+remotejoe-importer = { path = "../importer" }
+remotejoe-snmp = { path = "../snmp" }
+remotejoe-worker-psrp = { path = "../worker-psrp" }
+remotejoe-proxmox = { path = "../proxmox" }
+remotejoe-worker-vnc = { path = "../worker-vnc" }
+remotejoe-worker-web = { path = "../worker-web" }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
+rustls-native-certs = "0.8"
+sha2.workspace = true
+remotejoe-update = { path = "../update" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "time"] }
+alacritty_terminal = "0.26"
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+cxx = "1"
+cxx-qt = "0.10"
+cxx-qt-lib = { version = "0.10", default-features = false }
+# Namen zu Adressen (andere Geräte an Switch-Ports).
+dns-lookup = "2"
+
+[build-dependencies]
+cxx-qt-build = "0.10"
+# Windows: Programmsymbol in remotejoe.exe (Ressourcen über rc.exe).
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
+[dev-dependencies]
+tempfile.workspace = true
+remotejoe-testkit = { path = "../testkit" }
+# Testschalter im Worker (Absturz und Hänger des Emulators), nur für Testbauten.
+remotejoe-worker-ssh = { path = "../worker-ssh", features = ["test-hooks"] }
+
+# Hauptkennwort im Schlüsselbund des Systems (Linux: Secret Service über D-Bus, reines Rust; Windows: Anmeldeinformationsverwaltung).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["async-secret-service", "async-io", "crypto-rust"] }
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }

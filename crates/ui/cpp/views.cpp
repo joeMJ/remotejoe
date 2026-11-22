@@ -1,0 +1,1679 @@
+#include "views.h"
+#include "editor.h"
+#include "kbcapture.h"
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
+#include "remotejoe-ui/src/bridge.cxxqt.h"
+
+#include <QtCore/QDateTime>
+#include <QtCore/QJsonDocument>
+#include <vector>
+#include <QtGui/QAction>
+#include <QtGui/QClipboard>
+#include <QtCore/QMimeData>
+#include <QtCore/QUrl>
+#include <QtGui/QFontDatabase>
+#include <QtGui/QGuiApplication>
+#include <QtGui/QKeyEvent>
+#include <QtGui/QPainter>
+#include <QtGui/QShortcut>
+#include <QtWidgets/QLineEdit>
+#include <QtCore/QJsonArray>
+#include <QtGui/QWheelEvent>
+#include <QtWidgets/QApplication>
+#include <QtCore/QPointer>
+#include <QtCore/QTimer>
+#include <QtWidgets/QHBoxLayout>
+#include <QtWidgets/QCheckBox>
+#include <QtWidgets/QMenu>
+#include <QtWidgets/QMessageBox>
+#include <QtWidgets/QStyle>
+#include <QtWidgets/QVBoxLayout>
+
+// ---------- FrameView ----------
+
+FrameView::FrameView(RjBackend* backend, std::uint64_t session, QWidget* parent)
+  : QWidget(parent)
+  , m_backend(backend)
+  , m_session(session)
+{
+	setFocusPolicy(Qt::StrongFocus);
+	setMouseTracking(true);
+	setCursor(Qt::ArrowCursor);
+	setAttribute(Qt::WA_OpaquePaintEvent);
+	setMinimumSize(160, 120);
+	// Größenänderungen des Fensters erst nach einer kurzen Pause weitergeben,
+	// damit beim Ziehen nicht bei jedem Pixel neu aufgebaut wird.
+	m_fitTimer = new QTimer(this);
+	m_fitTimer->setSingleShot(true);
+	m_fitTimer->setInterval(400);
+	connect(m_fitTimer, &QTimer::timeout, this, [this] { requestFit(); });
+}
+
+FrameView::~FrameView()
+{
+	if (hasFocus())
+		KeyCapture::release();
+	unmap();
+}
+
+void FrameView::unmap()
+{
+	m_image = QImage();
+	if (!m_map)
+		return;
+#ifdef _WIN32
+	UnmapViewOfFile(m_map);
+#else
+	munmap(m_map, m_mapLen);
+#endif
+	m_map = nullptr;
+	m_mapLen = 0;
+}
+
+void FrameView::closeHandle(std::int64_t fd)
+{
+	if (fd < 0)
+		return;
+#ifdef _WIN32
+	CloseHandle(reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(fd)));
+#else
+	::close(int(fd));
+#endif
+}
+
+void FrameView::attach(std::int64_t fd, int w, int h)
+{
+	// Der Hauptprozess hat Größe und Versiegelung bereits geprüft; die
+	// Kennung wird nach dem Abbilden geschlossen.
+	unmap();
+	const std::size_t len = std::size_t(w) * std::size_t(h) * 4;
+	if (fd >= 0 && len > 0)
+	{
+#ifdef _WIN32
+		void* p = MapViewOfFile(reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(fd)), FILE_MAP_READ, 0, 0, len);
+		if (p)
+		{
+			m_map = static_cast<uchar*>(p);
+			m_mapLen = len;
+		}
+#else
+		void* p = mmap(nullptr, len, PROT_READ, MAP_SHARED, int(fd), 0);
+		if (p != MAP_FAILED)
+		{
+			m_map = static_cast<uchar*>(p);
+			m_mapLen = len;
+		}
+#endif
+	}
+	closeHandle(fd);
+	if (m_map)
+		// BGRA im Speicher entspricht QImage::Format_RGB32 (little endian).
+		m_image = QImage(m_map, w, h, w * 4, QImage::Format_RGB32);
+	// Neue Verbindung oder von der Gegenstelle bestimmte Größe (nicht die Antwort auf
+	// unsere Anfrage): einmal an das Fenster anpassen, höchstens dreimal hintereinander.
+	const QSize now(w, h);
+	const bool ours = m_requested.isValid() && qAbs(now.width() - m_requested.width()) < 8 && qAbs(now.height() - m_requested.height()) < 8;
+	if (m_map && !ours && now != m_attached)
+	{
+		m_requested = QSize();
+		if (m_autoFits < 3)
+		{
+			++m_autoFits;
+			m_fitTimer->start();
+		}
+	}
+	m_attached = now;
+	update();
+}
+
+void FrameView::resizeEvent(QResizeEvent*)
+{
+	if (!m_pointer.isNull())
+		applyPointer();
+	m_autoFits = 0;
+	m_fitTimer->start();
+	sendBounds();
+}
+
+// ---------- Web im Tab (Windows: WebView2 als Kindfenster) ----------
+
+namespace
+{
+#ifdef Q_OS_WIN
+/// Windows-Tastencode zu einer Qt-Taste (0: nicht abgebildet).
+int vkOf(Qt::Key k)
+{
+	if (k >= Qt::Key_F1 && k <= Qt::Key_F12)
+		return 0x70 + (k - Qt::Key_F1);
+	if ((k >= Qt::Key_A && k <= Qt::Key_Z) || (k >= Qt::Key_0 && k <= Qt::Key_9))
+		return int(k);
+	switch (k)
+	{
+		case Qt::Key_Tab: return 0x09;
+		case Qt::Key_Backtab: return 0x09;
+		case Qt::Key_Return: return 0x0D;
+		case Qt::Key_Enter: return 0x0D;
+		case Qt::Key_Escape: return 0x1B;
+		case Qt::Key_PageUp: return 0x21;
+		case Qt::Key_PageDown: return 0x22;
+		case Qt::Key_End: return 0x23;
+		case Qt::Key_Home: return 0x24;
+		case Qt::Key_Left: return 0x25;
+		case Qt::Key_Up: return 0x26;
+		case Qt::Key_Right: return 0x27;
+		case Qt::Key_Down: return 0x28;
+		case Qt::Key_Insert: return 0x2D;
+		case Qt::Key_Delete: return 0x2E;
+		default: return 0;
+	}
+}
+
+struct Reserved
+{
+	int vk;
+	bool ctrl, alt, shift;
+	QAction* action;
+	QShortcut* shortcut;
+};
+
+/// Kurzbefehle des Hauptfensters, die nicht der Seite gehören: alle Aktionen und Kurzbefehle mit Fenster- oder
+/// Anwendungsbereich, ohne die Bearbeiten-Tasten (Strg+C/X/V/A/Z/Y, Einfg, Entf) und ohne unmodifizierte Tasten außer F1 bis F12.
+std::vector<Reserved> collectReserved(QWidget* window)
+{
+	std::vector<Reserved> out;
+	auto add = [&](const QKeySequence& ks, QAction* a, QShortcut* sc) {
+		if (ks.count() != 1)
+			return;
+		const QKeyCombination kc = ks[0];
+		const Qt::KeyboardModifiers m = kc.keyboardModifiers();
+		const Qt::Key key = kc.key();
+		const int vk = vkOf(key);
+		if (!vk)
+			return;
+		const bool fkey = key >= Qt::Key_F1 && key <= Qt::Key_F12;
+		const bool ctrl = m.testFlag(Qt::ControlModifier), alt = m.testFlag(Qt::AltModifier), shift = m.testFlag(Qt::ShiftModifier);
+		if (!fkey && !ctrl && !alt)
+			return;
+		if (ctrl && !alt && (key == Qt::Key_C || key == Qt::Key_X || key == Qt::Key_V || key == Qt::Key_A || key == Qt::Key_Z || key == Qt::Key_Y ||
+		                     key == Qt::Key_Insert || key == Qt::Key_Delete))
+			return;
+		if (shift && !ctrl && !alt && (key == Qt::Key_Insert || key == Qt::Key_Delete))
+			return;
+		out.push_back({ vk, ctrl, alt, shift, a, sc });
+	};
+	for (QAction* a : window->findChildren<QAction*>())
+	{
+		if (a->shortcutContext() == Qt::WidgetShortcut || !a->isEnabled())
+			continue;
+		for (const QKeySequence& ks : a->shortcuts())
+			add(ks, a, nullptr);
+	}
+	for (QShortcut* sc : window->findChildren<QShortcut*>())
+	{
+		if (sc->context() == Qt::WidgetShortcut || !sc->isEnabled())
+			continue;
+		add(sc->key(), nullptr, sc);
+	}
+	return out;
+}
+#endif
+} // namespace
+
+void FrameView::setWeb(bool web)
+{
+	m_web = web;
+#ifdef Q_OS_WIN
+	if (!web || m_embedded)
+		return;
+	// Die Seite ist ein Kindfenster dieses Widgets: eigenes natives Fenster, ohne native Vorfahren.
+	m_embedded = true;
+	setAttribute(Qt::WA_NativeWindow);
+	setAttribute(Qt::WA_DontCreateNativeAncestors);
+	// Qt-Fokus und Windows-Fokus laufen sonst auseinander: Hatte die Seite einmal den Windows-Fokus, bekäme sie weiter
+	// alle Tasten, auch wenn danach ein Qt-Feld angeklickt wird. Darum beim Fokuswechsel auf ein Qt-Feld den
+	// Windows-Fokus auf das Fenster zurückholen (einmal je Anwendung).
+	//
+	// Nur, wenn der Windows-Fokus wirklich bei der Seite liegt: Die Seite läuft in einem fremden Prozess, dann liefert
+	// GetFocus() für den eigenen Thread kein Fenster. Liegt der Fokus schon in einem eigenen Fenster, ist nichts zu
+	// tun – ein SetFocus auf ein Popup-Fenster (Auswahlliste, Menü) würde es aktivieren, Qt würde das Hauptfenster
+	// deaktivieren und das Popup sofort schließen. Genau das ließ Auswahllisten nach dem ersten Web-Tab nicht mehr
+	// aufgehen (0.1.11–0.1.13).
+	static bool hooked = false;
+	if (!hooked)
+	{
+		hooked = true;
+		connect(qApp, &QApplication::focusChanged, qApp, [](QWidget*, QWidget* now) {
+			auto* fv = qobject_cast<QWidget*>(now);
+			if (!fv || !fv->window() || !fv->window()->winId())
+				return;
+			if (::GetFocus() != nullptr)
+				return;
+			const Qt::WindowType t = fv->window()->windowType();
+			if (t == Qt::Popup || t == Qt::ToolTip || t == Qt::SplashScreen)
+				return;
+			for (QWidget* w = fv; w; w = w->parentWidget())
+				if (auto* f = dynamic_cast<FrameView*>(w); f && f->isEmbedded())
+					return;
+			::SetFocus(reinterpret_cast<HWND>(fv->window()->winId()));
+		});
+	}
+#endif
+}
+
+void FrameView::webCommand(const QString& cmd)
+{
+	m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":%2}").arg(m_session).arg(cmd));
+}
+
+void FrameView::sendBounds()
+{
+#ifdef Q_OS_WIN
+	if (!m_embedded || !testAttribute(Qt::WA_WState_Created))
+		return;
+	const qreal dpr = devicePixelRatioF();
+	webCommand(QStringLiteral("{\"op\":\"bounds\",\"x\":0,\"y\":0,\"w\":%1,\"h\":%2,\"scale\":%3}")
+	             .arg(qMax(1, qRound(width() * dpr)))
+	             .arg(qMax(1, qRound(height() * dpr)))
+	             .arg(qRound(dpr * 100)));
+#endif
+}
+
+void FrameView::resyncWeb()
+{
+#ifdef Q_OS_WIN
+	if (!m_embedded)
+		return;
+	webCommand(QStringLiteral("{\"op\":\"embed\",\"hwnd\":%1}").arg(QString::number(qulonglong(winId()))));
+	QJsonArray keys;
+	if (QWidget* top = window())
+		for (const Reserved& r : collectReserved(top))
+			keys.append(QJsonObject{ { QStringLiteral("vk"), r.vk }, { QStringLiteral("ctrl"), r.ctrl }, { QStringLiteral("alt"), r.alt }, { QStringLiteral("shift"), r.shift } });
+	webCommand(QStringLiteral("{\"op\":\"keys\",\"keys\":%1}").arg(QString::fromUtf8(QJsonDocument(keys).toJson(QJsonDocument::Compact))));
+	sendBounds();
+	webCommand(QStringLiteral("{\"op\":\"visible\",\"on\":%1}").arg(isVisible() ? QStringLiteral("true") : QStringLiteral("false")));
+#endif
+}
+
+void FrameView::showEvent(QShowEvent* e)
+{
+	QWidget::showEvent(e);
+#ifdef Q_OS_WIN
+	if (m_embedded)
+		resyncWeb();
+#endif
+}
+
+void FrameView::hideEvent(QHideEvent* e)
+{
+	QWidget::hideEvent(e);
+#ifdef Q_OS_WIN
+	if (m_embedded)
+		webCommand(QStringLiteral("{\"op\":\"visible\",\"on\":false}"));
+#endif
+}
+
+void FrameView::webFocus(bool on, bool forward)
+{
+#ifdef Q_OS_WIN
+	if (!m_embedded)
+		return;
+	if (on)
+	{
+		if (!hasFocus())
+			setFocus(Qt::MouseFocusReason);
+	}
+	else
+		// Tab am Ende der Seite: Qt-Fokus weiter (die eigene Überschreibung verhindert das sonst).
+		QWidget::focusNextPrevChild(forward);
+#else
+	Q_UNUSED(on);
+	Q_UNUSED(forward);
+#endif
+}
+
+void FrameView::triggerShortcut(QWidget* window, int vk, bool ctrl, bool alt, bool shift)
+{
+#ifdef Q_OS_WIN
+	if (!window)
+		return;
+	for (const Reserved& r : collectReserved(window))
+		if (r.vk == vk && r.ctrl == ctrl && r.alt == alt && r.shift == shift)
+		{
+			if (r.action)
+				r.action->trigger();
+			else if (r.shortcut)
+				QMetaObject::invokeMethod(r.shortcut, "activated");
+			return;
+		}
+#else
+	Q_UNUSED(window);
+	Q_UNUSED(vk);
+	Q_UNUSED(ctrl);
+	Q_UNUSED(alt);
+	Q_UNUSED(shift);
+#endif
+}
+
+void FrameView::requestFit()
+{
+	if (m_image.isNull() || !isVisible() || width() < 200 || height() < 150)
+		return;
+	const int w = qBound(200, width() & ~1, 8192);
+	const int h = qBound(200, height(), 8192);
+	if (qAbs(w - m_image.width()) < 8 && qAbs(h - m_image.height()) < 8)
+		return;
+	if (QSize(w, h) == m_requested)
+		return;
+	m_requested = QSize(w, h);
+	m_backend->resizeSession(m_session, std::uint32_t(w), std::uint32_t(h));
+}
+
+void FrameView::setRemotePointer(int kind, const QByteArray& bgra, int w, int h, int hx, int hy)
+{
+	m_pointerHidden = kind == 1;
+	m_pointer = QImage();
+	if (kind == 2 && w > 0 && h > 0 && bgra.size() >= w * h * 4)
+	{
+		// BGRA im Speicher = ARGB32 (Little Endian); Kopie, weil die Daten nicht bleiben.
+		m_pointer = QImage(reinterpret_cast<const uchar*>(bgra.constData()), w, h, w * 4, QImage::Format_ARGB32).copy();
+		m_pointerHot = QPoint(hx, hy);
+	}
+	applyPointer();
+}
+
+void FrameView::applyPointer()
+{
+	if (m_pointerHidden)
+		return setCursor(Qt::BlankCursor);
+	if (m_pointer.isNull())
+		return setCursor(Qt::ArrowCursor);
+	// Wie das Bild skalieren, damit der Zeiger zur Darstellung passt.
+	qreal f = 1.0;
+	if (!m_image.isNull() && m_image.width() > 0)
+		f = qreal(target().width()) / m_image.width();
+	if (qAbs(f - 1.0) < 0.05)
+		return setCursor(QCursor(QPixmap::fromImage(m_pointer), m_pointerHot.x(), m_pointerHot.y()));
+	const QImage s = m_pointer.scaled(qMax(1, qRound(m_pointer.width() * f)), qMax(1, qRound(m_pointer.height() * f)), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+	setCursor(QCursor(QPixmap::fromImage(s), qRound(m_pointerHot.x() * f), qRound(m_pointerHot.y() * f)));
+}
+
+QRect FrameView::target() const
+{
+	if (m_image.isNull())
+		return rect();
+	QSize s = m_image.size().scaled(size(), Qt::KeepAspectRatio);
+	if (s.width() > m_image.width())
+		s = m_image.size();
+	return QRect(QPoint((width() - s.width()) / 2, (height() - s.height()) / 2), s);
+}
+
+void FrameView::damage(int, int, int, int)
+{
+	update();
+}
+
+void FrameView::paintEvent(QPaintEvent*)
+{
+	QPainter p(this);
+	p.fillRect(rect(), palette().window());
+	if (m_image.isNull())
+	{
+		p.setPen(palette().text().color());
+		p.drawText(rect(), Qt::AlignCenter, m_backend->text(QStringLiteral("state.connecting")));
+		return;
+	}
+	p.setRenderHint(QPainter::SmoothPixmapTransform);
+	p.drawImage(target(), m_image);
+	if (hasFocus() && s_focusFrame)
+	{
+		// Dezent: dünne, leicht durchscheinende Linie (abschaltbar unter Extras → Darstellung).
+		QColor c = palette().highlight().color();
+		c.setAlpha(170);
+		p.setPen(QPen(c, 1));
+		p.drawRect(rect().adjusted(0, 0, -1, -1));
+	}
+}
+
+QPoint FrameView::toRemote(const QPointF& pos) const
+{
+	QRect t = target();
+	if (m_image.isNull() || t.width() == 0 || t.height() == 0)
+		return QPoint();
+	int x = int((pos.x() - t.x()) * m_image.width() / t.width());
+	int y = int((pos.y() - t.y()) * m_image.height() / t.height());
+	return QPoint(qBound(0, x, m_image.width() - 1), qBound(0, y, m_image.height() - 1));
+}
+
+static int buttonId(Qt::MouseButton b)
+{
+	switch (b)
+	{
+		case Qt::LeftButton:
+			return 1;
+		case Qt::RightButton:
+			return 2;
+		case Qt::MiddleButton:
+			return 3;
+		default:
+			return 0;
+	}
+}
+
+void FrameView::mouseMoveEvent(QMouseEvent* e)
+{
+	QPoint r = toRemote(e->position());
+	m_backend->mouseEvent(m_session, r.x(), r.y(), 0, false);
+}
+
+void FrameView::mousePressEvent(QMouseEvent* e)
+{
+	setFocus();
+	// Nach dem Notausgang holt ein Klick in die Sitzung die Tastenkürzel zurück.
+	if (!KeyCapture::active())
+		captureKeys();
+	QPoint r = toRemote(e->position());
+	m_backend->mouseEvent(m_session, r.x(), r.y(), buttonId(e->button()), true);
+}
+
+void FrameView::mouseReleaseEvent(QMouseEvent* e)
+{
+	QPoint r = toRemote(e->position());
+	m_backend->mouseEvent(m_session, r.x(), r.y(), buttonId(e->button()), false);
+}
+
+void FrameView::wheelEvent(QWheelEvent* e)
+{
+	QPoint r = toRemote(e->position());
+	m_backend->mouseEvent(m_session, r.x(), r.y(), e->angleDelta().y() > 0 ? 4 : 5, true);
+}
+
+namespace {
+
+// X11-Keysyms (unter Linux liefert Qt sie als nativeVirtualKey).
+constexpr std::uint32_t kControlR = 0xffe4;
+
+/// Umschalt-, Windows- und Menütasten, deren Seite (links/rechts) erhalten bleiben soll.
+/// AltGr (ISO_Level3_Shift) bewusst nicht: Sonderzeichen wie @ und € kommen als Text.
+bool sidedKeysym(std::uint32_t k)
+{
+	return (k >= 0xffe1 && k <= 0xffe4) || k == 0xffe9 || k == 0xffea || (k >= 0xffeb && k <= 0xffec) || k == 0xff67;
+}
+
+} // namespace
+
+std::uint32_t FrameView::keyCode(QKeyEvent* e) const
+{
+#ifdef Q_OS_LINUX
+	const std::uint32_t native = e->nativeVirtualKey();
+	if (sidedKeysym(native))
+		return 0x40000000u | native; // NATIVE_KEYSYM in keys.rs
+	// Windows-Taste unter dem Namen „Meta“ (manche Belegungen): links/rechts nach Keysym.
+	if (native == 0xffe7 || native == 0xffe8)
+		return 0x40000000u | (native == 0xffe7 ? 0xffebu : 0xffecu);
+#endif
+	return std::uint32_t(e->key());
+}
+
+bool FrameView::event(QEvent* e)
+{
+#ifdef Q_OS_WIN
+	// Beim Abreißen in ein eigenes Fenster kann Qt das native Fenster neu erzeugen: dem Worker die neue Kennung geben.
+	if (m_embedded && e->type() == QEvent::WinIdChange)
+	{
+		const bool r = QWidget::event(e);
+		resyncWeb();
+		return r;
+	}
+#endif
+	// Kürzel mit Alt oder der Windows-Taste und die Menütaste gehören der Sitzung, nicht dem Programm
+	// (sonst würden z. B. Menü-Kurzbefehle sie abfangen). Strg-Kürzel des Programms (Strg+Tab …) bleiben.
+	if (e->type() == QEvent::ShortcutOverride && !m_web && s_keyCapture)
+	{
+		auto* k = static_cast<QKeyEvent*>(e);
+		const bool winOrAlt = k->modifiers() & (Qt::AltModifier | Qt::MetaModifier);
+		const bool special = k->key() == Qt::Key_Menu || k->key() == Qt::Key_Super_L || k->key() == Qt::Key_Super_R || k->key() == Qt::Key_Meta || k->key() == Qt::Key_Alt;
+		if (winOrAlt || special)
+		{
+			e->accept();
+			return true;
+		}
+	}
+	return QWidget::event(e);
+}
+
+void FrameView::captureKeys()
+{
+	if (m_web || !s_keyCapture)
+		return;
+	KeyCapture::pump();
+	KeyCapture::capture(this);
+	if (KeyCapture::active() && s_notice)
+		s_notice(m_backend->text(QStringLiteral("keys.captured")));
+}
+
+void FrameView::releasePressed()
+{
+	// Gegen hängende Tasten: alles, was hier gedrückt wurde, beim Ziel wieder lösen.
+	for (std::uint32_t k : std::as_const(m_pressed))
+		m_backend->keyEvent(m_session, k, 0, QString(), false);
+	m_pressed.clear();
+	m_rightCtrlAlone = false;
+}
+
+void FrameView::setAdminKeys(bool on, int timeoutMins, const QString& layoutName)
+{
+	if (on && !m_adminKeys)
+	{
+		// Was unter dem bisherigen Modus gedrückt war, zuerst lösen.
+		releasePressed();
+		m_adminSince = QDateTime::currentMSecsSinceEpoch();
+	}
+	m_adminKeys = on;
+	m_adminLayout = on ? layoutName : QString();
+	if (!on || timeoutMins <= 0)
+	{
+		if (m_adminIdle)
+			m_adminIdle->stop();
+		return;
+	}
+	if (!m_adminIdle)
+	{
+		m_adminIdle = new QTimer(this);
+		m_adminIdle->setSingleShot(true);
+		connect(m_adminIdle, &QTimer::timeout, this, [this] {
+			if (m_adminKeys && s_adminTimeout)
+				s_adminTimeout(this);
+		});
+	}
+	m_adminIdle->setInterval(timeoutMins * 60 * 1000);
+	m_adminIdle->start();
+}
+
+void FrameView::keyPressEvent(QKeyEvent* e)
+{
+	const std::uint32_t code = keyCode(e);
+	if (m_adminKeys && m_adminIdle && m_adminIdle->interval() > 0)
+		m_adminIdle->start();
+	if (KeyCapture::logging())
+	{
+		KeyCapture::pump();
+		qInfo("[remotejoe-tasten] gedrückt: Qt-Taste 0x%x, System 0x%x, Umschalter 0x%x, an Sitzung 0x%x, Freigabe %s", unsigned(e->key()), unsigned(e->nativeVirtualKey()),
+		      unsigned(e->modifiers()), unsigned(code), KeyCapture::active() ? "an" : "aus");
+	}
+#ifdef Q_OS_LINUX
+	m_rightCtrlAlone = e->nativeVirtualKey() == kControlR && !e->isAutoRepeat() && m_pressed.isEmpty();
+#endif
+	// Merken nur, was als Taste (nicht als Text) beim Ziel ankommt.
+	if (!e->isAutoRepeat() && (e->text().isEmpty() || (e->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))))
+		m_pressed.insert(code);
+	m_backend->keyEvent(m_session, code, std::uint32_t(e->modifiers()), e->text(), true);
+}
+
+void FrameView::keyReleaseEvent(QKeyEvent* e)
+{
+	if (e->isAutoRepeat())
+		return;
+	const std::uint32_t code = keyCode(e);
+	if (KeyCapture::logging())
+		qInfo("[remotejoe-tasten] losgelassen: Qt-Taste 0x%x, System 0x%x, an Sitzung 0x%x", unsigned(e->key()), unsigned(e->nativeVirtualKey()), unsigned(code));
+	m_pressed.remove(code);
+	m_backend->keyEvent(m_session, code, std::uint32_t(e->modifiers()), e->text(), false);
+#ifdef Q_OS_LINUX
+	// Notausgang: rechte Strg-Taste allein gibt die Tastenkürzel an den Desktop zurück.
+	if (e->nativeVirtualKey() == kControlR && m_rightCtrlAlone && KeyCapture::active())
+	{
+		releasePressed();
+		KeyCapture::release();
+		if (s_notice)
+			s_notice(m_backend->text(QStringLiteral("keys.released")));
+	}
+	m_rightCtrlAlone = false;
+#endif
+}
+
+void FrameView::focusInEvent(QFocusEvent* e)
+{
+	QWidget::focusInEvent(e);
+	// Umschalt-, Strg-, Alt- und Windows-Tasten (links und rechts) beim Ziel lösen: Ging ein
+	// „losgelassen“ verloren (z. B. während der Desktop die Taste hatte), hinge sie sonst fest.
+	if (!m_web)
+		for (std::uint32_t k : { 0xffe1u, 0xffe2u, 0xffe3u, 0xffe4u, 0xffe9u, 0xffeau, 0xffebu, 0xffecu })
+			m_backend->keyEvent(m_session, 0x40000000u | k, 0, QString(), false);
+	captureKeys();
+	// Lokale Zwischenablage beim Betreten anbieten (Richtung prüft der Worker).
+	const QString text = QGuiApplication::clipboard()->text();
+	if (!text.isEmpty())
+		m_backend->offerClipboard(m_session, text);
+	// Kopierte lokale Dateien (Datei-URLs) nur bei geänderter Liste anbieten; Richtung und Limit prüft der Kern.
+	if (const QMimeData* md = QGuiApplication::clipboard()->mimeData(); md && md->hasUrls())
+	{
+		QStringList files;
+		for (const QUrl& u : md->urls())
+			if (u.isLocalFile())
+				files << u.toLocalFile();
+		if (!files.isEmpty() && files != m_lastClipFiles)
+		{
+			m_lastClipFiles = files;
+			m_backend->offerClipboardFiles(m_session, files.join(QLatin1Char('\n')));
+		}
+	}
+	if (m_web)
+		m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":{\"op\":\"focus\",\"on\":true}}").arg(m_session));
+	update();
+}
+
+void FrameView::focusOutEvent(QFocusEvent* e)
+{
+	QWidget::focusOutEvent(e);
+	releasePressed();
+	// Wechselt nur das aktive Fenster (z. B. Abfrage des Desktops, anderes Programm), bleibt die
+	// Freigabe: Der Desktop schaltet sie mit dem Fokus selbst ab und wieder an. Abgegeben wird sie,
+	// wenn der Fokus innerhalb von remotejoe woandershin geht.
+	if (KeyCapture::logging())
+		qInfo("[remotejoe-tasten] Fokus verloren (Grund %d)", int(e->reason()));
+	if (e->reason() != Qt::ActiveWindowFocusReason && e->reason() != Qt::PopupFocusReason)
+		KeyCapture::release();
+	if (m_web)
+	{
+#ifdef Q_OS_WIN
+		// Kein „focus off“ an den Worker: Der setzt darauf den Windows-Fokus auf das Elternfenster der Seite, also
+		// auf dieses Kindfenster, und Tasten kämen nie mehr beim Qt-Feld an. Stattdessen den Windows-Fokus selbst auf
+		// das eigene Fenster holen – nur, wenn der Fokus innerhalb von remotejoe wechselt (Klick in ein Feld, Tab aus
+		// der Seite), nicht bei Dialogen oder Menüs.
+		if (!m_embedded)
+			m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":{\"op\":\"focus\",\"on\":false}}").arg(m_session));
+		else if (e->reason() != Qt::ActiveWindowFocusReason && e->reason() != Qt::PopupFocusReason)
+			if (QWidget* top = window(); top && top->winId())
+				::SetFocus(reinterpret_cast<HWND>(top->winId()));
+#else
+		m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":{\"op\":\"focus\",\"on\":false}}").arg(m_session));
+#endif
+	}
+	update();
+}
+
+QPoint FrameView::toLocal(const QPoint& remote) const
+{
+	const QRect t = target();
+	if (m_image.isNull() || m_image.width() == 0 || m_image.height() == 0)
+		return remote;
+	return QPoint(t.x() + remote.x() * t.width() / m_image.width(), t.y() + remote.y() * t.height() / m_image.height());
+}
+
+// ---------- TerminalView ----------
+
+TerminalView::TerminalView(RjBackend* backend, std::uint64_t session, QWidget* parent)
+  : QWidget(parent)
+  , m_backend(backend)
+  , m_session(session)
+{
+	setFocusPolicy(Qt::StrongFocus);
+	setAttribute(Qt::WA_InputMethodEnabled);
+	setCursor(Qt::IBeamCursor);
+	m_font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+	m_font.setPointSize(11);
+	QFontMetrics fm(m_font);
+	m_cw = qMax(1, fm.horizontalAdvance(QLatin1Char('M')));
+	m_ch = qMax(1, fm.height());
+	m_ascent = fm.ascent();
+	setMinimumSize(m_cw * 20, m_ch * 5);
+	applySettings(QJsonDocument::fromJson(m_backend->terminalSettings().toUtf8()).object());
+}
+
+namespace
+{
+bool s_copyOnSelect = true;
+bool s_confirmPaste = true;
+QPointer<TerminalView> s_activeTerminal;
+} // namespace
+
+TerminalView* TerminalView::active()
+{
+	return s_activeTerminal && s_activeTerminal->isVisible() ? s_activeTerminal.data() : nullptr;
+}
+
+void TerminalView::focusInEvent(QFocusEvent* e)
+{
+	QWidget::focusInEvent(e);
+	s_activeTerminal = this;
+	update();
+}
+
+void TerminalView::applySettings(const QJsonObject& s)
+{
+	if (s.isEmpty())
+		return;
+	s_copyOnSelect = s.value(QStringLiteral("copy_on_select")).toBool(true);
+	s_confirmPaste = s.value(QStringLiteral("confirm_paste")).toBool(true);
+	const QString family = s.value(QStringLiteral("font_family")).toString();
+	QFont f = family.isEmpty() ? QFontDatabase::systemFont(QFontDatabase::FixedFont) : QFont(family);
+	f.setStyleHint(QFont::Monospace);
+	f.setFixedPitch(true);
+	f.setPointSizeF(qBound(6.0, s.value(QStringLiteral("font_size")).toDouble(11.0), 40.0));
+	m_font = f;
+	const QFontMetrics fm(m_font);
+	m_cw = qMax(1, fm.horizontalAdvance(QLatin1Char('M')));
+	m_ch = qMax(1, fm.height());
+	m_ascent = fm.ascent();
+	const QColor sel(s.value(QStringLiteral("selection")).toString());
+	m_selection = sel.isValid() ? sel : QColor();
+	setMinimumSize(m_cw * 20, m_ch * 5);
+	// Zellengröße hat sich geändert: Gitter der Sitzung neu bemessen.
+	const QSize c = cells();
+	if (c != m_lastSize)
+	{
+		m_lastSize = c;
+		m_backend->resizeSession(m_session, std::uint32_t(c.width()), std::uint32_t(c.height()));
+	}
+	refresh();
+}
+
+void TerminalView::applyToAll(const QJsonObject& settings)
+{
+	const QList<QWidget*> all = QApplication::allWidgets();
+	for (QWidget* w : all)
+		if (auto* t = dynamic_cast<TerminalView*>(w))
+			t->applySettings(settings);
+}
+
+void TerminalView::wheelEvent(QWheelEvent* e)
+{
+	if (!(e->modifiers() & Qt::ControlModifier))
+	{
+		// Drei Zeilen je Raste (120); feine Räder und Touchpads liefern Bruchteile.
+		m_scrollAcc += e->angleDelta().y();
+		const int lines = m_scrollAcc / 40;
+		if (lines != 0)
+		{
+			m_scrollAcc -= lines * 40;
+			if (m_snap.value(QStringLiteral("alt_screen")).toBool())
+			{
+				// Bildschirm-Programme (less, top) haben keinen Rücklauf: Pfeiltasten senden.
+				const int key = lines > 0 ? Qt::Key_Up : Qt::Key_Down;
+				for (int i = 0; i < qAbs(lines); ++i)
+					m_backend->keyEvent(m_session, std::uint32_t(key), 0, QString(), true);
+			}
+			else
+			{
+				m_backend->terminalScroll(m_session, lines);
+				refresh();
+			}
+		}
+		e->accept();
+		return;
+	}
+	// Feine Räder liefern Bruchteile: erst bei einer ganzen Raste (120) ändern.
+	m_wheel += e->angleDelta().y();
+	const int steps = m_wheel / 120;
+	if (steps != 0)
+	{
+		m_wheel -= steps * 120;
+		applyToAll(QJsonDocument::fromJson(m_backend->terminalFontStep(steps).toUtf8()).object());
+	}
+	e->accept();
+}
+
+QSize TerminalView::cells() const
+{
+	return QSize(qMax(20, width() / m_cw), qMax(5, height() / m_ch));
+}
+
+void TerminalView::refresh()
+{
+	const QString json = m_backend->terminalJson(m_session);
+	m_snap = QJsonDocument::fromJson(json.toUtf8()).object();
+	// Selbstheilung: Hat das Gitter der Sitzung eine andere Größe als die Ansicht fasst (zum Beispiel
+	// nach einer verlorenen Größenmeldung), wird die Größe erneut gemeldet; sonst wäre die letzte Zeile
+	// angeschnitten oder ein Streifen leer. Höchstens drei Versuche hintereinander.
+	const int rows = m_snap.value(QStringLiteral("rows")).toInt();
+	const int cols = m_snap.value(QStringLiteral("cols")).toInt();
+	const QSize want = cells();
+	if (rows > 0 && cols > 0 && (rows != want.height() || cols != want.width()) && m_healTries < 3 && isVisible())
+	{
+		++m_healTries;
+		m_lastSize = want;
+		m_backend->resizeSession(m_session, std::uint32_t(want.width()), std::uint32_t(want.height()));
+		m_snap = QJsonDocument::fromJson(m_backend->terminalJson(m_session).toUtf8()).object();
+	}
+	else if (rows == want.height() && cols == want.width())
+		m_healTries = 0;
+	// Zeilen merken, damit eine Auswahl über den sichtbaren Bereich hinaus ihren Text kennt.
+	if (m_selStart.x() < 0 && m_lineChars.size() > 3000)
+		m_lineChars.clear();
+	const int t = top();
+	const int shown = m_snap.value(QStringLiteral("lines")).toArray().size();
+	for (int r = 0; r < shown; ++r)
+	{
+		// Wie rowChars, aber die zweite Zelle breiter Zeichen bleibt leer (sonst stünde das Zeichen doppelt im Text).
+		QStringList cells = rowChars(r);
+		for (int c = 1; c < cells.size(); ++c)
+			if (!cells[c].isEmpty() && cells[c] == cells[c - 1] && cellWide(r, c))
+				cells[c].clear();
+		m_lineChars.insert(t + r, cells);
+	}
+	update();
+}
+
+int TerminalView::top() const
+{
+	return m_snap.value(QStringLiteral("history")).toInt() - m_snap.value(QStringLiteral("scroll_offset")).toInt();
+}
+
+QPoint TerminalView::absAt(const QPoint& p) const
+{
+	const int rows = qMax(1, m_snap.value(QStringLiteral("rows")).toInt());
+	QPoint c = cellAt(QPoint(p.x(), qBound(0, p.y(), rows * m_ch - 1)));
+	c.ry() += top();
+	return c;
+}
+
+void TerminalView::autoScrollTick()
+{
+	if (!(QGuiApplication::mouseButtons() & Qt::LeftButton) || m_selStart.x() < 0)
+	{
+		m_autoScroll->stop();
+		return;
+	}
+	const int rows = m_snap.value(QStringLiteral("rows")).toInt();
+	const int dir = m_lastMouse.y() < 0 ? 1 : (m_lastMouse.y() >= rows * m_ch ? -1 : 0);
+	if (dir == 0)
+	{
+		m_autoScroll->stop();
+		return;
+	}
+	m_backend->terminalScroll(m_session, dir);
+	refresh();
+	m_selEnd = absAt(m_lastMouse);
+	update();
+}
+
+void TerminalView::resizeEvent(QResizeEvent*)
+{
+	QSize c = cells();
+	if (c != m_lastSize)
+	{
+		m_lastSize = c;
+		m_backend->resizeSession(m_session, std::uint32_t(c.width()), std::uint32_t(c.height()));
+		refresh();
+	}
+}
+
+void TerminalView::paintEvent(QPaintEvent*)
+{
+	QPainter p(this);
+	const QColor bgScheme(m_snap.value(QStringLiteral("bg")).toString());
+	const QColor fgScheme(m_snap.value(QStringLiteral("fg")).toString());
+	p.fillRect(rect(), bgScheme.isValid() ? bgScheme : QColor(0, 0, 0));
+	p.setFont(m_font);
+	const QJsonArray lines = m_snap.value(QStringLiteral("lines")).toArray();
+	QPoint a = m_selStart, b = m_selEnd;
+	if (b.y() < a.y() || (b.y() == a.y() && b.x() < a.x()))
+		std::swap(a, b);
+	const int t = top();
+	for (int row = 0; row < lines.size(); ++row)
+	{
+		int col = 0;
+		for (const QJsonValue& rv : lines[row].toArray())
+		{
+			const QJsonArray run = rv.toArray();
+			const QString text = run[0].toString();
+			QColor fg(run[1].toString()), bg(run[2].toString());
+			const int flags = run[3].toInt();
+			QFont f = m_font;
+			f.setBold(flags & 1);
+			f.setItalic(flags & 2);
+			f.setUnderline(flags & 4);
+			p.setFont(f);
+			// Zeichen einzeln setzen, damit breite Zeichen zwei Zellen belegen.
+			int i = 0;
+			while (i < text.size())
+			{
+				const int len = text.at(i).isHighSurrogate() && i + 1 < text.size() ? 2 : 1;
+				const QString ch = text.mid(i, len);
+				const int span = (flags & 8) ? 2 : 1;
+				const bool sel = m_selStart.x() >= 0 &&
+				                 (row + t > a.y() || (row + t == a.y() && col >= a.x())) &&
+				                 (row + t < b.y() || (row + t == b.y() && col <= b.x()));
+				QRect cell(col * m_cw, row * m_ch, m_cw * span, m_ch);
+				p.fillRect(cell, sel ? (m_selection.isValid() ? m_selection : palette().highlight().color()) : bg);
+				p.setPen(sel ? (m_selection.isValid() && fgScheme.isValid() ? fgScheme : palette().highlightedText().color()) : fg);
+				p.drawText(cell.x(), cell.y() + m_ascent, ch);
+				col += span;
+				i += len;
+			}
+		}
+	}
+	const int back = m_snap.value(QStringLiteral("scroll_offset")).toInt();
+	if (back > 0)
+	{
+		// Marke oben rechts: Anzeige liegt im Rücklauf.
+		const QString text = m_backend->text(QStringLiteral("term.scrolled")).arg(back);
+		QFont lf = m_font;
+		lf.setBold(true);
+		p.setFont(lf);
+		const QRect tr = QFontMetrics(lf).boundingRect(text).adjusted(-8, -3, 8, 3);
+		const QRect box(width() - tr.width() - 6, 4, tr.width(), tr.height());
+		p.fillRect(box, QColor(0, 0, 0, 170));
+		p.setPen(QColor(255, 255, 255));
+		p.drawText(box, Qt::AlignCenter, text);
+	}
+	const QJsonArray cur = m_snap.value(QStringLiteral("cursor")).toArray();
+	if (m_snap.value(QStringLiteral("cursor_visible")).toBool() && cur.size() == 2)
+	{
+		QRect c(cur[1].toInt() * m_cw, cur[0].toInt() * m_ch, m_cw, m_ch);
+		QColor cc(m_snap.value(QStringLiteral("cursor_color")).toString());
+		if (!cc.isValid())
+			cc = QColor(229, 229, 229);
+		if (hasFocus())
+		{
+			cc.setAlpha(160);
+			p.fillRect(c, cc);
+		}
+		else
+		{
+			p.setPen(cc);
+			p.drawRect(c.adjusted(0, 0, -1, -1));
+		}
+	}
+}
+
+void TerminalView::keyPressEvent(QKeyEvent* e)
+{
+	const auto mods = e->modifiers();
+	// Strg+Einfg kopiert, Umschalt+Einfg fügt ein (wie in vielen Terminals und bei PuTTY).
+	if (e->key() == Qt::Key_Insert && mods == Qt::ControlModifier)
+	{
+		copySelection();
+		return;
+	}
+	if (e->key() == Qt::Key_Insert && mods == Qt::ShiftModifier)
+	{
+		pasteClipboard();
+		return;
+	}
+	if ((mods & Qt::ShiftModifier) && !(mods & Qt::ControlModifier) && (e->key() == Qt::Key_PageUp || e->key() == Qt::Key_PageDown) &&
+	    !m_snap.value(QStringLiteral("alt_screen")).toBool())
+	{
+		// Auswahl bleibt (sie liegt im Rücklauf, nicht auf dem Bildschirm).
+		m_backend->terminalScrollPage(m_session, e->key() == Qt::Key_PageUp);
+		refresh();
+		return;
+	}
+	if ((mods & Qt::ControlModifier) && (mods & Qt::ShiftModifier))
+	{
+		if (e->key() == Qt::Key_V)
+		{
+			pasteClipboard();
+			return;
+		}
+		if (e->key() == Qt::Key_C)
+		{
+			copySelection();
+			return;
+		}
+	}
+	m_backend->keyEvent(m_session, std::uint32_t(e->key()), std::uint32_t(mods), e->text(), true);
+}
+
+QPoint TerminalView::cellAt(const QPoint& p) const
+{
+	return QPoint(qMax(0, p.x() / m_cw), qMax(0, p.y() / m_ch));
+}
+
+void TerminalView::mousePressEvent(QMouseEvent* e)
+{
+	setFocus();
+	if (e->button() == Qt::LeftButton)
+	{
+		const QPoint c = cellAt(e->pos());
+		// Dritter Klick kurz nach dem Doppelklick: ganze Zeile.
+		if (m_tripleClock.isValid() && m_tripleClock.elapsed() < QApplication::doubleClickInterval() && c == m_tripleCell)
+		{
+			m_tripleClock.invalidate();
+			m_skipRelease = true;
+			selectLine(c.y());
+			return;
+		}
+		// Umschalt+Klick erweitert eine bestehende Auswahl.
+		if ((e->modifiers() & Qt::ShiftModifier) && m_selStart.x() >= 0)
+			m_selEnd = absAt(e->pos());
+		else
+			m_selStart = m_selEnd = absAt(e->pos());
+		update();
+	}
+	else if (e->button() == Qt::MiddleButton)
+		pasteText(QGuiApplication::clipboard()->text(QClipboard::Selection));
+}
+
+void TerminalView::mouseMoveEvent(QMouseEvent* e)
+{
+	if (e->buttons() & Qt::LeftButton)
+	{
+		m_lastMouse = e->pos();
+		m_selEnd = absAt(e->pos());
+		update();
+		// Über den oberen oder unteren Rand gezogen: mitrollen, solange die Maus dort bleibt.
+		const int rows = m_snap.value(QStringLiteral("rows")).toInt();
+		if ((e->pos().y() < 0 || e->pos().y() >= rows * m_ch) && !m_snap.value(QStringLiteral("alt_screen")).toBool())
+		{
+			if (!m_autoScroll)
+			{
+				m_autoScroll = new QTimer(this);
+				m_autoScroll->setInterval(70);
+				connect(m_autoScroll, &QTimer::timeout, this, &TerminalView::autoScrollTick);
+			}
+			if (!m_autoScroll->isActive())
+				m_autoScroll->start();
+		}
+	}
+}
+
+void TerminalView::mouseReleaseEvent(QMouseEvent* e)
+{
+	if (e->button() != Qt::LeftButton)
+		return;
+	// Nach Doppel- oder Dreifachklick bleibt die dort gesetzte Auswahl stehen.
+	if (m_skipRelease)
+	{
+		m_skipRelease = false;
+		return;
+	}
+	if (m_autoScroll)
+		m_autoScroll->stop();
+	m_selEnd = absAt(e->pos());
+	if (m_selEnd == m_selStart)
+	{
+		m_selStart = m_selEnd = QPoint(-1, -1);
+		update();
+		return;
+	}
+	finishSelection();
+}
+
+QString TerminalView::selectedText()
+{
+	if (m_selStart.x() < 0)
+		return QString();
+	QPoint a = m_selStart, b = m_selEnd;
+	if (b.y() < a.y() || (b.y() == a.y() && b.x() < a.x()))
+		std::swap(a, b);
+	const int t = top();
+	const int rows = m_snap.value(QStringLiteral("rows")).toInt();
+	// Ganz sichtbar: der Text des Terminals selbst (berücksichtigt umbrochene Zeilen).
+	if (a.y() >= t && b.y() < t + rows)
+		return m_backend->selectText(m_session, a.y() - t, a.x(), b.y() - t, b.x());
+	// Über den Bildschirm hinaus: aus den gemerkten Zeilen.
+	QStringList out;
+	for (int y = a.y(); y <= b.y(); ++y)
+	{
+		const QStringList chars = m_lineChars.value(y);
+		const int from = y == a.y() ? a.x() : 0;
+		const int to = y == b.y() ? qMin(b.x(), int(chars.size()) - 1) : int(chars.size()) - 1;
+		QString line;
+		for (int c = from; c <= to; ++c)
+			line += chars[c];
+		while (line.endsWith(QLatin1Char(' ')))
+			line.chop(1);
+		out << line;
+	}
+	return out.join(QLatin1Char('\n'));
+}
+
+/// Auswahl abgeschlossen: in die X11-Auswahl, auf Wunsch auch in die Zwischenablage.
+void TerminalView::finishSelection()
+{
+	const QString text = selectedText();
+	if (!text.isEmpty())
+	{
+		if (QGuiApplication::clipboard()->supportsSelection())
+			QGuiApplication::clipboard()->setText(text, QClipboard::Selection);
+		if (s_copyOnSelect)
+			QGuiApplication::clipboard()->setText(text);
+	}
+	update();
+}
+
+bool TerminalView::copySelection()
+{
+	const QString text = selectedText();
+	if (text.isEmpty())
+		return false;
+	QGuiApplication::clipboard()->setText(text);
+	if (QGuiApplication::clipboard()->supportsSelection())
+		QGuiApplication::clipboard()->setText(text, QClipboard::Selection);
+	return true;
+}
+
+void TerminalView::pasteClipboard()
+{
+	pasteText(QGuiApplication::clipboard()->text());
+}
+
+void TerminalView::pasteText(const QString& text)
+{
+	if (text.isEmpty())
+		return;
+	// Mehrere Zeilen: Zeilenumbrüche wirken wie die Eingabetaste, Befehle laufen sofort los.
+	const int lines = text.trimmed().count(QLatin1Char('\n')) + 1;
+	if (s_confirmPaste && lines > 1)
+	{
+		QMessageBox box(QMessageBox::Question, m_backend->text(QStringLiteral("term.paste.title")),
+		                m_backend->text(QStringLiteral("term.paste.text")).arg(lines), QMessageBox::NoButton, this);
+		auto* ok = box.addButton(m_backend->text(QStringLiteral("term.paste.ok")), QMessageBox::AcceptRole);
+		box.addButton(m_backend->text(QStringLiteral("term.paste.cancel")), QMessageBox::RejectRole);
+		auto* never = new QCheckBox(m_backend->text(QStringLiteral("term.paste.never")), &box);
+		box.setCheckBox(never);
+		box.setDefaultButton(ok);
+		box.exec();
+		if (never->isChecked())
+		{
+			const QJsonObject r = QJsonDocument::fromJson(m_backend->setTerminalSettings(QStringLiteral("{\"confirm_paste\":false}")).toUtf8()).object();
+			applyToAll(r);
+		}
+		if (box.clickedButton() != ok)
+			return;
+	}
+	m_backend->paste(m_session, text);
+}
+
+void TerminalView::selectAll()
+{
+	const int rows = m_snap.value(QStringLiteral("rows")).toInt();
+	const int cols = m_snap.value(QStringLiteral("cols")).toInt();
+	if (rows <= 0 || cols <= 0)
+		return;
+	m_selStart = QPoint(0, top());
+	m_selEnd = QPoint(cols - 1, top() + rows - 1);
+	finishSelection();
+}
+
+/// Zeichen je Spalte einer Zeile des Bildschirms (breite Zeichen belegen zwei Spalten).
+bool TerminalView::cellWide(int row, int col) const
+{
+	// Zweite Zelle eines breiten Zeichens?
+	const QJsonArray lines = m_snap.value(QStringLiteral("lines")).toArray();
+	if (row < 0 || row >= lines.size())
+		return false;
+	int at = 0;
+	for (const QJsonValue& rv : lines[row].toArray())
+	{
+		const QJsonArray run = rv.toArray();
+		const QString text = run[0].toString();
+		const bool wide = run[3].toInt() & 8;
+		int i = 0;
+		while (i < text.size())
+		{
+			const int len = text.at(i).isHighSurrogate() && i + 1 < text.size() ? 2 : 1;
+			if (wide && at + 1 == col)
+				return true;
+			at += wide ? 2 : 1;
+			if (at > col)
+				return false;
+			i += len;
+		}
+	}
+	return false;
+}
+
+QStringList TerminalView::rowChars(int row) const
+{
+	QStringList out;
+	const QJsonArray lines = m_snap.value(QStringLiteral("lines")).toArray();
+	if (row < 0 || row >= lines.size())
+		return out;
+	for (const QJsonValue& rv : lines[row].toArray())
+	{
+		const QJsonArray run = rv.toArray();
+		const QString text = run[0].toString();
+		const bool wide = run[3].toInt() & 8;
+		int i = 0;
+		while (i < text.size())
+		{
+			const int len = text.at(i).isHighSurrogate() && i + 1 < text.size() ? 2 : 1;
+			const QString ch = text.mid(i, len);
+			out << ch;
+			if (wide)
+				out << ch;
+			i += len;
+		}
+	}
+	return out;
+}
+
+void TerminalView::selectWordAt(const QPoint& c)
+{
+	const QStringList cols = rowChars(c.y());
+	if (c.x() < 0 || c.x() >= cols.size())
+		return;
+	auto isWord = [](const QString& s) {
+		if (s.isEmpty())
+			return false;
+		const QChar ch = s.at(0);
+		return ch.isLetterOrNumber() || QStringLiteral("_-./~:@%+=?&#").contains(ch);
+	};
+	const bool word = isWord(cols[c.x()]);
+	int a = c.x(), b = c.x();
+	if (word)
+	{
+		while (a > 0 && isWord(cols[a - 1]))
+			--a;
+		while (b + 1 < cols.size() && isWord(cols[b + 1]))
+			++b;
+	}
+	m_selStart = QPoint(a, c.y() + top());
+	m_selEnd = QPoint(b, c.y() + top());
+	finishSelection();
+}
+
+void TerminalView::selectLine(int row)
+{
+	const QStringList cols = rowChars(row);
+	int last = cols.size() - 1;
+	while (last > 0 && cols[last].trimmed().isEmpty())
+		--last;
+	m_selStart = QPoint(0, row + top());
+	m_selEnd = QPoint(qMax(0, last), row + top());
+	finishSelection();
+}
+
+void TerminalView::mouseDoubleClickEvent(QMouseEvent* e)
+{
+	if (e->button() != Qt::LeftButton)
+		return;
+	setFocus();
+	const QPoint c = cellAt(e->pos());
+	m_skipRelease = true;
+	selectWordAt(c);
+	m_tripleCell = c;
+	m_tripleClock.start();
+}
+
+void TerminalView::contextMenuEvent(QContextMenuEvent* e)
+{
+	QMenu menu(this);
+	auto* copy = menu.addAction(m_backend->text(QStringLiteral("term.menu.copy")));
+	copy->setEnabled(m_selStart.x() >= 0 && !selectedText().isEmpty());
+	connect(copy, &QAction::triggered, this, [this] { copySelection(); });
+	auto* paste = menu.addAction(m_backend->text(QStringLiteral("term.menu.paste")));
+	paste->setEnabled(!QGuiApplication::clipboard()->text().isEmpty());
+	connect(paste, &QAction::triggered, this, [this] { pasteClipboard(); });
+	menu.addSeparator();
+	auto* all = menu.addAction(m_backend->text(QStringLiteral("term.menu.selectall")));
+	connect(all, &QAction::triggered, this, [this] { selectAll(); });
+	menu.exec(e->globalPos());
+	e->accept();
+}
+
+// ---------- SessionPane ----------
+
+SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QString& title, const QString& protocol,
+                         QWidget* parent)
+  : QWidget(parent)
+  , m_backend(backend)
+  , m_session(session)
+  , m_title(title)
+  , m_protocol(protocol)
+{
+	connect(&m_loadTick, &QTimer::timeout, this, &SessionPane::updateHeader);
+	auto* lay = new QVBoxLayout(this);
+	lay->setContentsMargins(2, 2, 2, 2);
+	lay->setSpacing(2);
+	m_header = new QLabel(this);
+	m_header->hide();
+	m_header->setObjectName(QStringLiteral("paneHeader"));
+	m_header->setMinimumHeight(28);
+	m_notice = new QLabel(this);
+	m_notice->setWordWrap(true);
+	m_notice->setVisible(false);
+	m_notice->setObjectName(QStringLiteral("paneNotice"));
+	m_reconnect = new QPushButton(backend->text(QStringLiteral("session.reconnect")), this);
+	m_reconnect->setVisible(false);
+	m_reconnect->setMinimumHeight(36);
+	connect(m_reconnect, &QPushButton::clicked, this, [this] { m_backend->reconnect(m_session); });
+	m_security = new SecurityBar(backend, this);
+	m_ask = new ActionBar(backend, this);
+	// Kopfzeile: Name und Zustand, bei SSH außerdem die Makro-Schaltflächen.
+	auto* headRow = new QWidget(this);
+	auto* hl = new QHBoxLayout(headRow);
+	hl->setContentsMargins(0, 0, 0, 0);
+	if (protocol == QLatin1String("ssh"))
+	{
+		m_macroState = new QLabel(headRow);
+		m_macroState->hide();
+		m_macroCancel = new QPushButton(backend->text(QStringLiteral("macro.cancel")), headRow);
+		m_macroCancel->hide();
+		m_macroNew = new QPushButton(backend->text(QStringLiteral("macro.new")), headRow);
+		m_macroNew->setToolTip(backend->text(QStringLiteral("macro.tip.new")));
+		m_macroRun = new QPushButton(backend->text(QStringLiteral("macro.run")), headRow);
+		m_macroRun->setToolTip(backend->text(QStringLiteral("macro.tip.run")));
+		auto* menu = new QMenu(m_macroRun);
+		m_macroRun->setMenu(menu);
+		connect(menu, &QMenu::aboutToShow, this, [this] { fillMacroMenu(); });
+		hl->addWidget(m_macroNew);
+		hl->addWidget(m_macroRun);
+		hl->addWidget(m_macroCancel);
+		hl->addWidget(m_macroState);
+		connect(m_macroCancel, &QPushButton::clicked, this, [this] {
+			m_backend->edit(QStringLiteral("{\"op\":\"cancel_macro\",\"session\":%1}").arg(m_session));
+		});
+		connect(m_macroNew, &QPushButton::clicked, this, [this] {
+			// Neues Makro anlegen, diesem Ziel zuordnen und den Editor öffnen.
+			const QJsonObject info = QJsonDocument::fromJson(m_backend->sessionInfo(m_session).toUtf8()).object();
+			const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"macro_new\"}")).toUtf8()).object();
+			const QString id = r.value(QStringLiteral("macro")).toString();
+			if (id.isEmpty())
+				return;
+			const QString target = info.value(QStringLiteral("target")).toString();
+			if (!target.isEmpty())
+				m_backend->edit(QStringLiteral("{\"op\":\"macro_link\",\"id\":\"%1\",\"node\":\"%2\"}").arg(id, target));
+			if (m_openMacro)
+				m_openMacro(id);
+		});
+	}
+	if (protocol == QLatin1String("web") || protocol == QLatin1String("proxmox"))
+	{
+		// Web-Sitzung: Zurück, Vor, Neu laden in der Kopfzeile (Seite läuft im Worker).
+		auto nav = [&](QPushButton*& b, const char* label, const char* tip, const char* action) {
+			b = new QPushButton(backend->text(QString::fromLatin1(label)), headRow);
+			b->setToolTip(backend->text(QString::fromLatin1(tip)));
+			b->setAccessibleName(b->toolTip());
+			const QString a = QString::fromLatin1(action);
+			connect(b, &QPushButton::clicked, this, [this, a] {
+				webCommand(QStringLiteral("{\"op\":\"nav\",\"action\":\"%1\"}").arg(a));
+				if (m_frame)
+					m_frame->setFocus();
+			});
+			hl->addWidget(b);
+		};
+		nav(m_back, "web.back", "web.tip.back", "back");
+		nav(m_forward, "web.forward", "web.tip.forward", "forward");
+		nav(m_reload, "web.reload", "web.tip.reload", "reload");
+		m_back->setEnabled(false);
+		m_forward->setEnabled(false);
+		// Adresse der Seite: nur lesen, zum Markieren und Kopieren.
+		m_url = new QLineEdit(headRow);
+		m_url->setReadOnly(true);
+		m_url->setObjectName(QStringLiteral("webUrl"));
+		m_url->setPlaceholderText(backend->text(QStringLiteral("web.url.ph")));
+		m_url->setToolTip(backend->text(QStringLiteral("web.url.tip")));
+		m_url->setAccessibleName(backend->text(QStringLiteral("web.url.tip")));
+		m_url->setMinimumWidth(220);
+		hl->addWidget(m_url, 2);
+	}
+	// Schmale Kopfzeile: kleinere Schaltflächen und Schrift.
+	m_header->setMinimumHeight(18);
+	for (auto* b : headRow->findChildren<QPushButton*>())
+	{
+		b->setObjectName(QStringLiteral("paneBtn"));
+		QFont bf = b->font();
+		bf.setPointSizeF(bf.pointSizeF() * 0.9);
+		b->setFont(bf);
+	}
+	// Seitentitel (Web) füllt den Rest der Zeile; alle Knöpfe stehen links.
+	hl->addWidget(m_header, 1);
+	hl->addStretch(1);
+	if (m_back)
+	{
+		// Suche in der Seite (Strg+F), rechtsbündig: Feld, ↑ voriger, ↓ nächster Treffer, × schließen.
+		m_findBox = new QWidget(headRow);
+		auto* fl = new QHBoxLayout(m_findBox);
+		fl->setContentsMargins(0, 0, 0, 0);
+		fl->setSpacing(2);
+		m_find = new QLineEdit(m_findBox);
+		m_find->setPlaceholderText(backend->text(QStringLiteral("web.find.ph")));
+		m_find->setClearButtonEnabled(true);
+		m_find->setMinimumWidth(180);
+		auto mk = [&](const QString& text, const char* tip) {
+			auto* b = new QPushButton(text, m_findBox);
+			b->setToolTip(backend->text(QString::fromLatin1(tip)));
+			b->setAccessibleName(b->toolTip());
+			b->setObjectName(QStringLiteral("paneBtn"));
+			b->setFixedWidth(28);
+			return b;
+		};
+		auto* up = mk(QStringLiteral("↑"), "web.find.prev");
+		auto* down = mk(QStringLiteral("↓"), "web.find.next");
+		auto* close = mk(QStringLiteral("×"), "web.find.close");
+		fl->addWidget(m_find);
+		fl->addWidget(up);
+		fl->addWidget(down);
+		fl->addWidget(close);
+		hl->addWidget(m_findBox);
+		m_findBox->hide();
+		connect(up, &QPushButton::clicked, this, [this] { find(true); });
+		connect(down, &QPushButton::clicked, this, [this] { find(false); });
+		connect(m_find, &QLineEdit::returnPressed, this, [this] { find(QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier)); });
+		connect(m_find, &QLineEdit::textEdited, this, [this] { find(false, true); });
+		auto closeFind = [this] {
+			m_findBox->hide();
+			if (m_frame)
+				m_frame->setFocus();
+		};
+		connect(close, &QPushButton::clicked, this, closeFind);
+		auto* esc = new QShortcut(QKeySequence(Qt::Key_Escape), m_find, nullptr, nullptr, Qt::WidgetShortcut);
+		connect(esc, &QShortcut::activated, this, closeFind);
+	}
+	// Ohne Bedienknöpfe (RDP, VNC) entfällt die Zeile; sie erscheint, sobald es dort Knöpfe gibt.
+	headRow->setVisible(protocol == QLatin1String("ssh") || protocol == QLatin1String("web") || protocol == QLatin1String("proxmox"));
+	lay->addWidget(headRow);
+	lay->addWidget(m_notice);
+	lay->addWidget(m_security);
+	lay->addWidget(m_ask);
+	lay->addWidget(m_reconnect);
+	if (protocol == QLatin1String("ssh"))
+	{
+		m_terminal = new TerminalView(backend, session, this);
+		lay->addWidget(m_terminal, 1);
+		m_terminal->refresh();
+	}
+	else
+	{
+		m_frame = new FrameView(backend, session, this);
+		m_frame->setWeb(m_back != nullptr);
+		lay->addWidget(m_frame, 1);
+	}
+}
+
+QWidget* SessionPane::view() const
+{
+	return m_terminal ? static_cast<QWidget*>(m_terminal) : static_cast<QWidget*>(m_frame);
+}
+
+void SessionPane::setState(const QString& state, const QString& detail)
+{
+	m_state = state;
+	// Web unter Windows: Worker (neu) gestartet, Elternfenster und Bereich noch einmal melden.
+	if (m_frame && m_frame->isEmbedded() && (state == QLatin1String("connecting") || state == QLatin1String("authenticating") || state == QLatin1String("connected")))
+		m_frame->resyncWeb();
+	m_stateText = m_backend->text(QStringLiteral("state.") + state);
+	if (!detail.isEmpty())
+		m_stateText += QStringLiteral(": ") + detail;
+	updateHeader();
+	const bool down = state == QLatin1String("disconnected") || state == QLatin1String("failed") ||
+	                  state == QLatin1String("crashed");
+	m_reconnect->setVisible(down);
+}
+
+void SessionPane::updateHeader()
+{
+	// Name und Zustand stehen im Tab und in der Fußzeile des Hauptfensters; hier nur Seitentitel und Ladevorgang.
+	QString text = m_pageTitle;
+	if (m_loading)
+		text += (text.isEmpty() ? QString() : QStringLiteral(" · "))
+		  + m_backend->text(QStringLiteral("web.header.loading")).arg(m_loadClock.elapsed() / 1000).arg(m_progress);
+	m_header->setText(text);
+	m_header->setVisible(!text.isEmpty());
+}
+
+void SessionPane::webCommand(const QString& json)
+{
+	m_backend->edit(QStringLiteral("{\"op\":\"web_command\",\"session\":%1,\"cmd\":%2}").arg(m_session).arg(json));
+}
+
+void SessionPane::setWebStatus(const QJsonObject& e)
+{
+	m_pageTitle = e.value(QStringLiteral("title")).toString();
+	if (m_url)
+	{
+		const QString uri = e.value(QStringLiteral("uri")).toString();
+		if (!uri.isEmpty() && m_url->text() != uri && !m_url->hasFocus())
+		{
+			m_url->setText(uri);
+			m_url->setCursorPosition(0);
+		}
+	}
+	const bool loading = e.value(QStringLiteral("loading")).toBool();
+	m_progress = e.value(QStringLiteral("progress")).toInt();
+	if (loading && !m_loading)
+	{
+		m_loadClock.start();
+		m_loadTick.start(1000);
+	}
+	else if (!loading)
+		m_loadTick.stop();
+	m_loading = loading;
+	if (m_back)
+	{
+		m_back->setEnabled(e.value(QStringLiteral("back")).toBool());
+		m_forward->setEnabled(e.value(QStringLiteral("forward")).toBool());
+	}
+	updateHeader();
+}
+
+void SessionPane::openFind()
+{
+	if (!m_findBox)
+		return;
+	m_findBox->show();
+	m_find->setFocus();
+	m_find->selectAll();
+}
+
+void SessionPane::find(bool backwards, bool restart)
+{
+	const QString text = m_find->text();
+	if (text.isEmpty())
+	{
+		m_find->setStyleSheet(QString());
+		return;
+	}
+	webCommand(QStringLiteral("{\"op\":\"find\",\"text\":%1,\"backwards\":%2,\"restart\":%3}")
+	             .arg(QString::fromUtf8(QJsonDocument(QJsonArray{ text }).toJson(QJsonDocument::Compact)).mid(1).chopped(1), backwards ? QStringLiteral("true") : QStringLiteral("false"),
+	                  restart ? QStringLiteral("true") : QStringLiteral("false")));
+}
+
+void SessionPane::setFindResult(bool found)
+{
+	if (m_find)
+		m_find->setStyleSheet(found ? QString() : QStringLiteral("QLineEdit { background: #f6d5d5; color: #7a1010; }"));
+}
+
+void SessionPane::showWebMenu(const QJsonObject& e)
+{
+	if (!m_frame)
+		return;
+	const int id = e.value(QStringLiteral("id")).toInt();
+	const bool option = e.value(QStringLiteral("kind")).toString() == QLatin1String("option");
+	// Das Menü ist ein Popup im Hauptfenster; die Seite läuft ohne eigenes Fenster im Worker.
+	auto* menu = new QMenu(this);
+	menu->setAttribute(Qt::WA_DeleteOnClose);
+	const QJsonArray items = e.value(QStringLiteral("items")).toArray();
+	for (int i = 0; i < items.size(); ++i)
+	{
+		const QJsonObject it = items.at(i).toObject();
+		const QString action = it.value(QStringLiteral("action")).toString();
+		if (!option && action.isEmpty())
+		{
+			menu->addSeparator();
+			continue;
+		}
+		const QString label = option ? it.value(QStringLiteral("label")).toString() : m_backend->text(QStringLiteral("web.menu.") + action);
+		QAction* a = menu->addAction(label);
+		a->setEnabled(it.value(QStringLiteral("enabled")).toBool());
+		if (option)
+		{
+			a->setCheckable(true);
+			a->setChecked(it.value(QStringLiteral("selected")).toBool());
+		}
+		connect(a, &QAction::triggered, this, [this, id, i, action, option] {
+			if (option)
+				webCommand(QStringLiteral("{\"op\":\"menu\",\"id\":%1,\"index\":%2}").arg(id).arg(i));
+			else
+				webCommand(QStringLiteral("{\"op\":\"menu\",\"id\":0,\"action\":\"%1\"}").arg(action));
+		});
+	}
+	if (option)
+	{
+		// Ohne Auswahl geschlossen: Auswahlliste im Worker ebenfalls schließen.
+		connect(menu, &QMenu::aboutToHide, this, [this, id, menu] {
+			if (!menu->activeAction())
+				webCommand(QStringLiteral("{\"op\":\"menu\",\"id\":%1}").arg(id));
+		});
+	}
+	const QPoint at = m_frame->toLocal(QPoint(e.value(QStringLiteral("x")).toInt(), e.value(QStringLiteral("y")).toInt()));
+	menu->popup(m_frame->mapToGlobal(at));
+}
+
+void SessionPane::setNotice(const QString& text, bool severe)
+{
+	// Der Hinweis erscheint in der Fußzeile des Hauptfensters, nicht in der Sitzung.
+	m_noticeText = text;
+	m_noticeSevere = severe;
+}
+
+void SessionPane::fillMacroMenu()
+{
+	QMenu* menu = m_macroRun->menu();
+	menu->clear();
+	const QJsonArray list = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"session_macros\",\"session\":%1}").arg(m_session)).toUtf8()).array();
+	for (const QJsonValue& v : list)
+	{
+		const QJsonObject m = v.toObject();
+		const QString name = m.value(QStringLiteral("name")).toString();
+		const QString origin = m.value(QStringLiteral("origin")).toString();
+		const QString id = m.value(QStringLiteral("id")).toString();
+		const QString text = origin.isEmpty() ? name : m_backend->text(QStringLiteral("macro.run.origin")).arg(name, origin);
+		menu->addAction(text, this, [this, id, name] {
+			const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"run_macro\",\"session\":%1,\"macro\":\"%2\"}").arg(m_session).arg(id)).toUtf8()).object();
+			if (r.contains(QStringLiteral("error")))
+			{
+				setMacroResult(r.value(QStringLiteral("error")).toString(), false);
+				return;
+			}
+			m_macroState->setText(m_backend->text(QStringLiteral("macro.running")).arg(name));
+			m_macroState->show();
+			m_macroCancel->show();
+			m_macroRun->setEnabled(false);
+			if (m_terminal)
+				m_terminal->setFocus();
+		});
+	}
+	if (list.isEmpty())
+		menu->addAction(m_backend->text(QStringLiteral("macro.run.none")))->setEnabled(false);
+}
+
+void SessionPane::setMacroResult(const QString& text, bool ok)
+{
+	if (!m_macroState)
+		return;
+	m_macroState->setText(text);
+	// Fehler in der Warnfarbe, Erfolg in normaler Schrift.
+	m_macroState->setObjectName(ok ? QString() : QStringLiteral("paneNotice"));
+	m_macroState->style()->unpolish(m_macroState);
+	m_macroState->style()->polish(m_macroState);
+	m_macroState->setVisible(!text.isEmpty());
+	m_macroCancel->hide();
+	m_macroRun->setEnabled(true);
+	// Meldung nach einer Weile wieder ausblenden.
+	QPointer<QLabel> label(m_macroState);
+	QTimer::singleShot(20000, this, [label, text] {
+		if (label && label->text() == text)
+			label->hide();
+	});
+}

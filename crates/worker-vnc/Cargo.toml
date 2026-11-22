@@ -1,0 +1,32 @@
+[package]
+name = "remotejoe-worker-vnc"
+description = "VNC-Worker mit eigener RFB-Umsetzung"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rj_vnc"
+
+[[bin]]
+name = "rj-worker-vnc"
+path = "src/main.rs"
+
+[dependencies]
+remotejoe-core = { path = "../core" }
+remotejoe-ipc = { path = "../ipc" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+des = "0.8"
+flate2 = "1"
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
+
+[dev-dependencies]
+remotejoe-testkit = { path = "../testkit" }
+remotejoe-supervisor = { path = "../supervisor" }
+tempfile.workspace = true
+base64 = "0.22"

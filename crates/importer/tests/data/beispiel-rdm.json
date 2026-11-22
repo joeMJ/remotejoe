@@ -1,0 +1,7 @@
+{
+  "Connections": [
+    { "ConnectionType": 1, "Group": "Labor\\Testnetz", "ID": "a1", "Name": "Prüfrechner Ä", "Url": "pr1.example.test", "UserName": "labor", "Password": "Labor-Kennwort-1", "Farbe": "blau" },
+    { "ConnectionType": 1, "Group": "Labor\\Testnetz", "ID": "a2", "Name": "Prüfrechner Ö", "Url": "pr2.example.test", "UserName": "labor", "Password": "Labor-Kennwort-1" },
+    { "ConnectionType": 77, "Group": "Labor", "ID": "a3", "Name": "Sprung‍server", "Url": "192.0.2.30", "Port": 22, "UserName": "labor", "Password": "Labor-Kennwort-1" }
+  ]
+}

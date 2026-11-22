@@ -1,0 +1,14 @@
+[package]
+name = "remotejoe-kbdgen"
+description = "Werkzeug (nur Windows): Tastaturbelegungen aus den Belegungsdateien von Windows als Tabelle für den administrativen Tastaturmodus"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Eigenes Projekt, nicht Teil des Workspace (wird nur bei Bedarf unter Windows gebaut).
+[workspace]
+
+[[bin]]
+name = "kbdgen"
+path = "src/main.rs"
