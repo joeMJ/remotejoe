@@ -308,12 +308,51 @@ pub fn module_ids_aus(text: &str) -> Vec<String> {
     builtin_key().ok().and_then(|k| decode(text, &k).ok()).map(|l| module_ids_of(&l)).unwrap_or_default()
 }
 
-/// Gültige Lizenz mit laufender Wartung: Zugang zur Ablage (Freigabe-Link, Kennwort).
+/// Gültige Lizenz mit laufender Wartung: Zugang zur Ablage (Freigabe-Link, Kennwort). Ein eigenes Kennwort
+/// (Einstellungen → Updates → Erweiterungen, im Schlüsselbund) hat Vorrang vor dem der Lizenz.
 pub fn ablage() -> Option<(String, String)> {
     match status() {
-        Status::Gueltig(l) if wartung_aktiv(l, today()) => Some((l.url.clone(), l.kennwort.clone())),
+        Status::Gueltig(l) if wartung_aktiv(l, today()) => Some((l.url.clone(), eigenes_kennwort(&l.id).unwrap_or_else(|| l.kennwort.clone()))),
         _ => None,
     }
+}
+
+/// Konto im Schlüsselbund für das eigene Kennwort der Erweiterungen (je Lizenz).
+fn kennwort_konto(lizenz_id: &str) -> String {
+    format!("erweiterungen:{lizenz_id}")
+}
+
+/// Eigenes Kennwort aus dem Schlüsselbund (einmal gelesen, danach aus dem Speicher; Änderungen setzen es neu).
+fn eigenes_kennwort(lizenz_id: &str) -> Option<String> {
+    static CACHE: std::sync::Mutex<Option<(String, Option<String>)>> = std::sync::Mutex::new(None);
+    let mut c = CACHE.lock().ok()?;
+    if let Some((id, v)) = c.as_ref() {
+        if id == lizenz_id && !EIGEN_GEAENDERT.swap(false, Ordering::Relaxed) {
+            return v.clone();
+        }
+    }
+    let v = crate::keyring::secret_get(&kennwort_konto(lizenz_id)).ok().flatten().map(|z| z.to_string()).filter(|s| !s.is_empty());
+    *c = Some((lizenz_id.to_string(), v.clone()));
+    v
+}
+
+static EIGEN_GEAENDERT: AtomicBool = AtomicBool::new(false);
+
+/// Eigenes Kennwort der Erweiterungen setzen (leer = nicht erlaubt) bzw. entfernen (wieder das der Lizenz).
+pub fn kennwort_setzen(neu: Option<&str>) -> Result<Value, String> {
+    let id = match status() {
+        Status::Gueltig(l) | Status::Abgelaufen(l) => l.id.clone(),
+        _ => return Err("Keine Lizenz eingespielt.".into()),
+    };
+    match neu {
+        Some(k) if !k.trim().is_empty() => crate::keyring::secret_set(&kennwort_konto(&id), k)?,
+        Some(_) => return Err("Bitte ein Kennwort eingeben.".into()),
+        None => {
+            crate::keyring::secret_forget(&kennwort_konto(&id))?;
+        }
+    }
+    EIGEN_GEAENDERT.store(true, Ordering::Relaxed);
+    Ok(json!({ "ok": true, "eigen": neu.is_some() }))
 }
 
 /// Angaben für Einstellungen → Lizenz (Kennwort nie im Klartext).
@@ -321,7 +360,7 @@ pub fn json() -> Value {
     let t = today();
     let fields = |l: &Lizenz| {
         json!({ "module": known_ids(l).iter().map(|id| json!({ "id": id, "name": name_of(id), "lizenziert": hat_modul(l, id), "fehlt": crate::plugins::missing_dependencies(id) })).collect::<Vec<_>>(),
-                "id": l.id, "unternehmen": l.unternehmen, "unbeschraenkt": unbeschraenkt(l), "name": l.name, "email": l.email, "url": l.url, "kennwort": !l.kennwort.is_empty(),
+                "id": l.id, "unternehmen": l.unternehmen, "unbeschraenkt": unbeschraenkt(l), "name": l.name, "email": l.email, "url": l.url, "kennwort": !l.kennwort.is_empty(), "kennwort_eigen": eigenes_kennwort(&l.id).is_some(),
                 "ausgestellt": l.ausgestellt, "version_bis": l.version_bis, "wartung_bis": l.wartung_bis,
                 "wartung": wartung_aktiv(l, t) })
     };

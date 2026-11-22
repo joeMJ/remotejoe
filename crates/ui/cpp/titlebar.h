@@ -91,7 +91,8 @@ public:
 	AboutDialog(RjBackend* backend, const QString& version, QWidget* parent = nullptr);
 };
 
-/// Leser für Rechtstexte (Lizenz, Nutzungsbedingungen, Bibliotheken Dritter): Abschnittswahl, Suche, Text.
+/// Leser für Rechtstexte (Lizenz, Nutzungsbedingungen, Bibliotheken Dritter) als aufgeräumte Seite: Übersicht als
+/// Tabelle mit Links, Lizenztexte als Verzeichnis und je Abschnitt; Links ins Netz öffnen im Browser des Systems.
 /// `sections`: Schlüssel der eingebetteten Texte (siehe RjBackend::legalText), `start`: zuerst gezeigter Schlüssel.
 class LegalDialog : public QDialog
 {
@@ -102,11 +103,23 @@ public:
 private:
 	void showSection(const QString& key);
 	void findNext();
+	/// Link in der Seite: https im Browser des Systems, `rj:` innerhalb des Lesers (Lizenztext eines Pakets).
+	void openLink(const class QUrl& url);
+	/// Lizenztexte (THIRD_PARTY_LICENSES.txt) in Abschnitte zerlegt: Überschrift, „gilt für“, Text.
+	struct Block
+	{
+		QString title, appliesTo, text;
+	};
+	const QList<Block>& blocks();
+	void showBlock(int i);
+	QString rawText(const QString& key) const;
 	RjBackend* m_backend;
 	class QComboBox* m_sections;
 	class QLineEdit* m_search;
 	class QLabel* m_found;
-	class QPlainTextEdit* m_text;
+	class QTextBrowser* m_text;
+	QList<Block> m_blocks;
+	bool m_blocksLoaded = false;
 };
 
 /// Adresse der README auf GitHub (Hilfe → Hilfe).

@@ -76,6 +76,22 @@ void screenshots(MainWindow& w, const QString& dir)
 	save(&w, dir, QStringLiteral("hauptfenster-kompakt-ohne-baum.png"));
 	w.setTreeVisible(true);
 	pump(500);
+	// Gelöste Stecknadel: Registerkarte „Ziele“ und aufgeklappter Zielbereich.
+	w.flyoutForScreenshot(true, false);
+	pump(400);
+	save(&w, dir, QStringLiteral("ziele-eingeklappt.png"));
+	w.flyoutForScreenshot(true, true);
+	pump(400);
+	save(&w, dir, QStringLiteral("ziele-aufgeklappt.png"));
+	w.flyoutForScreenshot(false, false);
+	pump(400);
+	if (QWidget* hints = w.showFirstHints(true))
+	{
+		pump(300);
+		save(&w, dir, QStringLiteral("ersthilfe.png"));
+		delete hints; // sofort (deleteLater würde in pump nicht ausgeführt)
+		pump(100);
+	}
 	// Dunkles Bild mit Catppuccin Macchiato (Vorgabe für Bildschirmfotos, siehe appearance.rs).
 	qputenv("REMOTEJOE_THEME", "dark");
 	qputenv("RJ_SHOT_DARK_THEME", "eingebaut:catppuccin-macchiato");
@@ -288,6 +304,36 @@ void screenshots(MainWindow& w, const QString& dir)
 		save(about, dir, QStringLiteral("ueber.png"));
 		about->close();
 	}
+	// Einstellungen → Updates → Programm-Updates.
+	if (qEnvironmentVariableIsSet("RJ_SHOT_LEGAL"))
+	{
+		w.settingsForScreenshot(QStringLiteral("updates_program"));
+		pump(400);
+		save(w.tabs()->currentWidget(), dir, QStringLiteral("updates-programm.png"));
+	}
+	// Neuigkeiten (Releasenotes) als Tab.
+	if (qEnvironmentVariableIsSet("RJ_SHOT_LEGAL"))
+	{
+		w.openNews();
+		pump(400);
+		save(w.tabs()->currentWidget(), dir, QStringLiteral("neuigkeiten.png"));
+	}
+	// Leser der Rechtstexte: Übersicht der Bibliotheken Dritter und ein Lizenztext (Prüfbilder).
+	if (qEnvironmentVariableIsSet("RJ_SHOT_LEGAL"))
+	{
+		auto* legal = new LegalDialog(w.backendForScreenshot(), { QStringLiteral("license"), QStringLiteral("third_party"), QStringLiteral("third_party_licenses") },
+		                              QStringLiteral("third_party"), &w);
+		legal->show();
+		pump(500);
+		save(legal, dir, QStringLiteral("rechtliches-uebersicht.png"));
+		QMetaObject::invokeMethod(legal, "close");
+		auto* legal2 = new LegalDialog(w.backendForScreenshot(), { QStringLiteral("license"), QStringLiteral("third_party"), QStringLiteral("third_party_licenses") },
+		                               QStringLiteral("third_party_licenses"), &w);
+		legal2->show();
+		pump(500);
+		save(legal2, dir, QStringLiteral("rechtliches-lizenztexte.png"));
+		legal2->close();
+	}
 	w.tabs()->setCurrentIndex(0);
 	// Ein Terminal-Tab als eigenes Fenster (kein Verlaufsbild: das wäre fast einfarbig und winzig als PNG).
 	w.detachTabAt(w.tabs()->count() > 3 ? 3 : 1);
@@ -499,10 +545,18 @@ std::int32_t rjRunApplication()
 	// Nur noch die Platzsparvariante (Tabs in der Titelzeile); beim Start ist der Baum immer ausgeklappt.
 	w.setTreeVisible(true);
 	w.setCompact(true);
+	// Favoriten, Stecknadel und Verzögerungen des Zielbereichs aus der Darstellung.
+	w.applyTreePrefs();
 	// Standardgröße (1280 × 800) oder gespeicherte Größe nie größer als der sichtbare Bildschirmbereich.
 	if (!demo)
 		w.fitToScreen();
 	w.show();
+	// Neue Version: Neuigkeiten einmal zeigen (nicht im Vorführmodus).
+	if (!demo)
+		QTimer::singleShot(400, &w, [&w] {
+			w.showNewsIfNew();
+			w.showFirstHints();
+		});
 	if (!demo)
 		QTimer::singleShot(0, &w, [&w] { w.fitToScreen(); });
 	// Echter Start: zuerst die Entsperrmaske für die Schlüsseldatenbank.

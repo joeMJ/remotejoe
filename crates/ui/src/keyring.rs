@@ -62,6 +62,28 @@ mod imp {
             Err(e) => Err(e.to_string()),
         }
     }
+
+    /// Beliebiges Geheimnis unter dem Dienst `remotejoe` und dem Konto `account` (z. B. eigenes Kennwort der
+    /// Erweiterungen).
+    pub fn secret_set(account: &str, value: &str) -> Result<(), String> {
+        keyring::Entry::new(SERVICE, account).map_err(|e| e.to_string())?.set_password(value).map_err(|e| e.to_string())
+    }
+
+    pub fn secret_get(account: &str) -> Result<Option<Zeroizing<String>>, String> {
+        match keyring::Entry::new(SERVICE, account).map_err(|e| e.to_string())?.get_password() {
+            Ok(v) => Ok(Some(Zeroizing::new(v))),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    pub fn secret_forget(account: &str) -> Result<bool, String> {
+        match keyring::Entry::new(SERVICE, account).map_err(|e| e.to_string())?.delete_credential() {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
@@ -77,9 +99,18 @@ mod imp {
     pub fn forget(_: &str) -> Result<bool, String> {
         Err(NA.into())
     }
+    pub fn secret_set(_: &str, _: &str) -> Result<(), String> {
+        Err(NA.into())
+    }
+    pub fn secret_get(_: &str) -> Result<Option<Zeroizing<String>>, String> {
+        Err(NA.into())
+    }
+    pub fn secret_forget(_: &str) -> Result<bool, String> {
+        Err(NA.into())
+    }
 }
 
-pub use imp::{forget, load, store};
+pub use imp::{forget, load, secret_forget, secret_get, secret_set, store};
 
 #[cfg(test)]
 mod tests {

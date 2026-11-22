@@ -31,6 +31,10 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "appearanceJson"]
         fn appearance_json(self: &RjBackend) -> QString;
+        /// Schalter der Oberfläche (Fokusrahmen, runde Ecken, Favoriten, Stecknadel, Hinweise) ohne Palettenliste.
+        #[qinvokable]
+        #[cxx_name = "uiPrefsJson"]
+        fn ui_prefs_json(self: &RjBackend) -> QString;
         /// Farbschema und/oder Fokusrahmen ändern (JSON), speichern; liefert `appearanceJson`.
         #[qinvokable]
         #[cxx_name = "setAppearance"]
@@ -767,6 +771,10 @@ impl qobject::RjBackend {
 
     fn appearance_json(&self) -> QString {
         q(self.app().map(|a| a.appearance_json().to_string()).unwrap_or_else(|| "{}".into()))
+    }
+
+    fn ui_prefs_json(&self) -> QString {
+        q(self.app().map(|a| a.ui_prefs_json().to_string()).unwrap_or_else(|| "{}".into()))
     }
 
     fn set_appearance(self: Pin<&mut Self>, change: &QString) -> QString {

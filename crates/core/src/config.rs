@@ -142,6 +142,19 @@ pub struct AppearanceSettings {
     /// Eigene Symbolfarben je Art (`rdp`, `ssh`, …, `folder` → `#rrggbb`); leer = dem Theme folgen.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub icon_colors: std::collections::BTreeMap<String, String>,
+    /// Runde Fensterecken (Linux; unter Windows 11 rundet das System). Wirkt nach einem Neustart.
+    pub round_corners: bool,
+    /// Ordner „Favoriten“ oben im Baum.
+    pub show_favorites: bool,
+    /// Zielbereich (F9-Block) angeheftet; sonst klappt er ein und öffnet beim Überfahren der Registerkarte „Ziele“.
+    pub tree_pinned: bool,
+    /// Verzögerung beim Aufklappen (Verweilen über „Ziele“) und Zuklappen (nach dem Verlassen), in Millisekunden.
+    pub flyout_open_ms: u32,
+    pub flyout_close_ms: u32,
+    /// Hinweise beim ersten Start („Nicht mehr anzeigen“).
+    pub first_hints_off: bool,
+    /// Zuletzt gezeigte Releasenotes (Programmversion); leer = noch nie.
+    pub notes_seen: String,
 }
 
 impl Default for AppearanceSettings {
@@ -154,6 +167,13 @@ impl Default for AppearanceSettings {
             tree_size: "mittel".into(),
             icon_style: "einheitlich".into(),
             icon_colors: Default::default(),
+            round_corners: true,
+            show_favorites: true,
+            tree_pinned: true,
+            flyout_open_ms: 300,
+            flyout_close_ms: 500,
+            first_hints_off: false,
+            notes_seen: String::new(),
         }
     }
 }
@@ -167,6 +187,12 @@ pub struct UpdateSettings {
     pub check_on_start: bool,
     /// Proxy: leer = automatisch (Systemeinstellung bzw. Umgebung), „none“ = keiner, sonst `Rechner:Port`.
     pub proxy: String,
+    /// In regelmäßigen Abständen prüfen (solange remotejoe läuft): alle `every` Einheiten (`stunden`, `tage`, `wochen`).
+    pub periodic: bool,
+    pub every: u32,
+    pub unit: String,
+    /// Zeitpunkt der letzten Prüfung (Sekunden seit 1970); 0 = noch nie.
+    pub last_check: u64,
 }
 
 impl Default for Config {

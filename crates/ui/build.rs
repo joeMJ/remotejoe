@@ -39,6 +39,6 @@ const CORE: &[&str] = &[
     "cpp/waysedit.h", "cpp/waysedit.cpp", "cpp/exporttab.h", "cpp/exporttab.cpp", "cpp/overviewtab.h", "cpp/overviewtab.cpp",
     "cpp/folderoverviewtab.h", "cpp/folderoverviewtab.cpp", "cpp/orphantab.h", "cpp/orphantab.cpp", "cpp/credmergetab.h",
     "cpp/credmergetab.cpp", "cpp/credchecktab.h", "cpp/credchecktab.cpp", "cpp/mcpserver.h", "cpp/mcpserver.cpp",
-    "cpp/mcplogtab.h", "cpp/mcplogtab.cpp", "cpp/cards.h", "cpp/cards.cpp", "cpp/kbcapture.h", "cpp/kbcapture.cpp", "cpp/diag.h",
+    "cpp/mcplogtab.h", "cpp/mcplogtab.cpp", "cpp/cards.h", "cpp/cards.cpp", "cpp/faicons.h", "cpp/faicons.cpp", "cpp/kbcapture.h", "cpp/kbcapture.cpp", "cpp/diag.h",
     "cpp/diag.cpp", "cpp/app.cpp", "cpp/licensepage.cpp", "cpp/plugin/rjplugins.cpp",
 ];

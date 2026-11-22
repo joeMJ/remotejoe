@@ -73,6 +73,11 @@ impl App {
             "platform": rj_update::platform(),
             "check_on_start": self.config.update.check_on_start,
             "proxy": self.config.update.proxy,
+            "periodic": self.config.update.periodic,
+            "every": self.config.update.every.max(1),
+            "unit": if self.config.update.unit.is_empty() { "tage" } else { self.config.update.unit.as_str() },
+            "last_check": self.config.update.last_check,
+            "now": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
             "package_managed": matches!(plan, Some(install::Plan::PackageManaged { .. })),
             "development": matches!(plan, Some(install::Plan::Development { .. })),
             "busy": self.update.job.is_some_and(|j| self.jobs.is_pending(j)),
@@ -137,6 +142,18 @@ impl App {
         if let Some(v) = c.get("check_on_start").and_then(Value::as_bool) {
             self.config.update.check_on_start = v;
         }
+        if let Some(v) = c.get("periodic").and_then(Value::as_bool) {
+            self.config.update.periodic = v;
+        }
+        if let Some(n) = c.get("every").and_then(Value::as_u64) {
+            self.config.update.every = n.clamp(1, 999) as u32;
+        }
+        if let Some(u) = c.get("unit").and_then(Value::as_str) {
+            if !matches!(u, "stunden" | "tage" | "wochen") {
+                return Err(format!("Unbekannte Einheit „{u}“"));
+            }
+            self.config.update.unit = u.to_string();
+        }
         if let Some(p) = c.get("proxy").and_then(Value::as_str) {
             let p = p.trim();
             if let rj_update::proxy::ProxyMode::Manual(m) = rj_update::proxy::ProxyMode::from_setting(p) {
@@ -165,6 +182,13 @@ impl App {
     pub fn update_check(&mut self) -> Result<Value, String> {
         if self.update.job.is_some_and(|j| self.jobs.is_pending(j)) {
             return Err("Es läuft bereits eine Update-Prüfung oder -Installation.".into());
+        }
+        // Zeitpunkt merken (regelmäßige Prüfung zählt ab hier).
+        self.config.update.last_check = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        if !self.demo {
+            if let Some(cp) = self.config_path.clone() {
+                let _ = self.config.save(&cp);
+            }
         }
         // Programm-Updates kommen für alle nur von GitHub (Erweiterungen aus der Update-Quelle der Lizenz, siehe
         // plugin_fetch.rs).

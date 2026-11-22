@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QtCore/QHash>
+
 // Extras → Einstellungen: ein Reiter im Kartenstil wie die Einstellungen eines Ziels. Kopfkarte, links die
 // Bereiche (Sperre und Zwischenablage, Tastatur, Terminal, Darstellung, SNMP-Geräte), rechts die Karte des
 // gewählten Bereichs. Alle Änderungen gelten sofort und werden gespeichert; es gibt nichts zu speichern oder
@@ -25,6 +27,7 @@ class QSpinBox;
 class QStackedWidget;
 class QVBoxLayout;
 class RjBackend;
+class QTreeWidgetItem;
 class SnmpTab;
 namespace rjui
 {
@@ -78,10 +81,13 @@ signals:
 private:
 	struct Area
 	{
-		rjui::ClickRow* row;
-		QLabel* summary;
+		QTreeWidgetItem* item;
 		int page;
 	};
+	/// Gruppe mit Symbol (Kern); `addGroup` der Erweiterungen nimmt ein allgemeines Symbol.
+	void addGroupIcon(const QString& glyph, const QString& title, int indent);
+	QHash<int, QTreeWidgetItem*> m_groupAt;
+	rjui::AreaTree* m_areaTree = nullptr;
 	QWidget* pageLock();
 	QWidget* pageKeys();
 	QWidget* pageLicense();
@@ -97,7 +103,6 @@ private:
 	void saveBackup();
 
 	RjBackend* m_backend;
-	QVBoxLayout* m_areaList = nullptr;
 	QStackedWidget* m_pages = nullptr;
 	QLabel* m_pageTitle = nullptr;
 	QMap<QString, Area> m_areas;
@@ -106,6 +111,14 @@ private:
 	bool m_loading = false;
 	// Lizenzseite (veränderlicher Teil)
 	QWidget* m_licenseBox = nullptr;
+	/// Updates → Erweiterungen: neu aufgebauter Teil (Bezug, Kennwort, Stand) und bleibendes Protokoll.
+	QWidget* m_extBox = nullptr;
+	class QPlainTextEdit* m_extLog = nullptr;
+	QHash<QString, QLabel*> m_extState;
+	QWidget* pageExtensions();
+	/// Erweiterungen-Seite füllen (aus fillLicensePage); `l`: Lizenzangaben, `j`: ganzes Lizenz-JSON.
+	void fillExtensionsPage(const QJsonObject& j, const QJsonObject& l, bool valid);
+	void extLog(const QString& text);
 	QWidget* m_licenseRestart = nullptr;
 	QPushButton* m_licenseRemoveBtn = nullptr;
 	bool m_licenseRebuildPending = false;

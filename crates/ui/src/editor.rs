@@ -492,7 +492,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build") | Some("credcheck_start") | Some("credcheck_rows") | Some("credcheck_cancel") | Some("orphans_list") | Some("mcp_call") | Some("mcp_denied") | Some("data_dir") | Some("mcp_settings") | Some("set_mcp_settings") | Some("mcp_log")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("favorites_tree") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build") | Some("credcheck_start") | Some("credcheck_rows") | Some("credcheck_cancel") | Some("orphans_list") | Some("mcp_call") | Some("mcp_denied") | Some("data_dir") | Some("mcp_settings") | Some("set_mcp_settings") | Some("mcp_log")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -607,6 +607,13 @@ impl App {
                 Ok(json!({ "ok": true }))
             }),
             "templates" => Ok(json!(self.index.templates.iter().map(|t| json!({ "id": t.id, "name": t.name, "protocol": t.protocol.as_str(), "is_default": t.is_default })).collect::<Vec<_>>())),
+            // Favoriten als Baumknoten (Ordner „Favoriten“ oben im Baum); Verweise, keine Kopien.
+            "favorites_tree" => {
+                let lights = |id: Uuid| self.lights.get(&id).copied();
+                let mut nodes = crate::tree::listed(&self.index, &self.index.favorites, "", &lights);
+                crate::tree::mark_devices(&mut nodes, &|id| self.overview.devices.get(&id).map(crate::overview::inventory::device_key));
+                Ok(json!(nodes))
+            }
             "views" => Ok(json!(self.index.views.iter().map(|v| json!({ "id": v.id, "name": v.name, "count": v.targets.len() })).collect::<Vec<_>>())),
             "undo" => {
                 let before = self.index.referenced_entries();
@@ -897,6 +904,9 @@ impl App {
             }
             "update_status" => Ok(self.update_status()),
             "update_settings" => self.update_settings(&c),
+            // Eigenes Kennwort der Erweiterungen (Schlüsselbund) setzen bzw. wieder das der Lizenz nehmen.
+            "plugins_pw_set" => crate::license::kennwort_setzen(Some(str_of(&c, "kennwort").unwrap_or_default())),
+            "plugins_pw_reset" => crate::license::kennwort_setzen(None),
             "update_demo_source" => self.update_demo_source(str_of(&c, "base_url").unwrap_or_default()),
             "update_check" => self.update_check(),
             "plugins_update" => self.plugins_update(),

@@ -19,10 +19,12 @@
 namespace rjui
 {
 class ClickRow;
+class AreaTree;
 }
 
 class RjBackend;
 class QButtonGroup;
+class QTreeWidgetItem;
 class QCheckBox;
 class QComboBox;
 class QFormLayout;
@@ -189,6 +191,13 @@ private:
 	QWidget* pageParent();
 	QWidget* pageWays();
 	void addPage(const QString& key, const char* label, QWidget* page);
+	/// Kopfzeile einer Gruppe in der Bereichsliste (Ziel, Hauptweg, weitere Wege).
+	void addAreaHeader(const QString& glyph, const QString& text);
+	/// Zeilen der weiteren Zugangswege samt „Weg hinzufügen“.
+	void addWayRows();
+	static QString areaGlyph(const QString& key);
+	static QString protocolGlyph(const QString& protocol);
+
 	void markDirty(const QString& group, QWidget* changed = nullptr);
 	/// Markierung „geändert“ an einem Feld setzen oder entfernen.
 	void setMarked(QWidget* w, bool on);
@@ -212,19 +221,16 @@ private:
 	QSet<QString> m_dirty;
 	bool m_loading = false;
 	QTreeWidget* m_cats = nullptr;
-	/// Bereichsliste (Kartenstil): Zeile, Kurzfassung und Plakette je Bereich.
-	struct Area
-	{
-		rjui::ClickRow* row;
-		QLabel* summary;
-		QLabel* pill;
-	};
-	QHash<QString, Area> m_areas;
+	/// Bereichsbaum links (Ziel, Hauptweg, weitere Wege); aktuelle Gruppe beim Aufbau.
+	rjui::AreaTree* m_areaTree = nullptr;
+	QTreeWidgetItem* m_areaGroup = nullptr;
+	QTreeWidgetItem* m_targetGroup = nullptr;
+	class QPushButton* m_wayRemove = nullptr;
+	QString m_selectedWay;
 	/// Gruppe der Änderungsverfolgung → Bereich (für die Plakette „geändert“).
 	QHash<QString, QString> m_groupPage;
 	/// Bereich, dessen Seite gerade aufgebaut wird.
 	QString m_buildingPage;
-	class QVBoxLayout* m_areaList = nullptr;
 	QLabel* m_pageTitle = nullptr;
 	QString areaSummary(const QString& key) const;
 	void refreshAreas();
@@ -367,8 +373,15 @@ private:
 	/// Windows: Fortschritt des Downloads aus `update_status`.
 	void showProgress();
 	void setBusy(bool busy, const QString& text = QString());
+	/// Zustandszeile setzen und mit Uhrzeit ins Protokoll schreiben.
+	void logState(const QString& text);
 	RjBackend* m_backend;
 	QCheckBox* m_onStart;
+	QCheckBox* m_periodic = nullptr;
+	class QSpinBox* m_every = nullptr;
+	QComboBox* m_unit = nullptr;
+	QPlainTextEdit* m_log = nullptr;
+	QLabel* m_notesLabel = nullptr;
 	QComboBox* m_proxyMode;
 	QLineEdit* m_proxy;
 	QLabel* m_current;

@@ -1,5 +1,13 @@
 #include "mainwindow.h"
+#include "faicons.h"
 #include "mainwindow_p.h"
+
+#include <QtWidgets/QTextBrowser>
+#include <QtGui/QTextCursor>
+#include <QtGui/QTextDocument>
+#include <QtGui/QTextBlock>
+#include <cmath>
+#include <QtWidgets/QWidgetAction>
 #include "rjpluginui.h"
 #include "kbcapture.h"
 #include "titlebar.h"
@@ -176,77 +184,49 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 	struct P
 	{
 		const char* name;
-		const char* glyph; // weißes Piktogramm im Koordinatenraum 32 × 32
+		const char* fa; // Font-Awesome-Symbol (siehe faicons.h)
 		const char* color;
 	};
-	// Gemeinsame Strichart der Piktogramme.
-	#define RJ_G(body) "<g fill='none' stroke='COLOR' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'>" body "</g>"
-	// Einheitlicher Linienstil: gleiche Strichstärke, alle Formen auf etwa 24 × 22 Punkte im Feld 32 × 32.
+	// Sprechende Symbole aus Font Awesome; die Farbe je Zieltyp kommt weiter aus dem Farbschema.
 	static const P table[] = {
-		// RDP: Bildschirm mit Fuß
-		{ "rdp", RJ_G("<rect x='4' y='5' width='24' height='16' rx='2'/><path d='M11 27h10M16 21v6'/>"), "#0b5cad" },
-		// SSH: Terminalfenster mit „>_“
-		{ "ssh", RJ_G("<rect x='4' y='5' width='24' height='22' rx='2'/><path d='M9 12l4.5 4-4.5 4'/><path d='M16 21h7'/>"), "#1b6e20" },
-		// VNC: Bildschirm mit Mauszeiger
-		{ "vnc", RJ_G("<rect x='4' y='5' width='24' height='16' rx='2'/><path d='M11 27h10M16 21v6'/><path d='M13 9l7 4.5-3 .8 1.6 2.8-1.6.9-1.6-2.8-2.4 2z' fill='COLOR'/>"), "#7a3e9d" },
-		// Web: Weltkugel
-		{ "web", RJ_G("<circle cx='16' cy='16' r='11'/><ellipse cx='16' cy='16' rx='5' ry='11'/><path d='M5 16h22M7 10.5h18M7 21.5h18'/>"), "#8a5300" },
-		// PowerShell: schräges Fenster mit Pfeilspitze und Strich
-		{ "psrp", RJ_G("<path d='M5 27l3.5-22H28l-3.5 22z'/><path d='M12.5 11.5l5 4.5-6 4.5'/><path d='M17 21h5'/>"), "#005f73" },
-		// Proxmox: Würfel
-		{ "proxmox", RJ_G("<path d='M16 4l11 6v12l-11 6-11-6V10z'/><path d='M5 10l11 6 11-6M16 16v12'/>"), "#b03a00" },
-		// Hyper-V: zwei Server übereinander
-		{ "hyperv", RJ_G("<rect x='4' y='5' width='24' height='9' rx='2'/><rect x='4' y='18' width='24' height='9' rx='2'/><path d='M8.5 9.5h.1M8.5 22.5h.1M14 9.5h10M14 22.5h10'/>"), "#3a4a8c" },
-		// Anmeldung: Schlüssel
-		{ "login", RJ_G("<circle cx='11' cy='16' r='6'/><path d='M17 16h11M24 16v5M28 16v4'/>"), "#6a1b9a" },
-		// AP (Geräteart aus dem Inventar): Deckenpunkt mit Statuslicht, darüber drei Funkbögen
-		{ "controller", RJ_G("<rect x='4' y='19' width='24' height='8' rx='4'/><path d='M16 23h.1'/><path d='M12.5 14.5a5 5 0 0 1 7 0'/><path d='M9 11a10 10 0 0 1 14 0'/><path d='M5.5 7.5a15 15 0 0 1 21 0'/>"), "#00897b" },
-		// Switch: flaches Gehäuse mit Portreihe und Statuslicht
-		{ "switch", RJ_G("<rect x='3' y='10' width='26' height='12' rx='2'/><path d='M7 16h1.5M11 16h1.5M15 16h1.5M19 16h1.5M24.5 16h.1'/>"), "#00695c" },
-		// Ordner eines Moduls: Bürogebäude mit Fenstern und Tür
-		{ "site", RJ_G("<rect x='6' y='4' width='20' height='24' rx='1.5'/><path d='M11 9.5h.1M16 9.5h.1M21 9.5h.1M11 14.5h.1M16 14.5h.1M21 14.5h.1M11 19.5h.1M21 19.5h.1M14 28v-5h4v5'/>"), "#6d4c41" },
-		// Vorlagenordner: zwei hintereinanderliegende Blätter mit Zeilen
-		{ "tplfolder", RJ_G("<rect x='10' y='4' width='17' height='21' rx='2'/><path d='M6 9v16a2 2 0 0 0 2 2h13'/><path d='M14 10h9M14 15h9M14 20h5'/>"), "#5c6bc0" },
-		// Netzwerkkomponenten: drei verbundene Knoten
-		{ "netfolder", RJ_G("<rect x='12' y='4' width='8' height='7' rx='1.5'/><rect x='3' y='21' width='8' height='7' rx='1.5'/><rect x='21' y='21' width='8' height='7' rx='1.5'/><path d='M16 11v5M7 21v-5h18v5'/>"), "#00695c" },
-		// Serverkomponenten: Gestell mit drei Einschüben
-		{ "srvfolder", RJ_G("<rect x='6' y='4' width='20' height='7' rx='1.5'/><rect x='6' y='12.5' width='20' height='7' rx='1.5'/><rect x='6' y='21' width='20' height='7' rx='1.5'/><path d='M10 7.5h.1M10 16h.1M10 24.5h.1M15 7.5h7M15 16h7M15 24.5h7'/>"), "#37474f" },
-		// Mehrere Zugangswege: zwei hintereinanderliegende Fenster
-		{ "multi", RJ_G("<path d='M10 10V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3'/><rect x='4' y='12' width='19' height='15' rx='2'/><path d='M4 17h19'/>"), "#0b5cad" },
-		// Makro: Abspielzeichen
-		{ "macro", RJ_G("<path d='M10 6l16 10-16 10z' fill='COLOR' fill-opacity='0.25'/>"), "#6a1b9a" },
+		{ "rdp", "display", "#0b5cad" },
+		{ "ssh", "terminal", "#1b6e20" },
+		{ "vnc", "desktop", "#7a3e9d" },
+		{ "web", "globe", "#8a5300" },
+		{ "psrp", "code", "#005f73" },
+		{ "proxmox", "cubes", "#b03a00" },
+		{ "hyperv", "layer-group", "#3a4a8c" },
+		{ "login", "key", "#6a1b9a" },
+		{ "controller", "wifi", "#00897b" },
+		{ "switch", "network-wired", "#00695c" },
+		{ "site", "building", "#6d4c41" },
+		{ "tplfolder", "r-clone", "#5c6bc0" },
+		{ "netfolder", "sitemap", "#00695c" },
+		{ "srvfolder", "server", "#37474f" },
+		{ "multi", "r-window-restore", "#0b5cad" },
+		{ "macro", "play", "#6a1b9a" },
 	};
-	// SVG des Symbols; `over` ersetzt die Farbe (ausgewählte Zeile).
-	auto makeSvg = [&](const QString& over) -> QString {
+	// Symbolname und Farbe; `over` ersetzt die Farbe (ausgewählte Zeile), `open` = aufgeklappter Ordner.
+	auto pick = [&](const QString& over, bool open) -> QPair<QString, QColor> {
 		if (folder)
-		{
-			const QColor f = over.isEmpty() ? g_iconColors.value(QStringLiteral("folder"), QColor("#c9a227")) : QColor(over);
-			// Ordner im selben Linienstil wie die Ziele, nur leicht getönt gefüllt.
-			return QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
-			                      "<path d='M4 8.5a1.5 1.5 0 0 1 1.5-1.5h7l3 3h11a1.5 1.5 0 0 1 1.5 1.5v13a1.5 1.5 0 0 1-1.5 1.5h-21A1.5 1.5 0 0 1 4 24.5z' "
-			                      "fill='%1' fill-opacity='0.18' stroke='%1' stroke-width='2.4' stroke-linejoin='round'/></svg>")
-			    .arg(f.name());
-		}
-		QString glyph = QStringLiteral(RJ_G("<path d='M12 12a4 4 0 1 1 6 3.5c-1.5 1-2 1.5-2 3'/><path d='M16 23h.1'/>")), color = g_iconColors.value(QStringLiteral("other"), QColor("#555555")).name();
+			return { open ? QStringLiteral("r-folder-open") : QStringLiteral("r-folder"),
+			         over.isEmpty() ? g_iconColors.value(QStringLiteral("folder"), QColor("#c9a227")) : QColor(over) };
+		QString fa = QStringLiteral("circle-question");
+		QColor color = g_iconColors.value(QStringLiteral("other"), QColor("#555555"));
 		for (const P& p : table)
 			if (protocol == QLatin1String(p.name))
 			{
-				glyph = QLatin1String(p.glyph);
-				color = g_iconColors.value(protocol, QColor(QLatin1String(p.color))).name();
+				fa = QLatin1String(p.fa);
+				color = g_iconColors.value(protocol, QColor(QLatin1String(p.color)));
 			}
-		if (!over.isEmpty())
-			color = over;
-		// Ohne Kachel: das Piktogramm selbst in der Farbe des Zieltyps.
-		return QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>%1</svg>").arg(glyph.replace(QLatin1String("COLOR"), color));
+		return { fa, over.isEmpty() ? color : QColor(over) };
 	};
-	#undef RJ_G
-	auto draw = [&](const QString& svg, const QColor& ring) {
+	auto draw = [&](const QPair<QString, QColor>& sym, const QColor& ring) {
 	QPixmap pm(32, 32);
 	pm.fill(Qt::transparent);
 	{
 		QPainter p(&pm);
-		QSvgRenderer r(svg.toUtf8());
-		r.render(&p);
+		faPaint(&p, QRectF(2, 3, 26, 26), sym.first, sym.second);
 		if (!light.isEmpty())
 		{
 			QColor c = light == QLatin1String("green")    ? QColor("#1b9e20")
@@ -278,8 +258,14 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 	}
 	return pm;
 	};
-	QIcon icon(draw(makeSvg(QString()), g_iconRing));
-	icon.addPixmap(draw(makeSvg(g_iconSelected.name()), g_iconSelectedRing), QIcon::Selected);
+	QIcon icon(draw(pick(QString(), false), g_iconRing));
+	icon.addPixmap(draw(pick(g_iconSelected.name(), false), g_iconSelectedRing), QIcon::Selected);
+	if (folder)
+	{
+		// Aufgeklappte Ordner zeigen den offenen Ordner (der Baum fragt den Zustand „On“ ab).
+		icon.addPixmap(draw(pick(QString(), true), g_iconRing), QIcon::Normal, QIcon::On);
+		icon.addPixmap(draw(pick(g_iconSelected.name(), true), g_iconSelectedRing), QIcon::Selected, QIcon::On);
+	}
 	cache.insert(key, icon);
 	return icon;
 }
@@ -498,6 +484,7 @@ private:
 			updateInset();
 			return;
 		}
+		applyCornerPreference();
 		const LONG_PTR style = GetWindowLongPtrW(m_hwnd, GWL_STYLE);
 		const LONG_PTR want = style | WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
 		if (want != style)
@@ -506,6 +493,22 @@ private:
 			SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
 		}
 		updateInset();
+	}
+
+	/// Windows 11: runde oder eckige Fensterecken nach der Einstellung „Runde Fensterecken“ (DWMWA_WINDOW_CORNER_PREFERENCE).
+	/// dwmapi wird zur Laufzeit geladen; ältere Windows-Fassungen kennen das Attribut nicht und ignorieren es.
+	void applyCornerPreference()
+	{
+		using SetAttr = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+		static SetAttr set = [] {
+			HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+			return dwm ? reinterpret_cast<SetAttr>(GetProcAddress(dwm, "DwmSetWindowAttribute")) : nullptr;
+		}();
+		if (!set)
+			return;
+		const bool round = m_window->property("rjRoundCorners").toBool();
+		const DWORD pref = round ? 2 /* DWMWCP_ROUND */ : 1 /* DWMWCP_DONOTROUND */;
+		set(m_hwnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &pref, sizeof(pref));
 	}
 
 	/// Innenrand in logischen Bildpunkten: normal die Größenzone, maximiert der Überstand über den Arbeitsbereich.
@@ -525,8 +528,8 @@ private:
 			if (GetMonitorInfoW(MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST), &mi))
 				px = qMax(0, int(mi.rcWork.left - r.left));
 		}
-		else
-			px = border();
+		// Normalzustand: kein Innenrand – Tabs und Baum reichen bis an den Fensterrand (wie Firefox); die Größenzone
+		// meldet WM_NCHITTEST trotzdem. Maximiert gleicht der Innenrand den Überstand über den Arbeitsbereich aus.
 		const qreal dpr = m_window->devicePixelRatioF();
 		const int inset = qRound(px / (dpr > 0 ? dpr : 1.0));
 		if (inset != m_inset)
@@ -534,10 +537,46 @@ private:
 			m_inset = inset;
 			m_setInset(inset);
 		}
+		updateRegion();
+	}
+
+	/// Abgerundete Fensterform, wo Windows selbst nicht rundet (Windows 10, Remotedesktop-Sitzung): Ecken mit 8 px
+	/// (je DPI). Unter Windows 11 am eigenen Bildschirm rundet DWM sauber; maximiert und im Vollbild eckig.
+	void updateRegion()
+	{
+		if (!m_hwnd)
+			return;
+		static const bool needRegion = [] {
+			OSVERSIONINFOEXW v{};
+			v.dwOSVersionInfoSize = sizeof(v);
+			using RtlGetVersion = LONG(WINAPI*)(OSVERSIONINFOEXW*);
+			bool win11 = false;
+			if (HMODULE nt = GetModuleHandleW(L"ntdll.dll"))
+				if (auto f = reinterpret_cast<RtlGetVersion>(GetProcAddress(nt, "RtlGetVersion")); f && f(&v) == 0)
+					win11 = v.dwMajorVersion >= 10 && v.dwBuildNumber >= 22000;
+			return !win11 || GetSystemMetrics(SM_REMOTESESSION) != 0;
+		}();
+		const bool round = m_window->property("rjRoundCorners").toBool() && needRegion && !IsZoomed(m_hwnd) && !m_window->isFullScreen();
+		if (!round)
+		{
+			if (m_region)
+			{
+				SetWindowRgn(m_hwnd, nullptr, TRUE);
+				m_region = false;
+			}
+			return;
+		}
+		RECT r;
+		GetWindowRect(m_hwnd, &r);
+		const int d = MulDiv(16, GetDpiForWindow(m_hwnd), 96);
+		HRGN rgn = CreateRoundRectRgn(0, 0, r.right - r.left + 1, r.bottom - r.top + 1, d, d);
+		SetWindowRgn(m_hwnd, rgn, TRUE); // Windows übernimmt die Region
+		m_region = true;
 	}
 
 	QWidget* m_window;
 	std::function<void(int)> m_setInset;
+	bool m_region = false;
 	HWND m_hwnd = nullptr;
 	int m_inset = -1;
 };
@@ -707,6 +746,453 @@ QString g_updateNotice;
 #endif
 } // namespace
 
+namespace
+{
+/// Halbdurchsichtige Fläche über dem Fenster mit Pfeilen auf Menü und „Hinzufügen“ (Ersthilfe).
+class CoachOverlay : public QWidget
+{
+public:
+	struct Hint
+	{
+		QPointer<QWidget> target;
+		QString text;
+	};
+	CoachOverlay(QWidget* parent, QList<Hint> hints, const QString& dontShow, const QString& ok, std::function<void(bool)> done)
+	  : QWidget(parent)
+	  , m_hints(std::move(hints))
+	  , m_done(std::move(done))
+	{
+		setAttribute(Qt::WA_StyledBackground, false);
+		m_check = new QCheckBox(dontShow, this);
+		m_ok = new QPushButton(ok, this);
+		m_ok->setDefault(true);
+		m_check->setStyleSheet(QStringLiteral("QCheckBox { color: white; }"));
+		connect(m_ok, &QPushButton::clicked, this, [this] {
+			if (m_done)
+				m_done(m_check->isChecked());
+			deleteLater();
+		});
+		parent->installEventFilter(this);
+		setGeometry(parent->rect());
+		show();
+		raise();
+		m_ok->setFocus();
+	}
+	bool eventFilter(QObject* o, QEvent* e) override
+	{
+		if (o == parentWidget() && e->type() == QEvent::Resize)
+			setGeometry(parentWidget()->rect());
+		return QWidget::eventFilter(o, e);
+	}
+
+protected:
+	void resizeEvent(QResizeEvent*) override
+	{
+		const QSize c = m_check->sizeHint(), b = m_ok->sizeHint();
+		const int y = height() - 70;
+		m_check->setGeometry((width() - c.width() - b.width() - 24) / 2, y + (b.height() - c.height()) / 2, c.width(), c.height());
+		m_ok->setGeometry(m_check->geometry().right() + 24, y, b.width() + 20, b.height());
+	}
+	void paintEvent(QPaintEvent*) override
+	{
+		QPainter p(this);
+		p.setRenderHint(QPainter::Antialiasing);
+		p.fillRect(rect(), QColor(0, 0, 0, 150));
+		const QColor accent = palette().color(QPalette::Highlight);
+		const QColor boxBg = palette().color(QPalette::Base), boxText = palette().color(QPalette::Text);
+		int slot = 0;
+		m_nextY = 0;
+		for (const Hint& h : m_hints)
+		{
+			if (!h.target || !h.target->isVisible())
+				continue;
+			// Über Bildschirmkoordinaten: die Hinweisfläche ist Geschwister, nicht Elternteil des Ziels.
+			const QRect tr(mapFromGlobal(h.target->mapToGlobal(QPoint(0, 0))), h.target->size());
+			// Ziel hervorheben.
+			p.setPen(QPen(accent, 3));
+			p.setBrush(Qt::NoBrush);
+			p.drawRoundedRect(QRectF(tr).adjusted(-5, -5, 5, 5), 8, 8);
+			// Textkasten: links unterhalb des Ziels bzw. darunter, innerhalb des Fensters.
+			QFont f = font();
+			f.setPointSizeF(f.pointSizeF() * 1.1);
+			p.setFont(f);
+			const QFontMetrics fm(f);
+			const int w = 340;
+			const QRect textRect = fm.boundingRect(QRect(0, 0, w - 32, 1000), Qt::TextWordWrap, h.text);
+			const int bw = w, bh = textRect.height() + 28;
+			// Großes Ziel (Baum): Kasten rechts daneben auf halber Höhe, Pfeil in die Mitte.
+			const bool big = tr.height() > 120;
+			int bx = tr.center().x() - bw - 60 - slot * 40, by = qMax(tr.bottom() + 70, m_nextY);
+			if (big)
+			{
+				bx = qMin(width() - bw - 20, tr.right() + 90);
+				by = qMax(m_nextY, tr.center().y() - bh / 2);
+			}
+			else if (bx < 20)
+				bx = qMin(width() - bw - 20, tr.right() + 60);
+			by = qMin(by, height() - bh - 110);
+			m_nextY = by + bh + 40;
+			const QRectF box(bx, by, bw, bh);
+			p.setPen(Qt::NoPen);
+			p.setBrush(boxBg);
+			p.drawRoundedRect(box, 10, 10);
+			p.setPen(boxText);
+			p.drawText(box.adjusted(16, 14, -16, -14), Qt::TextWordWrap, h.text);
+			// Pfeil vom Kasten zum Ziel.
+			const QPointF from = big ? QPointF(box.left(), box.center().y()) : QPointF(box.center().x() > tr.center().x() ? box.left() + 30 : box.right() - 30, box.top());
+			const QPointF to = big ? QPointF(tr.center().x() + 20, tr.center().y()) : QPointF(tr.center().x(), tr.bottom() + 8);
+			QPainterPath path(from);
+			if (big)
+				path.lineTo(to);
+			else
+				path.cubicTo(QPointF(from.x(), (from.y() + to.y()) / 2), QPointF(to.x(), (from.y() + to.y()) / 2 + 20), to);
+			p.setPen(QPen(accent, 3, Qt::SolidLine, Qt::RoundCap));
+			p.setBrush(Qt::NoBrush);
+			p.drawPath(path);
+			const qreal a = big ? std::atan2(to.y() - from.y(), to.x() - from.x()) : std::atan2(to.y() - (from.y() + to.y()) / 2 - 20, 0.0001);
+			QPolygonF head;
+			head << to << to + QPointF(std::cos(a + 2.6) * 14, std::sin(a + 2.6) * 14) << to + QPointF(std::cos(a - 2.6) * 14, std::sin(a - 2.6) * 14);
+			p.setBrush(accent);
+			p.drawPolygon(head);
+			++slot;
+		}
+	}
+	void mousePressEvent(QMouseEvent* e) override { e->accept(); }
+
+private:
+	QList<Hint> m_hints;
+	std::function<void(bool)> m_done;
+	QCheckBox* m_check;
+	QPushButton* m_ok;
+	int m_nextY = 0;
+};
+} // namespace
+
+namespace
+{
+/// Tableiste wie Firefox, vollständig selbst gezeichnet (keine Kanten oder Grundlinien des Stils): Hintergrund in
+/// der Fensterfarbe, der aktive Tab als helle, abgerundete Karte mit feinem Rand und leichtem Schatten unten, die
+/// übrigen flach mit kurzen Trennstrichen, beim Darüberfahren getönt. Größe fest: 32 px hoch (Platzsparmodus 30 px).
+class RjTabBar : public QTabBar
+{
+public:
+	explicit RjTabBar(QWidget* parent = nullptr)
+	  : QTabBar(parent)
+	{
+		setDrawBase(false);
+		setMouseTracking(true);
+		setAttribute(Qt::WA_Hover);
+		setAutoFillBackground(false);
+	}
+
+protected:
+	static QColor mix(const QColor& a, const QColor& b, qreal t)
+	{
+		return QColor::fromRgbF(a.redF() * t + b.redF() * (1 - t), a.greenF() * t + b.greenF() * (1 - t), a.blueF() * t + b.blueF() * (1 - t));
+	}
+	QSize tabSizeHint(int index) const override
+	{
+		const int h = property("compact").toBool() ? 30 : 32;
+		const int text = fontMetrics().horizontalAdvance(tabText(index).remove(QLatin1Char('&')));
+		// Rand 12 + Symbol 16 + Abstand 8 + Text + Abstand 10 + Kreuz 16 + Rand 12.
+		const int w = qBound(130, 12 + 16 + 8 + text + 10 + 16 + 12, 240);
+		return QSize(w, h);
+	}
+	QSize minimumTabSizeHint(int index) const override { return QSize(qMin(120, tabSizeHint(index).width()), tabSizeHint(index).height()); }
+	void mouseMoveEvent(QMouseEvent* e) override
+	{
+		const int hover = tabAt(e->position().toPoint());
+		if (hover != m_hover)
+		{
+			m_hover = hover;
+			update();
+		}
+		QTabBar::mouseMoveEvent(e);
+	}
+	void leaveEvent(QEvent* e) override
+	{
+		m_hover = -1;
+		update();
+		QTabBar::leaveEvent(e);
+	}
+	void paintEvent(QPaintEvent*) override
+	{
+		QPainter p(this);
+		p.setRenderHint(QPainter::Antialiasing);
+		const QPalette pal = palette();
+		const QColor win = pal.color(QPalette::Window), text = pal.color(QPalette::WindowText);
+		p.fillRect(rect(), win);
+		const QColor card = pal.color(QPalette::Base), edge = mix(text, win, 0.16), shadow = mix(text, win, 0.28), sep = mix(text, win, 0.22);
+		const int cur = currentIndex();
+		for (int i = 0; i < count(); ++i)
+		{
+			const QRect tr = tabRect(i);
+			if (!tr.isValid() || !tr.intersects(rect()))
+				continue;
+			const QRectF box = QRectF(tr).adjusted(2, 3, -2, -3);
+			if (i == cur)
+			{
+				// Leichter Schatten: dieselbe Form 1 px tiefer in der Schattenfarbe, darüber die Karte.
+				p.setPen(Qt::NoPen);
+				p.setBrush(shadow);
+				p.drawRoundedRect(box.translated(0, 1), 6, 6);
+				p.setBrush(card);
+				p.setPen(QPen(edge, 1));
+				p.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
+			}
+			else if (i == m_hover)
+			{
+				p.setPen(Qt::NoPen);
+				p.setBrush(mix(text, win, 0.07));
+				p.drawRoundedRect(box, 6, 6);
+			}
+			else if (i + 1 < count() && i + 1 != cur && i + 1 != m_hover)
+			{
+				// Kurzer Trennstrich rechts (nicht neben der aktiven oder getönten Karte).
+				p.setPen(QPen(sep, 1));
+				const qreal x = tr.right() + 0.5;
+				p.drawLine(QPointF(x, tr.top() + 9), QPointF(x, tr.bottom() - 8));
+			}
+			// Symbol und Beschriftung; rechts bleibt Platz für das Schließen-Kreuz (eigenes Bedienelement).
+			int x = tr.left() + 12;
+			const QIcon icon = tabIcon(i);
+			if (!icon.isNull())
+			{
+				icon.paint(&p, QRect(x, tr.center().y() - 8, 16, 16));
+				x += 16 + 8;
+			}
+			int right = tr.right() - 10;
+			if (QWidget* b = tabButton(i, QTabBar::RightSide); b && b->isVisible())
+				right = b->geometry().left() - 6;
+			const QRect textRect(x, tr.top(), qMax(0, right - x), tr.height());
+			p.setPen(i == cur ? text : mix(text, win, 0.85));
+			p.drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, fontMetrics().elidedText(tabText(i).remove(QLatin1Char('&')), Qt::ElideMiddle, textRect.width()));
+		}
+	}
+
+private:
+	int m_hover = -1;
+};
+
+/// Tab-Bereich mit der selbst gezeichneten Tableiste.
+class RjTabWidget : public QTabWidget
+{
+public:
+	explicit RjTabWidget(QWidget* parent = nullptr)
+	  : QTabWidget(parent)
+	{
+		setTabBar(new RjTabBar(this));
+	}
+
+#ifdef Q_OS_WIN
+protected:
+	// Nur Windows: nur die Fensterfarbe. QTabWidget zeichnete im Dokumentmodus unter die Eckbereiche (Logo,
+	// Fensterknöpfe) eine eigene Grundlinie des Stils (graue und weiße Linie). Ubuntu bleibt unverändert.
+	void paintEvent(QPaintEvent*) override
+	{
+		QPainter p(this);
+		p.fillRect(rect(), palette().color(QPalette::Window));
+	}
+#endif
+};
+} // namespace
+
+RailTab::RailTab(const QString& text, QWidget* parent)
+  : QWidget(parent)
+  , m_text(text)
+{
+	setFixedWidth(28);
+	setAttribute(Qt::WA_Hover);
+	setCursor(Qt::PointingHandCursor);
+	setToolTip(text + QStringLiteral(" (F9)"));
+	setAccessibleName(text);
+}
+
+void RailTab::paintEvent(QPaintEvent*)
+{
+	QPainter p(this);
+	p.setRenderHint(QPainter::Antialiasing);
+	const QPalette pal = palette();
+	p.fillRect(rect(), pal.color(QPalette::Window));
+	// Karte: oben am Rand, so hoch wie Symbol und Text; beim Darüberfahren getönt.
+	const QFontMetrics fm(font());
+	const int len = fm.horizontalAdvance(m_text) + 34;
+	const QRectF card(3.5, 8.5, width() - 7, len);
+	p.setPen(QPen(pal.color(QPalette::Mid), 1));
+	p.setBrush(underMouse() ? pal.color(QPalette::AlternateBase) : pal.color(QPalette::Base));
+	p.drawRoundedRect(card, 6, 6);
+	faPaint(&p, QRectF(card.x() + 3, card.y() + 6, card.width() - 6, 14), QStringLiteral("server"), faMutedColor());
+	p.save();
+	p.translate(card.center().x() + fm.ascent() / 2.0 - 1, card.bottom() - 6);
+	p.rotate(-90);
+	p.setPen(pal.color(QPalette::WindowText));
+	p.drawText(QPointF(0, 0), m_text);
+	p.restore();
+}
+
+void RailTab::enterEvent(QEnterEvent* e)
+{
+	QWidget::enterEvent(e);
+	update();
+	if (onEnter)
+		onEnter();
+}
+
+void RailTab::leaveEvent(QEvent* e)
+{
+	QWidget::leaveEvent(e);
+	update();
+	if (onLeave)
+		onLeave();
+}
+
+void RailTab::mousePressEvent(QMouseEvent* e)
+{
+	if (e->button() == Qt::LeftButton && onClick)
+		onClick();
+	QWidget::mousePressEvent(e);
+}
+
+namespace
+{
+/// Unsichtbare Greifzone am Fensterrand (6 px innen): Zeiger für die Größenänderung, Druck startet sie.
+class EdgeGrip : public QWidget
+{
+public:
+	EdgeGrip(QWidget* window, Qt::Edges edges)
+	  : QWidget(window)
+	  , m_edges(edges)
+	{
+		setAttribute(Qt::WA_NoSystemBackground);
+		setAttribute(Qt::WA_TranslucentBackground);
+		const bool diagA = edges == (Qt::LeftEdge | Qt::TopEdge) || edges == (Qt::RightEdge | Qt::BottomEdge);
+		const bool diagB = edges == (Qt::RightEdge | Qt::TopEdge) || edges == (Qt::LeftEdge | Qt::BottomEdge);
+		setCursor(diagA ? Qt::SizeFDiagCursor : diagB ? Qt::SizeBDiagCursor : (edges & (Qt::LeftEdge | Qt::RightEdge)) ? Qt::SizeHorCursor : Qt::SizeVerCursor);
+	}
+	Qt::Edges edges() const { return m_edges; }
+
+protected:
+	void paintEvent(QPaintEvent*) override {}
+	void mousePressEvent(QMouseEvent* e) override
+	{
+		if (e->button() == Qt::LeftButton && window()->windowHandle())
+		{
+			window()->windowHandle()->startSystemResize(m_edges);
+			e->accept();
+			return;
+		}
+		QWidget::mousePressEvent(e);
+	}
+
+private:
+	Qt::Edges m_edges;
+};
+} // namespace
+
+RoundCorners::RoundCorners(QMainWindow* window)
+  : QObject(window)
+  , m_window(window)
+{
+	window->installEventFilter(this);
+	for (Qt::Edges e : { Qt::Edges(Qt::LeftEdge), Qt::Edges(Qt::RightEdge), Qt::Edges(Qt::TopEdge), Qt::Edges(Qt::BottomEdge),
+	                     Qt::LeftEdge | Qt::TopEdge, Qt::RightEdge | Qt::TopEdge, Qt::LeftEdge | Qt::BottomEdge, Qt::RightEdge | Qt::BottomEdge })
+	{
+		auto* g = new EdgeGrip(window, e);
+		g->setObjectName(QStringLiteral("edgeGrip"));
+		m_grips.append(g);
+	}
+	m_timer.setSingleShot(true);
+	m_timer.setInterval(0);
+	connect(&m_timer, &QTimer::timeout, this, &RoundCorners::update);
+}
+
+bool RoundCorners::eventFilter(QObject* o, QEvent* e)
+{
+	switch (e->type())
+	{
+	case QEvent::Resize:
+	case QEvent::Move:
+	case QEvent::Show:
+	case QEvent::Hide:
+	case QEvent::WindowStateChange:
+	case QEvent::ChildAdded:
+	case QEvent::LayoutRequest:
+		m_timer.start();
+		break;
+	default:
+		break;
+	}
+	return QObject::eventFilter(o, e);
+}
+
+void RoundCorners::update()
+{
+	// Direkte Fensterteile (Titel- und Menüleiste, Mitte, Statuszeile), die eine Ecke berühren, bekommen dort eine
+	// abgerundete Maske; ihre Kinder werden mit beschnitten. Maximiert: keine Masken.
+	const bool plain = m_window->isMaximized() || m_window->isFullScreen();
+	const QRect inner = m_window->contentsRect();
+	const int r = kRadius;
+	const QRect corners[4] = { QRect(inner.topLeft(), QSize(r, r)), QRect(inner.right() - r + 1, inner.top(), r, r),
+		                       QRect(inner.left(), inner.bottom() - r + 1, r, r), QRect(inner.right() - r + 1, inner.bottom() - r + 1, r, r) };
+	const QRect ellipses[4] = { QRect(inner.topLeft(), QSize(2 * r, 2 * r)), QRect(inner.right() - 2 * r + 1, inner.top(), 2 * r, 2 * r),
+		                        QRect(inner.left(), inner.bottom() - 2 * r + 1, 2 * r, 2 * r),
+		                        QRect(inner.right() - 2 * r + 1, inner.bottom() - 2 * r + 1, 2 * r, 2 * r) };
+	// Greifzonen: 6 px innen an Kanten, 14 px in den Ecken; maximiert ausgeblendet; immer obenauf.
+	{
+		const int g = 6, c = 14, W = m_window->width(), H = m_window->height();
+		for (QWidget* grip : std::as_const(m_grips))
+		{
+			const Qt::Edges e = static_cast<EdgeGrip*>(grip)->edges();
+			QRect r;
+			if (e == Qt::LeftEdge)
+				r = QRect(0, c, g, H - 2 * c);
+			else if (e == Qt::RightEdge)
+				r = QRect(W - g, c, g, H - 2 * c);
+			else if (e == Qt::TopEdge)
+				r = QRect(c, 0, W - 2 * c, g);
+			else if (e == Qt::BottomEdge)
+				r = QRect(c, H - g, W - 2 * c, g);
+			else
+				r = QRect((e & Qt::LeftEdge) ? 0 : W - c, (e & Qt::TopEdge) ? 0 : H - c, c, c);
+			grip->setGeometry(r);
+			grip->setVisible(!plain);
+			if (!plain)
+				grip->raise();
+		}
+	}
+	for (QObject* c : m_window->children())
+	{
+		auto* w = qobject_cast<QWidget*>(c);
+		if (!w || w->isWindow() || w->objectName() == QLatin1String("edgeGrip"))
+			continue;
+		if (!m_watched.contains(w))
+		{
+			m_watched.insert(w);
+			w->installEventFilter(this);
+		}
+		if (plain || !w->isVisible())
+		{
+			if (!w->mask().isEmpty())
+				w->clearMask();
+			continue;
+		}
+		QRegion cut;
+		for (int i = 0; i < 4; ++i)
+			if (w->geometry().intersects(corners[i]))
+				cut += QRegion(corners[i]).subtracted(QRegion(ellipses[i], QRegion::Ellipse));
+		if (cut.isEmpty())
+		{
+			if (!w->mask().isEmpty())
+				w->clearMask();
+			continue;
+		}
+		const QRegion mask = QRegion(w->rect()).subtracted(cut.translated(-w->pos()));
+		if (w->mask() != mask)
+			w->setMask(mask);
+	}
+	m_window->update();
+}
+
 MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
   : QMainWindow(parent)
   , m_backend(backend)
@@ -721,7 +1207,25 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	// Eigene Titelleiste (links Logo, Name, Version): gleiches Aussehen unter Ubuntu und Windows.
 	setWindowFlag(Qt::FramelessWindowHint, true);
 	setMouseTracking(true);
-	setContentsMargins(kResizeBorder, kResizeBorder, kResizeBorder, kResizeBorder);
+	// Runde Fensterecken (Darstellung, Vorgabe an): Windows 11 rundet über DWM (WinFrame), Linux zeichnet selbst
+	// (durchsichtiger Rand, Ecken der Fensterteile ausgespart). Umschalten wirkt nach einem Neustart.
+	{
+		const bool round = parseObject(m_backend->uiPrefsJson()).value(QStringLiteral("round_corners")).toBool(true);
+		setProperty("rjRoundCorners", round);
+#ifndef Q_OS_WIN
+		if (round)
+		{
+			setAttribute(Qt::WA_TranslucentBackground);
+			m_round = true;
+			m_roundCorners = new RoundCorners(this);
+		}
+#endif
+	}
+	// Runde Ecken (Linux): kein Rand – das Fenster sitzt bündig am Bildschirm; Größe ziehen über Greifzonen innen.
+	if (m_round)
+		setContentsMargins(0, 0, 0, 0);
+	else
+		setContentsMargins(kResizeBorder, kResizeBorder, kResizeBorder, kResizeBorder);
 #ifdef Q_OS_WIN
 	// Windows: nativer Größenrahmen (Zeiger, Ziehen, Aero Snap); der Innenrand folgt Rahmenbreite und Zustand.
 	new WinFrame(this, [this](int m) { setContentsMargins(m, m, m, m); });
@@ -831,12 +1335,35 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		m_tree->viewport()->installEventFilter(this);
 	}
 	m_tree->setAccessibleName(QStringLiteral("Verbindungsbaum"));
-	leftLay->addWidget(m_viewBox);
-	leftLay->addWidget(m_search);
+	// Kopfzeile „Ziele“ mit Stecknadel (angeheftet bzw. automatisch einklappen), darunter Leiste und Baum, unten die
+	// Suche mit grauer Lupe. Die frühere Ansichtenauswahl entfällt (Favoriten stehen als Ordner im Baum).
+	{
+		auto* header = new QWidget(leftInner);
+		header->setObjectName(QStringLiteral("treeHeader"));
+		auto* hl = new QHBoxLayout(header);
+		hl->setContentsMargins(6, 0, 0, 0);
+		hl->setSpacing(4);
+		auto* title = new QLabel(T(m_backend, "tree.header"), header);
+		QFont hf = title->font();
+		hf.setWeight(QFont::DemiBold);
+		title->setFont(hf);
+		m_pinButton = new QToolButton(header);
+		m_pinButton->setAutoRaise(true);
+		m_pinButton->setFocusPolicy(Qt::NoFocus);
+		m_pinButton->setFixedSize(28, 24);
+		connect(m_pinButton, &QToolButton::clicked, this, [this] { setPinned(!m_pinned, true); });
+		hl->addWidget(title);
+		hl->addStretch(1);
+		hl->addWidget(m_pinButton);
+		leftLay->addWidget(header);
+	}
+	m_viewBox->hide();
+	m_search->addAction(faIcon(QStringLiteral("magnifying-glass")), QLineEdit::LeadingPosition);
 	leftLay->addWidget(m_bar);
 	leftLay->addWidget(m_tree, 1);
+	leftLay->addWidget(m_search);
 
-	m_tabs = new QTabWidget(this);
+	m_tabs = new RjTabWidget(this);
 	m_tabs->setTabsClosable(true);
 	m_tabs->setMovable(true);
 	m_tabs->setDocumentMode(true);
@@ -851,10 +1378,53 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	// Breiterer Trenner zwischen Baum und Tabs: leichter zu treffen, beim Darüberfahren hervorgehoben.
 	split->setHandleWidth(7);
 	m_split = split;
-	setCentralWidget(split);
+	// Mitte: links die Registerkarte „Ziele“ (nur bei gelöster Stecknadel), daneben Baum und Tabs.
+	m_center = new QWidget(this);
+	{
+		auto* cl = new QHBoxLayout(m_center);
+		cl->setContentsMargins(0, 0, 0, 0);
+		cl->setSpacing(0);
+		m_rail = new RailTab(T(m_backend, "tree.header"), m_center);
+		m_rail->onEnter = [this] {
+			if (!m_flyOpen)
+				m_flyOpenTimer.start(m_flyOpenMs);
+			m_flyCloseTimer.stop();
+		};
+		m_rail->onLeave = [this] {
+			m_flyOpenTimer.stop();
+			if (m_flyOpen)
+				m_flyCloseTimer.start(m_flyCloseMs);
+		};
+		m_rail->onClick = [this] { m_flyOpen ? closeFlyout() : openFlyout(); };
+		m_rail->hide();
+		cl->addWidget(m_rail);
+		cl->addWidget(split, 1);
+	}
+	m_center->installEventFilter(this);
+	m_flyOpenTimer.setSingleShot(true);
+	m_flyCloseTimer.setSingleShot(true);
+	connect(&m_flyOpenTimer, &QTimer::timeout, this, [this] { openFlyout(); });
+	connect(&m_flyCloseTimer, &QTimer::timeout, this, [this] {
+		if (!m_flyOpen)
+			return;
+		// Offenes Kontextmenü oder Maus über dem Bereich: später noch einmal prüfen.
+		if (QApplication::activePopupWidget() || m_leftPane->underMouse() || m_rail->underMouse())
+		{
+			m_flyCloseTimer.start(m_flyCloseMs);
+			return;
+		}
+		closeFlyout();
+	});
+	connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* now) {
+		if (!m_pinned && m_flyOpen && now && !m_leftPane->isAncestorOf(now) && now != m_leftPane && !QApplication::activePopupWidget())
+			m_flyCloseTimer.start(m_flyCloseMs);
+	});
+	setCentralWidget(m_center);
 
 	buildMenus();
 	// Hamburger-Menü (Platzsparmodus): dieselben Menüs; die Kürzel gelten auch bei verborgener Menüzeile.
+	applyMenuIcons();
+	// Hamburger-Menü: die Menüs Datei, Bearbeiten, Extras, Ansicht, Hilfe als Untermenüs (mit Symbolen).
 	m_burgerMenu = new QMenu(this);
 	for (QAction* a : m_menuBar->actions())
 		if (a->menu())
@@ -892,17 +1462,31 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		m_logo->setObjectName(QStringLiteral("emptyLogo"));
 		m_logo->setPixmap(pm);
 		m_logo->setFixedSize(200, 200);
-		m_logo->setAttribute(Qt::WA_TransparentForMouseEvents);
-		// Darunter ein Link auf die Projektseite (öffnet im Standardbrowser).
-		auto* link = new QLabel(m_tabs);
-		link->setObjectName(QStringLiteral("emptyLogoLink"));
-		link->setTextFormat(Qt::RichText);
-		link->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);
-		link->setOpenExternalLinks(true);
-		link->setText(QStringLiteral("<a href=\"https://github.com/joeMJ/remotejoe\">%1</a>").arg(T(m_backend, "logo.link").toHtmlEscaped()));
-		link->adjustSize();
+		// Das Logo selbst ist der Link auf die Projektseite (öffnet im Standardbrowser); kein Text darunter.
+		m_logo->setCursor(Qt::PointingHandCursor);
+		m_logo->setToolTip(QStringLiteral("github.com/joeMJ/remotejoe"));
+		m_logo->setAccessibleName(T(m_backend, "logo.link"));
+		m_logo->installEventFilter(this);
 		connect(m_tabs, &QTabWidget::currentChanged, this, [this] { updateLogo(); });
 		QTimer::singleShot(0, this, [this] { updateLogo(); });
+	}
+	// Regelmäßige Update-Suche (Einstellungen → Updates): alle zehn Minuten nachsehen, ob sie fällig ist.
+	{
+		auto* periodic = new QTimer(this);
+		periodic->setInterval(10 * 60 * 1000);
+		connect(periodic, &QTimer::timeout, this, [this] {
+			const QJsonObject s = parseObject(m_backend->edit(QStringLiteral("{\"op\":\"update_status\"}")));
+			if (!s.value(QStringLiteral("periodic")).toBool() || s.value(QStringLiteral("busy")).toBool() || m_backend->isDemo())
+				return;
+			const QString unit = s.value(QStringLiteral("unit")).toString();
+			const qint64 step = unit == QLatin1String("stunden") ? 3600 : unit == QLatin1String("wochen") ? 7 * 86400 : 86400;
+			const qint64 every = qMax(1, s.value(QStringLiteral("every")).toInt(1)) * step;
+			const qint64 last = static_cast<qint64>(s.value(QStringLiteral("last_check")).toDouble());
+			const qint64 now = static_cast<qint64>(s.value(QStringLiteral("now")).toDouble());
+			if (now - last >= every)
+				m_backend->edit(QStringLiteral("{\"op\":\"update_check\"}"));
+		});
+		periodic->start();
 	}
 	m_fitTimer.setSingleShot(true);
 	m_fitTimer.setInterval(300);
@@ -914,7 +1498,7 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	// Hell/Dunkel des Desktops live übernehmen (ab Qt 6.5; unter Ubuntu 24.04 mit Qt 6.4 gilt es beim Start).
 	connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] { applyAppearance(); });
 #endif
-	FrameView::setFocusFrame(parseObject(m_backend->appearanceJson()).value(QStringLiteral("focus_frame")).toBool(true));
+	FrameView::setFocusFrame(parseObject(m_backend->uiPrefsJson()).value(QStringLiteral("focus_frame")).toBool(true));
 	{
 		const QJsonObject st = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("settings") } }));
 		FrameView::s_keyCapture = st.value(QStringLiteral("keyboard_capture")).toBool(true);
@@ -988,10 +1572,14 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(m_tree, &QTreeView::expanded, this, [this](const QModelIndex& i) {
 		if (i.data(RoleMacro).toInt() == 1)
 			m_macroShelfOpen = true;
+		if (i.data(RoleFavFolder).toBool() && !m_autoExpand)
+			m_favOpen = true;
 	});
 	connect(m_tree, &QTreeView::collapsed, this, [this](const QModelIndex& i) {
 		if (i.data(RoleMacro).toInt() == 1)
 			m_macroShelfOpen = false;
+		if (i.data(RoleFavFolder).toBool() && !m_autoExpand)
+			m_favOpen = false;
 	});
 	// Einfachklick auf ein Ziel: Objektübersicht (Doppelklick verbindet wie bisher).
 	connect(m_tree, &QTreeView::clicked, this, [this](const QModelIndex& i) {
@@ -1059,6 +1647,10 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		const QModelIndex i = m_tree->currentIndex();
 		if (i.isValid() && i.data(RoleMacro).toInt() == 2)
 			deleteMacro(i.data(RoleId).toString(), i.data(Qt::DisplayRole).toString());
+		else if (i.isValid() && i.data(RoleFavFolder).toBool())
+			return;
+		else if (i.isValid() && i.data(RoleFavLink).toBool())
+			toggleFavorite(); // Entf im Ordner „Favoriten“ nimmt nur den Favoriten heraus.
 		else
 			deleteSelected();
 	});
@@ -1225,6 +1817,8 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		}
 		if (!findKeyActive())
 			return;
+		if (!m_pinned)
+			openFlyout();
 		m_search->setFocus();
 		m_search->selectAll();
 	});
@@ -1287,6 +1881,103 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 
 MainWindow::~MainWindow() = default;
 
+namespace
+{
+/// Setzt beim Öffnen jedes Menüs (auch der Erweiterungen) sprechende Symbole, zugeordnet über den Text des Eintrags.
+class MenuIconizer : public QObject
+{
+public:
+	MenuIconizer(QObject* parent, QHash<QString, QString> byText)
+	  : QObject(parent)
+	  , m_byText(std::move(byText))
+	{
+	}
+	static QString norm(QString t)
+	{
+		t = t.section(QLatin1Char('\t'), 0, 0).remove(QLatin1Char('&')).trimmed();
+		if (t.endsWith(QStringLiteral(" …")))
+			t.chop(2);
+		return t.trimmed();
+	}
+	void apply(QMenu* m) const
+	{
+		for (QAction* a : m->actions())
+		{
+			if (a->isSeparator() || !a->icon().isNull())
+				continue;
+			QString fa = m_byText.value(norm(a->text()));
+			if (fa.isEmpty() && a->menu())
+				fa = m_byText.value(norm(a->menu()->title()));
+			if (fa.isEmpty() && !m_undoPrefix.isEmpty() && norm(a->text()).startsWith(m_undoPrefix))
+				fa = QStringLiteral("rotate-left");
+			if (!fa.isEmpty())
+				a->setIcon(faIcon(fa));
+		}
+	}
+	bool eventFilter(QObject* o, QEvent* e) override
+	{
+		if (e->type() == QEvent::Show)
+			if (auto* m = qobject_cast<QMenu*>(o))
+				apply(m);
+		return false;
+	}
+	QString m_undoPrefix;
+
+private:
+	QHash<QString, QString> m_byText;
+};
+} // namespace
+
+void MainWindow::applyMenuIcons()
+{
+	// Sprechende Symbole (Font Awesome) je Menüeintrag; zugeordnet über den Text des Eintrags. Gilt für alle Menüs
+	// (Hauptmenü, Kontextmenüs, Menüs der Erweiterungen), gesetzt beim Öffnen.
+	static const char* const map[][2] = {
+		{ "menu.file", "r-file-lines" }, { "menu.edit", "pen-to-square" }, { "menu.extras", "gear" }, { "menu.view", "r-window-restore" },
+		{ "menu.help", "circle-question" },
+		{ "menu.file.new", "file-circle-plus" }, { "menu.file.open", "r-folder-open" }, { "menu.file.import", "file-import" },
+		{ "menu.file.export", "file-export" }, { "menu.file.save", "r-floppy-disk" }, { "menu.file.lock", "lock" },
+		{ "menu.file.keyring.forget", "key" }, { "menu.file.quit", "right-from-bracket" },
+		{ "menu.edit.undo.none", "rotate-left" }, { "menu.edit.term.copy", "r-copy" }, { "menu.edit.term.paste", "r-paste" },
+		{ "menu.edit.properties", "pen-to-square" }, { "menu.edit.add", "plus" }, { "ctx.rename", "i-cursor" },
+		{ "ctx.duplicate", "r-clone" }, { "ctx.move", "arrow-right-arrow-left" }, { "ctx.delete", "r-trash-can" },
+		{ "ctx.favorite.on", "r-star" }, { "ctx.favorite.off", "star" }, { "menu.extras.settings", "gear" }, { "menu.extras.idle", "hourglass-half" },
+		{ "menu.extras.clipclear", "eraser" }, { "menu.extras.shared", "user-group" }, { "menu.extras.credmerge", "object-group" },
+		{ "menu.extras.mcplog", "robot" }, { "menu.extras.orphans", "link-slash" }, { "menu.extras.terminal", "terminal" },
+		{ "menu.extras.appearance", "palette" }, { "menu.extras.keycapture", "keyboard" }, { "menu.extras.closetab", "xmark" },
+		{ "menu.view.single", "r-square" }, { "menu.view.one_by_two", "table-columns" }, { "menu.view.two_by_two", "table-cells-large" },
+		{ "menu.view.free", "up-down-left-right" }, { "menu.view.term.bigger", "magnifying-glass-plus" },
+		{ "menu.view.term.smaller", "magnifying-glass-minus" }, { "menu.view.term.default", "text-height" },
+		{ "menu.view.detach", "up-right-from-square" }, { "menu.view.tree", "thumbtack" }, { "menu.view.reset_window", "rotate" },
+		{ "menu.help.update", "arrows-rotate" }, { "menu.help.help", "circle-question" }, { "menu.help.issues", "bug" },
+		{ "menu.help.about", "circle-info" }, { "menu.help.news", "r-lightbulb" }, { "menu.help.firststeps", "circle-info" },
+		// Kontextmenü des Baums
+		{ "ctx.connect", "plug" }, { "ctx.tile", "table-columns" }, { "ctx.copy.user", "user" }, { "ctx.copy.password", "key" },
+		{ "ctx.add", "plus" }, { "ctx.properties", "pen-to-square" }, { "ctx.tasks", "list-check" }, { "ctx.mass", "magnifying-glass-chart" },
+		{ "ctx.certcheck", "shield-halved" }, { "ctx.credcheck", "user-check" }, { "ctx.credmerge", "object-group" },
+		{ "ctx.merge", "arrows-to-circle" }, { "ctx.merge.manual", "object-ungroup" }, { "ctx.up", "arrow-up" }, { "ctx.down", "chevron-down" },
+		{ "ctx.all.connect", "plug" }, { "ctx.all.reconnect", "arrows-rotate" }, { "ctx.all.disconnect", "link-slash" },
+		{ "ctx.tree.start.save", "r-floppy-disk" }, { "ctx.tree.start.reset", "rotate-left" }, { "login.edit", "pen-to-square" },
+		{ "login.delete", "r-trash-can" }, { "ctx.guest.console", "display" }, { "ctx.guest.start", "play" },
+		{ "ctx.guest.reboot", "rotate" }, { "ctx.guest.refresh", "arrows-rotate" }, { "fav.connect", "plug" }, { "fav.show", "sitemap" },
+	};
+	QHash<QString, QString> byText;
+	for (const auto& e : map)
+		byText.insert(MenuIconizer::norm(T(m_backend, e[0])), QString::fromLatin1(e[1]));
+	auto* iconizer = new MenuIconizer(this, byText);
+	iconizer->m_undoPrefix = MenuIconizer::norm(T(m_backend, "menu.edit.undo").section(QStringLiteral("%1"), 0, 0));
+	qApp->installEventFilter(iconizer);
+	std::function<void(QMenu*)> walk = [&](QMenu* m) {
+		iconizer->apply(m);
+		for (QAction* a : m->actions())
+			if (a->menu())
+				walk(a->menu());
+	};
+	for (QAction* a : m_menuBar->actions())
+		if (a->menu())
+			walk(a->menu());
+}
+
 void MainWindow::buildMenus()
 {
 	QMenu* file = m_menuBar->addMenu(T(m_backend, "menu.file"));
@@ -1344,30 +2035,29 @@ void MainWindow::buildMenus()
 		if (!currentId().isEmpty())
 			openProperties(currentId());
 	});
-	QMenu* add = editMenu->addMenu(T(m_backend, "menu.edit.add"));
-	connect(add, &QMenu::aboutToShow, this, [this, add] {
-		add->clear();
-		buildAddMenu(add, currentParentId());
-	});
+	// „Hinzufügen“ gibt es nur im Kontextmenü des Baums (Strg+N und Einfg wirken weiter im Baum).
 	editMenu->addAction(T(m_backend, "ctx.rename") + QStringLiteral("\tF2"), this, [this] { renameSelected(); });
 	editMenu->addAction(T(m_backend, "ctx.duplicate") + QStringLiteral("\tCtrl+D"), this, [this] { duplicateSelected(); });
 	editMenu->addAction(T(m_backend, "ctx.move") + QStringLiteral("\tCtrl+Shift+M"), this, [this] { moveSelected(); });
 	editMenu->addAction(T(m_backend, "ctx.delete") + QStringLiteral("\tEntf"), this, [this] { deleteSelected(); });
 	editMenu->addAction(T(m_backend, "ctx.favorite.on") + QStringLiteral("\tCtrl+B"), this, [this] { toggleFavorite(); });
 	editMenu->addSeparator();
-	editMenu->addAction(T(m_backend, "menu.edit.view.new"), this, [this] { viewCommand(QStringLiteral("new")); });
-	editMenu->addAction(T(m_backend, "menu.edit.view.rename"), this, [this] { viewCommand(QStringLiteral("rename")); });
-	editMenu->addAction(T(m_backend, "menu.edit.view.delete"), this, [this] { viewCommand(QStringLiteral("delete")); });
 	QMenu* extras = m_menuBar->addMenu(T(m_backend, "menu.extras"));
 	extras->addAction(T(m_backend, "menu.extras.settings"), this, [this] { openSettings(QString()); });
 	extras->addSeparator();
 	extras->addAction(T(m_backend, "menu.extras.idle"), this, [this] { openSettings(QStringLiteral("lock")); });
 	extras->addAction(T(m_backend, "menu.extras.clipclear"), this, [this] { openSettings(QStringLiteral("lock")); });
-	extras->addAction(T(m_backend, "menu.extras.snmp"), this, [this] { openSettings(QStringLiteral("snmp")); });
 	extras->addAction(T(m_backend, "menu.extras.shared"), this, [this] { openSharedCheck(); });
 	extras->addAction(T(m_backend, "menu.extras.credmerge"), this, [this] { openCredMerge({}); });
-	for (const auto& h : m_modules.extrasMenu)
-		h(extras);
+	{
+		// Einträge der Erweiterungen: neutrales Puzzleteil (der Kern kennt ihre Namen nicht).
+		const QList<QAction*> before = extras->actions();
+		for (const auto& h : m_modules.extrasMenu)
+			h(extras);
+		for (QAction* a : extras->actions())
+			if (!before.contains(a) && !a->isSeparator() && a->icon().isNull())
+				a->setIcon(faIcon(QStringLiteral("puzzle-piece")));
+	}
 	extras->addAction(T(m_backend, "menu.extras.mcplog"), this, [this] {
 		if (auto* old = findChild<McpLogTab*>())
 		{
@@ -1450,6 +2140,8 @@ void MainWindow::buildMenus()
 	view->addAction(T(m_backend, "menu.view.tree"), QKeySequence(Qt::Key_F9), this, [this] { setTreeVisible(m_treeHidden); });
 	view->addAction(T(m_backend, "menu.view.reset_window"), this, [this] { resetWindow(); });
 	help = m_menuBar->addMenu(T(m_backend, "menu.help"));
+	help->addAction(T(m_backend, "menu.help.news"), this, [this] { openNews(); });
+	help->addAction(T(m_backend, "menu.help.firststeps"), this, [this] { showFirstHints(true); });
 	help->addAction(T(m_backend, "menu.help.update"), this, [this] { openUpdateTab(); });
 	help->addAction(T(m_backend, "menu.help.help"), QKeySequence::HelpContents, this, [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kHelpUrl))); });
 	help->addAction(T(m_backend, "menu.help.issues"), this, [this] {
@@ -1488,13 +2180,10 @@ void MainWindow::updateForScreenshot(const QString& base)
 
 void MainWindow::openUpdateTab()
 {
+	// Programm-Updates stehen unter Einstellungen → Updates → Programm-Updates.
+	openSettings(QStringLiteral("updates_program"));
 	if (auto* u = findChild<UpdateTab*>())
-	{
 		u->refresh();
-		m_tabs->setCurrentWidget(u);
-		return;
-	}
-	addToolTab(new UpdateTab(m_backend, m_tabs), T(m_backend, "update.title"));
 }
 
 /// Stylesheet der Kartenbausteine (cards.h) aus den Farben des Schemas; Plaketten hell und dunkel lesbar.
@@ -1620,6 +2309,7 @@ void MainWindow::applyTheme(bool dark)
 	const QColor textColor = c("text"), windowColor = c("window");
 	const QColor tabLine((textColor.red() * 55 + windowColor.red() * 45) / 100, (textColor.green() * 55 + windowColor.green() * 45) / 100,
 	                     (textColor.blue() * 55 + windowColor.blue() * 45) / 100);
+	m_starColor = c("warning").isValid() ? c("warning") : QColor("#d4a017");
 	// Symbolfarben des Themes; danach Baum und Tabs neu zeichnen.
 	{
 		QJsonObject icons = p.value(QStringLiteral("icons")).toObject();
@@ -1639,19 +2329,31 @@ void MainWindow::applyTheme(bool dark)
 			f.setPointSizeF(f.pointSizeF() + fontDelta);
 		m_tree->setFont(f);
 	}
-	qApp->setStyleSheet(QStringLiteral(
+	// Schließen-Kreuz der Tabs (Font Awesome) in Neben- und Textfarbe; Stylesheets brauchen dafür eine Datei.
+	// Feine Linien der Tabs: Trennstrich, Kartenrand und „Schatten“ (Text- zu Fensterfarbe gemischt).
+	auto mix = [&](qreal t) {
+		const QColor a = c("text"), b = c("window");
+		return QColor::fromRgbF(a.redF() * t + b.redF() * (1 - t), a.greenF() * t + b.greenF() * (1 - t), a.blueF() * t + b.blueF() * (1 - t)).name();
+	};
+	auto withCloseIcons = [&](QString css) {
+		css.replace(QStringLiteral("@SEP@"), mix(0.22));
+		css.replace(QStringLiteral("@CARD@"), mix(0.16));
+		css.replace(QStringLiteral("@SHADOW@"), mix(0.30));
+		css.replace(QStringLiteral("@CLOSEHOVER@"), faFile(QStringLiteral("xmark"), c("text")));
+		css.replace(QStringLiteral("@CLOSE@"), faFile(QStringLiteral("xmark"), c("muted")));
+		return css;
+	};
+	qApp->setStyleSheet(withCloseIcons(QStringLiteral(
 	  "QTreeView::item { min-height: %9px; padding: 0 2px; }"
-	  // Tabs: der aktive Tab hat Akzentbalken, kräftige Schrift und den Hintergrund der Fläche darunter;
-	  // inaktive Tabs sind abgesetzt (Schaltflächenfarbe, Nebentext) und durch Linien klar getrennt.
-	  "QTabWidget::pane { border: 1px solid %3; border-top: 2px solid %2; top: -1px; }"
-	  "QTabBar::tab { min-height: 30px; min-width: 130px; max-width: 230px; padding: 4px 16px 4px 12px; margin-right: 2px; background: %4; color: %5; border: 1px solid %3; border-bottom: none; "
-	  "border-top-left-radius: 4px; border-top-right-radius: 4px; }"
-	  "QTabBar::close-button { subcontrol-position: right; margin-right: 8px; }"
-  "QTabBar::tab:selected { background: %6; color: %7; border-top: 3px solid %2; padding-top: 3px; }"
-	  "QTabBar::tab:!selected { margin-top: 3px; }"
-	  "QTabBar[compact=\"true\"]::tab { min-height: 20px; padding: 2px 14px 2px 10px; }"
-	  "QTabBar[compact=\"true\"]::tab:selected { padding-top: 1px; }"
-	  "QTabBar::tab:!selected:hover { background: %8; color: %7; }"
+	  // Tableiste zeichnet RjTabBar selbst; hier nur der Inhalt ohne Rahmen und das Schließen-Kreuz.
+	  "QTabWidget::pane { border: none; top: 0; }"
+	  "QTabBar::close-button { subcontrol-position: right; margin-right: 8px; image: url(\"@CLOSE@\"); "
+	  "width: 12px; height: 12px; padding: 2px; border-radius: 4px; }"
+	  "QTabBar::close-button:hover { background: %4; image: url(\"@CLOSEHOVER@\"); }"
+	  "QTabBar::scroller { width: 24px; }"
+	  "QTabBar::tab:disabled { color: %5; border-color: %3; }"
+	  // Platzhalter %6–%8 bleiben belegt (sonst verschiebt QString::arg die Farben).
+	  "QLabel#rjPh6 { color: %6; } QLabel#rjPh7 { color: %7; } QLabel#rjPh8 { color: %8; }"
 	  "QLabel#paneHeader { font-weight: bold; padding: 1px 4px; }"
 	  "QLabel#paneNotice { color: %1; padding: 4px; }"
 	  "QPushButton { min-height: 30px; padding: 2px 12px; }"
@@ -1688,7 +2390,7 @@ void MainWindow::applyTheme(bool dark)
 	                                             "QRadioButton::indicator:disabled, QCheckBox::indicator:disabled { border-color: %4; background: %5; }")
 	                                  .arg(c("muted").name(), c("base").name(), c("highlight").name(), c("alternate").name(), c("window").name()))
 	                  // Kartenstil (Übersicht, Einstellungen): Karten, Kacheln, Abschnitte, Plaketten, Zeilen der Bereichsliste.
-	                  + cardStyle(c("base"), c("window"), c("alternate"), c("muted"), c("text"), c("highlight")));
+	                  + cardStyle(c("base"), c("window"), c("alternate"), c("muted"), c("text"), c("highlight"))));
 	if (m_model)
 		reloadTree();
 	if (m_tabs)
@@ -1735,6 +2437,7 @@ void MainWindow::reloadTree()
 	m_tree->setUpdatesEnabled(false);
 	m_model->clear();
 	addNodes(m_model->invisibleRootItem(), QJsonDocument::fromJson(json.toUtf8()).array());
+	addFavoritesFolder();
 	m_searchApplied = false;
 	if (searching)
 	{
@@ -1814,7 +2517,7 @@ void MainWindow::reloadTree()
 			for (int r = 0; r < m_model->rowCount(parent); ++r)
 			{
 				const QModelIndex i = m_model->index(r, 0, parent);
-				if (i.data(RoleId).toString() == current)
+				if (i.data(RoleId).toString() == current && !i.data(RoleFavLink).toBool())
 					return i;
 				if (const QModelIndex f = find(i); f.isValid())
 					return f;
@@ -1918,7 +2621,7 @@ void MainWindow::applySearch()
 			const QModelIndex i = m_model->index(r, 0, parent);
 			const QString id = i.data(RoleId).toString();
 			// Einträge ohne Kennung (Gäste, Platzhalter) folgen ihrem Hypervisor; das Makro-Fach nie.
-			const bool hide = i.data(RoleMacro).toInt() == 1 || (!id.isEmpty() && !keep.contains(id));
+			const bool hide = i.data(RoleMacro).toInt() == 1 || i.data(RoleFavFolder).toBool() || (!id.isEmpty() && !keep.contains(id));
 			m_tree->setRowHidden(r, parent, hide);
 			if (!hide && !i.data(RoleGuest).isValid())
 				apply(i);
@@ -2017,6 +2720,9 @@ QSize MainWindow::contentSize(bool terminal) const
 
 void MainWindow::connectSelected(const QString& credential, bool remember)
 {
+	// Gelöste Stecknadel: nach dem Verbinden klappt der Zielbereich zu.
+	if (!m_pinned && m_flyOpen)
+		QTimer::singleShot(0, this, [this] { closeFlyout(); });
 	// Module (z. B. Einträge, die keine Ziele sind): öffnen statt verbinden.
 	for (const auto& h : m_modules.activate)
 		if (h(m_tree->currentIndex()))
@@ -2378,7 +3084,7 @@ void MainWindow::applyGuests(const QString& target, QJsonObject r)
 		for (int row = 0; row < m_model->rowCount(p) && !parent; ++row)
 		{
 			const QModelIndex i = m_model->index(row, 0, p);
-			if (i.data(RoleId).toString() == target && !i.data(RoleGuest).isValid())
+			if (i.data(RoleId).toString() == target && !i.data(RoleGuest).isValid() && !i.data(RoleFavLink).toBool())
 				parent = m_model->itemFromIndex(i);
 			else
 				find(i);
@@ -2541,6 +3247,22 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		macroContextMenu(i, m_tree->viewport()->mapToGlobal(pos));
 		return;
 	}
+	if (i.data(RoleFavFolder).toBool())
+		return;
+	if (i.data(RoleFavLink).toBool())
+	{
+		// Verweis im Ordner „Favoriten“: verbinden, im Baum zeigen, Eigenschaften, aus den Favoriten nehmen.
+		m_tree->setCurrentIndex(i);
+		const QString id = i.data(RoleId).toString();
+		QMenu fm(this);
+		fm.addAction(faIcon(QStringLiteral("plug")), T(m_backend, "fav.connect"), this, [this] { connectSelected(); });
+		fm.addAction(faIcon(QStringLiteral("sitemap")), T(m_backend, "fav.show"), this, [this, id] { selectId(id); });
+		fm.addAction(faIcon(QStringLiteral("pen-to-square")), T(m_backend, "menu.edit.properties").remove(QLatin1Char('&')) + QStringLiteral("\tF4"), this, [this, id] { openProperties(id); });
+		fm.addSeparator();
+		fm.addAction(faIcon(QStringLiteral("r-star")), T(m_backend, "ctx.favorite.off") + QStringLiteral("\tCtrl+B"), this, [this] { toggleFavorite(); });
+		fm.exec(m_tree->viewport()->mapToGlobal(pos));
+		return;
+	}
 	for (const auto& h : m_modules.contextMenu)
 		if (h(i, pos))
 			return;
@@ -2618,26 +3340,17 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 	menu.addAction(T(m_backend, "ctx.duplicate") + QStringLiteral("\tCtrl+D"), this, [this] { duplicateSelected(); });
 	menu.addAction(T(m_backend, "ctx.move") + QStringLiteral("\tCtrl+Shift+M"), this, [this] { moveSelected(); });
 	menu.addAction(T(m_backend, "ctx.delete") + QStringLiteral("\tEntf"), this, [this] { deleteSelected(); });
-	for (const auto& h : m_modules.treeMenu)
-		h(menu, i, id, folder);
+	{
+		// Einträge der Erweiterungen: neutrales Puzzleteil (der Kern kennt ihre Namen nicht).
+		const QList<QAction*> before = menu.actions();
+		for (const auto& h : m_modules.treeMenu)
+			h(menu, i, id, folder);
+		for (QAction* a : menu.actions())
+			if (!before.contains(a) && !a->isSeparator() && a->icon().isNull())
+				a->setIcon(faIcon(QStringLiteral("puzzle-piece")));
+	}
 	const bool fav = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), id } })).value(QStringLiteral("favorite")).toBool();
 	menu.addAction(T(m_backend, fav ? "ctx.favorite.off" : "ctx.favorite.on") + QStringLiteral("\tCtrl+B"), this, [this] { toggleFavorite(); });
-	QMenu* viewsM = menu.addMenu(T(m_backend, "ctx.view.add"));
-	for (const QJsonValue& v : QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("views") } }).toUtf8()).array())
-	{
-		const QString vid = v.toObject().value(QStringLiteral("id")).toString();
-		viewsM->addAction(v.toObject().value(QStringLiteral("name")).toString(), this, [this, vid] {
-			showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("view_add") }, { QStringLiteral("view"), vid }, { QStringLiteral("ids"), QJsonArray::fromStringList(selectedIds()) } })));
-			reloadViews();
-		});
-	}
-	viewsM->addSeparator();
-	viewsM->addAction(T(m_backend, "ctx.view.new"), this, [this] { viewCommand(QStringLiteral("new_with")); });
-	const QString curView = m_viewBox->currentData().toString();
-	if (!curView.isEmpty() && curView != QLatin1String("favorites"))
-		menu.addAction(T(m_backend, "ctx.view.remove"), this, [this, curView] {
-			showEditResult(parseObject(edit({ { QStringLiteral("op"), QStringLiteral("view_remove") }, { QStringLiteral("view"), curView }, { QStringLiteral("ids"), QJsonArray::fromStringList(selectedIds()) } })));
-		});
 	if (folder)
 	{
 		menu.addSeparator();
@@ -3221,7 +3934,7 @@ void MainWindow::rebuildTabs()
 			win->resize(900, 650);
 			auto* lay = new QVBoxLayout(win);
 			lay->setContentsMargins(0, 0, 0, 0);
-			tw = new QTabWidget(win);
+			tw = new RjTabWidget(win);
 			tw->setDocumentMode(true);
 			tw->tabBar()->setContextMenuPolicy(Qt::CustomContextMenu);
 			configureTabBar(tw);
@@ -3260,9 +3973,10 @@ QWidget* MainWindow::detachedWindow() const
 
 void MainWindow::applyAppearance()
 {
-	const QJsonObject a = parseObject(m_backend->appearanceJson());
+	const QJsonObject a = parseObject(m_backend->uiPrefsJson());
 	FrameView::setFocusFrame(a.value(QStringLiteral("focus_frame")).toBool(true));
 	applyTheme(qEnvironmentVariable("REMOTEJOE_THEME") == QLatin1String("dark"));
+	applyTreePrefs();
 	for (auto* w : findChildren<QWidget*>())
 		if (dynamic_cast<FrameView*>(w))
 			w->update();
@@ -3603,6 +4317,8 @@ void MainWindow::handleEvents(const QString& json)
 				for (auto* ed : findChildren<PropertiesTab*>())
 					ed->reload();
 				statusBar()->showMessage(T(m_backend, "status.unlocked"), 5000);
+				// Neue bzw. leere Schlüsseldatenbank: Hinweise zum ersten Ziel (nach dem Aufbau des Baums).
+				QTimer::singleShot(500, this, [this] { showFirstHints(); });
 				// Lizenz aus der Schlüsseldatenbank übernommen: Hinweis mit Neustart (gilt erst danach).
 				licenseNoticeAfterUnlock();
 				// Geteilte Zugangsdaten (z. B. aus früheren Duplikaten): Hinweis mit Verweis auf die Prüfroutine.
@@ -3769,6 +4485,9 @@ void MainWindow::configureTabBar(QTabWidget* tabs)
 	QTabBar* bar = tabs->tabBar();
 	bar->setElideMode(Qt::ElideMiddle);
 	bar->setUsesScrollButtons(true);
+	// Keine Grundlinie: der Windows-Stil zeichnete sie im Dokumentmodus als graue und weiße Linie über die ganze
+	// Tableiste (sah aus wie eine Leiste über den Tabs).
+	bar->setDrawBase(false);
 	bar->installEventFilter(this);
 }
 
@@ -3782,13 +4501,6 @@ void MainWindow::updateLogo()
 	m_logo->setVisible(show);
 	if (show)
 		m_logo->raise();
-	if (auto* link = m_tabs->findChild<QLabel*>(QStringLiteral("emptyLogoLink")))
-	{
-		link->move(m_logo->x() + (m_logo->width() - link->width()) / 2, m_logo->y() + m_logo->height() + 4);
-		link->setVisible(show);
-		if (show)
-			link->raise();
-	}
 }
 
 bool MainWindow::focusInSession() const
@@ -3823,6 +4535,26 @@ bool MainWindow::findKeyActive() const
 
 bool MainWindow::eventFilter(QObject* o, QEvent* e)
 {
+	// Logo unten rechts: Klick öffnet die Projektseite.
+	if (o == m_logo && e->type() == QEvent::MouseButtonRelease && static_cast<QMouseEvent*>(e)->button() == Qt::LeftButton)
+	{
+		QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/joeMJ/remotejoe")));
+		return true;
+	}
+	// Gelöste Stecknadel: Zielbereich folgt der Größe der Mitte; Verlassen startet das Zuklappen.
+	if (o == m_center && e->type() == QEvent::Resize)
+		placeFlyout();
+	if (o == m_leftPane && !m_pinned)
+	{
+		if (e->type() == QEvent::Enter)
+			m_flyCloseTimer.stop();
+		else if (e->type() == QEvent::Leave && m_flyOpen && !m_leftPane->isAncestorOf(QApplication::focusWidget()))
+			m_flyCloseTimer.start(m_flyCloseMs);
+		else if (e->type() == QEvent::Leave && m_flyOpen)
+			m_flyCloseTimer.start(m_flyCloseMs * 4);
+		else if (e->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(e)->key() == Qt::Key_Escape)
+			closeFlyout();
+	}
 	if (o == m_search && (e->type() == QEvent::ShortcutOverride || e->type() == QEvent::KeyPress))
 	{
 		auto* k = static_cast<QKeyEvent*>(e);
@@ -3993,7 +4725,30 @@ void MainWindow::detachTabAt(int index)
 
 void MainWindow::paintEvent(QPaintEvent* e)
 {
-	QMainWindow::paintEvent(e);
+	if (m_round)
+	{
+		// Durchsichtiges Fenster: Fläche selbst füllen (sonst schienen Lücken zwischen den Teilen durch), im
+		// Normalzustand als abgerundetes Rechteck mit feinem Rand und leichtem Schatten im Größenrand.
+		QPainter p(this);
+		p.setRenderHint(QPainter::Antialiasing);
+		p.setCompositionMode(QPainter::CompositionMode_Source);
+		p.fillRect(rect(), Qt::transparent);
+		p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+		const QColor bg = palette().color(QPalette::Window);
+		if (isMaximized() || isFullScreen())
+			p.fillRect(rect(), bg);
+		else
+		{
+			// Abgerundete Fläche bis an den Fensterrand, feiner Rand in der Trennfarbe.
+			const qreal r = RoundCorners::kRadius;
+			const QRectF inner = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+			p.setBrush(bg);
+			p.setPen(QPen(palette().color(QPalette::Mid), 1));
+			p.drawRoundedRect(inner, r, r);
+		}
+	}
+	else
+		QMainWindow::paintEvent(e);
 	if (firstPaintMs < 0)
 		firstPaintMs = startClock.elapsed();
 }
@@ -4028,6 +4783,9 @@ static Qt::CursorShape cursorFor(Qt::Edges e)
 
 void MainWindow::updateEdgeCursor(const QPoint& global)
 {
+	// Runde Ecken: Zeiger und Ziehen übernehmen die Greifzonen (RoundCorners).
+	if (m_round)
+		return;
 #ifdef Q_OS_WIN
 	// Windows: Zeiger an den Rändern stellt das System (WM_NCHITTEST, siehe WinFrame).
 	Q_UNUSED(global);
@@ -4082,7 +4840,7 @@ void MainWindow::changeEvent(QEvent* e)
 	{
 		// Maximiert: kein Rand zum Ziehen. Windows: den Innenrand setzt WinFrame.
 #ifndef Q_OS_WIN
-		const int m = isMaximized() || isFullScreen() ? 0 : kResizeBorder;
+		const int m = m_round || isMaximized() || isFullScreen() ? 0 : kResizeBorder;
 		setContentsMargins(m, m, m, m);
 #endif
 		if (m_titleBar)
@@ -4223,6 +4981,12 @@ void MainWindow::resetWindow()
 
 void MainWindow::setTreeVisible(bool on)
 {
+	// Gelöste Stecknadel: F9 klappt den Zielbereich auf und zu; die Registerkarte „Ziele“ bleibt.
+	if (!m_pinned)
+	{
+		on ? openFlyout() : closeFlyout();
+		return;
+	}
 	if (!on && m_split && !m_split->sizes().isEmpty() && m_split->sizes().first() >= 100 && !m_treeHidden && m_leftInner->isVisible())
 		m_treeWidth = m_split->sizes().first();
 	m_treeHidden = !on;
@@ -4280,22 +5044,26 @@ void MainWindow::placeBrand()
 {
 	if (!m_leftPane || !m_split)
 		return;
-	const bool on = !m_treeHidden;
+	// Gelöste Stecknadel: der Baum liegt nicht im Teiler (Logo wie bei eingeklapptem Baum neben den Tabs).
+	const bool on = !m_treeHidden && m_pinned;
 	if (!m_compact)
 	{
+		m_leftInner->setVisible(true);
+		if (!m_pinned)
+			return;
 		m_leftPane->setMinimumWidth(0);
 		m_leftPane->setMaximumWidth(QWIDGETSIZE_MAX);
-		m_leftInner->setVisible(true);
 		m_leftPane->setVisible(on);
 		if (on)
 			m_split->setSizes({ m_treeWidth, qMax(200, m_split->width() - m_treeWidth) });
 		return;
 	}
 	BrandStrip* brand = m_titleBar->brand();
-	brand->setStyleSheet(QStringLiteral("QWidget#brandStrip { background: palette(button); border-bottom: 1px solid palette(mid); }"
+	brand->setStyleSheet(QStringLiteral("QWidget#brandStrip { background: palette(window); border: none; }"
 	                                    "QWidget#brandStrip QLabel { background: transparent; }"));
 	brand->setAttribute(Qt::WA_StyledBackground, true);
-	m_leftPane->setVisible(on);
+	if (m_pinned)
+		m_leftPane->setVisible(on);
 	m_leftInner->setVisible(true);
 	if (on)
 	{
@@ -4482,7 +5250,7 @@ void MainWindow::selectId(const QString& id)
 		for (int r = 0; r < m_model->rowCount(parent); ++r)
 		{
 			const QModelIndex i = m_model->index(r, 0, parent);
-			if (i.data(RoleId).toString() == id && !i.data(RoleGuest).isValid())
+			if (i.data(RoleId).toString() == id && !i.data(RoleGuest).isValid() && !i.data(RoleFavLink).toBool())
 			{
 				m_tree->setCurrentIndex(i);
 				m_tree->scrollTo(i);
@@ -5047,3 +5815,242 @@ QIcon icon(const QString& kind, const QString& light, bool folder, int session)
 
 } // namespace rjmw
 
+void MainWindow::addFavoritesFolder()
+{
+	if (!m_showFavorites || !m_backend->isVaultOpen())
+		return;
+	const QJsonArray favs = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("favorites_tree") } }).toUtf8()).array();
+	if (favs.isEmpty())
+		return;
+	const QColor star = m_starColor;
+	auto* folder = new QStandardItem(faIcon(QStringLiteral("r-star"), star, star), T(m_backend, "view.favorites").remove(QStringLiteral("★ ")));
+	folder->setData(true, RoleFavFolder);
+	folder->setData(true, RoleFolder);
+	folder->setEditable(false);
+	folder->setDragEnabled(false);
+	folder->setDropEnabled(false);
+	QFont f = folder->font();
+	f.setWeight(QFont::DemiBold);
+	folder->setFont(f);
+	addNodes(folder, favs);
+	// Verweise: kein Ziehen, keine Unterknoten (Gäste eines Hypervisors lädt nur der Eintrag im Baum).
+	for (int r = 0; r < folder->rowCount(); ++r)
+	{
+		QStandardItem* it = folder->child(r);
+		it->setData(true, RoleFavLink);
+		it->setDragEnabled(false);
+		it->setDropEnabled(false);
+		if (it->rowCount() > 0)
+			it->removeRows(0, it->rowCount());
+	}
+	m_model->invisibleRootItem()->insertRow(0, folder);
+	if (m_favOpen)
+	{
+		const bool was = m_autoExpand;
+		m_autoExpand = true;
+		m_tree->expand(folder->index());
+		m_autoExpand = was;
+	}
+}
+
+void MainWindow::applyTreePrefs()
+{
+	const QJsonObject a = parseObject(m_backend->uiPrefsJson());
+	m_flyOpenMs = a.value(QStringLiteral("flyout_open_ms")).toInt(300);
+	m_flyCloseMs = a.value(QStringLiteral("flyout_close_ms")).toInt(500);
+	const bool favs = a.value(QStringLiteral("show_favorites")).toBool(true);
+	if (favs != m_showFavorites)
+	{
+		m_showFavorites = favs;
+		if (m_model)
+			reloadTree();
+	}
+	setPinned(a.value(QStringLiteral("tree_pinned")).toBool(true), false);
+	updatePinButton();
+}
+
+void MainWindow::updatePinButton()
+{
+	if (!m_pinButton)
+		return;
+	const QColor accent = palette().color(QPalette::Highlight);
+	m_pinButton->setIcon(m_pinned ? faIcon(QStringLiteral("thumbtack"), accent, accent) : faIcon(QStringLiteral("thumbtack-slash")));
+	const QString tip = T(m_backend, m_pinned ? "tree.pin.on" : "tree.pin.off");
+	m_pinButton->setToolTip(tip);
+	m_pinButton->setAccessibleName(tip);
+}
+
+void MainWindow::setPinned(bool on, bool save)
+{
+	if (save)
+		m_backend->setAppearance(QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("tree_pinned"), on } }).toJson(QJsonDocument::Compact)));
+	if (on == m_pinned)
+	{
+		updatePinButton();
+		return;
+	}
+	m_flyOpenTimer.stop();
+	m_flyCloseTimer.stop();
+	if (on)
+	{
+		// Zurück in den Teiler, ausgeklappt.
+		m_flyOpen = false;
+		m_pinned = true;
+		m_rail->hide();
+		m_leftPane->setAutoFillBackground(false);
+		m_leftPane->setStyleSheet(QString());
+		m_leftPane->setAttribute(Qt::WA_StyledBackground, false);
+		m_split->insertWidget(0, m_leftPane);
+		m_treeHidden = false;
+		m_leftPane->show();
+		m_split->setSizes({ m_treeWidth, qMax(200, m_split->width() - m_treeWidth) });
+	}
+	else
+	{
+		if (!m_treeHidden && !m_split->sizes().isEmpty() && m_split->sizes().first() >= 100)
+			m_treeWidth = m_split->sizes().first();
+		m_pinned = false;
+		m_flyOpen = false;
+		m_treeHidden = true;
+		m_leftPane->hide();
+		m_leftPane->setParent(m_center);
+		m_leftPane->setAutoFillBackground(true);
+		m_leftPane->setObjectName(QStringLiteral("treeFlyout"));
+		m_leftPane->setAttribute(Qt::WA_StyledBackground, true);
+		m_leftPane->setStyleSheet(QStringLiteral("QWidget#treeFlyout { background: palette(window); border: 1px solid palette(mid); border-left: none; "
+		                                         "border-top-right-radius: 8px; border-bottom-right-radius: 8px; }"));
+		m_leftPane->installEventFilter(this);
+		m_leftPane->hide();
+		m_rail->show();
+	}
+	updatePinButton();
+	placeBrand();
+	if (m_treeButton)
+		m_treeButton->setText(m_pinned && !m_treeHidden ? QStringLiteral("\u00ab") : QStringLiteral("\u00bb"));
+}
+
+void MainWindow::placeFlyout()
+{
+	if (m_pinned || !m_flyOpen)
+		return;
+	// Unter der Reiterzeile, damit Tabs und Logo sichtbar bleiben.
+	const int x = m_rail->isVisible() ? m_rail->geometry().right() + 1 : 0;
+	const int w = qBound(220, m_treeWidth, qMax(220, m_center->width() - x - 120));
+	QTabBar* bar = m_tabs->tabBar();
+	const int y = bar->isVisible() ? qMax(0, bar->mapTo(m_center, QPoint(0, bar->height())).y()) : 0;
+	m_leftPane->setGeometry(x, y, w, m_center->height() - y);
+}
+
+void MainWindow::openFlyout()
+{
+	m_flyOpenTimer.stop();
+	m_flyCloseTimer.stop();
+	if (m_pinned || m_flyOpen)
+		return;
+	m_flyOpen = true;
+	m_treeHidden = false;
+	placeFlyout();
+	m_leftPane->show();
+	m_leftPane->raise();
+	m_leftInner->setVisible(true);
+}
+
+void MainWindow::closeFlyout()
+{
+	m_flyOpenTimer.stop();
+	m_flyCloseTimer.stop();
+	if (m_pinned || !m_flyOpen)
+		return;
+	const bool hadFocus = m_leftPane->isAncestorOf(QApplication::focusWidget());
+	m_flyOpen = false;
+	m_treeHidden = true;
+	m_leftPane->hide();
+	if (hadFocus && m_tabs->currentWidget())
+		m_tabs->currentWidget()->setFocus();
+}
+
+void MainWindow::flyoutForScreenshot(bool unpinned, bool open)
+{
+	setPinned(!unpinned, false);
+	if (unpinned && open)
+		openFlyout();
+}
+
+void MainWindow::openNews()
+{
+	for (int i = 0; i < m_tabs->count(); ++i)
+		if (m_tabs->widget(i)->objectName() == QLatin1String("newsTab"))
+		{
+			m_tabs->setCurrentIndex(i);
+			return;
+		}
+	auto* view = new QTextBrowser(m_tabs);
+	view->setObjectName(QStringLiteral("newsTab"));
+	view->setOpenExternalLinks(true);
+	view->setFrameShape(QFrame::NoFrame);
+	view->document()->setDocumentMargin(24);
+	// Kopf mittig (Logo, Titel, Link auf GitHub), darunter die Releasenotes aus dem Markdown.
+	{
+		QTextDocument md;
+		md.setMarkdown(m_backend->legalText(QStringLiteral("releasenotes")));
+		QString body = md.toHtml();
+		const int open = body.indexOf(QStringLiteral("<body"));
+		const int start = open >= 0 ? body.indexOf(QLatin1Char('>'), open) + 1 : 0;
+		const int end = body.lastIndexOf(QStringLiteral("</body>"));
+		body = body.mid(start, end > start ? end - start : -1);
+		const QString head = QStringLiteral("<p align=\"center\"><img src=\":/logo/remotejoe-128.png\" width=\"96\" height=\"96\"></p>"
+		                                    "<p align=\"center\" style=\"font-size: x-large; font-weight: 600;\">%1</p>"
+		                                    "<p align=\"center\"><a href=\"https://github.com/joeMJ/remotejoe\">github.com/joeMJ/remotejoe</a><br>%2</p><hr>")
+		                       .arg(T(m_backend, "news.heading").toHtmlEscaped(), T(m_backend, "news.sub").toHtmlEscaped());
+		view->setHtml(head + body);
+	}
+	const int i = m_tabs->addTab(view, faIcon(QStringLiteral("r-lightbulb")), T(m_backend, "news.title"));
+	m_tabs->setCurrentIndex(i);
+}
+
+void MainWindow::showNewsIfNew()
+{
+	const QString version = m_backend->appVersion();
+	const QString seen = parseObject(m_backend->uiPrefsJson()).value(QStringLiteral("notes_seen")).toString();
+	if (seen == version)
+		return;
+	// Bisher benutzt (gespeicherter Fensterzustand): Update, Neuigkeiten zeigen. Sonst neue Installation.
+	const bool used = parseObject(m_backend->windowStateJson()).value(QStringLiteral("saved")).toBool();
+	m_backend->setAppearance(QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("notes_seen"), version } }).toJson(QJsonDocument::Compact)));
+	if (used)
+		openNews();
+}
+
+QWidget* MainWindow::showFirstHints(bool force)
+{
+	if (!force)
+	{
+		if (parseObject(m_backend->uiPrefsJson()).value(QStringLiteral("first_hints_off")).toBool())
+			return nullptr;
+		// Erst mit angelegter bzw. geöffneter Schlüsseldatenbank; sobald es ein Ziel gibt, entfallen sie von selbst.
+		if (!m_backend->isVaultOpen() || !(m_emptyHint && m_emptyHint->isVisible()))
+			return nullptr;
+	}
+	if (auto* old = findChild<QWidget*>(QStringLiteral("coachOverlay")))
+		return old;
+	QList<CoachOverlay::Hint> hints;
+	if (auto* burger = m_titleBar->controls()->findChild<QToolButton*>(QString(), Qt::FindDirectChildrenOnly); burger)
+	{
+		// Der Hamburger-Knopf ist der Knopf mit Menü.
+		for (auto* b : m_titleBar->controls()->findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly))
+			if (b->menu())
+				hints.append({ b, T(m_backend, "hint.menu") });
+	}
+	// Anlegen geht über das Kontextmenü im Baum: Pfeil auf den Zielbereich („Rechtsklick hier“).
+	QWidget* add = (m_emptyButton && m_emptyButton->isVisible()) ? static_cast<QWidget*>(m_emptyButton) : static_cast<QWidget*>(m_tree->viewport());
+	if (m_pinned && m_leftPane->isVisible())
+		hints.append({ add, T(m_backend, m_backend->isVaultOpen() ? "hint.add" : "hint.add.vault") });
+	else
+		hints.append({ m_rail, T(m_backend, "hint.add.rail") });
+	auto* o = new CoachOverlay(this, hints, T(m_backend, "hint.dontshow"), T(m_backend, "hint.ok"), [this](bool off) {
+		if (off)
+			m_backend->setAppearance(QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("first_hints_off"), true } }).toJson(QJsonDocument::Compact)));
+	});
+	o->setObjectName(QStringLiteral("coachOverlay"));
+	return o;
+}

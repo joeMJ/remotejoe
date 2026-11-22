@@ -212,7 +212,22 @@ pub fn demo_index(targets: usize) -> Index {
                 // Ordner Nord → Netz: drei Ziele (verschiedene Protokolle) unter einer Adresse, für
                 // „Gleiche Adressen zusammenfassen“.
                 let host_nr = if si == 0 && g == 2 && (1..3).contains(&i) { n - i } else { n };
-                let t = rj_core::Target::new(name, p, format!("h{host_nr}.site{si}.example.test"));
+                let mut t = rj_core::Target::new(name, p, format!("h{host_nr}.site{si}.example.test"));
+                // Erstes Ziel: zwei weitere Zugangswege (Web-Oberfläche und SSH) für die Bildschirmfotos.
+                if n == 0 {
+                    for (proto, label, host) in [(Protocol::Web, "Web-Oberfläche", format!("https://h0.site{si}.example.test")), (Protocol::Ssh, "", String::new())] {
+                        t.ways.push(rj_core::AccessWay {
+                            id: Uuid::new_v4(),
+                            name: label.into(),
+                            protocol: proto,
+                            host,
+                            port: None,
+                            options: Default::default(),
+                            credential: Default::default(),
+                            own: None,
+                        });
+                    }
+                }
                 group.children.push(Node::Target(t));
                 n += 1;
             }
@@ -220,6 +235,19 @@ pub fn demo_index(targets: usize) -> Index {
         }
         idx.root.children.push(Node::Folder(site));
     }
+    // Zwei Favoriten (Ordner „Favoriten“ oben im Baum).
+    fn first_targets(f: &Folder, out: &mut Vec<Uuid>) {
+        for c in &f.children {
+            match c {
+                Node::Target(t) if out.len() < 2 => out.push(t.id),
+                Node::Folder(sub) => first_targets(sub, out),
+                _ => {}
+            }
+        }
+    }
+    let mut favs = Vec::new();
+    first_targets(&idx.root, &mut favs);
+    idx.favorites = favs;
     idx
 }
 

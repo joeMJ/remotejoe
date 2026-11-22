@@ -1,6 +1,7 @@
 #include "settingstab.h"
 
 #include "appearance.h"
+#include "editor.h"
 #include "cards.h"
 #include "rjpluginui.h"
 
@@ -36,6 +37,7 @@ RjHostBackend* SettingsTab::hostBackend() const
 #include <QtWidgets/QSpinBox>
 #include <QtGui/QStandardItemModel>
 #include <QtWidgets/QStackedWidget>
+#include <QtWidgets/QTreeWidget>
 #include <QtWidgets/QVBoxLayout>
 
 namespace
@@ -99,18 +101,10 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 	QVBoxLayout* ain = nullptr;
 	auto* areas = rjui::card(this, &ain);
 	areas->setFixedWidth(300);
-	ain->addWidget(rjui::section(T("edit.areas"), areas));
-	// Die Liste rollt, statt die Zeilen zu quetschen (viele Bereiche, kleine Fenster).
-	auto* areaScroll = new QScrollArea(areas);
-	areaScroll->setWidgetResizable(true);
-	areaScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	auto* areaInner = new QWidget;
-	m_areaList = new QVBoxLayout(areaInner);
-	m_areaList->setContentsMargins(0, 0, 0, 0);
-	m_areaList->setSpacing(ain->spacing());
-	areaScroll->setWidget(areaInner);
-	cardBackground(areaScroll);
-	ain->addWidget(areaScroll, 1);
+	// Schlanker Bereichsbaum mit Gruppen und Symbolen (rollt selbst bei vielen Bereichen).
+	m_areaTree = new rjui::AreaTree(areas);
+	m_areaTree->onSelect = [this](const QString& key, QTreeWidgetItem*) { showSection(key); };
+	ain->addWidget(m_areaTree, 1);
 	QVBoxLayout* pin = nullptr;
 	auto* pageCard = rjui::card(this, &pin);
 	m_pageTitle = rjui::section(QString(), pageCard);
@@ -122,28 +116,42 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 	lay->addLayout(body, 1);
 
 	m_loading = true;
-	addArea(QStringLiteral("lock"), T("settings.lock"), pageLock(), true);
-	addArea(QStringLiteral("keys"), T("settings.keys"), pageKeys(), true);
-	addArea(QStringLiteral("terminal"), T("term.title"), new TerminalSettingsTab(m_backend), true);
+	// Gruppen: Sicherheit, Darstellung, Daten, Funktionen der Erweiterungen, Lizenz, Claude.
+	addGroupIcon(QStringLiteral("shield-halved"), T("settings.group.security"), 0);
+	addArea(QStringLiteral("lock"), T("settings.lock.entry"), pageLock(), true, 1);
+	addArea(QStringLiteral("keys"), T("settings.keys"), pageKeys(), true, 1);
+	addGroupIcon(QStringLiteral("palette"), T("settings.group.look"), 0);
 	m_appearance = new AppearanceTab(m_backend);
 	connect(m_appearance, &AppearanceTab::appearanceChanged, this, &SettingsTab::appearanceChanged);
 	connect(m_appearance, &ToolTab::status, this, &ToolTab::status);
-	addArea(QStringLiteral("appearance"), T("appearance.title"), m_appearance, false);
-	m_snmp = new SnmpTab(m_backend);
-	connect(m_snmp, &SnmpTab::status, this, [this](const QString& s) {
-		refreshSummaries();
-		emit status(s);
-	});
-	addArea(QStringLiteral("snmp"), T("snmp.title"), m_snmp, false);
-	addArea(QStringLiteral("backup"), T("settings.backup"), pageBackup(), true);
+	addArea(QStringLiteral("appearance"), T("appearance.title"), m_appearance, false, 1);
+	addArea(QStringLiteral("terminal"), T("term.title"), new TerminalSettingsTab(m_backend), true, 1);
+	// SNMP-Geräte: kein Bereich mehr in den Einstellungen (kommt später mit „Monitoring-Integration“). Ampeln im
+	// Baum und Zuordnung zu Zielen bleiben im Kern.
+	addGroupIcon(QStringLiteral("hard-drive"), T("settings.group.data"), 0);
+	addArea(QStringLiteral("backup"), T("settings.backup"), pageBackup(), true, 1);
 	for (RjPluginUi* p : rjPluginUis(m_backend))
 		if (RjSettingsPart* part = p->settingsPart(this))
 			m_parts.push_back(part);
 	for (RjSettingsPart* part : m_parts)
 		part->addAreas();
-	addArea(QStringLiteral("license"), T("settings.license"), pageLicense(), true);
-	addArea(QStringLiteral("mcp"), T("settings.mcp"), pageMcp(), true);
-	m_areaList->addStretch(1);
+	// Seite „Erweiterungen“ vor der Lizenzseite anlegen: die Lizenzseite füllt sie mit.
+	QWidget* extPage = pageExtensions();
+	addGroupIcon(QStringLiteral("puzzle-piece"), T("settings.group.license"), 0);
+	addArea(QStringLiteral("license"), T("settings.license"), pageLicense(), true, 1);
+	addGroupIcon(QStringLiteral("robot"), T("settings.group.claude"), 0);
+	addArea(QStringLiteral("mcp"), T("settings.mcp"), pageMcp(), true, 1);
+	// Updates: Programm (immer) und Erweiterungen (nur mit eingespielter Lizenz, siehe fillLicensePage).
+	addGroupIcon(QStringLiteral("arrows-rotate"), T("settings.group.updates"), 0);
+	{
+		auto* up = new UpdateTab(m_backend);
+		connect(up, &ToolTab::status, this, &ToolTab::status);
+		addArea(QStringLiteral("updates_program"), T("settings.updates.program"), up, true, 1);
+	}
+	addArea(QStringLiteral("updates_ext"), T("settings.updates.ext"), extPage, true, 1);
+	// Nur mit eingespielter Lizenz sichtbar.
+	m_areas.value(QStringLiteral("updates_ext")).item->setHidden(
+	  QJsonDocument::fromJson(m_backend->lizenzJson().toUtf8()).object().value(QStringLiteral("lizenz")).toObject().isEmpty());
 	m_loading = false;
 	reload();
 	showSection(QStringLiteral("lock"));
@@ -151,13 +159,13 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 
 void SettingsTab::addGroup(const QString& title, int indent)
 {
-	auto* l = new QLabel(title);
-	QFont bf = l->font();
-	bf.setBold(true);
-	l->setFont(bf);
-	l->setObjectName(QStringLiteral("rjMuted"));
-	l->setContentsMargins(8 + indent * 16, 8, 8, 2);
-	m_areaList->addWidget(l);
+	addGroupIcon(QStringLiteral("layer-group"), title, indent);
+}
+
+void SettingsTab::addGroupIcon(const QString& glyph, const QString& title, int indent)
+{
+	QTreeWidgetItem* parent = indent > 0 ? m_groupAt.value(indent - 1) : nullptr;
+	m_groupAt.insert(indent, m_areaTree->addGroup(glyph, title, parent));
 }
 
 void SettingsTab::addArea(const QString& key, const QString& title, QWidget* page, bool scroll, int indent)
@@ -173,25 +181,17 @@ void SettingsTab::addArea(const QString& key, const QString& title, QWidget* pag
 	cardBackground(holder);
 	m_pages->addWidget(holder);
 	m_titles.insert(key, title);
-
-	auto* row = new rjui::ClickRow;
-	auto* h = new QHBoxLayout(row);
-	h->setContentsMargins(8 + indent * 16, 6, 8, 6);
-	auto* v = new QVBoxLayout;
-	v->setSpacing(1);
-	auto* t = new QLabel(title, row);
-	QFont bf = t->font();
-	bf.setBold(true);
-	t->setFont(bf);
-	auto* sum = new QLabel(row);
-	sum->setObjectName(QStringLiteral("rjMuted"));
-	sum->setWordWrap(true);
-	v->addWidget(t);
-	v->addWidget(sum);
-	h->addLayout(v, 1);
-	m_areaList->addWidget(row);
-	m_areas.insert(key, Area{ row, sum, m_pages->count() - 1 });
-	connect(row, &rjui::ClickRow::clicked, this, [this, key] { showSection(key); });
+	// Symbol je Bereich; Bereiche der Erweiterungen bekommen ein allgemeines.
+	static const QHash<QString, QString> glyphs = {
+		{ QStringLiteral("lock"), QStringLiteral("lock") }, { QStringLiteral("keys"), QStringLiteral("keyboard") },
+		{ QStringLiteral("terminal"), QStringLiteral("terminal") }, { QStringLiteral("appearance"), QStringLiteral("palette") },
+		{ QStringLiteral("backup"), QStringLiteral("clock-rotate-left") }, { QStringLiteral("license"), QStringLiteral("certificate") },
+		{ QStringLiteral("mcp"), QStringLiteral("robot") },
+		{ QStringLiteral("updates_program"), QStringLiteral("download") }, { QStringLiteral("updates_ext"), QStringLiteral("puzzle-piece") },
+	};
+	QTreeWidgetItem* parent = indent > 0 ? m_groupAt.value(indent - 1) : nullptr;
+	QTreeWidgetItem* item = m_areaTree->addEntry(parent, key, glyphs.value(key, QStringLiteral("sliders")), QString(title).remove(QLatin1Char('&')));
+	m_areas.insert(key, Area{ item, m_pages->count() - 1 });
 }
 
 void SettingsTab::showSection(const QString& key)
@@ -200,9 +200,8 @@ void SettingsTab::showSection(const QString& key)
 		return;
 	m_current = key;
 	m_pages->setCurrentIndex(m_areas.value(key).page);
-	m_pageTitle->setText(m_titles.value(key).toUpper());
-	for (auto it = m_areas.cbegin(); it != m_areas.cend(); ++it)
-		it->row->setSelected(it.key() == key);
+	m_pageTitle->setText(QString(m_titles.value(key)).remove(QLatin1Char('&')).toUpper());
+	m_areaTree->selectKey(key);
 }
 
 QString SettingsTab::edit(const QJsonObject& cmd)
@@ -639,7 +638,7 @@ void SettingsTab::refreshSummaries()
 	auto T = [this](const char* k) { return rjText(m_backend, k); };
 	auto set = [this](const char* key, const QString& text) {
 		if (auto it = m_areas.find(QString::fromLatin1(key)); it != m_areas.end())
-			it->summary->setText(text);
+			it->item->setToolTip(0, text);
 	};
 	const int mins = m_idle->currentData().toInt();
 	const int secs = m_clipSecs->value();
@@ -650,8 +649,6 @@ void SettingsTab::refreshSummaries()
 	set("keys", T(m_keyCapture->isChecked() ? "settings.keys.sum.on" : "settings.keys.sum.off"));
 	set("terminal", T("settings.terminal.sum"));
 	set("appearance", T("settings.appearance.sum"));
-	const int devices = int(QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("snmp_list") } }).toUtf8()).array().size());
-	set("snmp", T("settings.snmp.sum").arg(devices));
 	set("backup", m_bkEnabled->isChecked() ? T("settings.backup.sum.on").arg(m_bkLast->value()).arg(m_bkDays->value())
 	                                       + (m_bkSecond->isChecked() && !m_bkDir->text().trimmed().isEmpty() ? T("settings.backup.sum.second") : QString())
 	                                       : T("settings.backup.sum.off"));

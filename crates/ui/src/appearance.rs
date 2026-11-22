@@ -32,9 +32,31 @@ impl App {
             "icon_style": a.icon_style,
             "icon_colors": a.icon_colors,
             "icon_kinds": crate::icons::KINDS,
+            "round_corners": a.round_corners,
+            "show_favorites": a.show_favorites,
+            "tree_pinned": a.tree_pinned,
+            "flyout_open_ms": a.flyout_open_ms,
+            "flyout_close_ms": a.flyout_close_ms,
+            "first_hints_off": a.first_hints_off,
+            "notes_seen": a.notes_seen,
             "palettes": palettes,
             "dir": theme::custom_dir().map(|d| d.display().to_string()),
             "notes": notes,
+        })
+    }
+
+    /// Nur die Schalter der Oberfläche (ohne Palettenliste; schnell, für den Programmstart).
+    pub fn ui_prefs_json(&self) -> Value {
+        let a = &self.config.appearance;
+        json!({
+            "focus_frame": a.focus_frame,
+            "round_corners": a.round_corners,
+            "show_favorites": a.show_favorites,
+            "tree_pinned": a.tree_pinned,
+            "flyout_open_ms": a.flyout_open_ms,
+            "flyout_close_ms": a.flyout_close_ms,
+            "first_hints_off": a.first_hints_off,
+            "notes_seen": a.notes_seen,
         })
     }
 
@@ -67,6 +89,22 @@ impl App {
         }
         if let Some(b) = c.get("focus_frame").and_then(Value::as_bool) {
             self.config.appearance.focus_frame = b;
+        }
+        {
+            let a = &mut self.config.appearance;
+            for (key, slot) in [("round_corners", &mut a.round_corners), ("show_favorites", &mut a.show_favorites), ("tree_pinned", &mut a.tree_pinned), ("first_hints_off", &mut a.first_hints_off)] {
+                if let Some(b) = c.get(key).and_then(Value::as_bool) {
+                    *slot = b;
+                }
+            }
+            for (key, slot) in [("flyout_open_ms", &mut a.flyout_open_ms), ("flyout_close_ms", &mut a.flyout_close_ms)] {
+                if let Some(n) = c.get(key).and_then(Value::as_u64) {
+                    *slot = n.min(5000) as u32;
+                }
+            }
+            if let Some(s) = c.get("notes_seen").and_then(Value::as_str) {
+                a.notes_seen = s.chars().take(40).collect();
+            }
         }
         if let Some(s) = c.get("tree_size").and_then(Value::as_str) {
             if !matches!(s, "klein" | "mittel" | "gross") {

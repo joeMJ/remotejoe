@@ -1,4 +1,8 @@
 #include "editor.h"
+#include "faicons.h"
+#include <QtGui/QGuiApplication>
+#include <QtGui/QClipboard>
+#include <QtCore/QTime>
 #include "waysedit.h"
 #include "cards.h"
 #include "rjpluginui.h"
@@ -355,29 +359,9 @@ void PropertiesTab::addPage(const QString& key, const char* label, QWidget* page
 	m_pages->addWidget(scroll);
 	auto* item = new QTreeWidgetItem(m_cats, QStringList(rjText(m_backend, label)));
 	item->setData(0, Qt::UserRole, key);
-	// Zeile in der Bereichsliste: Titel, Kurzfassung, Plakette.
-	if (!m_areaList)
-		return;
-	auto* row = new rjui::ClickRow;
-	auto* h = new QHBoxLayout(row);
-	h->setContentsMargins(8, 6, 8, 6);
-	auto* v = new QVBoxLayout;
-	v->setSpacing(1);
-	auto* t = new QLabel(rjText(m_backend, label), row);
-	QFont bf = t->font();
-	bf.setBold(true);
-	t->setFont(bf);
-	auto* sum = new QLabel(row);
-	sum->setObjectName(QStringLiteral("rjMuted"));
-	sum->setWordWrap(true);
-	v->addWidget(t);
-	v->addWidget(sum);
-	h->addLayout(v, 1);
-	auto* pill = rjui::pill(QString(), QStringLiteral("off"), row);
-	h->addWidget(pill, 0, Qt::AlignTop);
-	m_areaList->addWidget(row);
-	m_areas.insert(key, Area{ row, sum, pill });
-	connect(row, &rjui::ClickRow::clicked, this, [this, key] { selectCategory(key); });
+	// Eintrag im Bereichsbaum: unter der aktuellen Gruppe (Ziel, Hauptweg) mit Symbol.
+	if (m_areaTree)
+		m_areaTree->addEntry(m_areaGroup, key, areaGlyph(key), rjText(m_backend, label).remove(QLatin1Char('&')));
 }
 
 QString PropertiesTab::areaSummary(const QString& key) const
@@ -463,18 +447,21 @@ QString PropertiesTab::areaSummary(const QString& key) const
 
 void PropertiesTab::refreshAreas()
 {
+	if (!m_areaTree)
+		return;
 	auto T = [this](const char* k) { return rjText(m_backend, k); };
 	const QString kind = m_data.value(QStringLiteral("kind")).toString();
-	for (auto it = m_areas.begin(); it != m_areas.end(); ++it)
+	for (int i = 0; i < m_cats->topLevelItemCount(); ++i)
 	{
-		const QString& key = it.key();
-		it->summary->setText(areaSummary(key));
+		const QString key = m_cats->topLevelItem(i)->data(0, Qt::UserRole).toString();
+		if (QTreeWidgetItem* it = m_areaTree->itemFor(key))
+			it->setToolTip(0, areaSummary(key));
 		bool changed = false;
 		for (const QString& g : std::as_const(m_dirty))
 			changed = changed || m_groupPage.value(g) == key;
 		if (changed)
 		{
-			rjui::setPill(it->pill, T("area.pill.changed"), QStringLiteral("warn"));
+			m_areaTree->setMark(key, T("area.pill.changed"), true);
 			continue;
 		}
 		// Woher der Wert kommt: geerbt oder hier gesetzt (nur wo es Vererbung gibt).
@@ -485,13 +472,12 @@ void PropertiesTab::refreshAreas()
 			setting = m_data.value(QStringLiteral("tunnel")).toString();
 		else if (key == QLatin1String("clipboard") && kind != QLatin1String("target"))
 			setting = m_data.value(QStringLiteral("clipboard")).toString();
-		if (setting.isEmpty())
-			rjui::setPill(it->pill, QString(), QStringLiteral("off"));
-		else if (setting == QLatin1String("inherit"))
-			rjui::setPill(it->pill, T("area.pill.inherited"), QStringLiteral("off"));
-		else
-			rjui::setPill(it->pill, T(kind == QLatin1String("target") ? "area.pill.target" : "area.pill.folder"), QStringLiteral("ok"));
+		m_areaTree->setMark(key, setting == QLatin1String("inherit") ? T("area.pill.inherited") : QString());
 	}
+	// Weitere Wege: „geändert“, solange die Wege ungespeichert sind.
+	const bool waysDirty = m_dirty.contains(QStringLiteral("ways"));
+	for (const QJsonValue& v : m_data.value(QStringLiteral("ways")).toArray())
+		m_areaTree->setMark(QStringLiteral("way:") + v.toObject().value(QStringLiteral("id")).toString(), waysDirty ? T("area.pill.changed") : QString(), true);
 }
 
 void PropertiesTab::selectCategory(const QString& key)
@@ -603,8 +589,12 @@ void PropertiesTab::build()
 	}
 	const QString kind = m_data.value(QStringLiteral("kind")).toString();
 	const bool target = kind == QLatin1String("target");
-	m_areas.clear();
 	m_groupPage.clear();
+	m_areaGroup = nullptr;
+	m_targetGroup = nullptr;
+	m_areaTree = nullptr;
+	m_wayRemove = nullptr;
+	m_selectedWay.clear();
 
 	// Kopfkarte: was bearbeitet wird, Änderungsstand, Knöpfe.
 	QVBoxLayout* hin = nullptr;
@@ -655,9 +645,25 @@ void PropertiesTab::build()
 	body->setSpacing(10);
 	QVBoxLayout* ain = nullptr;
 	auto* areas = rjui::card(this, &ain);
-	areas->setFixedWidth(300);
-	ain->addWidget(rjui::section(rjText(m_backend, "edit.areas"), areas));
-	m_areaList = ain;
+	areas->setFixedWidth(280);
+	// Bereichsbaum wie im Entwurf: Ziel, darunter je Zugangsweg ein Knoten; unten Weg hinzufügen bzw. entfernen.
+	m_areaTree = new rjui::AreaTree(areas);
+	m_areaTree->onSelect = [this](const QString& key, QTreeWidgetItem*) {
+		if (key.startsWith(QLatin1String("way:")))
+		{
+			m_selectedWay = key.mid(4);
+			selectCategory(QStringLiteral("ways"));
+			m_areaTree->selectKey(key);
+			if (m_ways)
+				m_ways->focusWay(m_selectedWay);
+			m_pageTitle->setText(m_areaTree->itemFor(key)->text(0).toUpper());
+			if (m_wayRemove)
+				m_wayRemove->setEnabled(true);
+			return;
+		}
+		selectCategory(key);
+	};
+	ain->addWidget(m_areaTree, 1);
 	QVBoxLayout* pin = nullptr;
 	auto* pageCard = rjui::card(this, &pin);
 	m_pageTitle = rjui::section(QString(), pageCard);
@@ -674,31 +680,88 @@ void PropertiesTab::build()
 		m_buildingPage = key;
 		addPage(key, label, (this->*make)());
 	};
+	// Zwei Ebenen: oben das Ziel (Allgemein, Organisation, Übergeordnet), darunter der Hauptweg mit seinen
+	// Bereichen (bei RDP eingerückt Zwischenablage und Freigaben), dann die weiteren Zugangswege je Weg.
+	// Ordner behalten die flache Liste (dort gibt es keine Zugangswege), jeweils mit Symbolen.
+	const QString proto = m_data.value(QStringLiteral("protocol")).toString();
+	if (target)
+	{
+		addAreaHeader(QStringLiteral("server"), m_data.value(QStringLiteral("name")).toString());
+		m_targetGroup = m_areaGroup;
+	}
 	page(QStringLiteral("general"), "edit.cat.general", &PropertiesTab::pageGeneral);
 	for (RjEditorPart* p : m_parts)
 		p->addPages();
-	page(QStringLiteral("connection"), "edit.cat.connection", &PropertiesTab::pageConnection);
 	if (target)
-		page(QStringLiteral("ways"), "edit.cat.ways", &PropertiesTab::pageWays);
+	{
+		page(QStringLiteral("organisation"), "edit.cat.organisation", &PropertiesTab::pageOrganisation);
+		page(QStringLiteral("parent"), "edit.cat.parent", &PropertiesTab::pageParent);
+		addAreaHeader(protocolGlyph(proto), proto.toUpper() + QStringLiteral("  (") + rjText(m_backend, "edit.mainway") + QStringLiteral(")"));
+	}
+	page(QStringLiteral("connection"), "edit.cat.connection", &PropertiesTab::pageConnection);
 	page(QStringLiteral("credentials"), "edit.cat.credentials", &PropertiesTab::pageCredentials);
 	page(QStringLiteral("tunnel"), "edit.cat.tunnel", &PropertiesTab::pageTunnel);
 	page(QStringLiteral("tasks"), "edit.cat.tasks", &PropertiesTab::pageTasks);
 	page(QStringLiteral("clipboard"), "edit.cat.clipboard", &PropertiesTab::pageClipboard);
-	if (target && m_data.value(QStringLiteral("protocol")).toString() == QLatin1String("rdp"))
+	if (target && proto == QLatin1String("rdp"))
 		page(QStringLiteral("shares"), "edit.cat.shares", &PropertiesTab::pageShares);
-	page(QStringLiteral("organisation"), "edit.cat.organisation", &PropertiesTab::pageOrganisation);
-	if (kind != QLatin1String("root"))
-		page(QStringLiteral("parent"), "edit.cat.parent", &PropertiesTab::pageParent);
+	if (target)
+	{
+		// Übersicht der Wege (Doppelklick, alle Wege) unter dem Ziel, dann je weiterer Weg ein Knoten.
+		m_areaGroup = m_targetGroup;
+		page(QStringLiteral("ways"), "edit.cat.ways", &PropertiesTab::pageWays);
+		addWayRows();
+	}
+	else
+	{
+		page(QStringLiteral("organisation"), "edit.cat.organisation", &PropertiesTab::pageOrganisation);
+		if (kind != QLatin1String("root"))
+			page(QStringLiteral("parent"), "edit.cat.parent", &PropertiesTab::pageParent);
+	}
 	m_buildingPage.clear();
-	ain->addStretch(1);
+	if (target)
+	{
+		// Unten: Zugangsweg hinzufügen bzw. den gewählten entfernen.
+		auto* buttons = new QHBoxLayout;
+		auto* add = new QPushButton(faIcon(QStringLiteral("plus")), rjText(m_backend, "edit.way.add"), areas);
+		m_wayRemove = new QPushButton(faIcon(QStringLiteral("r-trash-can")), QString(), areas);
+		m_wayRemove->setToolTip(rjText(m_backend, "edit.way.remove"));
+		m_wayRemove->setAccessibleName(m_wayRemove->toolTip());
+		m_wayRemove->setEnabled(false);
+		connect(add, &QPushButton::clicked, this, [this] {
+			selectCategory(QStringLiteral("ways"));
+			if (m_ways)
+				m_ways->addWay();
+		});
+		connect(m_wayRemove, &QPushButton::clicked, this, [this] {
+			if (!m_ways || m_selectedWay.isEmpty())
+				return;
+			m_ways->removeWay(m_selectedWay);
+			if (QTreeWidgetItem* it = m_areaTree->itemFor(QStringLiteral("way:") + m_selectedWay))
+				it->setHidden(true);
+			m_selectedWay.clear();
+			m_wayRemove->setEnabled(false);
+			selectCategory(QStringLiteral("ways"));
+		});
+		buttons->addWidget(add);
+		buttons->addStretch(1);
+		buttons->addWidget(m_wayRemove);
+		ain->addLayout(buttons);
+	}
 	connect(m_cats, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* cur) {
 		if (!cur)
 			return;
 		m_pages->setCurrentIndex(m_cats->indexOfTopLevelItem(cur));
 		const QString key = cur->data(0, Qt::UserRole).toString();
-		m_pageTitle->setText(cur->text(0).toUpper());
-		for (auto it = m_areas.begin(); it != m_areas.end(); ++it)
-			it->row->setSelected(it.key() == key);
+		m_pageTitle->setText(cur->text(0).remove(QLatin1Char('&')).toUpper());
+		if (m_areaTree)
+			m_areaTree->selectKey(key);
+		m_selectedWay.clear();
+		if (m_wayRemove)
+			m_wayRemove->setEnabled(false);
+		// Bereich „Zugangswege“ direkt gewählt: alle Wege zeigen.
+		if (key == QLatin1String("ways") && m_ways)
+			m_ways->focusWay(QString());
 	});
 	m_cats->setCurrentItem(m_cats->topLevelItem(0));
 	refreshAreas();
@@ -4442,12 +4505,83 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 {
 	auto T = [backend](const char* k) { return backend->text(QString::fromLatin1(k)); };
 	auto* lay = new QVBoxLayout(this);
+	lay->setSpacing(6);
 	m_bar = new ActionBar(backend, this);
 	lay->addWidget(m_bar);
-	// Die Quelle ist fest (GitHub); einstellbar ist nur die Prüfung beim Start.
+	// Abschnittskopf wie im Entwurf: klein, gedämpft, in Großbuchstaben.
+	auto section = [this, lay](const QString& text) {
+		auto* l = new QLabel(text.toUpper(), this);
+		l->setObjectName(QStringLiteral("rjMuted"));
+		QFont f = l->font();
+		f.setPointSizeF(f.pointSizeF() * 0.85);
+		f.setWeight(QFont::DemiBold);
+		l->setFont(f);
+		l->setContentsMargins(0, 10, 0, 2);
+		lay->addWidget(l);
+	};
+	// Version: installiert, neueste Veröffentlichung, Knöpfe.
+	section(T("update.sec.version"));
+	m_current = new QLabel(this);
+	m_found = new QLabel(this);
+	m_state = new QLabel(this);
+	m_state->setWordWrap(true);
+	m_state->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+	lay->addWidget(m_current);
+	lay->addWidget(m_found);
+	auto* row = new QHBoxLayout;
+	m_check = new QPushButton(faIcon(QStringLiteral("magnifying-glass")), T("update.check"), this);
+	m_install = new QPushButton(faIcon(QStringLiteral("download")), T("update.install"), this);
+	m_later = new QPushButton(T("update.later"), this);
+	m_later->hide();
+	m_cancel = new QPushButton(T("update.cancel"), this);
+	m_restart = new QPushButton(faIcon(QStringLiteral("rotate")), T("update.restart"), this);
+	auto* news = new QPushButton(faIcon(QStringLiteral("r-lightbulb")), T("update.news"), this);
+	connect(news, &QPushButton::clicked, this, [this] { QMetaObject::invokeMethod(window(), "openNews"); });
+	m_install->setEnabled(false);
+	m_cancel->hide();
+	m_restart->hide();
+	for (auto* b : { m_check, m_install, m_cancel, m_restart, news })
+		row->addWidget(b);
+	row->addStretch(1);
+	lay->addLayout(row);
+	lay->addWidget(m_state);
+	auto* notesLabel = new QLabel(T("update.notes"), this);
+	m_notesLabel = notesLabel;
+	notesLabel->setObjectName(QStringLiteral("rjMuted"));
+	m_notes = new QPlainTextEdit(this);
+	m_notes->setReadOnly(true);
+	m_notes->setMaximumHeight(140);
+	notesLabel->setBuddy(m_notes);
+	lay->addWidget(notesLabel);
+	lay->addWidget(m_notes);
+	// „Änderungen“ nur, wenn eine neuere Version gefunden wurde.
+	connect(m_notes, &QPlainTextEdit::textChanged, this, [this] {
+		const bool any = !m_notes->toPlainText().isEmpty();
+		m_notes->setVisible(any);
+		m_notesLabel->setVisible(any);
+	});
+	m_notes->hide();
+	notesLabel->hide();
+	// Automatisch suchen: beim Programmstart, in regelmäßigen Abständen.
+	section(T("update.sec.auto"));
 	m_onStart = new QCheckBox(T("update.on_start"), this);
 	lay->addWidget(m_onStart);
-	// Proxy: automatisch (Systemeinstellung bzw. Umgebung), keiner oder Rechner:Port.
+	{
+		auto* pr = new QHBoxLayout;
+		m_periodic = new QCheckBox(T("update.periodic"), this);
+		m_every = new QSpinBox(this);
+		m_every->setRange(1, 999);
+		m_unit = new QComboBox(this);
+		for (const char* u : { "stunden", "tage", "wochen" })
+			m_unit->addItem(T((QByteArray("update.unit.") + u).constData()), QString::fromLatin1(u));
+		pr->addWidget(m_periodic);
+		pr->addWidget(m_every);
+		pr->addWidget(m_unit);
+		pr->addStretch(1);
+		lay->addLayout(pr);
+	}
+	// Verbindung: Proxy (gilt auch für Erweiterungen).
+	section(T("update.sec.conn"));
 	auto* proxyRow = new QHBoxLayout;
 	auto* proxyLabel = new QLabel(T("update.proxy"), this);
 	m_proxyMode = new QComboBox(this);
@@ -4463,33 +4597,26 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 	proxyRow->addWidget(m_proxy, 1);
 	proxyRow->addStretch(0);
 	lay->addLayout(proxyRow);
-	m_current = new QLabel(this);
-	m_found = new QLabel(this);
-	m_state = new QLabel(this);
-	m_state->setWordWrap(true);
-	m_state->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-	lay->addWidget(m_current);
-	lay->addWidget(m_found);
-	auto* notesLabel = new QLabel(T("update.notes"), this);
-	m_notes = new QPlainTextEdit(this);
-	m_notes->setReadOnly(true);
-	notesLabel->setBuddy(m_notes);
-	lay->addWidget(notesLabel);
-	lay->addWidget(m_notes, 1);
-	lay->addWidget(m_state);
-	auto* row = new QHBoxLayout;
-	m_check = new QPushButton(T("update.check"), this);
-	m_install = new QPushButton(T("update.install"), this);
-	m_later = new QPushButton(T("update.later"), this);
-	m_cancel = new QPushButton(T("update.cancel"), this);
-	m_restart = new QPushButton(T("update.restart"), this);
-	m_install->setEnabled(false);
-	m_cancel->hide();
-	m_restart->hide();
-	for (auto* b : { m_check, m_install, m_cancel, m_restart, m_later })
-		row->addWidget(b);
-	row->addStretch(1);
-	lay->addLayout(row);
+	auto* both = new QLabel(T("update.proxy.both"), this);
+	both->setObjectName(QStringLiteral("rjMuted"));
+	lay->addWidget(both);
+	// Protokoll: jede Meldung der Suche und Installation mit Uhrzeit, zum Kopieren.
+	section(T("update.sec.log"));
+	m_log = new QPlainTextEdit(this);
+	m_log->setReadOnly(true);
+	m_log->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+	m_log->setMinimumHeight(110);
+	m_log->setPlaceholderText(T("update.log.empty"));
+	lay->addWidget(m_log, 1);
+	auto* copyRow = new QHBoxLayout;
+	auto* copy = new QPushButton(faIcon(QStringLiteral("r-copy")), T("update.log.copy"), this);
+	connect(copy, &QPushButton::clicked, this, [this] { QGuiApplication::clipboard()->setText(m_log->toPlainText()); });
+	copyRow->addWidget(copy);
+	copyRow->addStretch(1);
+	lay->addLayout(copyRow);
+	connect(m_periodic, &QCheckBox::toggled, this, [this] { saveSettings(); });
+	connect(m_every, &QSpinBox::editingFinished, this, [this] { saveSettings(); });
+	connect(m_unit, &QComboBox::currentIndexChanged, this, [this] { saveSettings(); });
 	connect(m_onStart, &QCheckBox::toggled, this, [this] { saveSettings(); });
 	connect(m_proxyMode, &QComboBox::currentIndexChanged, this, [this] {
 		const bool manual = m_proxyMode->currentData().toString() == QLatin1String("manual");
@@ -4527,7 +4654,7 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 		if (p.startDetached())
 			qApp->quit();
 		else
-			m_state->setText(m_backend->text(QStringLiteral("update.restart.failed")));
+			logState(m_backend->text(QStringLiteral("update.restart.failed")));
 	});
 	refresh();
 }
@@ -4537,6 +4664,12 @@ void UpdateTab::refresh()
 	const QJsonObject s = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_status\"}")).toUtf8()).object();
 	const QSignalBlocker block(m_onStart);
 	m_onStart->setChecked(s.value(QStringLiteral("check_on_start")).toBool());
+	{
+		const QSignalBlocker b2(m_periodic), b3(m_every), b4(m_unit);
+		m_periodic->setChecked(s.value(QStringLiteral("periodic")).toBool());
+		m_every->setValue(qMax(1, s.value(QStringLiteral("every")).toInt(1)));
+		m_unit->setCurrentIndex(qMax(0, m_unit->findData(s.value(QStringLiteral("unit")).toString(QStringLiteral("tage")))));
+	}
 	{
 		const QSignalBlocker b1(m_proxyMode);
 		const QString p = s.value(QStringLiteral("proxy")).toString().trimmed();
@@ -4578,13 +4711,16 @@ void UpdateTab::saveSettings()
 	QJsonObject o;
 	o.insert(QStringLiteral("op"), QStringLiteral("update_settings"));
 	o.insert(QStringLiteral("check_on_start"), m_onStart->isChecked());
+	o.insert(QStringLiteral("periodic"), m_periodic->isChecked());
+	o.insert(QStringLiteral("every"), m_every->value());
+	o.insert(QStringLiteral("unit"), m_unit->currentData().toString());
 	const QString mode = m_proxyMode->currentData().toString();
 	o.insert(QStringLiteral("proxy"), mode == QLatin1String("manual") ? m_proxy->text().trimmed() : mode);
 	const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact))).toUtf8()).object();
 	if (r.contains(QStringLiteral("error")))
-		m_state->setText(r.value(QStringLiteral("error")).toString());
+		logState(r.value(QStringLiteral("error")).toString());
 	else if (mode == QLatin1String("manual"))
-		m_state->setText(m_backend->text(QStringLiteral("update.proxy.saved")));
+		logState(m_backend->text(QStringLiteral("update.proxy.saved")));
 }
 
 void UpdateTab::setBusy(bool busy, const QString& text)
@@ -4593,7 +4729,7 @@ void UpdateTab::setBusy(bool busy, const QString& text)
 	m_install->setEnabled(!busy && m_install->isEnabled());
 	m_cancel->setVisible(busy);
 	if (!text.isEmpty())
-		m_state->setText(text);
+		logState(text);
 }
 
 void UpdateTab::check()
@@ -4601,7 +4737,7 @@ void UpdateTab::check()
 	const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_check\"}")).toUtf8()).object();
 	if (r.contains(QStringLiteral("error")))
 	{
-		m_state->setText(r.value(QStringLiteral("error")).toString());
+		logState(r.value(QStringLiteral("error")).toString());
 		return;
 	}
 	setBusy(true, m_backend->text(QStringLiteral("update.checking")));
@@ -4612,7 +4748,7 @@ void UpdateTab::install(bool confirm)
 	const QJsonObject r = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_install\",\"confirm\":%1}").arg(confirm ? QStringLiteral("true") : QStringLiteral("false"))).toUtf8()).object();
 	const QString state = r.value(QStringLiteral("state")).toString();
 	if (r.contains(QStringLiteral("error")))
-		m_state->setText(r.value(QStringLiteral("error")).toString());
+		logState(r.value(QStringLiteral("error")).toString());
 	else if (state == QLatin1String("confirm"))
 		m_bar->ask(m_backend->text(QStringLiteral("update.confirm")).arg(r.value(QStringLiteral("sessions")).toInt()), { m_backend->text(QStringLiteral("update.confirm.yes")) },
 		           [this](int b) {
@@ -4620,15 +4756,15 @@ void UpdateTab::install(bool confirm)
 				           install(true);
 		           });
 	else if (state == QLatin1String("package"))
-		m_state->setText(m_backend->text(QStringLiteral("update.package_managed.hint")).arg(r.value(QStringLiteral("url")).toString()));
+		logState(m_backend->text(QStringLiteral("update.package_managed.hint")).arg(r.value(QStringLiteral("url")).toString()));
 	else if (state == QLatin1String("development"))
-		m_state->setText(m_backend->text(QStringLiteral("update.development.hint")).arg(r.value(QStringLiteral("url")).toString()));
+		logState(m_backend->text(QStringLiteral("update.development.hint")).arg(r.value(QStringLiteral("url")).toString()));
 	else if (state == QLatin1String("page"))
 	{
 		// Windows: Release-Seite im Standardbrowser; die Adresse bleibt zum Kopieren stehen.
 		const QString url = r.value(QStringLiteral("url")).toString();
 		const bool opened = QDesktopServices::openUrl(QUrl(url));
-		m_state->setText(m_backend->text(opened ? QStringLiteral("update.page.opened") : QStringLiteral("update.page.failed")).arg(url));
+		logState(m_backend->text(opened ? QStringLiteral("update.page.opened") : QStringLiteral("update.page.failed")).arg(url));
 	}
 	else if (state == QLatin1String("downloading"))
 	{
@@ -4669,7 +4805,7 @@ void UpdateTab::apply()
 		// Nicht startbar: Fenster wieder zeigen, Grund nennen.
 		if (w)
 			w->show();
-		m_state->setText(m_backend->text(QStringLiteral("update.error")).arg(r.value(QStringLiteral("error")).toString()));
+		logState(m_backend->text(QStringLiteral("update.error")).arg(r.value(QStringLiteral("error")).toString()));
 	};
 	if (open > 0)
 		m_bar->ask(m_backend->text(QStringLiteral("update.apply.confirm")).arg(open), { m_backend->text(QStringLiteral("update.apply")) }, [go](int b) {
@@ -4687,7 +4823,7 @@ void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 	const QString state = r.value(QStringLiteral("state")).toString();
 	if (state == QLatin1String("error"))
 	{
-		m_state->setText(m_backend->text(QStringLiteral("update.error")).arg(r.value(QStringLiteral("error")).toString()));
+		logState(m_backend->text(QStringLiteral("update.error")).arg(r.value(QStringLiteral("error")).toString()));
 		return;
 	}
 	if (kind == QLatin1String("update_check"))
@@ -4704,7 +4840,7 @@ void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 				m_pageOnly = true;
 				m_install->setText(m_backend->text(QStringLiteral("update.open_page")));
 			}
-			m_state->setText(m_backend->text(QStringLiteral("update.newer"))
+			logState(m_backend->text(QStringLiteral("update.newer"))
 			                 + (m_pageOnly ? QLatin1Char(' ') + m_backend->text(QStringLiteral("update.windows.hint")) : QString()));
 			m_install->setFocus();
 		}
@@ -4715,7 +4851,7 @@ void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 			m_found->setText(latest.isEmpty() ? m_backend->text(QStringLiteral("update.found.none")) : m_backend->text(QStringLiteral("update.found")).arg(latest));
 			m_notes->clear();
 			m_install->setEnabled(false);
-			m_state->setText(m_backend->text(QStringLiteral("update.uptodate")).arg(latest));
+			logState(m_backend->text(QStringLiteral("update.uptodate")).arg(latest));
 		}
 	}
 	else if (state == QLatin1String("ready"))
@@ -4723,7 +4859,7 @@ void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 		// Windows: MSI geladen, Prüfsumme und Signaturen geprüft.
 		m_applyReady = true;
 		m_install->setEnabled(false);
-		m_state->setText(m_backend->text(QStringLiteral("update.ready")).arg(r.value(QStringLiteral("version")).toString()));
+		logState(m_backend->text(QStringLiteral("update.ready")).arg(r.value(QStringLiteral("version")).toString()));
 		m_restart->setText(m_backend->text(QStringLiteral("update.apply")));
 		m_restart->show();
 		m_restart->setFocus();
@@ -4732,8 +4868,65 @@ void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)
 	{
 		m_program = r.value(QStringLiteral("program")).toString();
 		m_install->setEnabled(false);
-		m_state->setText(m_backend->text(QStringLiteral("update.installed")).arg(r.value(QStringLiteral("version")).toString(), r.value(QStringLiteral("old")).toString()));
+		logState(m_backend->text(QStringLiteral("update.installed")).arg(r.value(QStringLiteral("version")).toString(), r.value(QStringLiteral("old")).toString()));
 		m_restart->show();
 		m_restart->setFocus();
+	}
+}
+
+void UpdateTab::logState(const QString& text)
+{
+	m_state->setText(text);
+	if (!text.isEmpty() && m_log)
+		m_log->appendPlainText(QTime::currentTime().toString(QStringLiteral("HH:mm:ss")) + QStringLiteral("  ") + text);
+}
+
+QString PropertiesTab::areaGlyph(const QString& key)
+{
+	static const QHash<QString, QString> map = {
+		{ QStringLiteral("general"), QStringLiteral("circle-info") }, { QStringLiteral("connection"), QStringLiteral("plug") },
+		{ QStringLiteral("ways"), QStringLiteral("r-window-restore") }, { QStringLiteral("credentials"), QStringLiteral("key") },
+		{ QStringLiteral("tunnel"), QStringLiteral("route") }, { QStringLiteral("tasks"), QStringLiteral("list-check") },
+		{ QStringLiteral("clipboard"), QStringLiteral("r-clipboard") }, { QStringLiteral("shares"), QStringLiteral("share-nodes") },
+		{ QStringLiteral("organisation"), QStringLiteral("tag") }, { QStringLiteral("parent"), QStringLiteral("folder-tree") },
+	};
+	return map.value(key, QStringLiteral("sliders"));
+}
+
+QString PropertiesTab::protocolGlyph(const QString& protocol)
+{
+	static const QHash<QString, QString> map = {
+		{ QStringLiteral("rdp"), QStringLiteral("display") }, { QStringLiteral("ssh"), QStringLiteral("terminal") },
+		{ QStringLiteral("vnc"), QStringLiteral("desktop") }, { QStringLiteral("web"), QStringLiteral("globe") },
+		{ QStringLiteral("psrp"), QStringLiteral("code") }, { QStringLiteral("proxmox"), QStringLiteral("cubes") },
+		{ QStringLiteral("hyperv"), QStringLiteral("layer-group") },
+	};
+	return map.value(protocol, QStringLiteral("plug"));
+}
+
+void PropertiesTab::addAreaHeader(const QString& glyph, const QString& text)
+{
+	if (m_areaTree)
+		m_areaGroup = m_areaTree->addGroup(glyph, text);
+}
+
+void PropertiesTab::addWayRows()
+{
+	if (!m_areaTree)
+		return;
+	// Je weiterer Weg ein Knoten (Symbol des Protokolls, Name); Klick zeigt nur diesen Weg.
+	for (const QJsonValue& v : m_data.value(QStringLiteral("ways")).toArray())
+	{
+		const QJsonObject w = v.toObject();
+		const QString id = w.value(QStringLiteral("id")).toString();
+		const QString proto = w.value(QStringLiteral("protocol")).toString();
+		QString name = w.value(QStringLiteral("name")).toString();
+		if (name.isEmpty())
+			name = proto.toUpper();
+		QString host = w.value(QStringLiteral("host")).toString();
+		if (host.isEmpty())
+			host = m_data.value(QStringLiteral("host")).toString();
+		QTreeWidgetItem* it = m_areaTree->addGroup(protocolGlyph(proto), name, nullptr, QStringLiteral("way:") + id);
+		it->setToolTip(0, host);
 	}
 }

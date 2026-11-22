@@ -54,6 +54,10 @@ private:
 	QWidget* m_fixedRow;
 	QCheckBox* m_focus;
 	QComboBox* m_treeSize;
+	QCheckBox* m_round = nullptr;
+	QCheckBox* m_favorites = nullptr;
+	class QSpinBox* m_flyOpen = nullptr;
+	class QSpinBox* m_flyClose = nullptr;
 	QComboBox* m_iconStyle;
 	QCheckBox* m_ownIcons;
 	QWidget* m_iconBox;

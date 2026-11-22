@@ -22,6 +22,13 @@
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QTreeWidget>
+#include <QtWidgets/QLineEdit>
+#include <QtGui/QGuiApplication>
+#include <QtGui/QClipboard>
+#include <QtGui/QFontDatabase>
+#include <QtCore/QTime>
+#include "faicons.h"
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QVBoxLayout>
 #include <cmath>
@@ -205,6 +212,17 @@ void SettingsTab::rebuildLicensePage()
 	}
 	while (QLayoutItem* it = m_licenseBox->layout()->takeAt(0))
 		delete it;
+	m_extState.clear();
+	if (m_extBox)
+	{
+		for (QWidget* c : m_extBox->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly))
+		{
+			m_extBox->layout()->removeWidget(c);
+			c->deleteLater();
+		}
+		while (QLayoutItem* it = m_extBox->layout()->takeAt(0))
+			delete it;
+	}
 	fillLicensePage();
 	refreshSummaries();
 }
@@ -274,6 +292,13 @@ void SettingsTab::licenseResult(const QJsonObject& r)
 	m_pluginLast.insert(id, r);
 	if (r.value(QStringLiteral("state")).toString() == QLatin1String("installed") && m_licenseRestart)
 		m_licenseRestart->setVisible(true);
+	{
+		const QJsonObject j = QJsonDocument::fromJson(m_backend->lizenzJson().toUtf8()).object();
+		const QString text = pluginStateText(id, j, m_pluginRows.value(id));
+		if (QLabel* l = m_extState.value(id))
+			l->setText(text);
+		extLog(QStringLiteral("%1: %2").arg(m_pluginRows.value(id).value(QStringLiteral("name")).toString(id), text));
+	}
 	if (QLabel* l = m_pluginState.value(id))
 	{
 		const QJsonObject j = QJsonDocument::fromJson(m_backend->lizenzJson().toUtf8()).object();
@@ -499,63 +524,8 @@ void SettingsTab::fillLicensePage()
 	}
 	v->addWidget(outer);
 
-	// Update-Quelle: eigener, schlichter Kasten unter der Urkunde, mit „Erweiterungen aktualisieren“.
-	if (!l.isEmpty())
-	{
-		auto* upd = new QFrame(w);
-		upd->setObjectName(QStringLiteral("rjLicUpd"));
-		upd->setStyleSheet(QStringLiteral("QFrame#rjLicUpd { border: 1px solid palette(mid); border-radius: 8px; }"));
-		auto* ul = new QVBoxLayout(upd);
-		ul->setContentsMargins(14, 10, 14, 10);
-		auto* uh = new QHBoxLayout;
-		auto* ut = new QLabel(T("settings.license.f.url"), upd);
-		QFont uf = ut->font();
-		uf.setBold(true);
-		ut->setFont(uf);
-		const bool maint = valid && l.value(QStringLiteral("wartung")).toBool();
-		auto* ub = new QLabel(T(maint ? "settings.license.upd.active" : "settings.license.upd.ended"), upd);
-		ub->setStyleSheet(QStringLiteral("color: %1; border: 1px solid %1; border-radius: 4px; padding: 0 6px;").arg(maint ? green : orange));
-		uh->addWidget(ut, 1);
-		uh->addWidget(ub);
-		ul->addLayout(uh);
-		auto* f = new QFormLayout;
-		auto* url = new QLabel(l.value(QStringLiteral("url")).toString(), upd);
-		url->setTextInteractionFlags(Qt::TextSelectableByMouse);
-		url->setWordWrap(true);
-		f->addRow(T("settings.license.upd.source"), url);
-		f->addRow(T("settings.license.f.pw"), new QLabel(T(l.value(QStringLiteral("kennwort")).toBool() ? "settings.license.f.pw.set" : "settings.license.f.pw.none"), upd));
-		ul->addLayout(f);
-		auto* urow = new QHBoxLayout;
-		auto* updateBtn = new QPushButton(T("settings.license.update"), upd);
-		updateBtn->setObjectName(QStringLiteral("pluginsUpdate"));
-		auto* updateState = new QLabel(upd);
-		updateState->setWordWrap(true);
-		updateState->setObjectName(QStringLiteral("rjMuted"));
-		if (!maint || !valid)
-		{
-			updateBtn->setEnabled(false);
-			updateBtn->setToolTip(wartungGrund);
-			updateState->setText(wartungGrund);
-		}
-		urow->addWidget(updateBtn);
-		urow->addWidget(updateState, 1);
-		ul->addLayout(urow);
-		connect(updateBtn, &QPushButton::clicked, this, [this, updateState, T] {
-			const QJsonObject r = QJsonDocument::fromJson(this->edit({ { QStringLiteral("op"), QStringLiteral("plugins_update") } }).toUtf8()).object();
-			if (r.contains(QStringLiteral("error")))
-			{
-				updateState->setText(r.value(QStringLiteral("error")).toString());
-				return;
-			}
-			m_pluginLast.clear();
-			const QJsonArray started = r.value(QStringLiteral("gestartet")).toArray();
-			updateState->setText(started.isEmpty() ? T("settings.license.update.none") : T("settings.license.update.started").arg(r.value(QStringLiteral("quelle")).toString()));
-			for (const QJsonValue& e : r.value(QStringLiteral("fehler")).toArray())
-				m_pluginLast.insert(e.toObject().value(QStringLiteral("id")).toString(), QJsonObject{ { QStringLiteral("state"), QStringLiteral("error") }, { QStringLiteral("error"), e.toObject().value(QStringLiteral("error")).toString() } });
-			rebuildLicensePage();
-		});
-		v->addWidget(upd);
-	}
+	// Bezug, Kennwort und „Erweiterungen aktualisieren“ stehen unter Updates → Erweiterungen (nur mit Lizenz).
+	fillExtensionsPage(j, l, valid);
 
 	// Der Bereich „Neue Lizenz einfügen“ steht fest unter diesem Kasten (buildLicensePage) und wird nie neu
 	// aufgebaut; hier nur, ob „Lizenz entfernen“ sichtbar ist.
@@ -609,5 +579,178 @@ void MainWindow::licenseNoticeAfterUnlock()
 			qApp->quit();
 		else
 			text->setText(T(m_backend, "settings.license.restart.failed"));
+	});
+}
+
+QWidget* SettingsTab::pageExtensions()
+{
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	auto* w = new QWidget;
+	auto* v = new QVBoxLayout(w);
+	m_extBox = new QWidget(w);
+	auto* bl = new QVBoxLayout(m_extBox);
+	bl->setContentsMargins(0, 0, 0, 0);
+	v->addWidget(m_extBox);
+	// Protokoll bleibt beim Neuaufbau erhalten.
+	auto* head = new QLabel(T("update.sec.log").toUpper(), w);
+	head->setObjectName(QStringLiteral("rjMuted"));
+	QFont hf = head->font();
+	hf.setPointSizeF(hf.pointSizeF() * 0.85);
+	hf.setWeight(QFont::DemiBold);
+	head->setFont(hf);
+	head->setContentsMargins(0, 10, 0, 2);
+	v->addWidget(head);
+	m_extLog = new QPlainTextEdit(w);
+	m_extLog->setReadOnly(true);
+	m_extLog->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+	m_extLog->setMinimumHeight(110);
+	m_extLog->setPlaceholderText(T("update.log.empty"));
+	v->addWidget(m_extLog, 1);
+	auto* copyRow = new QHBoxLayout;
+	auto* copy = new QPushButton(faIcon(QStringLiteral("r-copy")), T("update.log.copy"), w);
+	connect(copy, &QPushButton::clicked, this, [this] { QGuiApplication::clipboard()->setText(m_extLog->toPlainText()); });
+	copyRow->addWidget(copy);
+	copyRow->addStretch(1);
+	v->addLayout(copyRow);
+	return w;
+}
+
+void SettingsTab::extLog(const QString& text)
+{
+	if (m_extLog && !text.isEmpty())
+		m_extLog->appendPlainText(QTime::currentTime().toString(QStringLiteral("HH:mm:ss")) + QStringLiteral("  ") + text);
+}
+
+void SettingsTab::fillExtensionsPage(const QJsonObject& j, const QJsonObject& l, bool valid)
+{
+	// Nur mit eingespielter Lizenz sichtbar.
+	if (auto it = m_areas.find(QStringLiteral("updates_ext")); it != m_areas.end())
+		it->item->setHidden(l.isEmpty());
+	if (!m_extBox || l.isEmpty())
+		return;
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	QWidget* w = m_extBox;
+	auto* v = static_cast<QVBoxLayout*>(m_extBox->layout());
+	auto section = [&](const QString& text) {
+		auto* h = new QLabel(text.toUpper(), w);
+		h->setObjectName(QStringLiteral("rjMuted"));
+		QFont f = h->font();
+		f.setPointSizeF(f.pointSizeF() * 0.85);
+		f.setWeight(QFont::DemiBold);
+		h->setFont(f);
+		h->setContentsMargins(0, 10, 0, 2);
+		v->addWidget(h);
+	};
+	const bool dark = w->palette().color(QPalette::Window).lightness() < 128;
+	const QString green = dark ? QStringLiteral("#33d17a") : QStringLiteral("#1a7544");
+	const QString orange = dark ? QStringLiteral("#ff7800") : QStringLiteral("#a64800");
+	const QString wartungGrund = j.value(QStringLiteral("wartung_grund")).toString();
+	const bool maint = valid && l.value(QStringLiteral("wartung")).toBool();
+
+	// Bezug: Quelle, Kennwort (eigenes im Schlüsselbund oder das der Lizenz), Wartung.
+	section(T("ext.sec.source"));
+	auto* f = new QFormLayout;
+	auto* url = new QLabel(l.value(QStringLiteral("url")).toString(), w);
+	url->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	url->setWordWrap(true);
+	f->addRow(T("settings.license.f.url"), url);
+	{
+		auto* pwRow = new QHBoxLayout;
+		const bool own = l.value(QStringLiteral("kennwort_eigen")).toBool();
+		const bool have = own || l.value(QStringLiteral("kennwort")).toBool();
+		auto* badge = new QLabel(T(own ? "ext.pw.own" : have ? "ext.pw.license" : "settings.license.f.pw.none"), w);
+		badge->setStyleSheet(QStringLiteral("color: %1; border: 1px solid %1; border-radius: 4px; padding: 0 6px;").arg(have ? green : orange));
+		auto* pw = new QLineEdit(w);
+		pw->setEchoMode(QLineEdit::Password);
+		pw->setPlaceholderText(T("ext.pw.new"));
+		auto* save = new QPushButton(T("ext.pw.save"), w);
+		auto* reset = new QPushButton(faIcon(QStringLiteral("rotate-left")), T("ext.pw.reset"), w);
+		reset->setEnabled(own);
+		pwRow->addWidget(badge);
+		pwRow->addWidget(pw, 1);
+		pwRow->addWidget(save);
+		pwRow->addWidget(reset);
+		f->addRow(T("settings.license.f.pw"), pwRow);
+		connect(save, &QPushButton::clicked, this, [this, pw, T] {
+			const QJsonObject r = QJsonDocument::fromJson(this->edit({ { QStringLiteral("op"), QStringLiteral("plugins_pw_set") }, { QStringLiteral("kennwort"), pw->text() } }).toUtf8()).object();
+			pw->clear();
+			extLog(r.contains(QStringLiteral("error")) ? r.value(QStringLiteral("error")).toString() : T("ext.pw.saved"));
+			rebuildLicensePage();
+		});
+		connect(reset, &QPushButton::clicked, this, [this, T] {
+			const QJsonObject r = QJsonDocument::fromJson(this->edit({ { QStringLiteral("op"), QStringLiteral("plugins_pw_reset") } }).toUtf8()).object();
+			extLog(r.contains(QStringLiteral("error")) ? r.value(QStringLiteral("error")).toString() : T("ext.pw.resetdone"));
+			rebuildLicensePage();
+		});
+	}
+	auto* mt = new QLabel(T(l.value(QStringLiteral("wartung")).toBool() ? "settings.license.f.maint.on" : "settings.license.f.maint.off").arg(l.value(QStringLiteral("wartung_bis")).toString()), w);
+	mt->setStyleSheet(QStringLiteral("color: %1;").arg(maint ? green : orange));
+	f->addRow(T("settings.license.f.maint"), mt);
+	v->addLayout(f);
+
+	// Stand je lizenzierter Erweiterung.
+	section(T("ext.sec.state"));
+	auto* grid = new QGridLayout;
+	grid->setHorizontalSpacing(12);
+	QJsonArray mods = l.value(QStringLiteral("module")).toArray();
+	int row = 0;
+	for (const QJsonValue& m : mods)
+	{
+		const QJsonObject o = m.toObject();
+		if (!o.value(QStringLiteral("lizenziert")).toBool())
+			continue;
+		const QString id = o.value(QStringLiteral("id")).toString();
+		auto* icon = new QLabel(w);
+		icon->setPixmap(faIcon(QStringLiteral("puzzle-piece")).pixmap(16, 16));
+		auto* name = new QLabel(o.value(QStringLiteral("name")).toString(), w);
+		auto* state = new QLabel(pluginStateText(id, j, o), w);
+		state->setObjectName(QStringLiteral("rjMuted"));
+		state->setWordWrap(true);
+		state->setTextInteractionFlags(Qt::TextSelectableByMouse);
+		grid->addWidget(icon, row, 0);
+		grid->addWidget(name, row, 1);
+		grid->addWidget(state, row, 2);
+		m_extState.insert(id, state);
+		m_pluginRows.insert(id, o);
+		++row;
+	}
+	grid->setColumnStretch(2, 1);
+	v->addLayout(grid);
+
+	auto* urow = new QHBoxLayout;
+	auto* updateBtn = new QPushButton(faIcon(QStringLiteral("download")), T("settings.license.update"), w);
+	updateBtn->setObjectName(QStringLiteral("pluginsUpdate"));
+	if (!maint)
+	{
+		updateBtn->setEnabled(false);
+		updateBtn->setToolTip(wartungGrund);
+	}
+	urow->addWidget(updateBtn);
+	urow->addStretch(1);
+	v->addLayout(urow);
+	if (!maint && !wartungGrund.isEmpty())
+	{
+		auto* why = new QLabel(wartungGrund, w);
+		why->setObjectName(QStringLiteral("rjMuted"));
+		why->setWordWrap(true);
+		v->addWidget(why);
+	}
+	connect(updateBtn, &QPushButton::clicked, this, [this, T] {
+		const QJsonObject r = QJsonDocument::fromJson(this->edit({ { QStringLiteral("op"), QStringLiteral("plugins_update") } }).toUtf8()).object();
+		if (r.contains(QStringLiteral("error")))
+		{
+			extLog(r.value(QStringLiteral("error")).toString());
+			return;
+		}
+		m_pluginLast.clear();
+		const QJsonArray started = r.value(QStringLiteral("gestartet")).toArray();
+		extLog(started.isEmpty() ? T("settings.license.update.none") : T("settings.license.update.started").arg(r.value(QStringLiteral("quelle")).toString()));
+		for (const QJsonValue& e : r.value(QStringLiteral("fehler")).toArray())
+		{
+			const QJsonObject eo = e.toObject();
+			m_pluginLast.insert(eo.value(QStringLiteral("id")).toString(), QJsonObject{ { QStringLiteral("state"), QStringLiteral("error") }, { QStringLiteral("error"), eo.value(QStringLiteral("error")).toString() } });
+			extLog(QStringLiteral("%1: %2").arg(eo.value(QStringLiteral("id")).toString(), eo.value(QStringLiteral("error")).toString()));
+		}
+		rebuildLicensePage();
 	});
 }

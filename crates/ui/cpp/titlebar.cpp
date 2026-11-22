@@ -1,4 +1,5 @@
 #include "titlebar.h"
+#include "faicons.h"
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
@@ -14,6 +15,8 @@
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QPlainTextEdit>
+#include <QtCore/QRegularExpression>
+#include <QtWidgets/QTextBrowser>
 #include <QtGui/QDesktopServices>
 #include <QtGui/QIcon>
 #include <QtGui/QMouseEvent>
@@ -36,34 +39,16 @@ namespace {
 
 enum class Glyph { Minimize, Maximize, Restore, Close };
 
-/// Eigene Symbole in der Textfarbe des Farbschemas: Die Standardsymbole des Systemstils sind unter Windows im
-/// dunklen Schema dunkelgrau auf dunkel und kaum zu sehen.
+/// Font-Awesome-Symbole in der Textfarbe des Farbschemas: Die Standardsymbole des Systemstils sind unter Windows
+/// im dunklen Schema dunkelgrau auf dunkel und kaum zu sehen.
 QIcon glyphIcon(Glyph g, const QColor& color, qreal dpr)
 {
+	const char* name = g == Glyph::Minimize ? "r-window-minimize" : g == Glyph::Maximize ? "r-window-maximize" : g == Glyph::Restore ? "r-window-restore" : "xmark";
 	QPixmap pm(QSize(16, 16) * dpr);
 	pm.setDevicePixelRatio(dpr);
 	pm.fill(Qt::transparent);
 	QPainter p(&pm);
-	p.setPen(QPen(color, 1.3, Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
-	switch (g)
-	{
-	case Glyph::Minimize:
-		p.drawLine(QPointF(3.5, 11.5), QPointF(12.5, 11.5));
-		break;
-	case Glyph::Maximize:
-		p.drawRect(QRectF(3.5, 3.5, 9, 9));
-		break;
-	case Glyph::Restore:
-		p.drawRect(QRectF(3.5, 5.5, 7, 7));
-		p.drawLine(QPointF(5.5, 3.5), QPointF(12.5, 3.5));
-		p.drawLine(QPointF(12.5, 3.5), QPointF(12.5, 10.5));
-		p.drawLine(QPointF(10.5, 10.5), QPointF(12.5, 10.5));
-		break;
-	case Glyph::Close:
-		p.drawLine(QPointF(3.5, 3.5), QPointF(12.5, 12.5));
-		p.drawLine(QPointF(12.5, 3.5), QPointF(3.5, 12.5));
-		break;
-	}
+	faPaint(&p, QRectF(2, 2, 12, 12), QString::fromLatin1(name), color);
 	p.end();
 	return QIcon(pm);
 }
@@ -94,13 +79,23 @@ BrandStrip::BrandStrip(QWidget* window, const QString& name, const QString& vers
 	logo->setPixmap(icon.pixmap(20, 20));
 	logo->setFixedSize(20, 20);
 	logo->setAccessibleName(name);
-	auto* title = new QLabel(name, this);
+	// „remotejoe“ kräftig, dahinter Ausgabe und Version klein und gedämpft („advanced 0.1.63“).
+	QString product = name, edition;
+	if (const int sp = name.indexOf(QLatin1Char(' ')); sp > 0)
+	{
+		product = name.left(sp);
+		edition = name.mid(sp + 1);
+	}
+	auto* title = new QLabel(product, this);
 	QFont f = title->font();
-	f.setPointSizeF(f.pointSizeF() * 0.9);
+	f.setPointSizeF(f.pointSizeF() * 0.95);
+	f.setWeight(QFont::DemiBold);
 	title->setFont(f);
-	auto* ver = new QLabel(QStringLiteral("V %1").arg(version), this);
+	auto* ver = new QLabel(edition.isEmpty() ? version : QStringLiteral("%1 %2").arg(edition, version), this);
 	m_ver = ver;
-	ver->setFont(f);
+	QFont vf = font();
+	vf.setPointSizeF(vf.pointSizeF() * 0.82);
+	ver->setFont(vf);
 	applyVersionColor();
 	l->addWidget(logo);
 	l->addWidget(title);
@@ -216,9 +211,7 @@ void WindowControls::paintBurgerIcon()
 	pm.setDevicePixelRatio(dpr);
 	pm.fill(Qt::transparent);
 	QPainter p(&pm);
-	p.setPen(QPen(qApp->palette().color(QPalette::ButtonText), 2, Qt::SolidLine, Qt::RoundCap));
-	for (int y : { 4, 9, 14 })
-		p.drawLine(3, y, 15, y);
+	faPaint(&p, QRectF(2, 2, 14, 14), QStringLiteral("bars"), qApp->palette().color(QPalette::ButtonText));
 	p.end();
 	m_burger->setIcon(QIcon(pm));
 }
@@ -424,10 +417,10 @@ LegalDialog::LegalDialog(RjBackend* backend, const QStringList& sections, const 
 	head->addWidget(next);
 	head->addWidget(m_found);
 	root->addLayout(head);
-	m_text = new QPlainTextEdit(this);
-	m_text->setReadOnly(true);
-	m_text->setLineWrapMode(QPlainTextEdit::WidgetWidth);
-	m_text->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+	m_text = new QTextBrowser(this);
+	m_text->setOpenLinks(false);
+	m_text->document()->setDocumentMargin(16);
+	connect(m_text, &QTextBrowser::anchorClicked, this, &LegalDialog::openLink);
 	root->addWidget(m_text, 1);
 	auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
 	buttons->button(QDialogButtonBox::Close)->setText(T("about.close"));
@@ -442,7 +435,7 @@ LegalDialog::LegalDialog(RjBackend* backend, const QStringList& sections, const 
 	showSection(m_sections->currentData().toString());
 }
 
-void LegalDialog::showSection(const QString& key)
+QString LegalDialog::rawText(const QString& key) const
 {
 	QString text;
 	if (key == QLatin1String("third_party_licenses"))
@@ -455,11 +448,143 @@ void LegalDialog::showSection(const QString& key)
 	}
 	if (text.isEmpty())
 		text = m_backend->legalText(key);
-	if (text.isEmpty())
-		text = m_backend->text(QStringLiteral("legal.missing"));
-	m_text->setPlainText(text);
+	return text;
+}
+
+namespace
+{
+// Text als HTML: maskiert, Zeilenumbrüche bleiben, Adressen werden zu Links.
+QString textToHtml(const QString& text)
+{
+	QString html = text.toHtmlEscaped();
+	static const QRegularExpression url(QStringLiteral(R"((https?://[^\s<>"'()]+[^\s<>"'().,;:]))"));
+	html.replace(url, QStringLiteral("<a href=\"\\1\">\\1</a>"));
+	return QStringLiteral("<pre style=\"white-space: pre-wrap; font-family: monospace;\">%1</pre>").arg(html);
+}
+} // namespace
+
+const QList<LegalDialog::Block>& LegalDialog::blocks()
+{
+	if (m_blocksLoaded)
+		return m_blocks;
+	m_blocksLoaded = true;
+	// Aufbau: Trennlinie „=====“, Kopfzeile „NAME – gilt für: a 1.0, b 2.0“, Trennlinie, Text bis zur nächsten Linie.
+	const QStringList lines = rawText(QStringLiteral("third_party_licenses")).split(QLatin1Char('\n'));
+	auto isRule = [](const QString& l) { return l.size() > 20 && l.startsWith(QLatin1String("=====")); };
+	for (int i = 0; i < lines.size(); ++i)
+	{
+		if (!isRule(lines[i]) || i + 2 >= lines.size() || !isRule(lines[i + 2]))
+			continue;
+		Block b;
+		const QString head = lines[i + 1];
+		const int sep = head.indexOf(QStringLiteral(" – gilt für: "));
+		b.title = sep > 0 ? head.left(sep) : head;
+		b.appliesTo = sep > 0 ? head.mid(sep + 13) : QString();
+		int j = i + 3;
+		QStringList body;
+		while (j < lines.size() && !(isRule(lines[j]) && j + 2 < lines.size() && isRule(lines[j + 2])))
+			body << lines[j++];
+		b.text = body.join(QLatin1Char('\n')).trimmed();
+		m_blocks << b;
+		i = j - 1;
+	}
+	return m_blocks;
+}
+
+void LegalDialog::showBlock(int i)
+{
+	const QList<Block>& all = blocks();
+	if (i < 0 || i >= all.size())
+		return;
+	const Block& b = all[i];
+	m_text->setHtml(QStringLiteral("<p><a href=\"rj:index\">← %1</a></p><h2>%2</h2><p><b>%3</b> %4</p>%5")
+	                  .arg(m_backend->text(QStringLiteral("legal.sec.third_party_licenses")).toHtmlEscaped(), b.title.toHtmlEscaped(),
+	                       m_backend->text(QStringLiteral("legal.applies")).toHtmlEscaped(), b.appliesTo.toHtmlEscaped(), textToHtml(b.text)));
 	m_text->moveCursor(QTextCursor::Start);
+}
+
+void LegalDialog::openLink(const QUrl& url)
+{
+	if (url.scheme() == QLatin1String("http") || url.scheme() == QLatin1String("https"))
+	{
+		QDesktopServices::openUrl(url);
+		return;
+	}
+	if (url.scheme() != QLatin1String("rj"))
+		return;
+	const QString what = url.path();
+	if (what == QLatin1String("index"))
+	{
+		m_sections->setCurrentIndex(qMax(0, m_sections->findData(QStringLiteral("third_party_licenses"))));
+		showSection(QStringLiteral("third_party_licenses"));
+		return;
+	}
+	if (what.startsWith(QLatin1String("block/")))
+	{
+		showBlock(what.mid(6).toInt());
+		return;
+	}
+	if (what.startsWith(QLatin1String("pkg/")))
+	{
+		// Paket „name version“: der erste Lizenztext, der dafür gilt.
+		const QString pkg = QUrl::fromPercentEncoding(what.mid(4).toUtf8());
+		const QList<Block>& all = blocks();
+		for (int i = 0; i < all.size(); ++i)
+			if ((QStringLiteral(", ") + all[i].appliesTo + QStringLiteral(",")).contains(QStringLiteral(", ") + pkg + QStringLiteral(",")))
+			{
+				m_sections->blockSignals(true);
+				m_sections->setCurrentIndex(qMax(0, m_sections->findData(QStringLiteral("third_party_licenses"))));
+				m_sections->blockSignals(false);
+				showBlock(i);
+				return;
+			}
+		m_found->setText(m_backend->text(QStringLiteral("legal.search.none")));
+	}
+}
+
+void LegalDialog::showSection(const QString& key)
+{
+	const QString text = rawText(key);
 	m_found->clear();
+	if (text.isEmpty())
+	{
+		m_text->setPlainText(m_backend->text(QStringLiteral("legal.missing")));
+		return;
+	}
+	if (key == QLatin1String("third_party"))
+	{
+		// Markdown mit Tabelle: Paketname verweist auf crates.io, die Lizenz auf ihren Text im Leser.
+		QStringList lines = text.split(QLatin1Char('\n'));
+		for (QString& l : lines)
+		{
+			if (!l.startsWith(QLatin1String("| ")) || l.startsWith(QLatin1String("| Paket")))
+				continue;
+			const QStringList c = l.split(QLatin1Char('|'));
+			if (c.size() < 5)
+				continue;
+			const QString name = c[1].trimmed(), ver = c[2].trimmed(), lic = c[3].trimmed();
+			if (name.isEmpty() || name.startsWith(QLatin1Char('-')))
+				continue;
+			l = QStringLiteral("| [%1](https://crates.io/crates/%1/%2) | %2 | [%3](rj:pkg/%4) |")
+			      .arg(name, ver, lic, QString::fromUtf8(QUrl::toPercentEncoding(name + QLatin1Char(' ') + ver)));
+		}
+		m_text->setMarkdown(lines.join(QLatin1Char('\n')));
+	}
+	else if (key == QLatin1String("third_party_licenses"))
+	{
+		// Verzeichnis der Lizenztexte; ein Klick zeigt den Text samt der Pakete, für die er gilt.
+		QString html = QStringLiteral("<h2>%1</h2><table cellspacing=\"0\" cellpadding=\"5\">").arg(m_backend->text(QStringLiteral("legal.sec.third_party_licenses")).toHtmlEscaped());
+		const QList<Block>& all = blocks();
+		for (int i = 0; i < all.size(); ++i)
+			html += QStringLiteral("<tr><td valign=\"top\" width=\"190\"><a href=\"rj:block/%1\">%2</a></td><td>%3</td></tr>").arg(i).arg(all[i].title.toHtmlEscaped(), all[i].appliesTo.toHtmlEscaped());
+		html += QStringLiteral("</table>");
+		if (all.isEmpty())
+			html = textToHtml(text);
+		m_text->setHtml(html);
+	}
+	else
+		m_text->setHtml(textToHtml(text));
+	m_text->moveCursor(QTextCursor::Start);
 }
 
 void LegalDialog::findNext()

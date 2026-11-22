@@ -57,6 +57,7 @@ WaysEditor::WaysEditor(RjBackend* backend, const QJsonObject& data, QWidget* par
 	v->addLayout(m_rows);
 	auto* buttons = new QHBoxLayout;
 	auto* add = new QPushButton(T("ways.add"), this);
+	m_addButton = add;
 	auto* sug = new QPushButton(T("ways.suggest"), this);
 	sug->setToolTip(T("ways.suggest.tip"));
 	buttons->addWidget(add);
@@ -408,4 +409,28 @@ void WaysEditor::wipeSecrets()
 		pw.fill(QLatin1Char(' '));
 		r.pass->clear();
 	}
+}
+
+void WaysEditor::focusWay(const QString& id)
+{
+	m_focus = id;
+	for (const Row& r : m_list)
+		r.box->setVisible(id.isEmpty() || r.id == id);
+}
+
+void WaysEditor::addWay()
+{
+	focusWay(QString());
+	if (m_addButton)
+		m_addButton->click();
+}
+
+void WaysEditor::removeWay(const QString& id)
+{
+	for (const Row& r : m_list)
+		if (r.id == id)
+		{
+			removeRow(r.box);
+			return;
+		}
 }

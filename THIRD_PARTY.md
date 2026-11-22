@@ -641,6 +641,13 @@ Die eingebauten Farbschemata und Symbolfarben übernehmen Farbwerte dieser Palet
 | Gruvbox | MIT | <https://github.com/morhetz/gruvbox> |
 | Dracula | MIT | <https://github.com/dracula/dracula-theme> |
 
+## Symbole
+
+Die Symbole in Baum, Menüs, Leisten und Einstellungen stammen aus Font Awesome Free 6.7.2 von Fonticons, Inc.
+(<https://fontawesome.com>), Lizenz der Symbole: Creative Commons Attribution 4.0 International (CC BY 4.0,
+<https://creativecommons.org/licenses/by/4.0/>), siehe <https://fontawesome.com/license/free>. Eingebettet sind
+einzelne SVG-Dateien (`crates/ui/res/fa/`), zur Anzeige in der Farbe des Farbschemas eingefärbt; sonst unverändert.
+
 ## Herstellerliste (MAC-Präfixe)
 
 `crates/ui/res/oui.txt` ist eine gekürzte Fassung der öffentlichen OUI-Liste (MA-L) der IEEE Registration Authority

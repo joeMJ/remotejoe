@@ -2123,6 +2123,8 @@ mod terminal_settings_tests {
     fn scheme_font_and_overrides() {
         let mut app = App::new(true);
         app.config_path = None;
+        // Nie die echte Konfiguration des Rechners (z. B. eine verstellte Terminal-Schrift) zugrunde legen.
+        app.config = Config::default();
         let d = parse(&app.terminal_settings_json());
         assert_eq!(d["scheme"], "standard-dunkel");
         assert_eq!(d["font_size"], 11.0);
@@ -2156,6 +2158,8 @@ mod terminal_settings_tests {
     fn invalid_input_is_rejected_without_change() {
         let mut app = App::new(true);
         app.config_path = None;
+        // Nie die echte Konfiguration des Rechners (z. B. eine verstellte Terminal-Schrift) zugrunde legen.
+        app.config = Config::default();
         let before = app.terminal_settings_json();
         for bad in [r#"{"font_size":3}"#, r#"{"font_size":99}"#, r#"{"scheme":"gibt-es-nicht"}"#, r##"{"fg":"rot"}"##, "kein json"] {
             let r = parse(&app.set_terminal_settings(bad));
@@ -2168,6 +2172,8 @@ mod terminal_settings_tests {
     fn font_steps_are_clamped_and_reset() {
         let mut app = App::new(true);
         app.config_path = None;
+        // Nie die echte Konfiguration des Rechners (z. B. eine verstellte Terminal-Schrift) zugrunde legen.
+        app.config = Config::default();
         assert_eq!(parse(&app.terminal_font_step(2))["font_size"], 13.0);
         assert_eq!(parse(&app.terminal_font_step(-3))["font_size"], 10.0);
         assert_eq!(parse(&app.terminal_font_step(100))["font_size"], 40.0);

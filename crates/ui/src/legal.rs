@@ -10,6 +10,7 @@ pub fn text(which: &str) -> &'static str {
         "third_party" => include_str!("../../../THIRD_PARTY.md"),
         "third_party_licenses" => include_str!("../../../THIRD_PARTY_LICENSES.txt"),
         "terms" => terms(),
+        "releasenotes" => include_str!("../../../RELEASENOTES.md"),
         _ => "",
     }
 }
@@ -27,5 +28,6 @@ mod tests {
         assert!(super::text("third_party_licenses").len() > 100_000);
         assert_eq!(super::text("unbekannt"), "");
         assert!(!super::text("terms").is_empty());
+        assert!(super::text("releasenotes").contains("## 0.1.60"));
     }
 }

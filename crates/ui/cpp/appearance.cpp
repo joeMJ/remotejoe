@@ -1,5 +1,7 @@
 #include "appearance.h"
 
+#include <QtWidgets/QSpinBox>
+
 #include "remotejoe-ui/src/bridge.cxxqt.h"
 
 #include <QtCore/QDir>
@@ -184,6 +186,20 @@ AppearanceTab::AppearanceTab(RjBackend* backend, QWidget* parent)
 	for (const char* s : { "klein", "mittel", "gross" })
 		m_treeSize->addItem(T((QByteArray("appearance.tree_size.") + s).constData()), QString::fromLatin1(s));
 	form->addRow(T("appearance.tree_size"), m_treeSize);
+	// Fenster und Zielbereich: runde Ecken, Favoriten im Baum, Auf- und Zuklappen bei gelöster Stecknadel.
+	m_round = new QCheckBox(T("appearance.round_corners"), page);
+	form->addRow(QString(), m_round);
+	m_favorites = new QCheckBox(T("appearance.show_favorites"), page);
+	form->addRow(QString(), m_favorites);
+	for (QSpinBox** sp : { &m_flyOpen, &m_flyClose })
+	{
+		*sp = new QSpinBox(page);
+		(*sp)->setRange(0, 3000);
+		(*sp)->setSingleStep(50);
+		(*sp)->setSuffix(QStringLiteral(" ms"));
+	}
+	form->addRow(T("appearance.flyout_open"), m_flyOpen);
+	form->addRow(T("appearance.flyout_close"), m_flyClose);
 	// Symbolfarben: dem Theme folgen oder eigene Farbe je Art.
 	m_iconStyle = new QComboBox(page);
 	for (const char* s : { "einheitlich", "je_typ" })
@@ -290,6 +306,22 @@ AppearanceTab::AppearanceTab(RjBackend* backend, QWidget* parent)
 		if (!m_loading)
 			apply({ { QStringLiteral("tree_size"), m_treeSize->currentData().toString() } });
 	});
+	connect(m_round, &QCheckBox::toggled, this, [this](bool on) {
+		if (!m_loading)
+			apply({ { QStringLiteral("round_corners"), on } });
+	});
+	connect(m_favorites, &QCheckBox::toggled, this, [this](bool on) {
+		if (!m_loading)
+			apply({ { QStringLiteral("show_favorites"), on } });
+	});
+	connect(m_flyOpen, &QSpinBox::editingFinished, this, [this] {
+		if (!m_loading)
+			apply({ { QStringLiteral("flyout_open_ms"), m_flyOpen->value() } });
+	});
+	connect(m_flyClose, &QSpinBox::editingFinished, this, [this] {
+		if (!m_loading)
+			apply({ { QStringLiteral("flyout_close_ms"), m_flyClose->value() } });
+	});
 	connect(m_iconStyle, &QComboBox::currentIndexChanged, this, [this] {
 		if (!m_loading)
 			apply({ { QStringLiteral("icon_style"), m_iconStyle->currentData().toString() } });
@@ -354,6 +386,10 @@ void AppearanceTab::reload()
 	m_focus->setChecked(m_state.value(QStringLiteral("focus_frame")).toBool(true));
 	m_treeSize->setCurrentIndex(qMax(0, m_treeSize->findData(m_state.value(QStringLiteral("tree_size")).toString(QStringLiteral("mittel")))));
 	m_iconStyle->setCurrentIndex(qMax(0, m_iconStyle->findData(m_state.value(QStringLiteral("icon_style")).toString(QStringLiteral("einheitlich")))));
+	m_round->setChecked(m_state.value(QStringLiteral("round_corners")).toBool(true));
+	m_favorites->setChecked(m_state.value(QStringLiteral("show_favorites")).toBool(true));
+	m_flyOpen->setValue(m_state.value(QStringLiteral("flyout_open_ms")).toInt(300));
+	m_flyClose->setValue(m_state.value(QStringLiteral("flyout_close_ms")).toInt(500));
 	{
 		// Eigene Farben aus der Einstellung, sonst die Farben des Themes anzeigen.
 		const QJsonObject own = m_state.value(QStringLiteral("icon_colors")).toObject();

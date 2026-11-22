@@ -35,8 +35,45 @@ class QMenu;
 class QAction;
 class QEvent;
 class QMouseEvent;
+class QEnterEvent;
 class QMenuBar;
 class TitleBar;
+
+/// Senkrechte Registerkarte „Ziele“ am linken Rand (gelöste Stecknadel): Überfahren klappt den Zielbereich auf.
+class RailTab : public QWidget
+{
+public:
+	RailTab(const QString& text, QWidget* parent);
+	QSize sizeHint() const override { return QSize(28, 120); }
+	std::function<void()> onEnter, onLeave, onClick;
+
+protected:
+	void paintEvent(QPaintEvent*) override;
+	void enterEvent(QEnterEvent*) override;
+	void leaveEvent(QEvent*) override;
+	void mousePressEvent(QMouseEvent*) override;
+
+private:
+	QString m_text;
+};
+
+/// Runde Fensterecken unter Linux: setzt an den Fensterteilen, die eine Ecke berühren, abgerundete Masken und
+/// passt sie bei Größen- und Zustandswechseln an. Das Fenster selbst zeichnet Rand, Fläche und Schatten.
+class RoundCorners : public QObject
+{
+	Q_OBJECT
+public:
+	static constexpr int kRadius = 12;
+	explicit RoundCorners(QMainWindow* window);
+	bool eventFilter(QObject* o, QEvent* e) override;
+
+private:
+	void update();
+	QMainWindow* m_window;
+	QTimer m_timer;
+	QSet<QWidget*> m_watched;
+	QList<QWidget*> m_grips;
+};
 
 class MainWindow : public QMainWindow, public RjHostWindow
 {
@@ -58,6 +95,8 @@ public:
 	bool compact() const { return m_compact; }
 	/// Baum links ein- oder ausklappen.
 	void setTreeVisible(bool on);
+	/// Favoriten, Stecknadel und Verzögerungen aus der Darstellung übernehmen (Start und nach Änderungen).
+	void applyTreePrefs();
 	/// Fenster auf den sichtbaren Bildschirmbereich begrenzen und zurück ins Bild holen.
 	void fitToScreen();
 	/// Größe, Lage und Baumbreite auf die Voreinstellung setzen (Ansicht → Fenster zurücksetzen).
@@ -119,6 +158,15 @@ public:
 	/// Bildschirmfoto: Übersicht des ersten Unterordners (→ erster Ordner).
 	void folderForScreenshot() { openFolderOverview(m_model->index(0, 0, m_model->index(0, 0))); }
 	QWidget* aboutForScreenshot();
+	/// Nur für Bildschirmfotos: Stecknadel lösen bzw. anheften, Zielbereich aufklappen.
+	void flyoutForScreenshot(bool unpinned, bool open);
+	RjBackend* backendForScreenshot() const { return m_backend; }
+
+	/// Beim ersten Start einer neuen Version die Neuigkeiten zeigen (nicht bei einer neuen Installation).
+	void showNewsIfNew();
+	/// Hinweise beim allerersten Start (Pfeile auf Menü und „Hinzufügen“), solange es kein Ziel gibt und sie nicht
+	/// abgeschaltet sind; `force` zeigt sie immer (Bildschirmfotos). Liefert die Hinweisfläche.
+	QWidget* showFirstHints(bool force = false);
 	/// Update-Tab mit einer Prüfung gegen `base` (lokale Attrappe).
 	void updateForScreenshot(const QString& base);
 	QTabWidget* tabs() const override { return m_tabs; }
@@ -153,6 +201,10 @@ public:
 	/// Zeit vom Programmstart bis zum ersten Zeichnen des Fensters.
 	static QElapsedTimer startClock;
 	qint64 firstPaintMs = -1;
+
+public slots:
+	/// Tab „Neuigkeiten“ (Releasenotes, neueste oben).
+	void openNews();
 
 protected:
 	void paintEvent(QPaintEvent*) override;
@@ -201,6 +253,30 @@ public:
 private:
 
 	void buildMenus();
+	/// Font-Awesome-Symbole an die Menüeinträge setzen (auch im Hamburger-Menü).
+	void applyMenuIcons();
+	bool m_round = false;
+	RoundCorners* m_roundCorners = nullptr;
+	/// Ordner „Favoriten“ oben in den Baum setzen (Einstellung „Favoriten anzeigen“).
+	void addFavoritesFolder();
+	/// Stecknadel: angeheftet (Baum im Teiler) oder gelöst (Registerkarte „Ziele“, Aufklappen über den Tabs).
+	void setPinned(bool on, bool save);
+	void openFlyout();
+	void closeFlyout();
+	void placeFlyout();
+	void updatePinButton();
+	bool m_pinned = true;
+	bool m_flyOpen = false;
+	bool m_showFavorites = true;
+	bool m_favOpen = true;
+	QColor m_starColor = QColor("#d4a017");
+	int m_flyOpenMs = 300;
+	int m_flyCloseMs = 500;
+	QTimer m_flyOpenTimer;
+	QTimer m_flyCloseTimer;
+	QWidget* m_center = nullptr;
+	RailTab* m_rail = nullptr;
+	class QToolButton* m_pinButton = nullptr;
 	void placeBrand();
 	void syncStripHeight();
 	void updateNotice();

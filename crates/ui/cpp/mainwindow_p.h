@@ -37,6 +37,9 @@ inline constexpr int RoleVSwitch = Qt::UserRole + 42;
 inline constexpr int RoleIconKind = Qt::UserRole + 12;
 /// Fach „Makros“ im Baum: 1 = das Fach selbst, 2 = ein Makro (RoleId = Makro-ID).
 inline constexpr int RoleMacro = Qt::UserRole + 20;
+/// Ordner „Favoriten“ oben im Baum (true) und Verweise darin (true, RoleId = Ziel).
+inline constexpr int RoleFavFolder = Qt::UserRole + 43;
+inline constexpr int RoleFavLink = Qt::UserRole + 44;
 
 QString text(RjBackend* b, const char* key);
 QJsonObject parseJson(const QString& s);

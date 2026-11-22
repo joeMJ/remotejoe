@@ -1,5 +1,6 @@
 #include <array>
 #include "cards.h"
+#include "faicons.h"
 
 #include <QtGui/QPixmap>
 
@@ -424,6 +425,36 @@ private:
 
 QIcon glyphIcon(Glyph g)
 {
+	// Font-Awesome-Symbol, wo es ein sprechendes gibt; die Oktett-Beschriftung („.2.1“) bleibt gezeichnet.
+	const char* fa = nullptr;
+	switch (g)
+	{
+	case Glyph::Note: fa = "r-note-sticky"; break;
+	case Glyph::Signal: fa = "signal"; break;
+	case Glyph::Search: fa = "magnifying-glass"; break;
+	case Glyph::Library: fa = "book"; break;
+	case Glyph::Refresh: fa = "arrows-rotate"; break;
+	case Glyph::Gear: fa = "gear"; break;
+	case Glyph::Person: fa = "user"; break;
+	case Glyph::Topology: fa = "diagram-project"; break;
+	case Glyph::Cable: fa = "ethernet"; break;
+	case Glyph::Layers: fa = "layer-group"; break;
+	case Glyph::Route: fa = "route"; break;
+	case Glyph::Devices: fa = "computer"; break;
+	case Glyph::Rows: fa = "list"; break;
+	case Glyph::Tag: fa = "tag"; break;
+	case Glyph::Fit: fa = "expand"; break;
+	case Glyph::ActualSize: fa = "compress"; break;
+	case Glyph::Maximize: fa = "up-right-and-down-left-from-center"; break;
+	case Glyph::ExpandAll: fa = "r-square-plus"; break;
+	case Glyph::CollapseAll: fa = "r-square-minus"; break;
+	case Glyph::Print: fa = "print"; break;
+	case Glyph::Backup: fa = "download"; break;
+	case Glyph::Report: fa = "r-file-lines"; break;
+	default: break;
+	}
+	if (fa)
+		return faIcon(QString::fromLatin1(fa));
 	return QIcon(new GlyphEngine(g));
 }
 
@@ -655,4 +686,109 @@ int FlowLayout::doLayout(const QRect& rect, bool testOnly) const
 	}
 	return y + line - rect.y();
 }
+
+AreaTree::AreaTree(QWidget* parent)
+  : QTreeWidget(parent)
+{
+	setObjectName(QStringLiteral("areaTree"));
+	setColumnCount(2);
+	setHeaderHidden(true);
+	header()->setStretchLastSection(false);
+	header()->setSectionResizeMode(0, QHeaderView::Stretch);
+	header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+	setRootIsDecorated(false);
+	setIndentation(18);
+	setFrameShape(QFrame::NoFrame);
+	setIconSize(QSize(16, 16));
+	setUniformRowHeights(false);
+	setExpandsOnDoubleClick(false);
+	setItemsExpandable(false);
+	setSelectionMode(QAbstractItemView::SingleSelection);
+	setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	setStyleSheet(QStringLiteral("QTreeWidget#areaTree { background: transparent; border: none; outline: 0; }"
+	                             "QTreeWidget#areaTree::item { padding: 5px 2px; border: none; }"
+	                             "QTreeWidget#areaTree::item:selected { background: palette(highlight); color: palette(highlighted-text); }"
+	                             "QTreeWidget#areaTree::item:hover:!selected { background: palette(alternate-base); }"));
+	connect(this, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* cur) {
+		if (!cur || m_quiet)
+			return;
+		QString key = cur->data(0, Qt::UserRole).toString();
+		// Gruppe ohne eigenen Bereich: ersten Eintrag darunter wählen.
+		if (key.isEmpty())
+		{
+			QTreeWidgetItem* c = cur;
+			while (c && c->data(0, Qt::UserRole).toString().isEmpty() && c->childCount() > 0)
+				c = c->child(0);
+			if (c && c != cur)
+			{
+				setCurrentItem(c);
+				return;
+			}
+		}
+		if (!key.isEmpty() && onSelect)
+			onSelect(key, cur);
+	});
+}
+
+QTreeWidgetItem* AreaTree::addGroup(const QString& glyph, const QString& text, QTreeWidgetItem* parent, const QString& key)
+{
+	auto* it = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(this);
+	it->setText(0, text);
+	if (!glyph.isEmpty())
+		it->setIcon(0, faIcon(glyph, palette().color(QPalette::Highlight), palette().color(QPalette::HighlightedText)));
+	QFont f = font();
+	f.setWeight(QFont::DemiBold);
+	it->setFont(0, f);
+	it->setData(0, Qt::UserRole, key);
+	if (!key.isEmpty())
+		m_items.insert(key, it);
+	it->setExpanded(true);
+	if (parent)
+		parent->setExpanded(true);
+	return it;
+}
+
+QTreeWidgetItem* AreaTree::addEntry(QTreeWidgetItem* parent, const QString& key, const QString& glyph, const QString& text)
+{
+	auto* it = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(this);
+	it->setText(0, text);
+	it->setIcon(0, faIcon(glyph.isEmpty() ? QStringLiteral("sliders") : glyph));
+	it->setData(0, Qt::UserRole, key);
+	m_items.insert(key, it);
+	if (parent)
+		parent->setExpanded(true);
+	return it;
+}
+
+void AreaTree::setMark(const QString& key, const QString& text, bool warn)
+{
+	QTreeWidgetItem* it = m_items.value(key);
+	if (!it)
+		return;
+	it->setText(1, text);
+	QFont f = font();
+	f.setPointSizeF(f.pointSizeF() * 0.85);
+	it->setFont(1, f);
+	it->setForeground(1, warn ? QBrush(QColor(0xc7, 0x77, 0x00)) : palette().brush(QPalette::PlaceholderText));
+	it->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
+}
+
+void AreaTree::selectKey(const QString& key)
+{
+	QTreeWidgetItem* it = m_items.value(key);
+	if (!it || currentItem() == it)
+		return;
+	m_quiet = true;
+	setCurrentItem(it);
+	m_quiet = false;
+}
+
+void AreaTree::clearAll()
+{
+	m_quiet = true;
+	clear();
+	m_items.clear();
+	m_quiet = false;
+}
+
 } // namespace rjui

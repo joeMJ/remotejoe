@@ -28,6 +28,12 @@ public:
 	QString summary() const;
 	/// Eingegebene Kennwörter der Wege leeren.
 	void wipeSecrets();
+	/// Nur den Weg `id` zeigen (Auswahl im Bereichsbaum links); leer = alle Wege.
+	void focusWay(const QString& id);
+	/// Neuen Weg anlegen (wie der Knopf „Weg hinzufügen“) und zeigen.
+	void addWay();
+	/// Weg `id` entfernen (wie sein Knopf „Entfernen“).
+	void removeWay(const QString& id);
 
 signals:
 	void changed();
@@ -67,6 +73,8 @@ private:
 	QJsonArray m_logins;
 	QVBoxLayout* m_rows;
 	QComboBox* m_openWith;
+	QPushButton* m_addButton = nullptr;
+	QString m_focus;
 	QLabel* m_hint;
 	QList<Row> m_list;
 	bool m_loading = false;

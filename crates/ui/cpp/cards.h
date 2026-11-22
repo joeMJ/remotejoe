@@ -5,6 +5,8 @@
 // des Hauptfensters (Objektnamen rjCard, rjSection, rjTile, rjRow; Eigenschaft rjPill).
 
 #include <QtWidgets/QFrame>
+#include <QtCore/QHash>
+#include <QtWidgets/QTreeWidget>
 #include <QtWidgets/QLayout>
 #include <QtCore/QList>
 #include <QtGui/QIcon>
@@ -91,6 +93,30 @@ signals:
 protected:
 	void mouseReleaseEvent(QMouseEvent* e) override;
 	void keyPressEvent(QKeyEvent* e) override;
+};
+
+/// Schlanker Bereichsbaum (Einstellungen, Eigenschaften): Gruppen halbfett, Einträge eingerückt in normaler Schrift,
+/// je Zeile ein Symbol (Font Awesome); rechts optional eine kleine Markierung („geändert“, „geerbt“).
+class AreaTree : public QTreeWidget
+{
+public:
+	explicit AreaTree(QWidget* parent = nullptr);
+	/// Gruppe (oben oder unter `parent`); ein Klick wählt ihren ersten Eintrag bzw. `key`, wenn gesetzt.
+	QTreeWidgetItem* addGroup(const QString& glyph, const QString& text, QTreeWidgetItem* parent = nullptr, const QString& key = QString());
+	/// Eintrag mit Schlüssel `key` unter `parent` (nullptr = oberste Ebene).
+	QTreeWidgetItem* addEntry(QTreeWidgetItem* parent, const QString& key, const QString& glyph, const QString& text);
+	/// Markierung rechts; `warn` färbt sie in der Warnfarbe.
+	void setMark(const QString& key, const QString& text, bool warn = false);
+	/// Eintrag auswählen, ohne `onSelect` auszulösen.
+	void selectKey(const QString& key);
+	QTreeWidgetItem* itemFor(const QString& key) const { return m_items.value(key); }
+	void clearAll();
+	/// Gewählter Eintrag (Schlüssel, Zeile).
+	std::function<void(const QString&, QTreeWidgetItem*)> onSelect;
+
+private:
+	QHash<QString, QTreeWidgetItem*> m_items;
+	bool m_quiet = false;
 };
 
 /// Fläche mit umbrechendem Layout; passt ihre Höhe bei jeder Breitenänderung an die Zahl der Zeilen an
