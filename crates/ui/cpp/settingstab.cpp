@@ -16,6 +16,7 @@ RjHostBackend* SettingsTab::hostBackend() const
 
 #include <QtCore/QDir>
 #include <QtCore/QJsonArray>
+#include <QtCore/QLocale>
 #include <QtCore/QUrl>
 #include <QtGui/QDesktopServices>
 #include <QtCore/QJsonDocument>
@@ -132,6 +133,7 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 	// Baum und Zuordnung zu Zielen bleiben im Kern.
 	addGroupIcon(QStringLiteral("hard-drive"), T("settings.group.data"), 0);
 	addArea(QStringLiteral("backup"), T("settings.backup"), pageBackup(), true, 1);
+	addArea(QStringLiteral("webcache"), T("settings.webcache"), pageWebCache(), true, 1);
 	for (RjPluginUi* p : rjPluginUis(m_backend))
 		if (RjSettingsPart* part = p->settingsPart(this))
 			m_parts.push_back(part);
@@ -188,7 +190,7 @@ void SettingsTab::addArea(const QString& key, const QString& title, QWidget* pag
 		{ QStringLiteral("lock"), QStringLiteral("lock") }, { QStringLiteral("keys"), QStringLiteral("keyboard") },
 		{ QStringLiteral("ciphers"), QStringLiteral("key") },
 		{ QStringLiteral("terminal"), QStringLiteral("terminal") }, { QStringLiteral("appearance"), QStringLiteral("palette") },
-		{ QStringLiteral("backup"), QStringLiteral("clock-rotate-left") }, { QStringLiteral("license"), QStringLiteral("certificate") },
+		{ QStringLiteral("backup"), QStringLiteral("clock-rotate-left") }, { QStringLiteral("webcache"), QStringLiteral("eraser") }, { QStringLiteral("license"), QStringLiteral("certificate") },
 		{ QStringLiteral("mcp"), QStringLiteral("robot") },
 		{ QStringLiteral("updates_program"), QStringLiteral("download") }, { QStringLiteral("updates_ext"), QStringLiteral("puzzle-piece") },
 	};
@@ -600,6 +602,89 @@ QWidget* SettingsTab::pageBackup()
 	return w;
 }
 
+QWidget* SettingsTab::pageWebCache()
+{
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	auto* w = new QWidget;
+	auto* v = new QVBoxLayout(w);
+	auto* f = new QFormLayout;
+	m_wcLimit = new QSpinBox(w);
+	m_wcLimit->setRange(10, 2000);
+	m_wcLimit->setSingleStep(10);
+	m_wcLimit->setSuffix(T("settings.webcache.mb"));
+	f->addRow(T("settings.webcache.limit"), m_wcLimit);
+	m_wcDays = new QSpinBox(w);
+	m_wcDays->setRange(1, 365);
+	m_wcDays->setSuffix(T("settings.webcache.days.suffix"));
+	f->addRow(T("settings.webcache.days"), m_wcDays);
+	f->addRow(QString(), hint(T("settings.webcache.hint"), w));
+	m_wcState = new QLabel(w);
+	m_wcState->setWordWrap(true);
+	m_wcState->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	f->addRow(T("settings.webcache.state"), m_wcState);
+	auto* buttons = new QHBoxLayout;
+	auto* now = new QPushButton(T("settings.webcache.now"), w);
+	now->setObjectName(QStringLiteral("webCacheNow"));
+	auto* open = new QPushButton(T("settings.webcache.open"), w);
+	buttons->addWidget(now);
+	buttons->addWidget(open);
+	buttons->addStretch(1);
+	f->addRow(QString(), buttons);
+	m_wcResult = new QLabel(w);
+	m_wcResult->setWordWrap(true);
+	f->addRow(QString(), m_wcResult);
+	v->addLayout(f);
+	v->addStretch(1);
+	for (auto* s : { m_wcLimit, m_wcDays })
+		connect(s, &QSpinBox::valueChanged, this, &SettingsTab::saveWebCache);
+	connect(now, &QPushButton::clicked, this, [this] {
+		const QJsonObject r = parseObj(edit({ { QStringLiteral("op"), QStringLiteral("webcache_cleanup") }, { QStringLiteral("all"), true } }));
+		if (r.contains(QStringLiteral("error")))
+		{
+			m_wcResult->setText(r.value(QStringLiteral("error")).toString());
+			return;
+		}
+		QString text = rjText(m_backend, "settings.webcache.done")
+		                 .arg(QLocale().formattedDataSize(static_cast<qint64>(r.value(QStringLiteral("freed")).toDouble()), 2, QLocale::DataSizeTraditionalFormat))
+		                 .arg(r.value(QStringLiteral("cleared")).toInt())
+		                 .arg(r.value(QStringLiteral("removed")).toInt());
+		if (r.value(QStringLiteral("locked")).toBool())
+			text += QLatin1Char(' ') + rjText(m_backend, "settings.webcache.locked");
+		m_wcResult->setText(text);
+		reloadWebCache();
+	});
+	connect(open, &QPushButton::clicked, this, [this] {
+		const QString dir = parseObj(edit({ { QStringLiteral("op"), QStringLiteral("webcache_status") } })).value(QStringLiteral("dir")).toString();
+		if (!dir.isEmpty() && QDir().mkpath(dir))
+			QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+	});
+	return w;
+}
+
+void SettingsTab::saveWebCache()
+{
+	if (m_loading)
+		return;
+	edit({ { QStringLiteral("op"), QStringLiteral("set_settings") },
+	       { QStringLiteral("webcache_limit_mb"), m_wcLimit->value() },
+	       { QStringLiteral("webcache_keep_days"), m_wcDays->value() } });
+	refreshSummaries();
+}
+
+void SettingsTab::reloadWebCache()
+{
+	const bool was = m_loading;
+	m_loading = true;
+	const QJsonObject s = parseObj(edit({ { QStringLiteral("op"), QStringLiteral("webcache_status") } }));
+	m_wcLimit->setValue(s.value(QStringLiteral("limit_mb")).toInt(50));
+	m_wcDays->setValue(s.value(QStringLiteral("keep_days")).toInt(7));
+	m_wcState->setText(rjText(m_backend, "settings.webcache.size")
+	                     .arg(QLocale().formattedDataSize(static_cast<qint64>(s.value(QStringLiteral("bytes")).toDouble()), 2, QLocale::DataSizeTraditionalFormat))
+	                     .arg(s.value(QStringLiteral("profiles")).toInt())
+	                     .arg(QLocale().formattedDataSize(static_cast<qint64>(s.value(QStringLiteral("cache_bytes")).toDouble()), 2, QLocale::DataSizeTraditionalFormat)));
+	m_loading = was;
+}
+
 void SettingsTab::saveBackup()
 {
 	if (m_loading)
@@ -731,6 +816,7 @@ void SettingsTab::reload()
 	for (RjSettingsPart* part : m_parts)
 		part->load(s);
 	reloadBackup();
+	reloadWebCache();
 	reloadMcp();
 	if (m_appearance)
 		m_appearance->reload();
@@ -760,6 +846,7 @@ void SettingsTab::refreshSummaries()
 	set("backup", m_bkEnabled->isChecked() ? T("settings.backup.sum.on").arg(m_bkLast->value()).arg(m_bkDays->value())
 	                                       + (m_bkSecond->isChecked() && !m_bkDir->text().trimmed().isEmpty() ? T("settings.backup.sum.second") : QString())
 	                                       : T("settings.backup.sum.off"));
+	set("webcache", T("settings.webcache.sum").arg(m_wcLimit->value()).arg(m_wcDays->value()));
 	if (m_mcp)
 		set("mcp", T(m_mcp->isChecked() ? "settings.mcp.sum.on" : "settings.mcp.sum.off"));
 	for (RjSettingsPart* part : m_parts)

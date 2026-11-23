@@ -43,4 +43,5 @@ pub mod theme;
 pub mod tree;
 pub mod update;
 pub mod vaultlock;
+pub mod webcache;
 pub mod workspace;

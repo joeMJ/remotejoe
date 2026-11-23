@@ -50,6 +50,26 @@ pub struct Config {
     pub features: FeatureSettings,
     /// Sicherungen der KDBX.
     pub backup: BackupSettings,
+    /// Zwischenspeicher der Web-Profile.
+    pub web_cache: WebCacheSettings,
+}
+
+/// Zwischenspeicher der Web-Profile (`daten/web-profile/<Ziel>`): Grenze je Ziel und Aufbewahrung. Anmeldung
+/// (Cookies, Speicher der Seite) und angenommene Zertifikate bleiben beim Aufräumen erhalten.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebCacheSettings {
+    /// Höchstens so viele MB Zwischenspeicher je Ziel.
+    pub limit_mb: u32,
+    /// Ziele, die so viele Tage nicht geöffnet wurden, verlieren ihren Zwischenspeicher; Profile gelöschter Ziele
+    /// werden nach dieser Zeit ganz entfernt.
+    pub keep_days: u32,
+}
+
+impl Default for WebCacheSettings {
+    fn default() -> Self {
+        WebCacheSettings { limit_mb: 50, keep_days: 7 }
+    }
 }
 
 /// Sicherungen der KDBX (siehe [`crate::backup`]): nach jedem Speichern und vor jedem Update, im Ordner
@@ -209,6 +229,7 @@ impl Default for Config {
             appearance: AppearanceSettings::default(),
             features: FeatureSettings::default(),
             backup: BackupSettings::default(),
+            web_cache: WebCacheSettings::default(),
         }
     }
 }

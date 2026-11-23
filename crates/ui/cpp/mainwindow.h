@@ -105,6 +105,7 @@ public:
 	void setFilter(const QString& text);
 	/// Ersten Hypervisor im Baum aufklappen (lädt die Gäste).
 	void expandFirstHypervisor();
+	QStringList expandedIdsForCheck() const; // Prüfbild: aufgeklappte Ordner (Kennungen, sortiert)
 	QWidget* detachedWindow() const;
 	void showCredentialChoiceForScreenshot();
 	/// Für Bildschirmfotos: Host-Schlüssel-Rückfrage in der ersten Sitzung.
@@ -375,6 +376,7 @@ private:
 	void collapseUnloadedHypervisors();
 	/// Suche aktiv (Zeilen ausgeblendet); beim Verlassen wird der Baum einmal neu aufgebaut.
 	bool m_searchApplied = false;
+	bool m_keepExpanded = false; // reloadTree während einer Suche: gemerkten Aufklappzustand behalten
 	QSet<QString> m_expandedIds;
 	QTimer* m_clipTimer = nullptr;
 	QByteArray m_clipHash;

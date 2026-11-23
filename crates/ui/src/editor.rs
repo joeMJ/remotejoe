@@ -492,7 +492,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("views") | Some("favorites_tree") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build") | Some("credcheck_start") | Some("credcheck_rows") | Some("credcheck_cancel") | Some("orphans_list") | Some("mcp_call") | Some("mcp_denied") | Some("data_dir") | Some("mcp_settings") | Some("set_mcp_settings") | Some("mcp_log")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("webcache_status") | Some("webcache_cleanup") | Some("views") | Some("favorites_tree") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build") | Some("credcheck_start") | Some("credcheck_rows") | Some("credcheck_cancel") | Some("orphans_list") | Some("mcp_call") | Some("mcp_denied") | Some("data_dir") | Some("mcp_settings") | Some("set_mcp_settings") | Some("mcp_log")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -748,6 +748,7 @@ impl App {
                 }
                 crate::modules::set_settings(self, &c);
                 self.backup_apply_settings(&c);
+                self.webcache_apply_settings(&c);
                 match &self.config_path {
                     Some(p) => self.config.save(p).map(|_| json!({ "ok": true })).map_err(|e| e.to_string()),
                     None => Ok(json!({ "ok": true })),
@@ -755,6 +756,8 @@ impl App {
             }
             "save" => return self.save_with(str_of(&c, "choice")),
             "backup_status" => Ok(self.backup_settings_json()),
+            "webcache_status" => Ok(self.webcache_status()),
+            "webcache_cleanup" => Ok(self.webcache_cleanup(c.get("all").and_then(Value::as_bool).unwrap_or(true))),
             // Aufklappzustand des Baums beim Start (je Schlüsseldatenbank); `ids` = null setzt auf die Vorgabe zurück.
             "tree_start" => Ok(json!({ "ids": self.kdbx_path().and_then(|k| self.config.window.tree_start.get(&k).cloned()) })),
             "set_tree_start" => {

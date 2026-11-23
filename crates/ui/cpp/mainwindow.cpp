@@ -2428,9 +2428,10 @@ void MainWindow::reloadTree()
 	if (auto* m = findChild<MergeTab*>())
 		QTimer::singleShot(0, m, [m] { m->refresh(); });
 	// Aufgeklappte Ordner, Auswahl und Bildlauf merken, damit eine Änderung den Baum nicht zuklappt.
-	// Während einer Suche klappt alles auf; dann bleibt der zuletzt bekannte Zustand ohne Suche erhalten.
+	// Während einer Suche klappt alles auf; dann bleibt der zuletzt bekannte Zustand ohne Suche erhalten. Gemerkt wird
+	// nur, solange der Baum noch nicht durch die Suche aufgeklappt ist (auch wenn der Suchtext schon getippt ist).
 	const bool searching = !m_search->text().isEmpty();
-	if (!searching && m_treeLoaded && !m_searchApplied)
+	if (m_treeLoaded && !m_searchApplied)
 	{
 		m_expandedIds.clear();
 		std::function<void(const QModelIndex&)> collect = [&](const QModelIndex& parent) {
@@ -2549,7 +2550,12 @@ void MainWindow::reloadTree()
 	m_tree->setUpdatesEnabled(true);
 	updateSessionMarks();
 	if (searching)
+	{
+		// Der neu aufgebaute Baum ist noch zugeklappt: den gemerkten Zustand ohne Suche nicht überschreiben.
+		m_keepExpanded = true;
 		applySearch();
+		m_keepExpanded = false;
+	}
 	else
 		m_tree->verticalScrollBar()->setValue(scroll);
 	updateEmptyHint();
@@ -2599,14 +2605,12 @@ void MainWindow::applySearch()
 	if (text.isEmpty())
 	{
 		// Suche verlassen: einmal neu aufbauen, damit Aufklappzustand und Makro-Fach zurückkommen.
+		// m_searchApplied bleibt dabei gesetzt, damit reloadTree den aufgeklappten Suchbaum nicht als Zustand merkt.
 		if (m_searchApplied)
-		{
-			m_searchApplied = false;
 			reloadTree();
-		}
 		return;
 	}
-	if (!m_searchApplied && m_treeLoaded)
+	if (!m_searchApplied && m_treeLoaded && !m_keepExpanded)
 	{
 		// Zustand ohne Suche merken (wie in reloadTree).
 		m_expandedIds.clear();
@@ -3040,6 +3044,23 @@ void MainWindow::openImport(const QString& path, const QJsonObject& report, cons
 void MainWindow::showProperties(const QString& id)
 {
 	openProperties(id);
+}
+
+QStringList MainWindow::expandedIdsForCheck() const
+{
+	QStringList ids;
+	std::function<void(const QModelIndex&)> walk = [&](const QModelIndex& parent) {
+		for (int r = 0; r < m_model->rowCount(parent); ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			if (m_tree->isExpanded(i) && !i.data(RoleId).toString().isEmpty())
+				ids << i.data(RoleId).toString();
+			walk(i);
+		}
+	};
+	walk(QModelIndex());
+	ids.sort();
+	return ids;
 }
 
 void MainWindow::expandFirstHypervisor()

@@ -116,6 +116,19 @@ void screenshots(MainWindow& w, const QString& dir)
 		save(w.tabs()->currentWidget(), dir, QStringLiteral("lizenz-%1.png").arg(lic));
 		return;
 	}
+	// Prüfung: Suche und Neuaufbau während der Suche lassen den Aufklappzustand ohne Suche unverändert.
+	{
+		const QStringList before = w.expandedIdsForCheck();
+		w.setFilter(QStringLiteral("10."));
+		pump(300);
+		w.reloadTree();
+		pump(100);
+		w.setFilter(QString());
+		pump(300);
+		const QStringList after = w.expandedIdsForCheck();
+		std::fprintf(stderr, "[prüfbild] Suche: aufgeklappt vorher %lld, nachher %lld, %s\n", static_cast<long long>(before.size()),
+		             static_cast<long long>(after.size()), before == after ? "gleich" : "ABWEICHUNG");
+	}
 	w.setFilter(QStringLiteral("ssh-00"));
 	pump(300);
 	save(&w, dir, QStringLiteral("suche.png"));

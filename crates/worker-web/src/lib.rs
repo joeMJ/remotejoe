@@ -7,6 +7,8 @@
 //! Das Kennwort gelangt nur über die Skript-Schnittstelle in die Seite
 //! (als JSON-Zeichenkette im eingespeisten Skript), nie in die Adresse.
 
+pub mod cache;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

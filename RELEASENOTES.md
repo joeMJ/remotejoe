@@ -1,3 +1,12 @@
+## 0.1.66 – Web-Zwischenspeicher und Suche
+
+*Veröffentlicht am 23.11.2026*
+
+**Platz zurück:** Web-Ziele haben ihren Zwischenspeicher bisher unbegrenzt aufbewahrt; der Datenordner konnte dadurch mehrere GB groß werden. Nach dem ersten Entsperren mit 0.1.66 räumt remotejoe einmal im Hintergrund auf. Anmeldungen und angenommene Zertifikate bleiben erhalten.
+
+- Web-Zwischenspeicher (neu, Einstellungen → Daten): Grenze je Ziel (Vorgabe 50 MB) und Aufbewahrung (Vorgabe 7 Tage), beides einstellbar. Liegt der Zwischenspeicher eines Ziels über der Grenze oder wurde das Ziel so lange nicht geöffnet, wird er geleert; Profile gelöschter Ziele werden nach dieser Zeit entfernt. Die Seite zeigt den belegten Platz; „Zwischenspeicher jetzt aufräumen“ leert sofort alle Zwischenspeicher und meldet, wie viel frei geworden ist. „Felder erkennen“ hinterlässt kein eigenes Profil mehr.
+- Suche im Zielbaum: Nach dem Leeren der Suche kommt der vorherige Aufklappzustand zurück, auch wenn sich der Baum während der Suche neu aufgebaut hat. Bisher blieb der Baum nach einer Suche mit vielen Treffern ganz aufgeklappt.
+
 ## 0.1.65 – Tab-Wechsel, Cipher-Suites und Web-Anmeldung
 
 *Veröffentlicht am 23.11.2026*

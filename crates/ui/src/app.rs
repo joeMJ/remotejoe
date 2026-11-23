@@ -1082,6 +1082,8 @@ impl App {
         match done {
             Some((error, fields)) => {
                 self.sessions.close(p.s);
+                // Das Profil der Erkennung wird nicht wieder gebraucht.
+                self.remove_probe_profile(p.target);
                 out.push(UiEvent::FieldsDetected { target: p.target.to_string(), error, fields });
             }
             None => self.probe = Some(p),
@@ -1663,6 +1665,8 @@ impl App {
                         let key_file = self.unlock_key_file.take();
                         self.remember_kdbx_path(&kdbx, key_file);
                         self.restore_session_credentials();
+                        // Web-Zwischenspeicher: Grenze, Ablauf und Reste der Felderkennung (im Hintergrund).
+                        self.webcache_cleanup_background();
                         self.start_snmp();
                         // Hauptkennwort im Schlüsselbund gemerkt? (Ergebnis vom Hintergrundfaden)
                         if let Some(r) = self.keyring_result.lock().unwrap_or_else(|e| e.into_inner()).take() {

@@ -243,6 +243,9 @@ impl Worker {
         let key = opts.profile.clone().unwrap_or_else(|| format!("{}-{}", url.host, url.port));
         let profile = profile_dir(&base, &key);
         std::fs::create_dir_all(&profile).map_err(|e| format!("Profil: {e}"))?;
+        // Zuletzt benutzt festhalten und den Zwischenspeicher auf die eingestellte Grenze bringen.
+        rj_web::cache::touch(&profile);
+        rj_web::cache::trim(&profile, rj_web::cache::settings().limit_mb);
         let trace = profile.join("protokoll.log");
         // Das Protokoll ist nur für die letzten Sitzungen gedacht.
         if std::fs::metadata(&trace).is_ok_and(|m| m.len() > 200_000) {

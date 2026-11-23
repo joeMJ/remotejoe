@@ -31,7 +31,7 @@ use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use wry::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
-use wry::{Rect, WebContext, WebView, WebViewBuilder, WebViewExtWindows};
+use wry::{Rect, WebContext, WebView, WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows};
 
 /// Anmeldung: Suche nach dem Kennwortfeld wiederholen (Abstand und Anzahl; zusammen 10 Sekunden).
 const LOGIN_RETRY_EVERY: Duration = Duration::from_millis(500);
@@ -360,6 +360,9 @@ impl Worker {
         let key = opts.profile.clone().unwrap_or_else(|| format!("{}-{}", url.host, url.port));
         let profile = profile_dir(&base, &key);
         std::fs::create_dir_all(&profile).map_err(|e| format!("Profil: {e}"))?;
+        // Zuletzt benutzt festhalten und den Zwischenspeicher auf die eingestellte Grenze bringen.
+        rj_web::cache::touch(&profile);
+        rj_web::cache::trim(&profile, rj_web::cache::settings().limit_mb);
         let trace = profile.join("protokoll.log");
         // Das Protokoll ist nur für die letzten Sitzungen gedacht.
         if std::fs::metadata(&trace).is_ok_and(|m| m.len() > 200_000) {
@@ -393,7 +396,11 @@ impl Worker {
         };
         let (x, y, w, h) = self.0.bounds.get();
         let mut ctx = WebContext::new(Some(profile.clone()));
+        // Grenze des Zwischenspeichers (Einstellungen → Daten → Web-Zwischenspeicher); die übrigen Angaben sind die
+        // Vorgaben von wry, die mit eigenen Argumenten sonst entfielen.
+        let cache_bytes = u64::from(rj_web::cache::settings().limit_mb.max(1)) * 1024 * 1024;
         let built = WebViewBuilder::new_with_web_context(&mut ctx)
+            .with_additional_browser_args(format!("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disk-cache-size={cache_bytes}"))
             .with_bounds(Rect {
                 position: Position::Physical(PhysicalPosition::new(x, y)),
                 size: Size::Physical(PhysicalSize::new(w.max(1) as u32, h.max(1) as u32)),

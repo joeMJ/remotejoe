@@ -48,6 +48,7 @@ public:
 	void reload();
 	/// Stand der Sicherung neu zeigen (nach einer Sicherung im Hintergrund).
 	void reloadBackup();
+	void reloadWebCache();
 	/// Lizenzseite neu aufbauen (nach Lizenzeingabe, Entfernen, Downloads).
 	void rebuildLicensePage();
 	/// Ergebnis eines Downloads einer Erweiterung (Art `plugin_fetch`): Zeile der Erweiterung aktualisieren.
@@ -101,10 +102,12 @@ private:
 	QString pluginStateText(const QString& id, const QJsonObject& j, const QJsonObject& mod) const;
 	QString licenseSummary() const;
 	QWidget* pageBackup();
+	QWidget* pageWebCache();
 	QWidget* pageMcp();
 	void saveMcp();
 	void reloadMcp();
 	void saveBackup();
+	void saveWebCache();
 
 	RjBackend* m_backend;
 	QStackedWidget* m_pages = nullptr;
@@ -168,6 +171,10 @@ private:
 	QLabel* m_bkKeyFile = nullptr;
 	QPushButton* m_bkNow = nullptr;
 	QString m_bkLocalDir;
+	QSpinBox* m_wcLimit = nullptr;
+	QSpinBox* m_wcDays = nullptr;
+	QLabel* m_wcState = nullptr;
+	QLabel* m_wcResult = nullptr;
 	/// Beiträge der Erweiterungen (Bereiche unter „Erweiterungen“).
 	std::vector<class RjSettingsPart*> m_parts;
 	// Eingebettete Bereiche

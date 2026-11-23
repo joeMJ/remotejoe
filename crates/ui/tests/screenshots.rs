@@ -7,7 +7,9 @@ use std::process::Command;
 fn offscreen_screenshots_and_start_time() {
     let dir = tempfile::tempdir().unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_remotejoe"));
-    cmd.args(["--screenshots", dir.path().to_str().unwrap()]).env("QT_QPA_PLATFORM", "offscreen");
+    // Eigener Programmordner: Einstellungen und installierte Erweiterungen des Rechners bleiben außen vor.
+    let home = tempfile::tempdir().unwrap();
+    cmd.args(["--screenshots", dir.path().to_str().unwrap()]).env("QT_QPA_PLATFORM", "offscreen").env("REMOTEJOE_HOME", home.path());
     // Offscreen findet unter Windows keine Schriften von selbst (nur Kästchen in den Bildern).
     #[cfg(windows)]
     if std::env::var_os("QT_QPA_FONTDIR").is_none() {
@@ -26,7 +28,7 @@ fn offscreen_screenshots_and_start_time() {
     let m = std::fs::read_to_string(dir.path().join("messwerte.txt")).unwrap();
     eprintln!("{m}");
     let get = |k: &str| m.lines().find_map(|l| l.strip_prefix(k)).and_then(|v| v.trim().parse::<i64>().ok()).unwrap();
-    assert_eq!(get("baum_eintraege="), 525, "500 Ziele, 20 Gruppen, 5 Standorte");
+    assert_eq!(get("baum_eintraege="), 528, "500 Ziele, 20 Gruppen, 5 Standorte, Favoriten mit 2 Einträgen");
     let bulk = m.lines().find_map(|l| l.strip_prefix("mehrere_ziele=")).unwrap_or_default();
     assert!(bulk.starts_with("4 Ziele werden angelegt, 3 Zeilen mit Fehlern"), "{bulk}");
     let ms = get("erstes_zeichnen_ms=");
