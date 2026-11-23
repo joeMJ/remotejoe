@@ -528,18 +528,44 @@ pub struct Manifest {
     pub api: u32,
     /// Älteste Version von remotejoe, mit der sie läuft.
     pub min_remotejoe: String,
-    /// Erweiterungen, die geladen und lizenziert sein müssen (Kennungen), z. B. eine Hersteller-Erweiterung ihre Oberfunktion.
+    /// Erweiterungen, die geladen und lizenziert sein müssen, z. B. eine Hersteller-Erweiterung ihre Oberfunktion:
+    /// Kennung, wahlweise mit Mindestversion („standorte>=1.2.0“), siehe [`dependency`].
     #[serde(default)]
     pub braucht: Vec<String>,
-    /// Anschlussstellen, die sie anderen Erweiterungen anbietet, z. B. „adapter“.
+    /// Anschlussstellen, die sie anderen Erweiterungen anbietet, mit Fassung („adapter@3“; ohne Angabe Fassung 1),
+    /// siehe [`interface`].
     #[serde(default)]
     pub stellt_bereit: Vec<String>,
-    /// Anschlussstellen anderer Erweiterungen, die sie nutzt.
+    /// Anschlussstellen anderer Erweiterungen, die sie nutzt, mit der Fassung, gegen die sie gebaut ist
+    /// („adapter@3“; ohne Angabe Fassung 1). Der Kern lädt sie nur, wenn der Anbieter genau diese Fassung anbietet.
     #[serde(default)]
     pub nutzt: Vec<String>,
 }
 
+/// Angabe aus `braucht` zerlegen: Kennung und Mindestversion („standorte“ → ("standorte", None),
+/// „standorte>=1.2.0“ → ("standorte", Some("1.2.0"))).
+pub fn dependency(entry: &str) -> (&str, Option<&str>) {
+    match entry.split_once(">=") {
+        Some((id, min)) => (id.trim(), Some(min.trim())),
+        None => (entry.trim(), None),
+    }
+}
+
+/// Anschlussstelle zerlegen: Name und Fassung („adapter“ → ("adapter", 1), „adapter@3“ → ("adapter", 3)). Eine
+/// unlesbare Fassung zählt als 0 (passt zu nichts; [`Manifest::parse`] lehnt sie ab).
+pub fn interface(entry: &str) -> (&str, u32) {
+    match entry.split_once('@') {
+        Some((name, v)) => (name.trim(), v.trim().parse().unwrap_or(0)),
+        None => (entry.trim(), 1),
+    }
+}
+
 impl Manifest {
+    /// Kennungen aus `braucht` (ohne Mindestversion).
+    pub fn braucht_ids(&self) -> Vec<String> {
+        self.braucht.iter().map(|b| dependency(b).0.to_string()).collect()
+    }
+
     /// Manifest aus JSON lesen und auf Vollständigkeit prüfen (Kennung, Name, Versionen).
     pub fn parse(text: &str) -> Result<Manifest, String> {
         let m: Manifest = serde_json::from_str(text).map_err(|e| format!("Manifest unlesbar: {e}"))?;
@@ -549,8 +575,14 @@ impl Manifest {
         if m.name.is_empty() || m.version.is_empty() || m.min_remotejoe.is_empty() {
             return Err(format!("Manifest der Erweiterung „{}“: Name, Version oder min_remotejoe fehlt", m.id));
         }
-        if m.braucht.iter().any(|b| b == &m.id) {
+        if m.braucht_ids().iter().any(|b| b == &m.id) {
             return Err(format!("Manifest der Erweiterung „{}“ braucht sich selbst", m.id));
+        }
+        if let Some(b) = m.braucht.iter().find(|b| dependency(b).0.is_empty() || dependency(b).1.is_some_and(str::is_empty)) {
+            return Err(format!("Manifest der Erweiterung „{}“: Angabe „{b}“ in braucht unlesbar", m.id));
+        }
+        if let Some(a) = m.stellt_bereit.iter().chain(&m.nutzt).find(|a| interface(a).0.is_empty() || interface(a).1 == 0) {
+            return Err(format!("Manifest der Erweiterung „{}“: Anschlussstelle „{a}“ unlesbar (Name oder Name@Fassung)", m.id));
         }
         Ok(m)
     }

@@ -39,6 +39,7 @@ pub mod legal;
 pub mod license;
 pub mod plugins;
 pub mod plugin_fetch;
+pub mod plugin_file;
 pub mod theme;
 pub mod tree;
 pub mod update;

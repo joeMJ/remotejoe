@@ -19,6 +19,8 @@ path = "src/main.rs"
 default = []
 
 [dependencies]
+# Probeordner beim Prüfen von Erweiterungspaketen aus einer Datei.
+tempfile.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 zeroize.workspace = true
 base64 = "0.22"

@@ -8,23 +8,41 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-/// Ordner des Zwischenspeichers relativ zum Profil: WebKitGTK (Linux) und WebView2 (Windows, `EBWebView`).
-pub const CACHE_DIRS: &[&str] = &[
-    "WebKitCache",
-    "CacheStorage",
-    "EBWebView/Default/Cache",
-    "EBWebView/Default/Code Cache",
-    "EBWebView/Default/GPUCache",
-    "EBWebView/Default/DawnGraphiteCache",
-    "EBWebView/Default/DawnWebGPUCache",
-    "EBWebView/Default/Service Worker/CacheStorage",
-    "EBWebView/Default/Service Worker/ScriptCache",
-    "EBWebView/ShaderCache",
-    "EBWebView/GrShaderCache",
-    "EBWebView/GraphiteDawnCache",
-    // Nutzungsmesswerte der Browser-Engine (wachsen mit jeder Sitzung, werden nie gebraucht).
-    "EBWebView/BrowserMetrics",
+/// Ordner des Zwischenspeichers relativ zum Profil eines Ziels (Linux, WebKitGTK bis 0.1.66; seit 0.1.67 hält die
+/// Web-Engine ihren Zwischenspeicher nur im Arbeitsspeicher).
+pub const CACHE_DIRS: &[&str] = &["WebKitCache", "CacheStorage"];
+
+/// Windows (WebView2): gemeinsamer Browser-Ordner aller Web-Ziele unter `web-profile`. Jedes Ziel ist darin ein
+/// eigenes Profil (`EBWebView/WV2Profile_<Ziel>`, eigene Cookies und Anmeldungen); Komponenten der Web-Engine liegen nur einmal
+/// da statt in jedem Ziel (bis 0.1.66: ein ganzer Browser-Ordner je Ziel, rund 70 MB Komponenten je Ziel).
+pub const SHARED_WEBVIEW2: &str = "_webview2";
+
+/// Zwischenspeicher im Profil eines Ziels im gemeinsamen Browser-Ordner (relativ zu `EBWebView/WV2Profile_<Ziel>`).
+pub const ENGINE_CACHE_DIRS: &[&str] = &["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "Service Worker/CacheStorage", "Service Worker/ScriptCache"];
+
+/// Gemeinsame Zwischenspeicher und nachgeladene Komponenten im gemeinsamen Browser-Ordner (relativ zu `EBWebView`),
+/// die remotejoe nicht braucht (Kopierschutz-Modul, Filterlisten, Spracherkennung, Silbentrennung, Nutzungsmesswerte).
+/// Werden nur entfernt, wenn keine Web-Sitzung läuft.
+pub const SHARED_JUNK_DIRS: &[&str] = &[
+    "ShaderCache",
+    "GrShaderCache",
+    "GraphiteDawnCache",
+    "BrowserMetrics",
+    "WidevineCdm",
+    "component_crx_cache",
+    "Subresource Filter",
+    "Speech Recognition",
+    "hyphen-data",
 ];
+
+/// Vorsilbe, die WebView2 dem Profilnamen im Ordner gibt (`EBWebView/WV2Profile_<Name>`, auf der VM gemessen).
+pub const WEBVIEW2_PROFILE_PREFIX: &str = "WV2Profile_";
+
+/// Profil eines Ziels im gemeinsamen Browser-Ordner (Windows); `profile` ist der Ordner des Ziels unter `web-profile`.
+pub fn engine_profile(profile: &Path) -> Option<PathBuf> {
+    let name = profile.file_name()?.to_string_lossy();
+    Some(profile.parent()?.join(SHARED_WEBVIEW2).join("EBWebView").join(format!("{WEBVIEW2_PROFILE_PREFIX}{name}")))
+}
 
 /// Merkdatei „zuletzt benutzt“ im Profil (Inhalt ohne Belang, es zählt die Änderungszeit).
 pub const LAST_USED: &str = "zuletzt-benutzt";
@@ -43,17 +61,26 @@ pub fn dir_size(p: &Path) -> u64 {
     std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| dir_size(&e.path())).sum()).unwrap_or(0)
 }
 
+/// Ordner des Zwischenspeichers eines Ziels (im Ordner des Ziels und, unter Windows, in seinem Profil im
+/// gemeinsamen Browser-Ordner).
+fn cache_paths(profile: &Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = CACHE_DIRS.iter().map(|d| profile.join(d)).collect();
+    if let Some(e) = engine_profile(profile) {
+        v.extend(ENGINE_CACHE_DIRS.iter().map(|d| e.join(d)));
+    }
+    v
+}
+
 /// Größe des Zwischenspeichers eines Profils.
 pub fn cache_size(profile: &Path) -> u64 {
-    CACHE_DIRS.iter().map(|d| dir_size(&profile.join(d))).sum()
+    cache_paths(profile).iter().map(|p| dir_size(p)).sum()
 }
 
 /// Zwischenspeicher eines Profils leeren; liefert die frei gewordenen Bytes. Gesperrte Dateien (laufende Sitzung)
 /// bleiben stehen.
 pub fn clear_cache(profile: &Path) -> u64 {
     let mut freed = 0;
-    for d in CACHE_DIRS {
-        let p = profile.join(d);
+    for p in cache_paths(profile) {
         let before = dir_size(&p);
         if before == 0 {
             continue;
@@ -79,6 +106,39 @@ pub fn touch(profile: &Path) {
     if let Ok(f) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&p) {
         let _ = f.set_modified(SystemTime::now());
     }
+}
+
+/// Daten der Web-Engine aus Fassungen bis 0.1.66 im Profil (Linux, WebKitGTK mit dauerhaftem Profil). Seit 0.1.67
+/// läuft die Web-Engine flüchtig ([`crate::cookies`]); diese Ordner werden nicht mehr benutzt. Darin lag unter
+/// anderem das Schreibprotokoll des lokalen Speichers, das ohne Grenze wuchs (mehrere GB).
+/// Unter Windows bis 0.1.66 der eigene Browser-Ordner je Ziel (`EBWebView`, samt Komponenten).
+pub const LEGACY_ENGINE_DATA: &[&str] = &["EBWebView", "localstorage", "storage", "databases", "WebKitCache", "CacheStorage", "mediakeys", "hsts-storage.sqlite", "deviceidhashsalts"];
+
+/// Altbestand eines Profils entfernen, das gerade nicht benutzt wird: alte Cookies einmal nach `cookies.json`
+/// übernehmen, dann die alten Daten der Web-Engine löschen. Liefert die frei gewordenen Bytes.
+pub fn remove_legacy(profile: &Path) -> u64 {
+    let legacy = profile.join(crate::cookies::LEGACY_FILE);
+    if legacy.is_file() {
+        if !profile.join(crate::cookies::FILE).is_file() {
+            let c = crate::cookies::load(profile);
+            if crate::cookies::save(profile, &c).is_err() {
+                // Ohne gesicherte Cookies nichts löschen (Anmeldungen gingen sonst verloren).
+                return 0;
+            }
+        }
+        let _ = std::fs::remove_file(&legacy);
+    }
+    let mut freed = 0;
+    for d in LEGACY_ENGINE_DATA {
+        let p = profile.join(d);
+        let before = dir_size(&p);
+        if before == 0 && !p.exists() {
+            continue;
+        }
+        let _ = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+        freed += before.saturating_sub(dir_size(&p));
+    }
+    freed
 }
 
 /// Zuletzt benutzt: Merkdatei, sonst die Änderungszeit des Profilordners.
@@ -109,11 +169,19 @@ pub fn stats(root: &Path) -> (u64, u64, usize) {
         cache += cache_size(&p);
         n += 1;
     }
+    // Gemeinsamer Browser-Ordner (Windows): enthält die Profile der Ziele (oben schon als Zwischenspeicher gezählt)
+    // und die gemeinsamen Teile.
+    let shared = root.join(SHARED_WEBVIEW2);
+    total += dir_size(&shared);
+    cache += SHARED_JUNK_DIRS.iter().map(|d| dir_size(&shared.join("EBWebView").join(d))).sum::<u64>();
     (total, cache, n)
 }
 
+/// Ordner der Ziele (ohne den gemeinsamen Browser-Ordner).
 fn profiles(root: &Path) -> Vec<PathBuf> {
-    std::fs::read_dir(root).map(|rd| rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| e.path()).collect()).unwrap_or_default()
+    std::fs::read_dir(root)
+        .map(|rd| rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) && e.file_name() != SHARED_WEBVIEW2).map(|e| e.path()).collect())
+        .unwrap_or_default()
 }
 
 /// Wie aufgeräumt wird.
@@ -151,9 +219,21 @@ pub fn cleanup(root: &Path, c: &Cleanup) -> Report {
         if c.in_use.contains(&name) {
             continue;
         }
+        // Altbestand der Web-Engine (bis 0.1.66) immer entfernen.
+        let legacy = remove_legacy(&p);
+        if legacy > 0 {
+            r.freed += legacy;
+            r.cleared += 1;
+        }
         let probe = name.ends_with(PROBE_SUFFIX);
         let orphan = c.known.is_some_and(|k| !k.contains(&name));
         if probe || (orphan && (c.all || expired(&p))) {
+            // Mit dem Ziel auch sein Profil im gemeinsamen Browser-Ordner.
+            if let Some(e) = engine_profile(&p).filter(|e| e.exists()) {
+                let before = dir_size(&e);
+                let _ = std::fs::remove_dir_all(&e);
+                r.freed += before.saturating_sub(dir_size(&e));
+            }
             let before = dir_size(&p);
             if std::fs::remove_dir_all(&p).is_ok() {
                 r.freed += before;
@@ -167,6 +247,18 @@ pub fn cleanup(root: &Path, c: &Cleanup) -> Report {
         if freed > 0 {
             r.freed += freed;
             r.cleared += 1;
+        }
+    }
+    // Gemeinsame Teile des Browser-Ordners nur, wenn keine Web-Sitzung läuft.
+    if c.in_use.is_empty() {
+        let shared = root.join(SHARED_WEBVIEW2).join("EBWebView");
+        for d in SHARED_JUNK_DIRS {
+            let p = shared.join(d);
+            let before = dir_size(&p);
+            if before > 0 {
+                let _ = std::fs::remove_dir_all(&p);
+                r.freed += before.saturating_sub(dir_size(&p));
+            }
         }
     }
     r
@@ -183,18 +275,18 @@ mod tests {
 
     fn profile(root: &Path, name: &str, cache: usize) -> PathBuf {
         let p = root.join(name);
-        file(&p.join("cookies"), 10);
+        file(&p.join("cookies.json"), 10);
         file(&p.join("zertifikate.json"), 20);
-        file(&p.join("storage/local.db"), 30);
-        file(&p.join("EBWebView/Default/Network/Cookies"), 40);
-        file(&p.join("WebKitCache/a"), cache);
-        file(&p.join("EBWebView/Default/Cache/Cache_Data/b"), cache);
+        let e = engine_profile(&p).unwrap();
+        file(&e.join("Network/Cookies"), 40);
+        file(&e.join("Cache/Cache_Data/a"), cache);
+        file(&e.join("Code Cache/js/b"), cache);
         touch(&p);
         p
     }
 
     fn kept(p: &Path) -> bool {
-        ["cookies", "zertifikate.json", "storage/local.db", "EBWebView/Default/Network/Cookies"].iter().all(|f| p.join(f).is_file())
+        ["cookies.json", "zertifikate.json"].iter().all(|f| p.join(f).is_file()) && engine_profile(p).unwrap().join("Network/Cookies").is_file()
     }
 
     #[test]
@@ -255,4 +347,66 @@ mod tests {
         assert!(trim(&p, 1) > MB);
         assert!(cache_size(&p) == 0 && kept(&p));
     }
+
+    /// Altbestand bis 0.1.66 (Linux): alte Cookies werden übernommen, die Daten der Web-Engine (u. a. das riesige
+    /// Schreibprotokoll des lokalen Speichers) entfernt; Zertifikate und „zuletzt benutzt“ bleiben. Ein Profil in
+    /// Benutzung bleibt unberührt.
+    #[test]
+    fn legacy_engine_data_is_removed_and_cookies_are_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let future = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600;
+        for name in ["alt", "offen"] {
+            let p = root.path().join(name);
+            file(&p.join("localstorage/https_192.0.2.1_0.localstorage-wal"), 5000);
+            file(&p.join("WebKitCache/x"), 100);
+            file(&p.join("hsts-storage.sqlite"), 10);
+            file(&p.join("zertifikate.json"), 10);
+            std::fs::write(p.join("cookies"), format!("192.0.2.1\tFALSE\t/\tTRUE\t{future}\tTOKEN\tabc\n")).unwrap();
+        }
+        let known: HashSet<String> = ["alt".to_string(), "offen".to_string()].into();
+        let in_use: HashSet<String> = ["offen".to_string()].into();
+        let r = cleanup(root.path(), &Cleanup { limit_mb: 50, keep_days: 7, known: Some(&known), in_use: &in_use, all: false, now: SystemTime::now() });
+        assert!(r.freed >= 5110, "{r:?}");
+        let alt = root.path().join("alt");
+        assert!(!alt.join("localstorage").exists() && !alt.join("WebKitCache").exists() && !alt.join("hsts-storage.sqlite").exists() && !alt.join("cookies").exists());
+        assert!(alt.join("zertifikate.json").exists());
+        assert_eq!(crate::cookies::load(&alt)[0].value, "abc", "Anmeldung übernommen");
+        assert!(root.path().join("offen/localstorage").exists(), "Profil in Benutzung bleibt unberührt");
+    }
+
+
+    /// Windows: gemeinsamer Browser-Ordner. Der alte Browser-Ordner je Ziel (bis 0.1.66, samt Komponenten) wird
+    /// entfernt, nachgeladene Komponenten im gemeinsamen Ordner ebenfalls (nur ohne laufende Sitzung); Anmeldungen
+    /// der Ziele bleiben; ein gelöschtes Ziel verschwindet samt seinem Profil im gemeinsamen Ordner.
+    #[test]
+    fn shared_webview2_folder_is_cleaned_without_losing_logins() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let shared = root.join(SHARED_WEBVIEW2).join("EBWebView");
+        file(&shared.join("WidevineCdm/4.10/widevinecdm.dll"), 5000);
+        file(&shared.join("component_crx_cache/x"), 4000);
+        file(&shared.join("Local State"), 10);
+        for name in ["ziel", "geloescht"] {
+            file(&root.join(name).join("zertifikate.json"), 10);
+            file(&root.join(name).join("EBWebView/WidevineCdm/4.10/widevinecdm.dll"), 3000);
+            file(&shared.join(format!("WV2Profile_{name}")).join("Network/Cookies"), 40);
+            file(&shared.join(format!("WV2Profile_{name}")).join("Cache/Cache_Data/a"), 700);
+        }
+        assert_eq!(stats(root).2, 2, "der gemeinsame Ordner ist kein Ziel");
+        let known: HashSet<String> = ["ziel".to_string()].into();
+        let none = HashSet::new();
+        let r = cleanup(root, &Cleanup { limit_mb: 50, keep_days: 7, known: Some(&known), in_use: &none, all: true, now: SystemTime::now() });
+        assert!(r.freed >= 5000 + 4000 + 3000 + 700, "{r:?}");
+        assert!(!root.join("ziel/EBWebView").exists(), "alter Browser-Ordner des Ziels entfernt");
+        assert!(!shared.join("WidevineCdm").exists() && !shared.join("component_crx_cache").exists());
+        assert!(shared.join("Local State").exists() && shared.join("WV2Profile_ziel/Network/Cookies").exists(), "Anmeldung bleibt");
+        assert_eq!(dir_size(&shared.join("WV2Profile_ziel/Cache")), 0);
+        assert!(!root.join("geloescht").exists() && !shared.join("WV2Profile_geloescht").exists(), "gelöschtes Ziel samt Profil entfernt");
+        // Läuft eine Sitzung, bleiben die gemeinsamen Teile.
+        file(&shared.join("WidevineCdm/neu"), 100);
+        let in_use: HashSet<String> = ["ziel".to_string()].into();
+        cleanup(root, &Cleanup { limit_mb: 50, keep_days: 7, known: Some(&known), in_use: &in_use, all: true, now: SystemTime::now() });
+        assert!(shared.join("WidevineCdm/neu").exists());
+    }
+
 }

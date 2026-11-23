@@ -18,7 +18,7 @@ use rj_ipc::worker::{Sender, WorkerLink};
 use rj_ipc::*;
 use rj_web::*;
 use webkit2gtk::{
-    CookieManagerExt, CookiePersistentStorage, HardwareAccelerationPolicy, HitTestResultExt, LoadEvent, OptionMenu, SettingsExt,
+    CookieManagerExt, HardwareAccelerationPolicy, HitTestResultExt, LoadEvent, OptionMenu, SettingsExt,
     WebContext, WebContextExt, WebView, WebViewExt, WebsiteDataManager, WebsiteDataManagerExt,
 };
 
@@ -78,6 +78,11 @@ pub fn run() {
         }
         glib::ControlFlow::Continue
     });
+    let w4 = w.clone();
+    glib::timeout_add_local(Duration::from_secs(30), move || {
+        w4.save_cookies();
+        glib::ControlFlow::Continue
+    });
     let w3 = w.clone();
     glib::timeout_add_local(RENDER_TICK, move || {
         w3.tick();
@@ -131,6 +136,10 @@ struct Inner {
     deferred: RefCell<VecDeque<(Instant, Deferred)>>,
     last_click: Cell<Option<Instant>>,
     last_key: Cell<Option<Instant>>,
+    /// Profil und Startadresse der Sitzung (Cookies sichern).
+    session: RefCell<Option<(std::path::PathBuf, String)>>,
+    /// Beenden angefordert: nur noch Cookies sichern, dann Ende.
+    closing: Cell<bool>,
 }
 
 enum Deferred {
@@ -161,6 +170,8 @@ impl Worker {
             last_error: RefCell::new(None),
             started: Instant::now(),
             trace_path: RefCell::new(None),
+            session: RefCell::new(None),
+            closing: Cell::new(false),
             load_started: Cell::new(None),
             login_busy: Cell::new(false),
             deferred: RefCell::new(VecDeque::new()),
@@ -189,7 +200,14 @@ impl Worker {
     /// Verarbeitet eine Nachricht; `false` beendet den Worker.
     fn handle(&self, m: ToWorker) -> bool {
         match m {
-            ToWorker::Shutdown => return false,
+            ToWorker::Shutdown => {
+                // Erst die Cookies sichern (läuft über die Hauptschleife), dann beenden. Der Aufpasser im Kern wartet
+                // eine halbe Sekunde; regelmäßig gesichert wird ohnehin (alle 30 s und nach jedem Laden).
+                if !self.0.closing.replace(true) {
+                    self.save_cookies();
+                    glib::timeout_add_local_once(Duration::from_millis(300), gtk::main_quit);
+                }
+            }
             ToWorker::Ping => self.send(FromWorker::Pong),
             ToWorker::Credentials(c) => {
                 *self.0.creds.borrow_mut() = Some(c);
@@ -233,6 +251,34 @@ impl Worker {
         true
     }
 
+    /// Dauerhafte Cookies der Sitzung sichern (Startadresse und aktuelle Seite; die Web-Engine kann Cookies nur je
+    /// Adresse liefern). Ersetzt den gesicherten Stand, damit eine Abmeldung auch gesichert ist.
+    fn save_cookies(&self) {
+        let Some((profile, start)) = self.0.session.borrow().clone() else { return };
+        let Some(view) = self.0.page.borrow().as_ref().map(|p| p.view.clone()) else { return };
+        let Some(cm) = view.context().and_then(|c| c.website_data_manager()).and_then(|m| m.cookie_manager()) else { return };
+        let mut uris = vec![start];
+        if let Some(u) = view.uri().map(|u| u.to_string()).filter(|u| u.starts_with("http")) {
+            if !uris.contains(&u) {
+                uris.push(u);
+            }
+        }
+        let all: Rc<RefCell<Vec<rj_web::cookies::StoredCookie>>> = Rc::new(RefCell::new(Vec::new()));
+        let left = Rc::new(Cell::new(uris.len()));
+        for u in uris {
+            let (all, left, profile) = (all.clone(), left.clone(), profile.clone());
+            cm.cookies(&u, None::<&gtk::gio::Cancellable>, move |r| {
+                if let Ok(list) = r {
+                    all.borrow_mut().extend(stored(list));
+                }
+                left.set(left.get() - 1);
+                if left.get() == 0 {
+                    let _ = rj_web::cookies::save(&profile, &all.borrow());
+                }
+            });
+        }
+    }
+
     fn open(&self, r: ConnectRequest) -> Result<(), String> {
         let opts: WebOptions = if r.options_json.trim().is_empty() { WebOptions::default() } else { serde_json::from_str(&r.options_json).map_err(|e| format!("Optionen: {e}"))? };
         let url = start_url(&opts, &r.host, r.port).map_err(|e| e.to_string())?;
@@ -262,7 +308,7 @@ impl Worker {
         *self.0.frame.borrow_mut() = Frame::default();
         self.send(FromWorker::State(SessionState::Connecting));
 
-        let view = new_view(&profile);
+        let view = new_view();
         let window = gtk::OffscreenWindow::new();
         let (w, h) = (r.width.clamp(64, 8192) as i32, r.height.clamp(64, 8192) as i32);
         view.set_size_request(w, h);
@@ -277,7 +323,11 @@ impl Worker {
         let page = Rc::new(Page { window, view: view.clone(), tls });
         *self.0.page.borrow_mut() = Some(page);
         self.focus(true);
-        view.load_uri(&url.url);
+        *self.0.session.borrow_mut() = Some((profile.clone(), url.url.clone()));
+        // Gesicherte Cookies einspielen, erst danach laden (sonst ginge die erste Anfrage ohne Anmeldung hinaus).
+        let start = url.url.clone();
+        let v2 = view.clone();
+        restore_cookies(&view, &profile, move || v2.load_uri(&start));
         self.send(FromWorker::State(SessionState::Connected));
         self.send(FromWorker::Log(format!("Web-Sitzung geöffnet: {}", url.host)));
         Ok(())
@@ -307,6 +357,7 @@ impl Worker {
             me.trace(&format!("{name}{dur}: {shown}"));
             me.status(v);
             if ev == LoadEvent::Finished {
+                me.save_cookies();
                 let uri = v.uri().map(|u| u.to_string()).unwrap_or_default();
                 let action = me.0.flow.borrow_mut().page_loaded(&uri);
                 match action {
@@ -883,12 +934,77 @@ fn button_mask(n: u32) -> u32 {
     }
 }
 
-fn new_view(profile: &Path) -> WebView {
-    let dir = profile.to_string_lossy().to_string();
-    let manager = WebsiteDataManager::builder().base_cache_directory(dir.as_str()).base_data_directory(dir.as_str()).build();
-    if let Some(cm) = manager.cookie_manager() {
-        cm.set_persistent_storage(&profile.join("cookies").to_string_lossy(), CookiePersistentStorage::Text);
+/// Gesicherte Cookies des Profils in die Web-Engine einspielen, danach `then` aufrufen (spätestens nach 2 s).
+fn restore_cookies(view: &WebView, profile: &Path, then: impl FnOnce() + 'static) {
+    let stored = rj_web::cookies::load(profile);
+    let then: Rc<RefCell<Option<Box<dyn FnOnce()>>>> = Rc::new(RefCell::new(Some(Box::new(then))));
+    let fire = {
+        let then = then.clone();
+        move || {
+            if let Some(f) = then.borrow_mut().take() {
+                f();
+            }
+        }
+    };
+    let cm = view.context().and_then(|c| c.website_data_manager()).and_then(|m| m.cookie_manager());
+    let Some(cm) = cm.filter(|_| !stored.is_empty()) else {
+        fire();
+        return;
+    };
+    let left = Rc::new(Cell::new(stored.len()));
+    for c in stored {
+        let mut ck = soup::Cookie::new(&c.name, &c.value, &c.domain, &c.path, -1);
+        if let Ok(t) = glib::DateTime::from_unix_utc(c.expires) {
+            ck.set_expires(&t);
+        }
+        ck.set_secure(c.secure);
+        ck.set_http_only(c.http_only);
+        ck.set_same_site_policy(match c.same_site.as_str() {
+            "strict" => soup::SameSitePolicy::Strict,
+            "none" => soup::SameSitePolicy::None,
+            _ => soup::SameSitePolicy::Lax,
+        });
+        let (left, fire) = (left.clone(), fire.clone());
+        cm.add_cookie(&mut ck, None::<&gtk::gio::Cancellable>, move |_| {
+            left.set(left.get() - 1);
+            if left.get() == 0 {
+                fire();
+            }
+        });
     }
+    glib::timeout_add_local_once(Duration::from_secs(2), fire);
+}
+
+/// Dauerhafte Cookies einer Liste der Web-Engine in das Format von remotejoe.
+fn stored(list: Vec<soup::Cookie>) -> Vec<rj_web::cookies::StoredCookie> {
+    list.into_iter()
+        .filter_map(|mut c| {
+            let expires = c.expires()?.to_unix();
+            Some(rj_web::cookies::StoredCookie {
+                name: c.name()?.to_string(),
+                value: c.value().map(|v| v.to_string()).unwrap_or_default(),
+                domain: c.domain()?.to_string(),
+                path: c.path().map(|v| v.to_string()).unwrap_or_else(|| "/".into()),
+                expires,
+                secure: c.is_secure(),
+                http_only: c.is_http_only(),
+                same_site: match c.same_site_policy() {
+                    soup::SameSitePolicy::Strict => "strict",
+                    soup::SameSitePolicy::None => "none",
+                    _ => "lax",
+                }
+                .into(),
+            })
+        })
+        .collect()
+}
+
+/// Neue WebView mit flüchtigem Profil der Web-Engine: Lokaler Speicher, Datenbanken und Zwischenspeicher der Seite
+/// liegen nur im Arbeitsspeicher. WebKitGTK leert sonst das Schreibprotokoll seines lokalen Speichers nie, und eine
+/// Seite, die ständig schreibt, füllt die Platte (gemessen: über 1 GB pro Stunde). Cookies sichert remotejoe selbst
+/// ([`rj_web::cookies`]), angenommene Zertifikate ebenfalls (`zertifikate.json`).
+fn new_view() -> WebView {
+    let manager = WebsiteDataManager::new_ephemeral();
     let ctx = WebContext::with_website_data_manager(&manager);
     ctx.set_automation_allowed(false);
     let view = WebView::with_context(&ctx);

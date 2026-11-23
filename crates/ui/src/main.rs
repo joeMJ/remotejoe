@@ -1,6 +1,6 @@
 //! remotejoe – Verbindungsmanager.
 //!
-//! Aufruf: `remotejoe [--demo] [--fenster-zuruecksetzen] [--screenshots <ordner>]`
+//! Aufruf: `remotejoe [--demo] [--fenster-zuruecksetzen] [--ohne-erweiterungen] [--screenshots <ordner>]`
 
 // Windows: Fensterprogramm, ohne Konsolenfenster beim Start aus dem Startmenü oder Explorer.
 #![cfg_attr(windows, windows_subsystem = "windows")]
@@ -15,6 +15,10 @@ fn main() {
     }
     if args.iter().any(|a| a == "--fenster-zuruecksetzen") {
         std::env::set_var("RJ_RESET_WINDOW", "1");
+    }
+    // Notausgang: dieser Start ohne Erweiterungen (z. B. wenn eine Erweiterung den Start verhindert).
+    if args.iter().any(|a| a == "--ohne-erweiterungen") {
+        std::env::set_var("RJ_NO_PLUGINS_ARG", "1");
     }
     if let Some(i) = args.iter().position(|a| a == "--screenshots") {
         if let Some(dir) = args.get(i + 1) {

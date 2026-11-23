@@ -5275,6 +5275,8 @@ void MainWindow::closeEvent(QCloseEvent* e)
 	for (auto& w : m_windows)
 		if (w)
 			w->close();
+	// Reguläres Beenden: Startmarke des Absturzwächters entfernen.
+	edit({ { QStringLiteral("op"), QStringLiteral("plugins_start_ok") } });
 	QMainWindow::closeEvent(e);
 }
 

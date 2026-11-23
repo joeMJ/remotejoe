@@ -51,6 +51,14 @@ document.getElementById(r+'Pg1').onclick=function(){fetch('/login',{method:'POST
 fn page_for(path: &str) -> String {
     match path {
         "/login" => "<html><body>angemeldet</body></html>".into(),
+        // Wie die Oberfläche eines Controllers: schreibt ständig denselben Zustand (rund 64 KB) in den lokalen
+        // Speicher. Meldet jede 50. Schreibrunde.
+        // Anmeldung wie bei einem Gerät: dauerhaftes Cookie setzen bzw. melden, ob es noch da ist.
+        "/cookie-setzen" => "<html><body><script>document.cookie='sitzung=abc123; max-age=86400; path=/';document.cookie='kurz=1; path=/';fetch('/ev?gesetzt');</script></body></html>".into(),
+        "/cookie-pruefen" => "<html><body><script>fetch('/ev?cookies='+encodeURIComponent(document.cookie));</script></body></html>".into(),
+        "/speicher" => "<html><body>Speicher<script>var n=0,v='x'.repeat(65536);setInterval(function(){for(var i=0;i<4;i++)localStorage.setItem('zustand'+i,v+n);\
+n++;if(n%50==0)fetch('/ev?runde='+n);},20);</script></body></html>"
+            .into(),
         "/eingabe" => INPUT_PAGE.into(),
         // Formular erst nach 1,5 s und in einer Webkomponente (Shadow-DOM), wie bei Oberflächen, die nachladen.
         "/spaet" => "<html><body><p>lade …</p><script>setTimeout(function(){var h=document.createElement('div');document.body.appendChild(h);\
@@ -720,4 +728,80 @@ fn late_form_in_a_web_component_is_found_after_waiting() {
     assert_eq!(sel("passwords"), ["#pw"], "{f}");
     assert!(sel("submits").contains(&"#go".to_string()), "{f}");
     assert!(f["users"][0]["label"].as_str().unwrap().contains("Benutzername"), "{f}");
+}
+
+/// Größe der Schreibprotokolle (`*-wal`) des lokalen Speichers im Profil `profile` unter dem Datenordner `data`.
+fn wal_bytes(data: &std::path::Path, profile: &str) -> u64 {
+    let dir = data.join("remotejoe").join("web-profile").join(profile).join("localstorage");
+    std::fs::read_dir(dir).map(|rd| rd.flatten().filter(|e| e.file_name().to_string_lossy().ends_with("-wal")).filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()).unwrap_or(0)
+}
+
+/// Eine Seite, die ständig in ihren lokalen Speicher schreibt (wie eine Controller-Oberfläche): Das Schreibprotokoll der
+/// Web-Engine darf nicht unbegrenzt wachsen und muss nach dem Schließen weg sein.
+#[test]
+fn local_storage_does_not_grow_without_bound() {
+    let Some(x) = xvfb() else { return };
+    let data = tempfile::tempdir().unwrap();
+    let (port, rx) = http_server();
+    let opts = serde_json::json!({"url": format!("http://127.0.0.1:{port}/speicher"), "allow_http": true, "profile": "speicher"});
+    let mut s = Sess::start(&x.display, data.path(), opts, 800, 600, false);
+    let mut max = 0;
+    let t = Instant::now();
+    let mut last = 0;
+    while t.elapsed() < Duration::from_secs(40) {
+        if let Some(r) = wait_ev(&mut s, &rx, "runde=", 5) {
+            last = r.parse().unwrap_or(last);
+        }
+        let w = wal_bytes(data.path(), "speicher");
+        max = max.max(w);
+        eprintln!("Messung: {:>5.1} s, Runde {last}, Schreibprotokoll {} KB", t.elapsed().as_secs_f32(), w / 1024);
+    }
+    assert!(last >= 200, "Seite hat kaum geschrieben: Runde {last}");
+    s.sup.stop(s.id);
+    std::thread::sleep(Duration::from_secs(2));
+    let after = wal_bytes(data.path(), "speicher");
+    eprintln!("Messung: höchstens {} KB während der Sitzung, nach dem Schließen {} KB", max / 1024, after / 1024);
+    assert!(max < 8 * 1024 * 1024, "Schreibprotokoll wächst ohne Grenze: {} KB", max / 1024);
+    assert!(after < 1024 * 1024, "nach dem Schließen liegen noch {} KB", after / 1024);
+}
+
+/// Flüchtiges Profil, aber Anmeldungen bleiben: Ein dauerhaftes Cookie überlebt Schließen und erneutes Öffnen, ein
+/// Sitzungs-Cookie nicht (wie im Browser). Auf der Platte liegt nur die Cookie-Datei von remotejoe, keine Datenbank
+/// der Web-Engine.
+#[test]
+fn login_cookies_survive_closing_with_ephemeral_profile() {
+    let Some(x) = xvfb() else { return };
+    let data = tempfile::tempdir().unwrap();
+    let (port, rx) = http_server();
+    let opts = |p: &str| serde_json::json!({"url": format!("http://127.0.0.1:{port}/{p}"), "allow_http": true, "profile": "geraet"});
+    let mut s = Sess::start(&x.display, data.path(), opts("cookie-setzen"), 640, 480, false);
+    assert!(wait_ev(&mut s, &rx, "gesetzt", 60).is_some(), "Seite nicht geladen: {:?}", s.log);
+    s.pump(Duration::from_millis(500));
+    s.sup.stop(s.id);
+    drop(s);
+    let profile = data.path().join("remotejoe/web-profile/geraet");
+    let saved = std::fs::read_to_string(profile.join("cookies.json")).unwrap_or_default();
+    assert!(saved.contains("abc123") && !saved.contains("\"kurz\""), "gesichert: {saved}");
+    let mut s = Sess::start(&x.display, data.path(), opts("cookie-pruefen"), 640, 480, false);
+    let c = wait_ev(&mut s, &rx, "cookies=", 60).expect("Seite meldet keine Cookies");
+    assert!(c.contains("sitzung=abc123") && !c.contains("kurz=1"), "nach erneutem Öffnen: {c}");
+    let left: Vec<String> = walk(&profile);
+    assert!(left.iter().all(|f| !f.contains("localstorage") && !f.contains("WebKitCache") && !f.ends_with("-wal")), "Daten der Web-Engine auf der Platte: {left:?}");
+}
+
+/// Alle Dateien unter `dir` (relativ).
+fn walk(dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                out.push(p.strip_prefix(dir).unwrap_or(&p).display().to_string());
+            }
+        }
+    }
+    out
 }

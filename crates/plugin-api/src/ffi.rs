@@ -358,12 +358,14 @@ macro_rules! export_plugins {
         #[no_mangle]
         pub extern "C" fn rj_plugin_manifest() -> *const ::std::ffi::c_char {
             static M: ::std::sync::OnceLock<::std::ffi::CString> = ::std::sync::OnceLock::new();
-            M.get_or_init(|| ::std::ffi::CString::new($manifest).unwrap_or_default()).as_ptr()
+            // Nie eine Panik über die C-Grenze: im Fehlerfall leerer Text (der Kern lehnt das Manifest dann ab).
+            ::std::panic::catch_unwind(|| M.get_or_init(|| ::std::ffi::CString::new($manifest).unwrap_or_default()).as_ptr()).unwrap_or(c"".as_ptr())
         }
 
+        /// Zahl der Erweiterungen; 0, wenn ihr Aufbau mit einer Panik scheitert.
         #[no_mangle]
         pub extern "C" fn rj_plugin_count() -> u32 {
-            __rj_plugins().len() as u32
+            ::std::panic::catch_unwind(|| __rj_plugins().len() as u32).unwrap_or(0)
         }
 
         /// Methode `op` der Erweiterung `idx` mit JSON-Argumenten; Ergebnis als JSON (freizugeben mit
@@ -426,6 +428,9 @@ pub mod host {
     type HostCtx = *mut dyn Host;
 
     unsafe extern "C" fn host_call(ctx: *mut c_void, op: *const c_char, args: *const c_char) -> *mut c_char {
+        if ctx.is_null() || op.is_null() {
+            return to_c(&err("Aufruf ohne Kontext"));
+        }
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let h: &mut dyn Host = &mut **(ctx as *mut HostCtx);
             let op = CStr::from_ptr(op).to_string_lossy().into_owned();
@@ -438,11 +443,25 @@ pub mod host {
     }
 
     unsafe extern "C" fn host_shared(ctx: *mut c_void) -> RjSharedVt {
-        let h: &mut dyn Host = &mut **(ctx as *mut HostCtx);
-        shared_vt(h.shared())
+        if ctx.is_null() {
+            return dead_vt();
+        }
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let h: &mut dyn Host = &mut **(ctx as *mut HostCtx);
+            shared_vt(h.shared())
+        }));
+        r.unwrap_or_else(|_| dead_vt())
+    }
+
+    /// Zugang, der jede Anfrage mit einem Fehler beantwortet (nach einer Panik im Kern statt eines Abbruchs).
+    fn dead_vt() -> RjSharedVt {
+        RjSharedVt { ctx: std::ptr::null_mut(), call: shared_call, free: free_c, clone: shared_clone, drop: shared_drop }
     }
 
     unsafe extern "C" fn shared_call(ctx: *mut c_void, op: *const c_char, args: *const c_char) -> *mut c_char {
+        if ctx.is_null() || op.is_null() {
+            return to_c(&err("Zugang zum Kern nicht verfügbar"));
+        }
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let s: &Arc<dyn HostShared> = &*(ctx as *const Arc<dyn HostShared>);
             let op = CStr::from_ptr(op).to_string_lossy().into_owned();
@@ -455,12 +474,65 @@ pub mod host {
     }
 
     unsafe extern "C" fn shared_clone(ctx: *mut c_void) -> *mut c_void {
-        let s: &Arc<dyn HostShared> = &*(ctx as *const Arc<dyn HostShared>);
-        Box::into_raw(Box::new(s.clone())) as *mut c_void
+        if ctx.is_null() {
+            return std::ptr::null_mut();
+        }
+        std::panic::catch_unwind(|| {
+            let s: &Arc<dyn HostShared> = &*(ctx as *const Arc<dyn HostShared>);
+            Box::into_raw(Box::new(s.clone())) as *mut c_void
+        })
+        .unwrap_or(std::ptr::null_mut())
     }
 
     unsafe extern "C" fn shared_drop(ctx: *mut c_void) {
-        drop(Box::from_raw(ctx as *mut Arc<dyn HostShared>));
+        if ctx.is_null() {
+            return;
+        }
+        let _ = std::panic::catch_unwind(|| drop(Box::from_raw(ctx as *mut Arc<dyn HostShared>)));
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Rückrufe des Kerns ohne gültigen Kontext antworten mit einem Fehler, statt abzustürzen.
+        #[test]
+        fn callbacks_survive_null_contexts() {
+            unsafe {
+                let vt = host_shared(std::ptr::null_mut());
+                assert!(vt.ctx.is_null());
+                let p = (vt.call)(vt.ctx, c"x".as_ptr(), c"null".as_ptr());
+                assert!(unres(from_c(p)).unwrap_err().contains("nicht verfügbar"));
+                free_c(p);
+                assert!((vt.clone)(vt.ctx).is_null());
+                (vt.drop)(vt.ctx);
+                let p = host_call(std::ptr::null_mut(), c"x".as_ptr(), c"null".as_ptr());
+                assert!(unres(from_c(p)).unwrap_err().contains("ohne Kontext"));
+                free_c(p);
+            }
+        }
+
+        struct Panicky;
+        impl HostShared for Panicky {
+            fn call(&self, _op: &str, _args: Value) -> Result<Value, String> {
+                panic!("Testpanik");
+            }
+        }
+
+        /// Eine Panik im Kern während eines Rückrufs wird zur Fehlermeldung (vorher: Abbruch des Programms).
+        #[test]
+        fn panic_in_core_callback_becomes_an_error() {
+            let vt = shared_vt(Arc::new(Panicky));
+            unsafe {
+                let c = (vt.clone)(vt.ctx);
+                assert!(!c.is_null());
+                let p = (vt.call)(c, c"x".as_ptr(), c"null".as_ptr());
+                assert!(unres(from_c(p)).unwrap_err().contains("Panik im Kern"));
+                free_c(p);
+                (vt.drop)(c);
+                (vt.drop)(vt.ctx);
+            }
+        }
     }
 
     fn shared_vt(s: Arc<dyn HostShared>) -> RjSharedVt {

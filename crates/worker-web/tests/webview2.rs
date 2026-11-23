@@ -340,7 +340,11 @@ fn form_login_with_script_and_profile_per_target() {
     assert!(s.wait(30, |s| s.loaded("Angemeldet")), "Nach der Anmeldung: {:?}", s.status_title());
     drop(s);
     let profile = profile_of(home.path());
-    assert!(profile.join("EBWebView").is_dir(), "Profilordner mit Browserdaten fehlt: {}", profile.display());
+    // Browserdaten im gemeinsamen Browser-Ordner, Profil je Ziel; im Ordner des Ziels nur Dateien von remotejoe.
+    let shared = home.path().join("daten/web-profile/_webview2/EBWebView");
+    assert!(shared.join("WV2Profile_6f1c0000-0000-4000-8000-0000000000aa").is_dir(), "Profil im gemeinsamen Browser-Ordner fehlt: {}", shared.display());
+    assert_eq!(rj_web::cache::engine_profile(&profile), Some(shared.join("WV2Profile_6f1c0000-0000-4000-8000-0000000000aa")), "Aufräumen findet das Profil");
+    assert!(!profile.join("EBWebView").exists(), "kein eigener Browser-Ordner mehr je Ziel");
     assert!(profile.join("protokoll.log").is_file());
     // Ein zweites Ziel hat sein eigenes Profil.
     let mut o = opts(&format!("http://127.0.0.1:{port}/titel"));
@@ -348,7 +352,7 @@ fn form_login_with_script_and_profile_per_target() {
     let mut s = Sess::start(home.path(), &[], o, true);
     assert!(s.wait(60, |s| s.loaded("Prüfseite ä")));
     drop(s);
-    assert!(home.path().join("daten/web-profile/6f1c0000-0000-4000-8000-0000000000bb/EBWebView").is_dir());
+    assert!(shared.join("WV2Profile_6f1c0000-0000-4000-8000-0000000000bb").is_dir(), "zweites Ziel mit eigenem Profil");
     // Kennwort gelangt nie ins Protokoll.
     let trace = std::fs::read_to_string(profile.join("protokoll.log")).unwrap();
     assert!(!trace.contains("Kennwort") || !trace.contains("Prüf-"), "{trace}");
@@ -640,4 +644,49 @@ fn page_embeds_into_a_window_of_another_process() {
     s.command(serde_json::json!({"op": "embed", "hwnd": host2.hwnd}));
     assert!(s.wait(10, |_| children_of_process(host2.hwnd, pid).iter().any(|c| c.0 == "WRY_WEBVIEW")), "Seite nicht umgezogen");
     assert!(children_of_process(host.hwnd, pid).iter().all(|c| c.0 != "WRY_WEBVIEW"), "Seite noch im alten Fenster");
+}
+
+/// Größe eines Ordners samt Unterordnern.
+fn size_of(p: &Path) -> u64 {
+    let Ok(m) = std::fs::metadata(p) else { return 0 };
+    if !m.is_dir() {
+        return m.len();
+    }
+    std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| size_of(&e.path())).sum()).unwrap_or(0)
+}
+
+/// Drei Web-Ziele teilen sich einen Browser-Ordner (je ein Profil); zwei laufen gleichzeitig, das erste wird
+/// geschlossen, die anderen arbeiten weiter.
+#[test]
+fn shared_browser_folder_for_all_targets() {
+    if !runtime_available() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let (port, _rx) = http_server();
+    let o = |id: &str| {
+        let mut o = opts(&format!("http://127.0.0.1:{port}/titel"));
+        o["profile"] = serde_json::json!(format!("6f1c0000-0000-4000-8000-0000000000{id}"));
+        o
+    };
+    let mut a = Sess::start(home.path(), &[], o("a1"), true);
+    assert!(a.wait(60, |s| s.loaded("Prüfseite ä")), "erstes Ziel: {:?}", a.log);
+    let mut b = Sess::start(home.path(), &[], o("b2"), true);
+    assert!(b.wait(60, |s| s.loaded("Prüfseite ä")), "zweites Ziel gleichzeitig: {:?}", b.log);
+    drop(a);
+    let mut c = Sess::start(home.path(), &[], o("c3"), true);
+    assert!(c.wait(60, |s| s.loaded("Prüfseite ä")), "drittes Ziel nach Schließen des ersten: {:?}", c.log);
+    // Das zweite lebt weiter (der Aufpasser meldet ein Ende als Panik) und lädt neu.
+    b.command(serde_json::json!({ "op": "nav", "action": "reload" }));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        b.pump(Duration::from_millis(200));
+        c.pump(Duration::from_millis(200));
+    }
+    assert!(b.loaded("Prüfseite ä"), "zweites Ziel nach dem Neuladen: {:?}", b.log);
+    let shared = home.path().join("daten/web-profile/_webview2/EBWebView");
+    for id in ["a1", "b2", "c3"] {
+        assert!(shared.join(format!("WV2Profile_6f1c0000-0000-4000-8000-0000000000{id}")).is_dir(), "Profil {id}");
+    }
+    eprintln!("Messung: gemeinsamer Browser-Ordner {} KB", size_of(&shared) / 1024);
 }

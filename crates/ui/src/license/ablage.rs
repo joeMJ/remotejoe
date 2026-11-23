@@ -8,17 +8,20 @@
 //! dann die Prüfsumme des Pakets. Das Kennwort steht nie in Protokollen oder Fehlermeldungen.
 
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::Mutex;
 
 use rj_update::http::{self, Control};
 use rj_update::Version;
 use rj_update::Limits;
 
-/// Angemeldete Sitzung an einem Freigabe-Link.
+/// Angemeldete Sitzung an einem Freigabe-Link. Alle Abrufe laufen über einen Client mit offener Verbindung
+/// (keep-alive), damit nicht jede Anfrage und jede Weiterleitung eine neue Verbindung öffnet.
 pub struct Sitzung {
     base: String,
     link: String,
     token: String,
     cookies: Vec<(String, String)>,
+    client: Mutex<http::Client>,
 }
 
 /// Ein Eintrag eines Ordners der Ablage.
@@ -93,6 +96,20 @@ impl Sitzung {
         ("Cookie".into(), self.cookies.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; "))
     }
 
+    fn client(&self) -> std::sync::MutexGuard<'_, http::Client> {
+        self.client.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Rechner der Quelle für Meldungen.
+    fn host(&self) -> &str {
+        self.base.trim_start_matches("https://").trim_start_matches("http://")
+    }
+
+    /// Zahl der bisher geöffneten Verbindungen dieser Sitzung.
+    pub fn verbindungen(&self) -> u64 {
+        self.client().connections()
+    }
+
     fn headers(&self) -> Vec<(String, String)> {
         vec![self.cookie_header(), ("Referer".into(), self.link.clone()), ("Accept".into(), "application/json, */*".into())]
     }
@@ -102,8 +119,8 @@ impl Sitzung {
         let (base, token) = parse_link(url)?;
         let link = format!("{base}/d/{token}/");
         let ctl = Control::new(Limits { max_bytes: 2 * 1024 * 1024, timeout: std::time::Duration::from_secs(30) }, cancel);
-        let mut s = Sitzung { base, link: link.clone(), token, cookies: Vec::new() };
-        let r = http::request("GET", &link, &[], &[], &ctl).map_err(|e| format!("Update-Quelle nicht erreichbar: {e}"))?;
+        let mut s = Sitzung { base, link: link.clone(), token, cookies: Vec::new(), client: Mutex::new(http::Client::new()) };
+        let r = s.client().request("GET", &link, &[], &[], &ctl).map_err(|e| format!("Update-Quelle {} nicht erreichbar (beim Laden der Anmeldeseite): {}", s.host(), http::describe(&e)))?;
         if r.status == 404 {
             return Err("Freigabe-Link nicht gefunden (abgelaufen oder gelöscht).".into());
         }
@@ -117,7 +134,7 @@ impl Sitzung {
         let body = format!("csrfmiddlewaretoken={}&token={}&password={}", form_enc(&csrf), form_enc(&form_token), form_enc(kennwort));
         let mut hs = s.headers();
         hs.push(("Content-Type".into(), "application/x-www-form-urlencoded".into()));
-        let r = http::request("POST", &link, &hs, body.as_bytes(), &ctl).map_err(|e| format!("Anmeldung an der Update-Quelle: {e}"))?;
+        let r = s.client().request("POST", &link, &hs, body.as_bytes(), &ctl).map_err(|e| format!("Anmeldung an der Update-Quelle {}: {}", s.host(), http::describe(&e)))?;
         merge_cookies(&mut s.cookies, &r.headers);
         // Erfolg: Weiterleitung oder Seite ohne Kennwortformular.
         let ok = matches!(r.status, 301 | 302 | 303) || (r.status == 200 && !is_password_form(&String::from_utf8_lossy(&r.body)));
@@ -127,12 +144,18 @@ impl Sitzung {
         Ok(s)
     }
 
-    /// Einträge eines Ordners (`/` bzw. `/0.1.50/windows/`).
-    pub fn ordner(&self, pfad: &str, cancel: Option<&AtomicBool>) -> Result<Vec<Eintrag>, String> {
+    /// Einträge eines Ordners (`/` bzw. `/0.1.50/windows/`). `Ok(None)`: den Ordner gibt es nicht (404 bzw. keine
+    /// Ordnerliste als Antwort – für einen fehlenden Ordner liefert die Freigabe eine Seite). Netz- und andere
+    /// Fehler bleiben Fehler, mit Schritt und Rechner.
+    pub fn ordner(&self, pfad: &str, cancel: Option<&AtomicBool>) -> Result<Option<Vec<Eintrag>>, String> {
         let ctl = Control::new(Limits { max_bytes: 2 * 1024 * 1024, timeout: std::time::Duration::from_secs(30) }, cancel);
         let url = format!("{}/api/v2.1/share-links/{}/dirents/?path={}", self.base, self.token, enc(pfad));
-        let body = http::get(&url, &self.headers(), "Ordner der Update-Quelle", &ctl).map_err(|e| e.to_string())?;
-        parse_dirents(&body)
+        let r = self.client().request("GET", &url, &self.headers(), &[], &ctl).map_err(|e| format!("Fehler beim Auflisten von „{pfad}“ auf {}: {}", self.host(), http::describe(&e)))?;
+        match r.status {
+            200 => Ok(parse_dirents(&r.body).ok()),
+            404 => Ok(None),
+            st => Err(format!("Fehler beim Auflisten von „{pfad}“ auf {}: Server meldet {st}", self.host())),
+        }
     }
 
     /// Datei laden (mit Größengrenze und optionaler Fortschrittsanzeige).
@@ -140,8 +163,53 @@ impl Sitzung {
         let mut ctl = Control::new(limits, cancel);
         ctl.progress = progress;
         let url = format!("{}/d/{}/files/?p={}&dl=1", self.base, self.token, form_enc(pfad));
-        http::get(&url, &self.headers(), pfad, &ctl).map_err(|e| e.to_string())
+        let name = pfad.rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or(pfad);
+        self.client().get(&url, &self.headers(), pfad, &ctl).map_err(|e| format!("Fehler beim Laden von „{name}“ von {}: {}", self.host(), http::describe(&e)))
     }
+}
+
+/// Sitzung gegen einen lokalen Testserver (`http://127.0.0.1:<port>`), ohne Anmeldung.
+#[cfg(test)]
+pub(crate) fn test_sitzung(base: &str) -> Sitzung {
+    Sitzung { base: base.into(), link: format!("{base}/d/tok/"), token: "tok".into(), cookies: Vec::new(), client: Mutex::new(http::Client::new()) }
+}
+
+/// Testserver: Antwort je Pfadanfang aus `routes`; „schliessen“ beendet die Verbindung ohne Antwort.
+#[cfg(test)]
+pub(crate) fn test_server(routes: Vec<(&'static str, &'static str)>) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            let Ok(mut c) = c else { return };
+            let routes = routes.clone();
+            std::thread::spawn(move || {
+                let mut r = BufReader::new(c.try_clone().unwrap());
+                loop {
+                    let mut first = String::new();
+                    if r.read_line(&mut first).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let mut h = String::new();
+                    while r.read_line(&mut h).unwrap_or(0) > 0 && h != "\r\n" {
+                        h.clear();
+                    }
+                    let path = first.split_whitespace().nth(1).unwrap_or("").to_string();
+                    let body = routes.iter().find(|(p, _)| path.starts_with(p)).map(|(_, b)| *b).unwrap_or("404");
+                    let resp = match body {
+                        "schliessen" => return,
+                        "404" => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string(),
+                        b => format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{b}", b.len()),
+                    };
+                    if c.write_all(resp.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    format!("http://127.0.0.1:{port}")
 }
 
 /// Antwort von `dirents` lesen.
@@ -271,6 +339,27 @@ mod tests {
         assert!(parse_dirents(b"{}").is_err());
     }
 
+    /// Ordner fehlt (404 oder Seite statt Liste) ist kein Fehler; ein Netzfehler beim Auflisten oder Laden schon –
+    /// mit Schritt und Rechner, nie als „fehlt“.
+    #[test]
+    fn listing_errors_are_errors_with_step_and_host() {
+        let base = test_server(vec![
+            ("/api/v2.1/share-links/tok/dirents/?path=/da/", r#"{"dirent_list":[{"is_dir":false,"file_name":"index.json","size":3}]}"#),
+            ("/api/v2.1/share-links/tok/dirents/?path=/seite/", "<html>Seite</html>"),
+            ("/api/v2.1/share-links/tok/dirents/?path=/kaputt/", "schliessen"),
+            ("/d/tok/files/?p=%2Fkaputt%2Findex.json", "schliessen"),
+        ]);
+        let host = base.trim_start_matches("http://").to_string();
+        let s = test_sitzung(&base);
+        assert_eq!(s.ordner("/da/", None).unwrap().unwrap()[0].name, "index.json");
+        assert_eq!(s.ordner("/fehlt/", None).unwrap(), None, "404");
+        assert_eq!(s.ordner("/seite/", None).unwrap(), None, "Seite statt Liste");
+        let e = s.ordner("/kaputt/", None).unwrap_err();
+        assert!(e.starts_with(&format!("Fehler beim Auflisten von „/kaputt/“ auf {host}: Netzwerk:")), "{e}");
+        let e = s.datei("/kaputt/index.json", Limits::default(), None, None).unwrap_err();
+        assert!(e.starts_with(&format!("Fehler beim Laden von „index.json“ von {host}: ")), "{e}");
+    }
+
     /// Nur von Hand (`--ignored`): echte Ablage, Kennwort aus dem Schlüsselbund (`dienst remotejoe-freigabe`),
     /// Link aus `RJ_ABLAGE_LINK`. Lädt und prüft das Paket für Ubuntu 26.04 der neuesten Version, installiert nichts.
     #[test]
@@ -281,10 +370,10 @@ mod tests {
         let pw = String::from_utf8(out.stdout).unwrap();
         assert!(!pw.is_empty(), "Kennwort im Schlüsselbund fehlt");
         let s = Sitzung::anmelden(&link, &pw, None).unwrap();
-        let v = neueste(&s.ordner("/", None).unwrap()).expect("keine Version");
+        let v = neueste(&s.ordner("/", None).unwrap().expect("Wurzel fehlt")).expect("keine Version");
         let key = rj_update::sign::public_key_from_text(crate::update::UPDATE_KEY).unwrap();
         let (name, data) = laden_geprueft(&s, &v, "linux-x86_64", &key, Limits::default(), None, None).unwrap();
-        eprintln!("neueste Version {v}: {name}, {} Bytes, Signatur und Prüfsumme in Ordnung", data.len());
+        eprintln!("neueste Version {v}: {name}, {} Bytes, Signatur und Prüfsumme in Ordnung, {} Verbindung(en)", data.len(), s.verbindungen());
         assert!(Sitzung::anmelden(&link, "falsch", None).is_err(), "falsches Kennwort muss scheitern");
     }
 }

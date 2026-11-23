@@ -8,6 +8,7 @@
 //! (als JSON-Zeichenkette im eingespeisten Skript), nie in die Adresse.
 
 pub mod cache;
+pub mod cookies;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

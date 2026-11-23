@@ -110,12 +110,78 @@ pub fn loaded() -> &'static LoadedLibs {
     L.get_or_init(load_all)
 }
 
+/// Marke des Absturzwächters im Ordner der Erweiterungen: liegt sie beim Start noch, endete der letzte Start mit
+/// Erweiterungen unerwartet (vor dem stabilen Lauf bzw. ohne reguläres Beenden).
+pub const START_MARK: &str = "start.marke";
+
+/// Warum dieser Start ohne Erweiterungen läuft.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SafeMode {
+    /// Der letzte Start mit Erweiterungen endete unerwartet; zuletzt geladen wurden diese (Kennungen).
+    Crash(Vec<String>),
+    /// Startparameter `--ohne-erweiterungen`.
+    Requested,
+}
+
+static SAFE_MODE: std::sync::OnceLock<SafeMode> = std::sync::OnceLock::new();
+
+/// Läuft dieser Start ohne Erweiterungen, und warum?
+pub fn safe_mode() -> Option<&'static SafeMode> {
+    SAFE_MODE.get()
+}
+
+/// Vor dem Laden: Ohne Erweiterungen starten (`Some`), wenn der Startparameter es verlangt oder die Marke des
+/// letzten Starts noch liegt (die Marke wird dabei entfernt – der nächste Start versucht es wieder mit
+/// Erweiterungen). Sonst die Marke mit den Kennungen setzen, die gleich geladen werden.
+pub fn guard_before_load(dir: &std::path::Path, requested: bool) -> Option<SafeMode> {
+    let mark = dir.join(START_MARK);
+    let last: Option<Vec<String>> = std::fs::read_to_string(&mark).ok().map(|t| t.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect());
+    if requested || last.is_some() {
+        let _ = std::fs::remove_file(&mark);
+        return Some(if requested { SafeMode::Requested } else { SafeMode::Crash(last.unwrap_or_default()) });
+    }
+    let ids: Vec<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| e.file_name().to_str().map(str::to_string))
+                .filter(|id| !id.ends_with(".alt") && (dir.join(id).join(library_name(id)).is_file() || id.strip_suffix(".neu").is_some_and(|b| dir.join(id).join(library_name(b)).is_file())))
+                .map(|id| id.trim_end_matches(".neu").to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !ids.is_empty() {
+        let mut ids = ids;
+        ids.sort();
+        ids.dedup();
+        let _ = std::fs::write(&mark, ids.join("\n") + "\n");
+    }
+    None
+}
+
+/// Stabiler Start bzw. reguläres Beenden: Marke des Absturzwächters entfernen.
+pub fn start_ok() {
+    if let Some(dir) = plugins_dir() {
+        let _ = std::fs::remove_file(dir.join(START_MARK));
+    }
+}
+
 /// Alle Unterordner von `plugins/` prüfen und laden. Ohne gültige Signatur (Prüfsummen mit Update-Schlüssel) wird
 /// keine Bibliothek geöffnet.
 fn load_all() -> LoadedLibs {
     // Tests laden nie aus dem Datenordner des Nutzers (nur ausdrücklich über `load_all_with`).
     if cfg!(test) || std::env::var_os("REMOTEJOE_NO_PLUGINS").is_some() {
         return LoadedLibs::default();
+    }
+    // Absturzwächter und Startparameter `--ohne-erweiterungen` (nicht bei Vorführung und Bildschirmfotos).
+    let guarded = std::env::var_os("RJ_DEMO").is_none() && std::env::var_os("RJ_SCREENSHOTS").is_none();
+    if guarded {
+        if let Some(dir) = plugins_dir() {
+            if let Some(mode) = guard_before_load(&dir, std::env::var_os("RJ_NO_PLUGINS_ARG").is_some()) {
+                let _ = SAFE_MODE.set(mode);
+                return LoadedLibs::default();
+            }
+        }
     }
     // Nur Entwicklungsbauten: anderer Ordner und anderer öffentlicher Schlüssel (Datei) über die Umgebung, für
     // Probeläufe mit einer selbst signierten Bibliothek. Veröffentlichte Bauten kennen nur Datenordner und Update-Schlüssel.
@@ -159,6 +225,45 @@ pub fn check_manifest(m: &Manifest, current: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Verträglichkeit der Erweiterungen untereinander, ohne eine Bibliothek zu öffnen: Mindestversion aus `braucht`
+/// („standorte>=1.2.0“) und Fassung jeder genutzten Anschlussstelle (`nutzt` „adapter@3“ gegen `stellt_bereit` des
+/// Anbieters; ohne Angabe Fassung 1). Liefert die Erweiterungen, die nicht geladen werden dürfen, mit Grund – so
+/// lädt eine alte Erweiterung nie gegen eine neue mit geändertem Aufbau.
+pub fn check_compat(manifests: &[Manifest]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for m in manifests {
+        let mut why = Vec::new();
+        for b in &m.braucht {
+            let (id, min) = rj_plugin_api::dependency(b);
+            let (Some(min), Some(p)) = (min, manifests.iter().find(|x| x.id == id)) else { continue };
+            let older = match (rj_update::Version::parse(&p.version), rj_update::Version::parse(min)) {
+                (Ok(have), Ok(need)) => have < need,
+                _ => true,
+            };
+            if older {
+                why.push(format!("braucht {} {min} oder neuer, vorhanden ist {} – {} aktualisieren", p.name, p.version, p.name));
+            }
+        }
+        for n in &m.nutzt {
+            let (name, want) = rj_plugin_api::interface(n);
+            for p in manifests.iter().filter(|p| p.id != m.id) {
+                for (pn, have) in p.stellt_bereit.iter().map(|a| rj_plugin_api::interface(a)) {
+                    if pn == name && have != want {
+                        why.push(format!(
+                            "{} {} passt nicht zu {} {} (Anschlussstelle „{name}“: Fassung {want}, angeboten wird {have}) – beide aktualisieren",
+                            m.name, m.version, p.name, p.version
+                        ));
+                    }
+                }
+            }
+        }
+        if !why.is_empty() {
+            out.push((m.id.clone(), why.join("; ")));
+        }
+    }
+    out
+}
+
 /// Ladereihenfolge nach Abhängigkeiten: eine Erweiterung kommt erst, wenn alles, was sie braucht, angenommen ist.
 /// Liefert die angenommenen Kennungen in Reihenfolge und die abgelehnten mit Grund (fehlende oder abgelehnte
 /// Abhängigkeit, Zyklus).
@@ -170,7 +275,7 @@ pub fn resolve_order(manifests: &[Manifest]) -> (Vec<String>, Vec<(String, Strin
         let before = open.len();
         let mut rest = Vec::new();
         for m in open {
-            if m.braucht.iter().all(|b| accepted.contains(b)) {
+            if m.braucht_ids().iter().all(|b| accepted.contains(b)) {
                 accepted.push(m.id.clone());
             } else {
                 rest.push(m);
@@ -182,8 +287,8 @@ pub fn resolve_order(manifests: &[Manifest]) -> (Vec<String>, Vec<(String, Strin
         }
     }
     for m in open {
-        let missing: Vec<String> = m.braucht.iter().filter(|b| !accepted.contains(b)).map(|b| {
-            if manifests.iter().any(|x| &x.id == b) { format!("„{b}“ (nicht geladen)") } else { format!("„{b}“ (nicht vorhanden)") }
+        let missing: Vec<String> = m.braucht_ids().into_iter().filter(|b| !accepted.contains(b)).map(|b| {
+            if manifests.iter().any(|x| x.id == b) { format!("„{b}“ (nicht geladen)") } else { format!("„{b}“ (nicht vorhanden)") }
         }).collect();
         rejected.push((m.id.clone(), format!("braucht {}", missing.join(", "))));
     }
@@ -233,11 +338,17 @@ pub fn load_all_with(dir: &std::path::Path, key: &rj_update::sign::VerifyingKey,
         eprintln!("remotejoe: Erweiterung {} nicht geladen: {why}", lib.display());
         out.libs.push(LibStatus { id: id.clone(), name: m.name.clone(), version: m.version.clone(), pfad: lib.clone(), geladen: false, fehler: Some(why), manifest: Some(m.clone()) });
     }
+    // Verträglichkeit untereinander (Mindestversionen, Fassungen der Anschlussstellen), ebenfalls vor dem Öffnen.
+    let incompatible = check_compat(&manifests);
     // 3. Laden in Reihenfolge; fällt eine aus, fallen ihre Abhängigen mit.
     for id in order {
         let (m, lib) = candidates.iter().find(|(m, _)| m.id == id).expect("Kennung stammt aus den Kandidaten");
-        let missing: Vec<&String> = m.braucht.iter().filter(|b| !out.is_loaded(b)).collect();
-        let r = if missing.is_empty() { load_one(key, m, lib) } else { Err(format!("braucht {}", missing.iter().map(|b| format!("„{b}“ (nicht geladen)")).collect::<Vec<_>>().join(", "))) };
+        let missing: Vec<String> = m.braucht_ids().into_iter().filter(|b| !out.is_loaded(b)).collect();
+        let r = if let Some((_, why)) = incompatible.iter().find(|(x, _)| x == &id) {
+            Err(why.clone())
+        } else if missing.is_empty() {
+            load_one(key, m, lib)
+        } else { Err(format!("braucht {}", missing.iter().map(|b| format!("„{b}“ (nicht geladen)")).collect::<Vec<_>>().join(", "))) };
         match r {
             Ok(l) => {
                 eprintln!("remotejoe: Erweiterung {id} {} geladen ({}; Oberfläche: {})", m.version, lib.display(), if l.ui.is_some() { "ja" } else { "nein" });
@@ -296,7 +407,7 @@ fn plugin_active_depth(p: &dyn Plugin, depth: usize) -> bool {
         return false;
     }
     match manifest_of(&info.id) {
-        Some(m) => m.braucht.iter().all(|b| registered().into_iter().filter(|q| q.info().modules.iter().any(|x| &x.id == b)).any(|q| plugin_active_depth(q, depth + 1))),
+        Some(m) => m.braucht_ids().iter().all(|b| registered().into_iter().filter(|q| q.info().modules.iter().any(|x| &x.id == b)).any(|q| plugin_active_depth(q, depth + 1))),
         None => true,
     }
 }
@@ -305,7 +416,7 @@ fn plugin_active_depth(p: &dyn Plugin, depth: usize) -> bool {
 /// („fehlt Oberfunktion …“).
 pub fn missing_dependencies(plugin_id: &str) -> Vec<String> {
     let Some(m) = manifest_of(plugin_id) else { return Vec::new() };
-    m.braucht.into_iter().filter(|b| !registered().into_iter().filter(|q| q.info().modules.iter().any(|x| &x.id == b)).any(|q| plugin_active(q))).collect()
+    m.braucht_ids().into_iter().filter(|b| !registered().into_iter().filter(|q| q.info().modules.iter().any(|x| &x.id == b)).any(|q| plugin_active(q))).collect()
 }
 
 /// Module aller Erweiterungen (Kennung, Name) für Lizenzseite und Über.
@@ -337,7 +448,7 @@ pub fn call_other(app: &mut App, to: &str, op: &str, c: &Value) -> Result<Value,
 /// Kennungen der freigeschalteten Erweiterungen, die die Anschlussstelle `anschluss` anbieten (Ladereihenfolge).
 pub fn providers(anschluss: &str) -> Vec<String> {
     let active: Vec<String> = all().into_iter().map(|p| p.info().id).collect();
-    let mut v: Vec<String> = manifests().into_iter().filter(|m| m.stellt_bereit.iter().any(|a| a == anschluss)).map(|m| m.id).filter(|id| active.contains(id) || loaded().owners.iter().any(|(p, l)| l == id && active.contains(p))).collect();
+    let mut v: Vec<String> = manifests().into_iter().filter(|m| m.stellt_bereit.iter().any(|a| rj_plugin_api::interface(a).0 == anschluss)).map(|m| m.id).filter(|id| active.contains(id) || loaded().owners.iter().any(|(p, l)| l == id && active.contains(p))).collect();
     v.dedup();
     v
 }
@@ -602,6 +713,90 @@ mod lib_tests {
         assert!(why("kind").contains("„eltern“ (nicht vorhanden)"), "{}", why("kind"));
         assert!(why("ohne").contains(rj_update::sign::SUMS), "{}", why("ohne"));
         assert_eq!(l.errors().len(), 4);
+    }
+
+
+    fn mfv(id: &str, name: &str, version: &str, braucht: &[&str], bereit: &[&str], nutzt: &[&str]) -> Manifest {
+        let v = |l: &[&str]| l.iter().map(|x| x.to_string()).collect();
+        Manifest { name: name.into(), version: version.into(), braucht: v(braucht), stellt_bereit: v(bereit), nutzt: v(nutzt), ..mf(id, &[]) }
+    }
+
+    /// Fassungen der Anschlussstellen und Mindestversionen: der Fall vom 23.11. (alte Hersteller-Erweiterung ohne
+    /// Fassungsangabe neben einer Oberfunktion mit neuer Fassung) wird abgelehnt, ein passendes Paar nicht.
+    #[test]
+    fn compat_rejects_old_users_of_a_newer_interface() {
+        let basis3 = mfv("basis", "Basis", "1.3.0", &[], &["adapter@3"], &[]);
+        let alt = mfv("netz", "Netz", "1.0.0", &["basis"], &["controller"], &["adapter"]);
+        let neu = mfv("netz", "Netz", "1.3.0", &["basis>=1.3.0"], &["controller"], &["adapter@3"]);
+        let bad = check_compat(&[basis3.clone(), alt]);
+        assert_eq!(bad.len(), 1);
+        assert_eq!(bad[0].0, "netz");
+        assert!(bad[0].1.contains("Netz 1.0.0 passt nicht zu Basis 1.3.0") && bad[0].1.contains("Fassung 1, angeboten wird 3") && bad[0].1.contains("beide aktualisieren"), "{}", bad[0].1);
+        assert!(check_compat(&[basis3.clone(), neu.clone()]).is_empty());
+        // Beide ohne Angabe (heutiger Stand): Fassung 1 zu Fassung 1 passt.
+        assert!(check_compat(&[mfv("basis", "Basis", "1.2.2", &[], &["adapter"], &[]), mfv("netz", "Netz", "1.0.0", &["basis"], &[], &["adapter"])]).is_empty());
+        // Mindestversion nicht erfüllt.
+        let basis_alt = mfv("basis", "Basis", "1.2.9", &[], &["adapter@3"], &[]);
+        let bad = check_compat(&[basis_alt, neu]);
+        assert!(bad[0].1.contains("braucht Basis 1.3.0 oder neuer, vorhanden ist 1.2.9"), "{:?}", bad);
+        // Anbieter fehlt: Sache von `braucht`, nicht der Fassungsprüfung.
+        assert!(check_compat(&[mfv("netz", "Netz", "1.3.0", &["basis>=1.3.0"], &[], &["adapter@3"])]).is_empty());
+        // Angaben im Manifest.
+        assert_eq!(rj_plugin_api::interface("adapter@3"), ("adapter", 3));
+        assert_eq!(rj_plugin_api::interface("adapter"), ("adapter", 1));
+        assert_eq!(rj_plugin_api::dependency("basis>=1.3.0"), ("basis", Some("1.3.0")));
+        assert!(Manifest::parse(r#"{"id":"a","name":"x","version":"1","api":1,"min_remotejoe":"0.1.60","nutzt":["adapter@x"]}"#).unwrap_err().contains("unlesbar"));
+        assert!(Manifest::parse(r#"{"id":"a","name":"x","version":"1","api":1,"min_remotejoe":"0.1.60","braucht":["a>=1.0.0"]}"#).unwrap_err().contains("sich selbst"));
+    }
+
+    /// Beim Laden: Unverträgliches wird vor dem Öffnen der Bibliothek abgelehnt (mit Grund in `libs`), Abhängige
+    /// fallen mit; die Anbieter-Suche kennt Anschlussstellen auch mit Fassungsangabe.
+    #[test]
+    fn incompatible_extensions_are_not_opened() {
+        let sk = rj_update::sign::generate().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        // Bibliotheken sind keine echten: geöffnet werden darf nur „basis“ (scheitert dann beim Öffnen, nicht hier).
+        write_dir(&base.path().join("basis"), &mfv("basis", "Basis", "1.3.0", &[], &["adapter@3"], &[]), b"x", &sk);
+        write_dir(&base.path().join("netz"), &mfv("netz", "Netz", "1.0.0", &["basis"], &[], &["adapter"]), b"x", &sk);
+        write_dir(&base.path().join("kind"), &mf("kind", &["netz"]), b"x", &sk);
+        let l = load_all_with(base.path(), &sk.verifying_key(), "0.1.60");
+        let why = |id: &str| l.libs.iter().find(|x| x.id == id).and_then(|x| x.fehler.clone()).unwrap_or_default();
+        assert!(why("netz").contains("passt nicht zu Basis 1.3.0"), "{}", why("netz"));
+        assert!(why("kind").contains("„netz“ (nicht geladen)"), "{}", why("kind"));
+        assert!(!why("basis").contains("passt nicht"), "{}", why("basis"));
+    }
+
+
+    /// Absturzwächter: Marke wird vor dem Laden gesetzt; liegt sie beim nächsten Start noch, läuft er ohne
+    /// Erweiterungen (Marke weg, der übernächste versucht es wieder); Startparameter ebenso; `start_ok`-Weg entfernt sie.
+    #[test]
+    fn crash_guard_marks_and_falls_back_once() {
+        let base = tempfile::tempdir().unwrap();
+        let d = base.path();
+        for id in ["basis", "netz"] {
+            std::fs::create_dir_all(d.join(id)).unwrap();
+            std::fs::write(d.join(id).join(library_name(id)), b"x").unwrap();
+        }
+        std::fs::create_dir_all(d.join("neu.neu")).unwrap();
+        std::fs::write(d.join("neu.neu").join(library_name("neu")), b"x").unwrap();
+        std::fs::create_dir_all(d.join("leer")).unwrap();
+        // Erster Start: Marke mit allem, was gleich geladen wird (auch wartende Pakete).
+        assert_eq!(guard_before_load(d, false), None);
+        assert_eq!(std::fs::read_to_string(d.join(START_MARK)).unwrap(), "basis\nnetz\nneu\n");
+        // Absturz (Marke bleibt): nächster Start ohne Erweiterungen, Marke entfernt.
+        assert_eq!(guard_before_load(d, false), Some(SafeMode::Crash(vec!["basis".into(), "netz".into(), "neu".into()])));
+        assert!(!d.join(START_MARK).exists());
+        // Übernächster Start: wieder mit Erweiterungen.
+        assert_eq!(guard_before_load(d, false), None);
+        assert!(d.join(START_MARK).exists());
+        // Stabiler Start bzw. reguläres Beenden: Marke weg (wie `start_ok`).
+        std::fs::remove_file(d.join(START_MARK)).unwrap();
+        assert_eq!(guard_before_load(d, true), Some(SafeMode::Requested), "Startparameter");
+        assert!(!d.join(START_MARK).exists());
+        // Ohne Erweiterungen auf der Platte keine Marke.
+        let leer = tempfile::tempdir().unwrap();
+        assert_eq!(guard_before_load(leer.path(), false), None);
+        assert!(!leer.path().join(START_MARK).exists());
     }
 
 }

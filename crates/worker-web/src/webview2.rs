@@ -395,12 +395,19 @@ impl Worker {
             None => return,
         };
         let (x, y, w, h) = self.0.bounds.get();
-        let mut ctx = WebContext::new(Some(profile.clone()));
-        // Grenze des Zwischenspeichers (Einstellungen → Daten → Web-Zwischenspeicher); die übrigen Angaben sind die
-        // Vorgaben von wry, die mit eigenen Argumenten sonst entfielen.
-        let cache_bytes = u64::from(rj_web::cache::settings().limit_mb.max(1)) * 1024 * 1024;
+        // Ein gemeinsamer Browser-Ordner für alle Web-Ziele, darin ein Profil je Ziel (eigene Cookies und
+        // Anmeldungen). Bis 0.1.66 hatte jedes Ziel einen eigenen Browser-Ordner, und WebView2 lud in jeden dieselben
+        // Komponenten (rund 70 MB je Ziel).
+        let shared = profile.parent().map(|r| r.join(rj_web::cache::SHARED_WEBVIEW2)).unwrap_or_else(|| profile.clone());
+        let name: String = profile.file_name().map(|n| n.to_string_lossy().chars().take(64).collect()).unwrap_or_else(|| "_".into());
+        let mut ctx = WebContext::new(Some(shared));
+        // Alle Sitzungen am selben Browser-Ordner müssen mit denselben Schaltern starten (sonst lehnt WebView2 die
+        // zweite ab): nichts Einstellbares hier. Die Grenze des Zwischenspeichers setzt `trim` beim Öffnen durch.
+        // Ohne Nachladen von Komponenten (Kopierschutz-Modul, Filterlisten, Spracherkennung …), die remotejoe nicht
+        // braucht; die übrigen Angaben sind die Vorgaben von wry, die mit eigenen Argumenten sonst entfielen.
         let built = WebViewBuilder::new_with_web_context(&mut ctx)
-            .with_additional_browser_args(format!("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disk-cache-size={cache_bytes}"))
+            .with_additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-component-update")
+            .with_profile_name(name)
             .with_bounds(Rect {
                 position: Position::Physical(PhysicalPosition::new(x, y)),
                 size: Size::Physical(PhysicalSize::new(w.max(1) as u32, h.max(1) as u32)),

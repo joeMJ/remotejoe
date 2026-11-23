@@ -90,6 +90,11 @@ fn ids_of(v: &Value, key: &str) -> Vec<Uuid> {
         .unwrap_or_default()
 }
 
+/// Liste von Zeichenketten (`["a", "b"]`) aus einem Befehl; fehlt sie, leer.
+fn strings_of(v: &Value, key: &str) -> Vec<String> {
+    v.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+}
+
 fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str)
 }
@@ -492,7 +497,7 @@ impl App {
             self.view = str_of(&c, "view").unwrap_or_default().to_string();
             return ok(json!({ "ok": true }));
         }
-        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("webcache_status") | Some("webcache_cleanup") | Some("views") | Some("favorites_tree") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build") | Some("credcheck_start") | Some("credcheck_rows") | Some("credcheck_cancel") | Some("orphans_list") | Some("mcp_call") | Some("mcp_denied") | Some("data_dir") | Some("mcp_settings") | Some("set_mcp_settings") | Some("mcp_log")) {
+        if self.vault.as_ref().is_some_and(|v| v.index().read_only) && !matches!(str_of(&c, "op"), Some("patchday") | Some("snmp_list") | Some("editor") | Some("check_text") | Some("bulk_preview") | Some("apply_preview") | Some("jobs") | Some("cancel_job") | Some("settings") | Some("set_settings") | Some("webcache_status") | Some("webcache_cleanup") | Some("plugins_safe_mode") | Some("plugins_start_ok") | Some("views") | Some("favorites_tree") | Some("templates") | Some("undo_label") | Some("connect_all") | Some("delete_preview") | Some("cert_check_start") | Some("cert_check_rows") | Some("cert_check_progress") | Some("cert_check_accept") | Some("logins") | Some("overview") | Some("ov_probe") | Some("ov_query") | Some("ov_field") | Some("ov_run") | Some("ov_stop") | Some("ov_output") | Some("mass_start") | Some("mass_rows") | Some("mass_cancel") | Some("merge_preview") | Some("merge_check") | Some("target_exists") | Some("shared_list") | Some("report_build") | Some("credcheck_start") | Some("credcheck_rows") | Some("credcheck_cancel") | Some("orphans_list") | Some("mcp_call") | Some("mcp_denied") | Some("data_dir") | Some("mcp_settings") | Some("set_mcp_settings") | Some("mcp_log")) {
             return err("Der Index ist schreibgeschützt (neuere Programmversion)");
         }
         let op = str_of(&c, "op").unwrap_or_default().to_string();
@@ -944,6 +949,15 @@ impl App {
             "update_demo_source" => self.update_demo_source(str_of(&c, "base_url").unwrap_or_default()),
             "update_check" => self.update_check(),
             "plugins_update" => self.plugins_update(),
+            // Erweiterungen aus Datei: erst prüfen (Prüfdialog), dann einspielen (prüft erneut).
+            "plugins_file_check" => self.plugins_file_check(&strings_of(&c, "dateien")),
+            "plugins_file_install" => self.plugins_file_install(&strings_of(&c, "dateien")),
+            // Absturzwächter: Läuft dieser Start ohne Erweiterungen (und warum)? Stabiler Start gemeldet.
+            "plugins_safe_mode" => Ok(crate::plugin_fetch::safe_mode_json()),
+            "plugins_start_ok" => {
+                crate::plugins::start_ok();
+                Ok(json!({ "ok": true }))
+            }
             "lizenz_entfernen" => crate::modules::lizenz_entfernen(self),
             "update_install" => self.update_install(c.get("confirm").and_then(Value::as_bool).unwrap_or(false)),
             "update_cancel" => Ok(self.update_cancel()),

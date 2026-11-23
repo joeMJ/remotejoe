@@ -5,7 +5,7 @@ members = ["crates/*", "tools/update"]
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-version = "0.1.66"
+version = "0.1.67"
 authors = ["John Lose (joeMJ)"]
 publish = false
 
@@ -19,8 +19,13 @@ zeroize = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 tempfile = "3"
 
+# Panics von Erweiterungen fängt die C-Schnittstelle ab (catch_unwind); das geht nur mit „unwind“ (gleich in plugins/).
+[profile.release]
+panic = "unwind"
+
 [profile.dev]
 debug = 1
+panic = "unwind"
 
 [profile.dev.package."*"]
 opt-level = 2

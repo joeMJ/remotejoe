@@ -85,9 +85,12 @@ impl App {
     pub(crate) fn remove_probe_profile(&self, target: uuid::Uuid) {
         let Some(dir) = rj_core::config::data_dir() else { return };
         let p = rj_web::profile_dir(&dir, &format!("{target}{}", cache::PROBE_SUFFIX));
+        // Unter Windows auch sein Profil im gemeinsamen Browser-Ordner.
+        let e = cache::engine_profile(&p);
         std::thread::spawn(move || {
             for _ in 0..20 {
-                if !p.exists() || std::fs::remove_dir_all(&p).is_ok() {
+                let engine_gone = e.as_ref().is_none_or(|e| !e.exists() || std::fs::remove_dir_all(e).is_ok());
+                if engine_gone && (!p.exists() || std::fs::remove_dir_all(&p).is_ok()) {
                     return;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -105,6 +108,8 @@ mod tests {
     fn settings_are_clamped_and_reported() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = app(dir.path());
+        // Die Testumgebung lädt die Konfiguration des Rechners; die Prüfung geht von den Vorgaben aus.
+        app.config.web_cache = Default::default();
         let s = cmd(&mut app, json!({ "op": "webcache_status" }));
         assert_eq!((s["limit_mb"].as_u64(), s["keep_days"].as_u64()), (Some(50), Some(7)), "{s}");
         cmd(&mut app, json!({ "op": "set_settings", "webcache_limit_mb": 5, "webcache_keep_days": 0 }));

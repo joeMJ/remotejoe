@@ -65,7 +65,9 @@ public:
 	/// Oberflächen werden in Ladereihenfolge angebunden (Oberfunktion vor ihren Kindern).
 	virtual void attach(RjHostWindow* w) { Q_UNUSED(w) }
 	/// Anschlussstelle für andere Erweiterungen: Zeiger auf das benannte Interface (z. B. einer Oberfunktion für
-	/// Hersteller-Erweiterungen), sonst nullptr. Der Kern vermittelt nur (RjHostWindow::pluginUi).
+	/// Hersteller-Erweiterungen), sonst nullptr. Der Kern vermittelt nur (RjHostWindow::pluginUi). Der Name trägt die
+	/// Fassung („name@3“); bei anderer oder fehlender Fassung liefert der Anbieter nullptr, damit nie über einen
+	/// fremden Aufbau aufgerufen wird.
 	virtual void* interface(const char* name) { Q_UNUSED(name) return nullptr; }
 	virtual RjOverviewPart* overviewPart(RjHostOverview* tab) { Q_UNUSED(tab) return nullptr; }
 	virtual RjSettingsPart* settingsPart(RjHostSettings* tab) { Q_UNUSED(tab) return nullptr; }

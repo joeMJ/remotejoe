@@ -53,6 +53,9 @@ public:
 	void rebuildLicensePage();
 	/// Ergebnis eines Downloads einer Erweiterung (Art `plugin_fetch`): Zeile der Erweiterung aktualisieren.
 	void licenseResult(const QJsonObject& r);
+	/// Prüfdialog „Erweiterungen aus Datei einspielen“ zum Prüfergebnis `r` (op plugins_file_check) der Dateien
+	/// `files`; „Einspielen“ nur, wenn alles passt. Nicht gezeigt (show/exec beim Aufrufer).
+	class QDialog* fileCheckDialog(const QJsonObject& r, const QStringList& files);
 
 	// Host-Schnittstelle für Erweiterungen (plugin/rjpluginui.h): Bereiche, Gruppen, Titel, Bearbeiten über den Kern.
 	RjBackend* backend() const { return m_backend; }
@@ -126,6 +129,8 @@ private:
 	/// Erweiterungen-Seite füllen (aus fillLicensePage); `l`: Lizenzangaben, `j`: ganzes Lizenz-JSON.
 	void fillExtensionsPage(const QJsonObject& j, const QJsonObject& l, bool valid);
 	void extLog(const QString& text);
+	/// „Aus Datei einspielen …“: Dateien wählen, prüfen, Prüfdialog, einspielen.
+	void pluginsFromFile();
 	QWidget* m_licenseRestart = nullptr;
 	QPushButton* m_licenseRemoveBtn = nullptr;
 	bool m_licenseRebuildPending = false;

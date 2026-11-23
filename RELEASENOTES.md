@@ -1,3 +1,13 @@
+## 0.1.67 – Speicherplatz der Web-Ziele, robuste Erweiterungen
+
+**Speicherplatz:** In 0.1.66 hat das Aufräumen des Web-Zwischenspeichers die eigentlichen Platzfresser nicht erfasst. Das ist jetzt behoben. Nach dem ersten Entsperren räumt remotejoe den Altbestand im Hintergrund weg.
+
+- Linux: Die Web-Engine leerte den Speicher mancher Seiten nie; eine Controller-Oberfläche brachte es auf über 1 GB pro Stunde. Web-Ziele halten die Daten der Seite jetzt nur noch während der Sitzung, Anmeldungen bleiben erhalten. Was sich eine Seite selbst merkt (z. B. Ansichtseinstellungen), gilt nur bis zum Schließen des Tabs.
+- Windows: Jedes Web-Ziel hatte einen eigenen Browser-Ordner mit rund 70 MB nachgeladener Zusatzteile. Alle Web-Ziele teilen sich jetzt einen Ordner, mit eigenem Profil je Ziel; die Zusatzteile werden nicht mehr geladen. Gespeicherte Anmeldungen auf Webseiten gehen dabei einmalig verloren, remotejoe meldet automatisch neu an.
+- Erweiterungen laden: über eine einzige Verbindung statt vieler einzelner. Das hilft bei Anschlüssen, die viele Verbindungen kurz hintereinander verwerfen. Zusammengehörige Erweiterungen werden nur gemeinsam aktualisiert. Netzfehler werden als Netzfehler gemeldet, mit Schritt und Server, statt „nicht in der Update-Quelle“.
+- Erweiterungen aus Datei (neu, Einstellungen → Updates → Erweiterungen): „Aus Datei einspielen …“ mit Prüfung vor dem Einspielen; nur mit laufender Wartung.
+- Kein Absturz mehr durch unpassende Erweiterungen: Unverträgliche Fassungen werden nicht geladen. Endete ein Start unerwartet, startet remotejoe einmal ohne Erweiterungen und zeigt eine Leiste. Notausgang: Startparameter `--ohne-erweiterungen`.
+
 ## 0.1.66 – Web-Zwischenspeicher und Suche
 
 *Veröffentlicht am 23.11.2026*

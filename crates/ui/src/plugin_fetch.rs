@@ -14,6 +14,7 @@
 //! geschieht beim nächsten Start vor dem Laden (`swap_pending`).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use rj_plugin_api::Manifest;
 use rj_update::sign::{self, SIG, SUMS};
@@ -57,6 +58,22 @@ fn katalog_speichern(k: &Katalog) {
 pub fn dirs(id: &str) -> Option<(PathBuf, PathBuf)> {
     let base = plugins_dir()?;
     Some((base.join(id), base.join(format!("{id}.neu"))))
+}
+
+/// Zustand des Absturzwächters für die Oberfläche: `aktiv` (dieser Start ohne Erweiterungen), `grund` („absturz“
+/// bzw. „schalter“), `zuletzt` (Namen der zuletzt geladenen Erweiterungen) und `ordner` (Ordner der Erweiterungen,
+/// für den Notfall-Hinweis).
+pub fn safe_mode_json() -> Value {
+    let ordner = plugins_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    match crate::plugins::safe_mode() {
+        None => json!({ "aktiv": false, "ordner": ordner }),
+        Some(crate::plugins::SafeMode::Requested) => json!({ "aktiv": true, "grund": "schalter", "zuletzt": [], "ordner": ordner }),
+        Some(crate::plugins::SafeMode::Crash(ids)) => {
+            let k = katalog();
+            let names: Vec<String> = ids.iter().map(|id| k.name_of(id).map(str::to_string).unwrap_or_else(|| id.clone())).collect();
+            json!({ "aktiv": true, "grund": "absturz", "zuletzt": names, "ordner": ordner })
+        }
+    }
 }
 
 /// Wartende Pakete (`<id>.neu`) an die Stelle der alten setzen – vor dem Laden, wenn noch nichts geladen ist.
@@ -195,103 +212,199 @@ fn host_of(url: &str) -> String {
     ablage::parse_link(url).map(|(base, _)| base.trim_start_matches("https://").to_string()).unwrap_or_default()
 }
 
-impl App {
-    /// Paket der Erweiterung `id` aus der Quelle holen (Zugang aus der Lizenz oder `zugang`; `current` =
-    /// Programmversion für die Wahl der Fassung). Ergebnis als `JobResult` „plugin_fetch“ mit `state`: `installed`
-    /// (Version, gilt ab dem nächsten Start), `uptodate`, `unavailable` (keine Fassung für diese Plattform bzw.
-    /// keinen Index), `incompatible` (Index da, nichts passt zu dieser Programmversion), `error`.
-    pub fn plugin_fetch(&mut self, id: &str, zugang: Option<(String, String)>, current: Version, mode: FetchMode) -> Result<Value, String> {
-        if self.demo {
-            return Err("Vorführung".into());
-        }
-        let (url, kennwort) = match zugang.or_else(ablage) {
-            Some(z) => z,
-            None => return Err(crate::license::wartung_grund().unwrap_or_else(|| "Keine gültige Lizenz mit Wartung – Erweiterungen gibt es nur mit Lizenz.".into())),
-        };
-        if self.plugin_jobs.contains_key(id) {
-            return Err(format!("Die Erweiterung „{id}“ wird bereits heruntergeladen."));
-        }
-        let platform = rj_update::platform();
-        let key_text = self.update.key_override.clone().unwrap_or_else(|| crate::update::UPDATE_KEY.to_string());
-        let key = sign::public_key_from_text(&key_text).map_err(|e| e.to_string())?;
-        rj_update::proxy::set_mode(rj_update::proxy::ProxyMode::from_setting(&self.config.update.proxy));
-        let installed = installed_manifest(id).and_then(|m| Version::parse(&m.version).ok());
-        let id_s = id.to_string();
-        let host = host_of(&url);
-        let job = self.jobs.spawn_cancellable(format!("Erweiterung {id} herunterladen"), move |job, cancel| {
-            enum Out {
-                Installed(String, PathBuf),
-                UpToDate(String),
-                Unavailable(String),
-                Incompatible(String),
-            }
-            let r = (|| -> Result<Out, String> {
-                let s = ablage::Sitzung::anmelden(&url, &kennwort, Some(&*cancel))?;
-                let dir = quelle_dir(&id_s, &platform)?;
-                // Erst den Ordner listen: eine Erweiterung, die es in der Quelle (noch) nicht gibt, ist kein Fehler.
-                // (Für einen fehlenden Ordner liefert die Freigabe keine 404, sondern eine Seite.)
-                let has_index = match s.ordner(&dir, Some(&*cancel)) {
-                    Ok(e) => e.iter().any(|x| x.name == INDEX_FILE),
-                    Err(_) => false,
-                };
-                if !has_index {
-                    return Ok(Out::Unavailable(format!("In der Update-Quelle liegt keine Erweiterung „{id_s}“ für diese Plattform.")));
-                }
-                let small = Limits { max_bytes: 1024 * 1024, timeout: std::time::Duration::from_secs(60) };
-                let index = Index::parse(&ablage::datei_geprueft(&s, &dir, INDEX_FILE, &key, small, Some(&*cancel), None)?)?;
-                let Some(f) = index.pick(&current, rj_plugin_api::API_VERSION) else {
-                    let newest = index.fassungen.first().map(|f| format!(" (neueste {} braucht remotejoe {} oder neuer, Schnittstelle {})", f.version, f.min_remotejoe, f.api)).unwrap_or_default();
-                    return Ok(Out::Incompatible(format!("Keine Fassung der Erweiterung „{id_s}“ passt zu remotejoe {current}{newest}.")));
-                };
-                let version = Version::parse(&f.version).map_err(|e| e.to_string())?;
-                if let Some(inst) = &installed {
-                    if inst >= &version || (mode == FetchMode::Update && inst == &version) {
-                        return Ok(Out::UpToDate(inst.to_string()));
-                    }
-                }
-                let limits = Limits { max_bytes: 400 * 1024 * 1024, timeout: std::time::Duration::from_secs(30 * 60) };
-                let data = ablage::datei_geprueft(&s, &dir, &f.datei, &key, limits, Some(&*cancel), None)?;
-                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err("Abgebrochen".into());
-                }
-                let neu = unpack_verified(&id_s, &f.datei, &data, &key)?;
-                let m = installed_manifest(&id_s).ok_or("Manifest im Paket fehlt")?;
-                if m.version != f.version {
-                    let _ = std::fs::remove_dir_all(&neu);
-                    return Err(format!("Das Paket nennt {} , der Index {}", m.version, f.version));
-                }
-                Ok(Out::Installed(f.version.clone(), neu))
-            })();
-            Box::new(move |app: &mut App, cancelled| {
-                app.plugin_jobs.remove(&id_s);
-                if cancelled {
-                    if let Some((_, neu)) = dirs(&id_s) {
-                        let _ = std::fs::remove_dir_all(neu);
-                    }
-                    return Vec::new();
-                }
-                let json = match r {
-                    Ok(Out::Installed(version, neu)) => {
-                        // Noch nichts geladen (z. B. erste Lizenz): sofort an Ort und Stelle; sonst beim nächsten Start.
-                        let swapped = !is_loaded(&id_s) && {
-                            swap_pending(neu.parent().unwrap_or(&neu));
-                            dirs(&id_s).is_some_and(|(d, _)| d.join(library_name(&id_s)).is_file())
-                        };
-                        json!({ "state": "installed", "id": id_s, "version": version, "swapped": swapped, "neustart": true })
-                    }
-                    Ok(Out::UpToDate(version)) => json!({ "state": "uptodate", "id": id_s, "version": version }),
-                    Ok(Out::Unavailable(why)) => json!({ "state": "unavailable", "id": id_s, "error": why }),
-                    Ok(Out::Incompatible(why)) => json!({ "state": "incompatible", "id": id_s, "error": why }),
-                    Err(e) => json!({ "state": "error", "id": id_s, "error": e }),
-                };
-                app.plugin_fetch_last.insert(id_s.clone(), json.clone());
-                vec![UiEvent::JobResult { job, kind: "plugin_fetch".into(), target: String::new(), json: json.to_string() }]
-            })
-        });
-        self.plugin_jobs.insert(id.to_string(), job);
-        Ok(json!({ "job": job, "id": id, "host": host }))
-    }
+/// Zwischenstand einer Erweiterung nach dem Laden aus der Quelle (noch nichts eingespielt).
+#[derive(Debug)]
+enum Geladen {
+    /// Neuere passende Fassung geladen und geprüft (Signatur, Prüfsumme), liegt im Speicher.
+    Neu { version: String, datei: String, data: Vec<u8> },
+    Aktuell(String),
+    /// Keine Erweiterung dieser Kennung für diese Plattform in der Quelle.
+    Fehlt(String),
+    /// Index da, aber keine Fassung passt zu dieser Programmversion.
+    Passt(String),
+    Fehler(String),
+}
 
+/// Endergebnis einer Erweiterung.
+#[derive(Debug)]
+enum Out {
+    Installed(String, PathBuf),
+    UpToDate(String),
+    Unavailable(String),
+    Incompatible(String),
+    Error(String),
+}
+
+/// Zusammengehörige Erweiterungen: verbunden über `braucht` (in beide Richtungen). Reihenfolge wie in `ids`.
+fn gruppen(ids: &[String], braucht: &std::collections::HashMap<String, Vec<String>>) -> Vec<Vec<String>> {
+    let mut gruppe: Vec<usize> = (0..ids.len()).collect();
+    fn wurzel(g: &mut [usize], mut i: usize) -> usize {
+        while g[i] != i {
+            g[i] = g[g[i]];
+            i = g[i];
+        }
+        i
+    }
+    for (i, id) in ids.iter().enumerate() {
+        for b in braucht.get(id).into_iter().flatten() {
+            if let Some(j) = ids.iter().position(|x| x == b) {
+                let (a, c) = (wurzel(&mut gruppe, i), wurzel(&mut gruppe, j));
+                gruppe[a] = c;
+            }
+        }
+    }
+    let mut out: Vec<(usize, Vec<String>)> = Vec::new();
+    for (i, id) in ids.iter().enumerate() {
+        let w = wurzel(&mut gruppe, i);
+        match out.iter_mut().find(|(r, _)| *r == w) {
+            Some((_, v)) => v.push(id.clone()),
+            None => out.push((w, vec![id.clone()])),
+        }
+    }
+    out.into_iter().map(|(_, v)| v).collect()
+}
+
+/// Alle oder keine: Ist in einer Gruppe zusammengehöriger Erweiterungen eine gescheitert (Fehler, keine passende
+/// Fassung oder installiert, aber nicht mehr in der Quelle), wird keine neue Fassung der Gruppe eingespielt – der
+/// bisherige Stand aller bleibt.
+fn zurueckhalten(stand: &mut [(String, Geladen)], braucht: &std::collections::HashMap<String, Vec<String>>, installiert: &dyn Fn(&str) -> bool) {
+    let ids: Vec<String> = stand.iter().map(|(id, _)| id.clone()).collect();
+    for g in gruppen(&ids, braucht) {
+        let gescheitert: Vec<String> = stand
+            .iter()
+            .filter(|(id, s)| g.contains(id) && (matches!(s, Geladen::Fehler(_) | Geladen::Passt(_)) || (matches!(s, Geladen::Fehlt(_)) && installiert(id))))
+            .map(|(id, _)| format!("„{id}“"))
+            .collect();
+        if gescheitert.is_empty() {
+            continue;
+        }
+        for (id, s) in stand.iter_mut().filter(|(id, _)| g.contains(id)) {
+            if let Geladen::Neu { version, .. } = s {
+                *s = Geladen::Fehler(format!(
+                    "Fassung {version} von „{id}“ nicht eingespielt: gehört mit {} zusammen, das nicht geladen werden konnte. Der bisherige Stand bleibt.",
+                    gescheitert.join(", ")
+                ));
+            }
+        }
+    }
+}
+
+/// Geladene Fassungen einspielen (`unpack(id, version, datei, data)` entpackt und prüft nach `<id>.neu`, `remove` entfernt so einen Ordner).
+/// Scheitert das Einspielen einer Erweiterung, werden die schon eingespielten ihrer Gruppe wieder entfernt und
+/// die übrigen nicht mehr eingespielt.
+fn einspielen(
+    stand: Vec<(String, Geladen)>,
+    braucht: &std::collections::HashMap<String, Vec<String>>,
+    unpack: &dyn Fn(&str, &str, &str, &[u8]) -> Result<PathBuf, String>,
+    remove: &dyn Fn(&Path),
+) -> Vec<(String, Out)> {
+    let ids: Vec<String> = stand.iter().map(|(id, _)| id.clone()).collect();
+    let mut neu: std::collections::HashMap<String, (String, String, Vec<u8>)> = std::collections::HashMap::new();
+    let mut out: Vec<(String, Option<Out>)> = Vec::new();
+    for (id, s) in stand {
+        let o = match s {
+            Geladen::Neu { version, datei, data } => {
+                neu.insert(id.clone(), (version, datei, data));
+                None
+            }
+            Geladen::Aktuell(v) => Some(Out::UpToDate(v)),
+            Geladen::Fehlt(w) => Some(Out::Unavailable(w)),
+            Geladen::Passt(w) => Some(Out::Incompatible(w)),
+            Geladen::Fehler(e) => Some(Out::Error(e)),
+        };
+        out.push((id, o));
+    }
+    let mut set = |id: &str, o: Out| {
+        if let Some((_, slot)) = out.iter_mut().find(|(x, _)| x == id) {
+            *slot = Some(o);
+        }
+    };
+    for g in gruppen(&ids, braucht) {
+        let mut done: Vec<(String, String, PathBuf)> = Vec::new();
+        let mut failed: Option<String> = None;
+        for id in &g {
+            let Some((version, datei, data)) = neu.remove(id) else { continue };
+            if let Some(f) = &failed {
+                set(id, Out::Error(format!("Fassung {version} von „{id}“ nicht eingespielt: gehört mit „{f}“ zusammen, das sich nicht einspielen ließ. Der bisherige Stand bleibt.")));
+                continue;
+            }
+            match unpack(id, &version, &datei, &data) {
+                Ok(dir) => done.push((id.clone(), version, dir)),
+                Err(e) => {
+                    set(id, Out::Error(e));
+                    failed = Some(id.clone());
+                }
+            }
+        }
+        for (id, version, dir) in done {
+            match &failed {
+                Some(f) => {
+                    remove(&dir);
+                    set(&id, Out::Error(format!("Fassung {version} von „{id}“ wieder herausgenommen: gehört mit „{f}“ zusammen, das sich nicht einspielen ließ. Der bisherige Stand bleibt.")));
+                }
+                None => set(&id, Out::Installed(version, dir)),
+            }
+        }
+    }
+    out.into_iter().map(|(id, o)| (id, o.unwrap_or_else(|| Out::Error("nicht eingespielt".into())))).collect()
+}
+
+/// Kennungen aus `braucht` (ohne Mindestversion).
+fn dep_ids(braucht: &[String]) -> Vec<String> {
+    braucht.iter().map(|b| rj_plugin_api::dependency(b).0.to_string()).collect()
+}
+
+/// Eine Erweiterung aus der Quelle laden und prüfen (Index, Wahl der Fassung, Paket mit Signatur und Prüfsumme),
+/// ohne einzuspielen. Liefert dazu, was die gewählte Fassung braucht.
+fn laden(s: &ablage::Sitzung, id: &str, platform: &str, key: &sign::VerifyingKey, current: &Version, mode: FetchMode, cancel: &AtomicBool) -> (Geladen, Vec<String>) {
+    let r = (|| -> Result<(Geladen, Vec<String>), String> {
+        let dir = quelle_dir(id, platform)?;
+        // Erst den Ordner listen: eine Erweiterung, die es in der Quelle (noch) nicht gibt, ist kein Fehler; ein
+        // Netzfehler beim Auflisten schon.
+        let has_index = s.ordner(&dir, Some(cancel))?.is_some_and(|e| e.iter().any(|x| x.name == INDEX_FILE));
+        if !has_index {
+            return Ok((Geladen::Fehlt(format!("In der Update-Quelle liegt keine Erweiterung „{id}“ für diese Plattform.")), Vec::new()));
+        }
+        let small = Limits { max_bytes: 1024 * 1024, timeout: std::time::Duration::from_secs(60) };
+        let index = Index::parse(&ablage::datei_geprueft(s, &dir, INDEX_FILE, key, small, Some(cancel), None)?)?;
+        let Some(f) = index.pick(current, rj_plugin_api::API_VERSION) else {
+            let newest = index.fassungen.first().map(|f| format!(" (neueste {} braucht remotejoe {} oder neuer, Schnittstelle {})", f.version, f.min_remotejoe, f.api)).unwrap_or_default();
+            return Ok((Geladen::Passt(format!("Keine Fassung der Erweiterung „{id}“ passt zu remotejoe {current}{newest}.")), Vec::new()));
+        };
+        let version = Version::parse(&f.version).map_err(|e| e.to_string())?;
+        if let Some(inst) = installed_manifest(id).and_then(|m| Version::parse(&m.version).ok()) {
+            if inst >= version || (mode == FetchMode::Update && inst == version) {
+                return Ok((Geladen::Aktuell(inst.to_string()), dep_ids(&f.braucht)));
+            }
+        }
+        let limits = Limits { max_bytes: 400 * 1024 * 1024, timeout: std::time::Duration::from_secs(30 * 60) };
+        let data = ablage::datei_geprueft(s, &dir, &f.datei, key, limits, Some(cancel), None)?;
+        Ok((Geladen::Neu { version: f.version.clone(), datei: f.datei.clone(), data }, dep_ids(&f.braucht)))
+    })();
+    r.unwrap_or_else(|e| (Geladen::Fehler(e), Vec::new()))
+}
+
+/// Ergebnis einer Erweiterung als JSON für die Oberfläche (`JobResult` „plugin_fetch“) mit `state`: `installed`
+/// (Version, gilt ab dem nächsten Start), `uptodate`, `unavailable` (keine Fassung für diese Plattform bzw. kein
+/// Index), `incompatible` (Index da, nichts passt zu dieser Programmversion), `error`.
+fn result_json(id: &str, o: Out) -> Value {
+    match o {
+        Out::Installed(version, neu) => {
+            // Noch nichts geladen (z. B. erste Lizenz): sofort an Ort und Stelle; sonst beim nächsten Start.
+            let swapped = !is_loaded(id) && {
+                swap_pending(neu.parent().unwrap_or(&neu));
+                dirs(id).is_some_and(|(d, _)| d.join(library_name(id)).is_file())
+            };
+            json!({ "state": "installed", "id": id, "version": version, "swapped": swapped, "neustart": true })
+        }
+        Out::UpToDate(version) => json!({ "state": "uptodate", "id": id, "version": version }),
+        Out::Unavailable(why) => json!({ "state": "unavailable", "id": id, "error": why }),
+        Out::Incompatible(why) => json!({ "state": "incompatible", "id": id, "error": why }),
+        Out::Error(e) => json!({ "state": "error", "id": id, "error": e }),
+    }
+}
+
+impl App {
     /// Lizenzierte Erweiterungen, deren Abhängigkeiten ebenfalls lizenziert sind (eine Lizenz mit einer
     /// Hersteller-Erweiterung ohne ihre Oberfunktion wird gemeldet, nicht still übergangen). `ids`: Module der Lizenz.
     fn fetch_candidates(ids: &[String]) -> (Vec<String>, Vec<(String, String)>) {
@@ -299,7 +412,7 @@ impl App {
         let mut ok = Vec::new();
         let mut bad = Vec::new();
         for id in ids {
-            let missing: Vec<&String> = manifests.iter().find(|m| &m.id == id).map(|m| m.braucht.iter().filter(|b| !ids.contains(b)).collect()).unwrap_or_default();
+            let missing: Vec<String> = manifests.iter().find(|m| &m.id == id).map(|m| m.braucht_ids().into_iter().filter(|b| !ids.contains(b)).collect()).unwrap_or_default();
             if missing.is_empty() {
                 ok.push(id.clone());
             } else {
@@ -309,61 +422,119 @@ impl App {
         (ok, bad)
     }
 
-    /// Abgleich mit der Quelle als ein Auftrag: Katalog laden (für Lizenzen ohne Modulliste und für Namen), dann je
-    /// lizenzierter Erweiterung, deren Abhängigkeiten ebenfalls lizenziert sind, einen Download-Auftrag starten.
-    /// Erweiterungen mit fehlender Oberfunktion in der Lizenz erscheinen als Fehler auf der Lizenzseite.
+    /// Erweiterungen, die dieser Abgleich holen soll; beim Start nur fehlende bzw. nicht geladene.
+    fn kandidaten(ids: &[String], anlass: SyncAnlass) -> (Vec<String>, Vec<(String, String)>) {
+        let (mut ok, bad) = App::fetch_candidates(ids);
+        if anlass == SyncAnlass::Start {
+            let pending = pending_ids();
+            ok.retain(|id| !is_loaded(id) && !pending.contains(id));
+        }
+        (ok, bad)
+    }
+
+    /// Abgleich mit der Quelle als **ein** Auftrag mit einer Anmeldung: Katalog laden (für Lizenzen ohne Modulliste
+    /// und für Namen), dann die lizenzierten Erweiterungen nacheinander laden und prüfen. Eingespielt wird erst danach
+    /// und nur gemeinsam: Scheitert eine von mehreren zusammengehörigen Erweiterungen, bleibt der alte Stand aller
+    /// (siehe [`zurueckhalten`], [`einspielen`]). Erweiterungen mit fehlender Oberfunktion in der Lizenz erscheinen
+    /// als Fehler auf der Lizenzseite.
     fn plugins_sync(&mut self, zugang: (String, String), current: Version, anlass: SyncAnlass, lizenz_ids: Vec<String>) -> Result<Value, String> {
         if self.demo {
             return Err("Vorführung".into());
+        }
+        if !self.plugin_jobs.is_empty() {
+            return Err("Die Erweiterungen werden bereits heruntergeladen.".into());
         }
         let key_text = self.update.key_override.clone().unwrap_or_else(|| crate::update::UPDATE_KEY.to_string());
         let key = sign::public_key_from_text(&key_text).map_err(|e| e.to_string())?;
         rj_update::proxy::set_mode(rj_update::proxy::ProxyMode::from_setting(&self.config.update.proxy));
         let host = host_of(&zugang.0);
-        let (url, kennwort) = zugang.clone();
-        let job = self.jobs.spawn_cancellable("Erweiterungen mit der Update-Quelle abgleichen".to_string(), move |_job, cancel| {
-            // Katalog: fehlt er in der Quelle, bleibt der zuletzt geladene.
-            let k = (|| -> Result<Option<Katalog>, String> {
+        let (url, kennwort) = zugang;
+        let platform = rj_update::platform();
+        let mode = if anlass == SyncAnlass::Update { FetchMode::Update } else { FetchMode::Install };
+        // Voraussichtliche Erweiterungen (für „wird heruntergeladen“ und Meldungen, falls schon die Anmeldung scheitert).
+        let vorab = App::kandidaten(&if lizenz_ids.is_empty() { katalog().ids() } else { lizenz_ids.clone() }, anlass).0;
+        let laufend = vorab.clone();
+        let job = self.jobs.spawn_cancellable("Erweiterungen mit der Update-Quelle abgleichen".to_string(), move |job, cancel| {
+            let r = (|| -> Result<(Vec<(String, Out)>, Vec<(String, String)>), String> {
                 let s = ablage::Sitzung::anmelden(&url, &kennwort, Some(&*cancel))?;
-                if !s.ordner(QUELLE_ERWEITERUNGEN, Some(&*cancel)).map(|e| e.iter().any(|x| x.name == KATALOG_FILE)).unwrap_or(false) {
-                    return Ok(None);
-                }
-                let small = Limits { max_bytes: 1024 * 1024, timeout: std::time::Duration::from_secs(60) };
-                Ok(Some(Katalog::parse(&ablage::datei_geprueft(&s, QUELLE_ERWEITERUNGEN, KATALOG_FILE, &key, small, Some(&*cancel), None)?)?))
-            })();
-            Box::new(move |app: &mut App, cancelled| {
-                if cancelled {
-                    return Vec::new();
-                }
-                if let Ok(Some(k)) = &k {
-                    katalog_speichern(k);
+                // Katalog: fehlt er in der Quelle oder scheitert er, bleibt der zuletzt geladene.
+                let k = (|| -> Result<Option<Katalog>, String> {
+                    if !s.ordner(QUELLE_ERWEITERUNGEN, Some(&*cancel))?.is_some_and(|e| e.iter().any(|x| x.name == KATALOG_FILE)) {
+                        return Ok(None);
+                    }
+                    let small = Limits { max_bytes: 1024 * 1024, timeout: std::time::Duration::from_secs(60) };
+                    Ok(Some(Katalog::parse(&ablage::datei_geprueft(&s, QUELLE_ERWEITERUNGEN, KATALOG_FILE, &key, small, Some(&*cancel), None)?)?))
+                })();
+                match &k {
+                    Ok(Some(k)) => katalog_speichern(k),
+                    Ok(None) => {}
+                    Err(e) => eprintln!("remotejoe: Katalog der Erweiterungen nicht geladen: {e}"),
                 }
                 let ids = if lizenz_ids.is_empty() { katalog().ids() } else { lizenz_ids };
-                let (ok, bad) = App::fetch_candidates(&ids);
+                let (ok, bad) = App::kandidaten(&ids, anlass);
+                let mut stand = Vec::new();
+                let mut braucht = std::collections::HashMap::new();
+                for id in &ok {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err("Abgebrochen".into());
+                    }
+                    let (g, b) = laden(&s, id, &platform, &key, &current, mode, &cancel);
+                    let mut deps = installed_manifest(id).map(|m| m.braucht_ids()).unwrap_or_default();
+                    deps.extend(b);
+                    braucht.insert(id.clone(), deps);
+                    stand.push((id.clone(), g));
+                }
+                eprintln!("remotejoe: Erweiterungen mit der Update-Quelle abgeglichen ({} Verbindung(en))", s.verbindungen());
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err("Abgebrochen".into());
+                }
+                zurueckhalten(&mut stand, &braucht, &|id| installed_manifest(id).is_some());
+                let unpack = |id: &str, version: &str, datei: &str, data: &[u8]| -> Result<PathBuf, String> {
+                    let neu = unpack_verified(id, datei, data, &key)?;
+                    let m = installed_manifest(id).ok_or("Manifest im Paket fehlt")?;
+                    if m.version != version {
+                        let _ = std::fs::remove_dir_all(&neu);
+                        return Err(format!("Das Paket nennt {}, der Index {version}", m.version));
+                    }
+                    Ok(neu)
+                };
+                Ok((einspielen(stand, &braucht, &unpack, &|d| {
+                    let _ = std::fs::remove_dir_all(d);
+                }), bad))
+            })();
+            Box::new(move |app: &mut App, cancelled| {
+                app.plugin_jobs.clear();
+                if cancelled {
+                    if let Ok((out, _)) = &r {
+                        for (_, o) in out {
+                            if let Out::Installed(_, neu) = o {
+                                let _ = std::fs::remove_dir_all(neu);
+                            }
+                        }
+                    }
+                    return Vec::new();
+                }
+                let (out, bad) = match r {
+                    Ok(x) => x,
+                    // Schon Anmeldung oder Abbruch gescheitert: Meldung bei jeder erwarteten Erweiterung.
+                    Err(e) => {
+                        eprintln!("remotejoe: Erweiterungen nicht abgeglichen: {e}");
+                        (vorab.into_iter().map(|id| (id, Out::Error(e.clone()))).collect(), Vec::new())
+                    }
+                };
                 let mut events = Vec::new();
-                for (id, e) in bad {
-                    let json = json!({ "state": "error", "id": id, "error": e });
+                let all = bad.into_iter().map(|(id, e)| (id, Out::Error(e))).chain(out);
+                for (id, o) in all {
+                    let json = result_json(&id, o);
                     app.plugin_fetch_last.insert(id, json.clone());
-                    events.push(UiEvent::JobResult { job: 0, kind: "plugin_fetch".into(), target: String::new(), json: json.to_string() });
-                }
-                let pending = pending_ids();
-                for id in ok {
-                    if anlass == SyncAnlass::Start && (is_loaded(&id) || pending.contains(&id)) {
-                        continue;
-                    }
-                    let mode = if anlass == SyncAnlass::Update { FetchMode::Update } else { FetchMode::Install };
-                    if let Err(e) = app.plugin_fetch(&id, Some(zugang.clone()), current.clone(), mode) {
-                        let json = json!({ "state": "error", "id": id, "error": e });
-                        app.plugin_fetch_last.insert(id, json.clone());
-                        events.push(UiEvent::JobResult { job: 0, kind: "plugin_fetch".into(), target: String::new(), json: json.to_string() });
-                    }
-                }
-                if let Err(e) = &k {
-                    eprintln!("remotejoe: Katalog der Erweiterungen nicht geladen: {e}");
+                    events.push(UiEvent::JobResult { job, kind: "plugin_fetch".into(), target: String::new(), json: json.to_string() });
                 }
                 events
             })
         });
+        for id in laufend {
+            self.plugin_jobs.insert(id, job);
+        }
         Ok(json!({ "job": job, "quelle": host, "gestartet": [ { "job": job } ], "fehler": [] }))
     }
 
@@ -430,6 +601,90 @@ mod tests {
         assert_eq!(quelle_dir("kind", "windows-x86_64").unwrap(), "/erweiterungen/kind/windows/");
         assert_eq!(quelle_dir("basis", "linux-x86_64").unwrap(), "/erweiterungen/basis/ubuntu2604/");
         assert!(quelle_dir("basis", "freebsd").is_err());
+    }
+
+    fn neu(v: &str) -> Geladen {
+        Geladen::Neu { version: v.into(), datei: format!("paket-{v}"), data: v.as_bytes().to_vec() }
+    }
+
+    fn deps(list: &[(&str, &[&str])]) -> std::collections::HashMap<String, Vec<String>> {
+        list.iter().map(|(id, b)| (id.to_string(), b.iter().map(|x| x.to_string()).collect())).collect()
+    }
+
+    /// Gruppen über `braucht` in beide Richtungen, auch über mehrere Stufen; Unabhängige bleiben allein.
+    #[test]
+    fn groups_follow_dependencies() {
+        let ids: Vec<String> = ["basis", "netz", "kind", "allein"].iter().map(|s| s.to_string()).collect();
+        let g = gruppen(&ids, &deps(&[("netz", &["basis"]), ("kind", &["netz"]), ("allein", &[])]));
+        assert_eq!(g, vec![vec!["basis".to_string(), "netz".into(), "kind".into()], vec!["allein".to_string()]]);
+    }
+
+    /// Scheitert eine zusammengehörige Erweiterung (Fehler, keine passende Fassung, installiert aber nicht mehr in
+    /// der Quelle), wird die neue Fassung der anderen nicht eingespielt; Unabhängige und Aktuelle bleiben unberührt.
+    #[test]
+    fn all_or_nothing_holds_back_partners() {
+        let b = deps(&[("netz", &["basis"])]);
+        for failure in [Geladen::Fehler("Zeitüberschreitung".into()), Geladen::Passt("zu neu".into()), Geladen::Fehlt("fehlt".into())] {
+            let mut st = vec![("basis".to_string(), neu("1.3.0")), ("netz".to_string(), failure), ("allein".to_string(), neu("2.0.0"))];
+            zurueckhalten(&mut st, &b, &|_| true);
+            assert!(matches!(&st[0].1, Geladen::Fehler(e) if e.contains("„netz“") && e.contains("bisherige Stand")), "{:?}", st[0].1);
+            assert!(matches!(st[2].1, Geladen::Neu { .. }), "unabhängige Erweiterung");
+        }
+        // Nicht installiert und nicht in der Quelle: kein Grund, den Partner zurückzuhalten.
+        let mut st = vec![("basis".to_string(), neu("1.3.0")), ("netz".to_string(), Geladen::Fehlt("fehlt".into()))];
+        zurueckhalten(&mut st, &b, &|id| id == "basis");
+        assert!(matches!(st[0].1, Geladen::Neu { .. }));
+        // Partner aktuell: neue Fassung darf kommen.
+        let mut st = vec![("basis".to_string(), neu("1.3.0")), ("netz".to_string(), Geladen::Aktuell("1.2.0".into()))];
+        zurueckhalten(&mut st, &b, &|_| true);
+        assert!(matches!(st[0].1, Geladen::Neu { .. }));
+    }
+
+    /// Einspielen: Die erste Erweiterung gelingt, die zweite derselben Gruppe scheitert beim Entpacken – die erste
+    /// wird wieder herausgenommen, der alte Stand beider bleibt. Eine unabhängige wird eingespielt.
+    #[test]
+    fn failed_unpack_removes_the_group() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().to_path_buf();
+        let unpack = |id: &str, version: &str, _datei: &str, _data: &[u8]| -> Result<PathBuf, String> {
+            if id == "netz" {
+                return Err("Signatur oder Prüfsumme der Bibliothek: falsch".into());
+            }
+            let d = root.join(format!("{id}.neu"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("version"), version).unwrap();
+            Ok(d)
+        };
+        let remove = |d: &Path| std::fs::remove_dir_all(d).unwrap();
+        let st = vec![("basis".to_string(), neu("1.3.0")), ("netz".to_string(), neu("1.3.0")), ("allein".to_string(), neu("2.0.0")), ("rest".to_string(), Geladen::Aktuell("1.0.0".into()))];
+        let out = einspielen(st, &deps(&[("netz", &["basis"])]), &unpack, &remove);
+        let get = |id: &str| &out.iter().find(|(x, _)| x == id).unwrap().1;
+        assert!(matches!(get("basis"), Out::Error(e) if e.contains("herausgenommen") && e.contains("„netz“")), "{:?}", get("basis"));
+        assert!(matches!(get("netz"), Out::Error(e) if e.contains("Signatur")));
+        assert!(!root.join("basis.neu").exists(), "erste Erweiterung wieder entfernt");
+        assert!(matches!(get("allein"), Out::Installed(v, d) if v == "2.0.0" && d.exists()));
+        assert!(matches!(get("rest"), Out::UpToDate(_)));
+        // Reihenfolge andersherum: scheitert die erste, wird die zweite gar nicht erst eingespielt.
+        let st = vec![("netz".to_string(), neu("1.3.0")), ("basis".to_string(), neu("1.3.0"))];
+        let out = einspielen(st, &deps(&[("netz", &["basis"])]), &unpack, &remove);
+        assert!(out.iter().all(|(_, o)| matches!(o, Out::Error(_))));
+        assert!(!root.join("basis.neu").exists());
+    }
+
+    /// Netzfehler beim Auflisten des Ordners einer Erweiterung ist ein Fehler, kein „nicht in der Quelle“; nur ein
+    /// fehlender Ordner ist „nicht in der Quelle“.
+    #[test]
+    fn listing_error_is_not_reported_as_missing() {
+        let platform = "linux-x86_64";
+        let base = ablage::test_server(vec![("/api/v2.1/share-links/tok/dirents/?path=/erweiterungen/netz/", "schliessen")]);
+        let s = ablage::test_sitzung(&base);
+        let key = sign::generate().unwrap().verifying_key();
+        let v = Version::parse("0.1.67").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (g, _) = laden(&s, "netz", platform, &key, &v, FetchMode::Install, &cancel);
+        assert!(matches!(&g, Geladen::Fehler(e) if e.contains("beim Auflisten")), "{g:?}");
+        let (g, _) = laden(&s, "fehlt", platform, &key, &v, FetchMode::Install, &cancel);
+        assert!(matches!(g, Geladen::Fehlt(_)), "{g:?}");
     }
 
     /// Ein signierter Ordner wird angenommen, ein veränderter oder fremd signierter nicht; `swap_pending` setzt das

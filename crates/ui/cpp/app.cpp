@@ -4,6 +4,11 @@
 
 #include "editor.h"
 #include "mainwindow.h"
+#include "settingstab.h"
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonObject>
+#include <QtWidgets/QDialog>
+#include <QtWidgets/QPushButton>
 #include "titlebar.h"
 #include <QtWidgets/QTabBar>
 #include "remotejoe-ui/src/bridge.cxxqt.h"
@@ -114,6 +119,53 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.settingsForScreenshot(QStringLiteral("license"));
 		pump(600);
 		save(w.tabs()->currentWidget(), dir, QStringLiteral("lizenz-%1.png").arg(lic));
+		return;
+	}
+	// Nur zur Prüfung „Erweiterungen aus Datei einspielen“ (RJ_SHOT_ERWEITERUNG_DATEI): Seite und Prüfdialog mit
+	// Beispielergebnissen („passt“, „passt nicht“), dann Ende.
+	if (qEnvironmentVariableIsSet("RJ_SHOT_ERWEITERUNG_DATEI"))
+	{
+		w.settingsForScreenshot(QStringLiteral("updates_ext"));
+		pump(600);
+		save(w.tabs()->currentWidget(), dir, QStringLiteral("erweiterungen-seite.png"));
+		auto* st = qobject_cast<SettingsTab*>(w.tabs()->currentWidget());
+		const auto check = [](const char* was, bool ok, const char* text) {
+			return QJsonObject{ { QStringLiteral("was"), QString::fromUtf8(was) }, { QStringLiteral("ok"), ok }, { QStringLiteral("text"), QString::fromUtf8(text) } };
+		};
+		const auto paket = [&](const char* name, const char* datei, const char* inst, const char* neu, bool sigOk) {
+			QJsonArray c{ check("Plattform", true, "linux-x86_64"), check("Signatur", sigOk, sigOk ? "gültig (Update-Schlüssel)" : "ungültig – Signatur oder Prüfsumme der Bibliothek"),
+				          check("Programmversion", true, "braucht remotejoe 0.1.67 oder neuer"), check("Lizenz", true, "in der Lizenz enthalten"),
+				          check("Installiert", true, (QString::fromUtf8(inst) + QStringLiteral(" → ") + QString::fromUtf8(neu)).toUtf8().constData()) };
+			return QJsonObject{ { QStringLiteral("name"), QString::fromUtf8(name) }, { QStringLiteral("dateiname"), QString::fromUtf8(datei) },
+				                { QStringLiteral("installiert"), QString::fromUtf8(inst) }, { QStringLiteral("neu"), QString::fromUtf8(neu) },
+				                { QStringLiteral("ok"), sigOk }, { QStringLiteral("pruefungen"), c } };
+		};
+		const QJsonObject passt{ { QStringLiteral("ok"), true },
+			                     { QStringLiteral("pakete"), QJsonArray{ paket("Erweiterung A", "remotejoe-a-1.3.0-linux-x86_64.tar.zst", "1.2.2", "1.3.0", true),
+				                                                        paket("Erweiterung B", "remotejoe-b-1.3.0-linux-x86_64.tar.zst", "1.2.0", "1.3.0", true) } },
+			                     { QStringLiteral("zusammenspiel"), QJsonObject{ { QStringLiteral("ok"), true }, { QStringLiteral("probleme"), QJsonArray{} } } } };
+		const QJsonObject passtNicht{ { QStringLiteral("ok"), false },
+			                          { QStringLiteral("pakete"), QJsonArray{ paket("Erweiterung A", "remotejoe-a-1.3.0-linux-x86_64.tar.zst", "1.2.2", "1.3.0", true) } },
+			                          { QStringLiteral("zusammenspiel"),
+				                        QJsonObject{ { QStringLiteral("ok"), false },
+					                                 { QStringLiteral("probleme"), QJsonArray{ QStringLiteral("Erweiterung B 1.2.0 passt nicht zu Erweiterung A 1.3.0 (Anschlussstelle „adapter“: Fassung 1, angeboten wird 3) – beide aktualisieren") } },
+					                                 { QStringLiteral("hinweis"), QStringLiteral("Passende Fassungen zusammengehöriger Erweiterungen gemeinsam auswählen und einspielen.") } } } };
+		int n = 0;
+		for (const QJsonObject& r : { passt, passtNicht })
+		{
+			if (!st)
+				break;
+			QDialog* dlg = st->fileCheckDialog(r, {});
+			dlg->show();
+			pump(400);
+			auto* install = dlg->findChild<QPushButton*>(QStringLiteral("extFileInstall"));
+			std::fprintf(stderr, "[prüfbild] Erweiterungen aus Datei (%s): Einspielen %s\n", n == 0 ? "passt" : "passt nicht", install && install->isEnabled() ? "aktiv" : "gesperrt");
+			save(dlg, dir, n == 0 ? QStringLiteral("erweiterungen-datei-passt.png") : QStringLiteral("erweiterungen-datei-passt-nicht.png"));
+			delete dlg;
+			++n;
+		}
+		if (!st)
+			std::fprintf(stderr, "[prüfbild] Erweiterungen aus Datei: Einstellungen nicht gefunden\n");
 		return;
 	}
 	// Prüfung: Suche und Neuaufbau während der Suche lassen den Aufklappzustand ohne Suche unverändert.
@@ -599,6 +651,9 @@ std::int32_t rjRunApplication()
 		});
 	if (!demo)
 		QTimer::singleShot(0, &w, [&w] { w.fitToScreen(); });
+	// Absturzwächter der Erweiterungen: Leiste bei einem Start ohne Erweiterungen, sonst Startmarke nach 30 s entfernen.
+	if (!demo)
+		w.pluginStartGuard();
 	// Echter Start: zuerst die Entsperrmaske für die Schlüsseldatenbank.
 	if (!demo)
 	{

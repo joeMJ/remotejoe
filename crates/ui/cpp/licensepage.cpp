@@ -35,6 +35,12 @@
 #include <QtCore/QUrl>
 #include <QtCore/QTimer>
 #include <QtWidgets/QMessageBox>
+#include <QtWidgets/QDialog>
+#include <QtWidgets/QDialogButtonBox>
+#include <QtWidgets/QFileDialog>
+#include <QtWidgets/QScrollArea>
+#include <QtCore/QFileInfo>
+#include <QtCore/QStandardPaths>
 
 namespace
 {
@@ -568,18 +574,66 @@ void MainWindow::licenseNoticeAfterUnlock()
 	lay->addWidget(restart);
 	statusBar()->addPermanentWidget(m_licenseNotice, 1);
 	connect(restart, &QPushButton::clicked, this, [this, text] {
-		if (!close())
-			return;
-		QProcess p;
-		p.setProgram(QCoreApplication::applicationFilePath());
-		auto env = QProcessEnvironment::systemEnvironment();
-		env.insert(QStringLiteral("RJ_RESTART_WAIT"), QStringLiteral("1"));
-		p.setProcessEnvironment(env);
-		if (p.startDetached())
-			qApp->quit();
-		else
+		if (!restartProgram())
 			text->setText(T(m_backend, "settings.license.restart.failed"));
 	});
+}
+
+bool MainWindow::restartProgram()
+{
+	if (!close())
+		return false;
+	QProcess p;
+	p.setProgram(QCoreApplication::applicationFilePath());
+	auto env = QProcessEnvironment::systemEnvironment();
+	env.insert(QStringLiteral("RJ_RESTART_WAIT"), QStringLiteral("1"));
+	p.setProcessEnvironment(env);
+	if (!p.startDetached())
+		return false;
+	qApp->quit();
+	return true;
+}
+
+void MainWindow::pluginStartGuard()
+{
+	const QJsonObject j = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("plugins_safe_mode") } }).toUtf8()).object();
+	if (!j.value(QStringLiteral("aktiv")).toBool())
+	{
+		// Stabiler Start: nach 30 s die Startmarke entfernen (beim regulären Beenden geschieht das ohnehin).
+		QTimer::singleShot(30000, this, [this] { edit({ { QStringLiteral("op"), QStringLiteral("plugins_start_ok") } }); });
+		return;
+	}
+	if (m_safeModeNotice)
+		return;
+	QStringList last;
+	for (const QJsonValue& v : j.value(QStringLiteral("zuletzt")).toArray())
+		last << v.toString();
+	const bool crash = j.value(QStringLiteral("grund")).toString() == QLatin1String("absturz");
+	const QString msg = crash ? T(m_backend, "plugins.safe.crash").arg(last.isEmpty() ? QStringLiteral("–") : last.join(QStringLiteral(", ")))
+	                          : T(m_backend, "plugins.safe.requested");
+	m_safeModeNotice = new QFrame(this);
+	m_safeModeNotice->setObjectName(QStringLiteral("rjSafeMode"));
+	m_safeModeNotice->setStyleSheet(QStringLiteral("QFrame#rjSafeMode { background: #e07000; border-radius: 4px; }"
+	                                               "QFrame#rjSafeMode QLabel { color: #ffffff; font-weight: bold; }"));
+	auto* lay = new QHBoxLayout(m_safeModeNotice);
+	lay->setContentsMargins(8, 2, 4, 2);
+	auto* text = new QLabel(msg, m_safeModeNotice);
+	text->setWordWrap(true);
+	text->setToolTip(T(m_backend, "plugins.safe.folder").arg(j.value(QStringLiteral("ordner")).toString()));
+	auto* restart = new QPushButton(T(m_backend, "plugins.safe.restart"), m_safeModeNotice);
+	restart->setObjectName(QStringLiteral("safeModeRestart"));
+	auto* update = new QPushButton(T(m_backend, "plugins.safe.update"), m_safeModeNotice);
+	update->setObjectName(QStringLiteral("safeModeUpdate"));
+	lay->addWidget(text, 1);
+	lay->addWidget(restart);
+	lay->addWidget(update);
+	statusBar()->addPermanentWidget(m_safeModeNotice, 1);
+	qWarning("remotejoe: %s", qPrintable(msg));
+	connect(restart, &QPushButton::clicked, this, [this, text] {
+		if (!restartProgram())
+			text->setText(T(m_backend, "settings.license.restart.failed"));
+	});
+	connect(update, &QPushButton::clicked, this, [this] { openSettings(QStringLiteral("updates_ext")); });
 }
 
 QWidget* SettingsTab::pageExtensions()
@@ -726,8 +780,27 @@ void SettingsTab::fillExtensionsPage(const QJsonObject& j, const QJsonObject& l,
 		updateBtn->setToolTip(wartungGrund);
 	}
 	urow->addWidget(updateBtn);
+	// Für den Fall, dass der Download nicht klappt: Pakete aus Dateien (gleiche Prüfungen, nur mit Wartung).
+	auto* fileBtn = new QPushButton(faIcon(QStringLiteral("file-import")), T("ext.file.button"), w);
+	fileBtn->setObjectName(QStringLiteral("pluginsFromFile"));
+	if (!maint)
+	{
+		fileBtn->setEnabled(false);
+		fileBtn->setToolTip(wartungGrund);
+	}
+	urow->addWidget(fileBtn);
+	connect(fileBtn, &QPushButton::clicked, this, [this] { pluginsFromFile(); });
 	urow->addStretch(1);
 	v->addLayout(urow);
+	// Notausgang, falls eine Erweiterung den Start verhindert: Ordner nennen, den man herausverschieben kann.
+	{
+		const QJsonObject sm = QJsonDocument::fromJson(this->edit({ { QStringLiteral("op"), QStringLiteral("plugins_safe_mode") } }).toUtf8()).object();
+		auto* rescue = new QLabel(T("plugins.safe.folder").arg(sm.value(QStringLiteral("ordner")).toString()), w);
+		rescue->setObjectName(QStringLiteral("rjMuted"));
+		rescue->setWordWrap(true);
+		rescue->setTextInteractionFlags(Qt::TextSelectableByMouse);
+		v->addWidget(rescue);
+	}
 	if (!maint && !wartungGrund.isEmpty())
 	{
 		auto* why = new QLabel(wartungGrund, w);
@@ -753,4 +826,126 @@ void SettingsTab::fillExtensionsPage(const QJsonObject& j, const QJsonObject& l,
 		}
 		rebuildLicensePage();
 	});
+}
+
+void SettingsTab::pluginsFromFile()
+{
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	const QStringList files = QFileDialog::getOpenFileNames(this, T("ext.file.title"), QStandardPaths::writableLocation(QStandardPaths::DownloadLocation), T("ext.file.filter"));
+	if (files.isEmpty())
+		return;
+	auto list = [&files] {
+		QJsonArray a;
+		for (const QString& f : files)
+			a.append(f);
+		return a;
+	};
+	const QJsonObject r = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("plugins_file_check") }, { QStringLiteral("dateien"), list() } }).toUtf8()).object();
+	if (r.contains(QStringLiteral("error")))
+	{
+		extLog(r.value(QStringLiteral("error")).toString());
+		return;
+	}
+	QDialog* dlg = fileCheckDialog(r, files);
+	if (dlg->exec() != QDialog::Accepted)
+	{
+		delete dlg;
+		return;
+	}
+	delete dlg;
+	const QJsonObject done = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("plugins_file_install") }, { QStringLiteral("dateien"), list() } }).toUtf8()).object();
+	if (done.contains(QStringLiteral("error")))
+	{
+		extLog(done.value(QStringLiteral("error")).toString());
+		return;
+	}
+	for (const QJsonValue& e : done.value(QStringLiteral("eingespielt")).toArray())
+	{
+		const QJsonObject o = e.toObject();
+		const QString id = o.value(QStringLiteral("id")).toString();
+		m_pluginLast.insert(id, o);
+		extLog(T("ext.file.done").arg(m_pluginRows.value(id).value(QStringLiteral("name")).toString(id), o.value(QStringLiteral("version")).toString(),
+		                               QFileInfo(o.value(QStringLiteral("datei")).toString()).fileName()));
+	}
+	rebuildLicensePage();
+}
+
+QDialog* SettingsTab::fileCheckDialog(const QJsonObject& r, const QStringList& files)
+{
+	Q_UNUSED(files)
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	const bool dark = palette().color(QPalette::Window).lightness() < 128;
+	const QString green = dark ? QStringLiteral("#33d17a") : QStringLiteral("#1a7544");
+	const QString orange = dark ? QStringLiteral("#ff7800") : QStringLiteral("#a64800");
+	auto* dlg = new QDialog(this);
+	dlg->setObjectName(QStringLiteral("extFileCheck"));
+	dlg->setWindowTitle(T("ext.file.title"));
+	dlg->resize(640, 600);
+	auto* outer = new QVBoxLayout(dlg);
+	auto* scroll = new QScrollArea(dlg);
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+	auto* body = new QWidget(scroll);
+	auto* v = new QVBoxLayout(body);
+	v->setContentsMargins(0, 0, 0, 0);
+	auto line = [&](bool ok, const QString& text) {
+		auto* l = new QLabel(QStringLiteral("<span style=\"color:%1\">%2</span> %3").arg(ok ? green : orange, ok ? QStringLiteral("✓") : QStringLiteral("✗"), text.toHtmlEscaped()), body);
+		l->setWordWrap(true);
+		l->setTextInteractionFlags(Qt::TextSelectableByMouse);
+		l->setContentsMargins(16, 0, 0, 0);
+		v->addWidget(l);
+	};
+	for (const QJsonValue& pv : r.value(QStringLiteral("pakete")).toArray())
+	{
+		const QJsonObject p = pv.toObject();
+		const QString inst = p.value(QStringLiteral("installiert")).toString();
+		const QString neu = p.value(QStringLiteral("neu")).toString();
+		auto* head = new QLabel(QStringLiteral("<b>%1</b>&nbsp;&nbsp;%2").arg(p.value(QStringLiteral("name")).toString().toHtmlEscaped(),
+		                                                                     neu.isEmpty() ? QString() : (inst.isEmpty() ? T("ext.file.new").arg(neu) : T("ext.file.update").arg(inst, neu)).toHtmlEscaped()),
+		                        body);
+		head->setContentsMargins(0, 8, 0, 0);
+		v->addWidget(head);
+		auto* file = new QLabel(p.value(QStringLiteral("dateiname")).toString(), body);
+		file->setObjectName(QStringLiteral("rjMuted"));
+		file->setContentsMargins(16, 0, 0, 0);
+		v->addWidget(file);
+		for (const QJsonValue& cv : p.value(QStringLiteral("pruefungen")).toArray())
+		{
+			const QJsonObject c = cv.toObject();
+			line(c.value(QStringLiteral("ok")).toBool(), QStringLiteral("%1: %2").arg(c.value(QStringLiteral("was")).toString(), c.value(QStringLiteral("text")).toString()));
+		}
+	}
+	const QJsonObject z = r.value(QStringLiteral("zusammenspiel")).toObject();
+	auto* zh = new QLabel(QStringLiteral("<b>%1</b>").arg(T("ext.file.together").toHtmlEscaped()), body);
+	zh->setContentsMargins(0, 12, 0, 0);
+	v->addWidget(zh);
+	const QJsonArray probs = z.value(QStringLiteral("probleme")).toArray();
+	if (probs.isEmpty())
+		line(true, T("ext.file.together.ok"));
+	for (const QJsonValue& pr : probs)
+		line(false, pr.toString());
+	if (!probs.isEmpty())
+	{
+		auto* hint = new QLabel(z.value(QStringLiteral("hinweis")).toString(), body);
+		hint->setWordWrap(true);
+		hint->setContentsMargins(16, 4, 0, 0);
+		v->addWidget(hint);
+	}
+	v->addStretch(1);
+	scroll->setWidget(body);
+	outer->addWidget(scroll, 1);
+	const bool ok = r.value(QStringLiteral("ok")).toBool();
+	auto* sum = new QLabel(T(ok ? "ext.file.ok" : "ext.file.notok"), dlg);
+	sum->setWordWrap(true);
+	sum->setStyleSheet(QStringLiteral("color: %1; font-weight: bold;").arg(ok ? green : orange));
+	outer->addWidget(sum);
+	auto* box = new QDialogButtonBox(dlg);
+	auto* install = box->addButton(T("ext.file.install"), QDialogButtonBox::AcceptRole);
+	install->setObjectName(QStringLiteral("extFileInstall"));
+	install->setEnabled(ok);
+	box->addButton(T("ext.file.cancel"), QDialogButtonBox::RejectRole);
+	connect(box, &QDialogButtonBox::accepted, dlg, &QDialog::accept);
+	connect(box, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+	outer->addWidget(box);
+	return dlg;
 }

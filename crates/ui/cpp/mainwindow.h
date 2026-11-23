@@ -236,6 +236,16 @@ public:
 	/// Lizenz aus der Schlüsseldatenbank übernommen: Hinweis mit Neustart (licensepage.cpp).
 	void licenseNoticeAfterUnlock();
 	QFrame* m_licenseNotice = nullptr;
+public:
+	/// Absturzwächter der Erweiterungen (nach dem Zeigen des Hauptfensters): läuft dieser Start ohne Erweiterungen,
+	/// eine Leiste mit Grund und „Mit Erweiterungen neu starten“ / „Erweiterungen aktualisieren“; sonst nach 30 s
+	/// stabilem Lauf die Startmarke entfernen.
+	void pluginStartGuard();
+private:
+	QFrame* m_safeModeNotice = nullptr;
+	/// remotejoe beenden und neu starten (wie nach einem Update); false, wenn das Fenster nicht schließt oder der
+	/// Start scheitert.
+	bool restartProgram();
 #endif
 
 public:
