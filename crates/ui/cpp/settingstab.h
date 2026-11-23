@@ -19,6 +19,7 @@
 class AppearanceTab;
 class QCheckBox;
 class QComboBox;
+class QKeySequenceEdit;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -73,6 +74,8 @@ signals:
 	/// Strg+Umschalt+W: neuer Modus (outside, always, never).
 	void closeTabKeyChanged(const QString& mode);
 	void findKeyChanged(const QString& mode);
+	/// Tab-Wechsel: Modus (outside, always, never) und Tastenfolgen nach links/rechts.
+	void tabSwitchKeysChanged(const QString& mode, const QString& prev, const QString& next);
 	/// Zuschaltbare Funktionen ein- oder ausgeschaltet.
 	void featuresChanged() override;
 	/// Baum geändert (z. B. Vorlagenordner angelegt).
@@ -90,6 +93,7 @@ private:
 	rjui::AreaTree* m_areaTree = nullptr;
 	QWidget* pageLock();
 	QWidget* pageKeys();
+	QWidget* pageCiphers();
 	QWidget* pageLicense();
 	/// Lizenz: Urkunde, Erweiterungen, Update-Quelle, Einfügen (licensepage.cpp).
 	void buildLicensePage(QVBoxLayout* v, QWidget* w);
@@ -132,11 +136,17 @@ private:
 	QComboBox* m_idle = nullptr;
 	QCheckBox* m_disconnect = nullptr;
 	QCheckBox* m_keyErrors = nullptr;
+	QCheckBox* m_cipherOld = nullptr;
+	QCheckBox* m_cipherVeryOld = nullptr;
 	QSpinBox* m_clipSecs = nullptr;
 	// Tastatur
 	QCheckBox* m_keyCapture = nullptr;
 	QComboBox* m_closeTab = nullptr;
 	QComboBox* m_findKey = nullptr;
+	QComboBox* m_tabSwitch = nullptr;
+	QKeySequenceEdit* m_tabPrev = nullptr;
+	QKeySequenceEdit* m_tabNext = nullptr;
+	void saveTabSwitchKeys();
 	QComboBox* m_adminLayout = nullptr;
 	QSpinBox* m_adminTimeout = nullptr;
 	// Claude-Anbindung

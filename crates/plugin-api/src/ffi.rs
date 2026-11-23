@@ -136,7 +136,7 @@ pub struct FfiHost {
 /// Operationen, nach denen der zwischengespeicherte Index weiter gilt.
 const READ_ONLY_OPS: &[&str] = &[
     "index", "target", "folder", "node_path", "settings_extra", "settings_core", "data_dir", "text", "demo", "vault_open", "read_only",
-    "device", "inventory", "inventory_web_way", "services_ip", "cli_ticket", "folder_has_slot", "snmp_ticket", "busy", "busy_set",
+    "device", "inventory", "inventory_web_way", "services_ip", "cli_ticket", "http_ticket", "secret_state", "folder_has_slot", "snmp_ticket", "busy", "busy_set",
     "busy_clear", "cfgstore_state", "light", "redact", "mcp_target", "login_kinds", "edition", "tree_changed",
 ];
 

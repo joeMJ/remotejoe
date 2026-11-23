@@ -295,7 +295,7 @@ fn run(groups: Vec<Group>, rows: Arc<Mutex<Vec<CheckRow>>>, done: Arc<AtomicUsiz
 
 impl App {
     /// Zugangsdaten eines Wegs bzw. des Hauptwegs auflösen; `Err` mit Grund fürs Überspringen.
-    fn check_credential(&self, t: &rj_core::Target, way: Option<&rj_core::model::AccessWay>) -> Result<(ResolvedCredential, String), String> {
+    pub(crate) fn check_credential(&self, t: &rj_core::Target, way: Option<&rj_core::model::AccessWay>) -> Result<(ResolvedCredential, String), String> {
         let target_cred = || -> Result<(ResolvedCredential, String), String> {
             match resolve_credential(&self.index, t.id).map_err(|e| e.to_string())? {
                 CredentialResolution::Found(r) => {

@@ -1757,6 +1757,16 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 			closeToolTab(tt);
 			return;
 		}
+		// Tab einer Erweiterung (RjPluginTab in deren Bibliothek): wie ihr Knopf „Schließen“.
+		if (QWidget* pw = m_tabs->widget(i); pw && pw->inherits("RjPluginTab"))
+		{
+			// Wie ihr Knopf „Schließen“ (Signal closeRequested); ohne das Signal direkt schließen.
+			if (pw->metaObject()->indexOfSignal("closeRequested()") >= 0)
+				QMetaObject::invokeMethod(pw, "closeRequested", Qt::QueuedConnection);
+			else
+				closeToolTab(pw);
+			return;
+		}
 		if (auto* mt = qobject_cast<MacroTab*>(m_tabs->widget(i)))
 		{
 			if (mt->isDirty())
@@ -1837,8 +1847,25 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		if (closeTabKeyActive() && m_tabs->count() > 0)
 			emit m_tabs->tabCloseRequested(m_tabs->currentIndex());
 	});
-	sc(QKeySequence(QStringLiteral("Ctrl+PgDown")), [this] { m_tabs->setCurrentIndex((m_tabs->currentIndex() + 1) % qMax(1, m_tabs->count())); });
-	sc(QKeySequence(QStringLiteral("Ctrl+PgUp")), [this] { m_tabs->setCurrentIndex((m_tabs->currentIndex() + m_tabs->count() - 1) % qMax(1, m_tabs->count())); });
+	sc(QKeySequence(QStringLiteral("Ctrl+PgDown")), [this] { stepTab(1); });
+	sc(QKeySequence(QStringLiteral("Ctrl+PgUp")), [this] { stepTab(-1); });
+	// Tab-Wechsel mit frei belegbaren Tastenfolgen (Einstellungen → Tastatur), Vorgabe Strg+Umschalt+Bild↑/↓.
+	m_tabPrevShortcut = new QShortcut(this);
+	m_tabPrevShortcut->setContext(Qt::ApplicationShortcut);
+	connect(m_tabPrevShortcut, &QShortcut::activated, this, [this] {
+		if (tabSwitchKeyActive())
+			stepTab(-1);
+	});
+	m_tabNextShortcut = new QShortcut(this);
+	m_tabNextShortcut->setContext(Qt::ApplicationShortcut);
+	connect(m_tabNextShortcut, &QShortcut::activated, this, [this] {
+		if (tabSwitchKeyActive())
+			stepTab(1);
+	});
+	{
+		const QJsonObject st = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("settings") } }));
+		applyTabSwitchKeys(st.value(QStringLiteral("tab_switch_key")).toString(QStringLiteral("outside")), st.value(QStringLiteral("tab_prev_keys")).toString(QStringLiteral("Ctrl+Shift+PgUp")), st.value(QStringLiteral("tab_next_keys")).toString(QStringLiteral("Ctrl+Shift+PgDown")));
+	}
 	connect(m_search, &QLineEdit::returnPressed, this, [this] { m_tree->setFocus(); m_tree->setCurrentIndex(m_model->index(0, 0)); });
 
 	m_poll.setInterval(16);
@@ -1954,7 +1981,7 @@ void MainWindow::applyMenuIcons()
 		{ "ctx.favorite.on", "r-star" }, { "ctx.favorite.off", "star" }, { "menu.extras.settings", "gear" }, { "menu.extras.idle", "hourglass-half" },
 		{ "menu.extras.clipclear", "eraser" }, { "menu.extras.shared", "user-group" }, { "menu.extras.credmerge", "object-group" },
 		{ "menu.extras.mcplog", "robot" }, { "menu.extras.orphans", "link-slash" }, { "menu.extras.terminal", "terminal" },
-		{ "menu.extras.appearance", "palette" }, { "menu.extras.keycapture", "keyboard" }, { "menu.extras.closetab", "xmark" },
+		{ "menu.extras.appearance", "palette" }, { "menu.extras.keycapture", "keyboard" }, { "menu.extras.shortcuts", "keyboard" },
 		{ "menu.view.single", "r-square" }, { "menu.view.one_by_two", "table-columns" }, { "menu.view.two_by_two", "table-cells-large" },
 		{ "menu.view.free", "up-down-left-right" }, { "menu.view.term.bigger", "magnifying-glass-plus" },
 		{ "menu.view.term.smaller", "magnifying-glass-minus" }, { "menu.view.term.default", "text-height" },
@@ -2104,26 +2131,8 @@ void MainWindow::buildMenus()
 		connect(extras, &QMenu::aboutToShow, kc, [kc] { kc->setChecked(FrameView::s_keyCapture); });
 	}
 	{
-		// Strg+Umschalt+W: wann es den aktiven Tab schließt.
-		QMenu* cw = extras->addMenu(T(m_backend, "menu.extras.closetab"));
-		auto* group = new QActionGroup(cw);
-		for (const char* mode : { "outside", "always", "never" })
-		{
-			QAction* a = cw->addAction(T(m_backend, (QByteArray("menu.extras.closetab.") + mode).constData()));
-			a->setCheckable(true);
-			a->setData(QString::fromLatin1(mode));
-			group->addAction(a);
-			connect(a, &QAction::triggered, this, [this, a] {
-				m_closeTabKey = a->data().toString();
-				edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("close_tab_key"), m_closeTabKey } });
-				for (auto* st : findChildren<SettingsTab*>())
-					st->reload();
-			});
-		}
-		connect(cw, &QMenu::aboutToShow, cw, [this, group] {
-			for (QAction* a : group->actions())
-				a->setChecked(a->data().toString() == m_closeTabKey);
-		});
+		// Tastenkürzel (Strg+Umschalt+W, Strg+F, Tab-Wechsel): eigener Eintrag zur Seite Tastatur der Einstellungen.
+		extras->addAction(T(m_backend, "menu.extras.shortcuts"), this, [this] { openSettings(QStringLiteral("keys")); });
 	}
 	QMenu* help = nullptr;
 	QMenu* view = m_menuBar->addMenu(T(m_backend, "menu.view"));
@@ -4028,6 +4037,7 @@ void MainWindow::openSettings(const QString& section)
 		connect(t, &SettingsTab::appearanceChanged, this, [this] { applyAppearance(); });
 		connect(t, &SettingsTab::closeTabKeyChanged, this, [this](const QString& mode) { m_closeTabKey = mode; });
 		connect(t, &SettingsTab::findKeyChanged, this, [this](const QString& mode) { m_findKey = mode; });
+		connect(t, &SettingsTab::tabSwitchKeysChanged, this, [this](const QString& mode, const QString& prev, const QString& next) { applyTabSwitchKeys(mode, prev, next); });
 		connect(t, &SettingsTab::treeChanged, this, [this] { reloadTree(); });
 		connect(t, &SettingsTab::featuresChanged, this, [this] {
 			if (auto* o = findChild<OverviewTab*>())
@@ -4543,6 +4553,37 @@ bool MainWindow::findKeyActive() const
 	return m_findKey == QLatin1String("always") || !focusInSession();
 }
 
+bool MainWindow::tabSwitchKeyActive() const
+{
+	if (m_tabSwitchKey == QLatin1String("never"))
+		return false;
+	return m_tabSwitchKey == QLatin1String("always") || !focusInSession();
+}
+
+void MainWindow::applyTabSwitchKeys(const QString& mode, const QString& prev, const QString& next)
+{
+	m_tabSwitchKey = mode.isEmpty() ? QStringLiteral("outside") : mode;
+	const bool off = m_tabSwitchKey == QLatin1String("never");
+	// Strg+Bild↑/↓ wechseln ohnehin immer; dieselbe Tastenfolge ein zweites Mal machte beide mehrdeutig.
+	auto seq = [off](const QString& s) {
+		const QKeySequence k(s, QKeySequence::PortableText);
+		const bool fixed = k == QKeySequence(QStringLiteral("Ctrl+PgUp")) || k == QKeySequence(QStringLiteral("Ctrl+PgDown"));
+		return off || fixed ? QKeySequence() : k;
+	};
+	if (m_tabPrevShortcut)
+		m_tabPrevShortcut->setKey(seq(prev));
+	if (m_tabNextShortcut)
+		m_tabNextShortcut->setKey(seq(next));
+}
+
+void MainWindow::stepTab(int step)
+{
+	const int n = m_tabs ? m_tabs->count() : 0;
+	if (n < 2)
+		return;
+	m_tabs->setCurrentIndex(((m_tabs->currentIndex() + step) % n + n) % n);
+}
+
 bool MainWindow::eventFilter(QObject* o, QEvent* e)
 {
 	// Logo unten rechts: Klick öffnet die Projektseite.
@@ -4586,6 +4627,16 @@ bool MainWindow::eventFilter(QObject* o, QEvent* e)
 		{
 			e->accept();
 			return true;
+		}
+		// Ebenso die Tastenfolgen für den Tab-Wechsel, wenn sie gerade nicht wechseln dürfen.
+		if (!tabSwitchKeyActive() && m_tabPrevShortcut && m_tabNextShortcut)
+		{
+			const QKeySequence pressed(k->keyCombination());
+			if ((!m_tabPrevShortcut->key().isEmpty() && pressed == m_tabPrevShortcut->key()) || (!m_tabNextShortcut->key().isEmpty() && pressed == m_tabNextShortcut->key()))
+			{
+				e->accept();
+				return true;
+			}
 		}
 		// Ebenso Strg+F, wenn es nicht in die Suche über dem Baum springen soll (Web-Sitzungen suchen selbst).
 		if (k->key() == Qt::Key_F && (k->modifiers() & ~Qt::KeypadModifier) == Qt::ControlModifier && !focusedWebPane() && !findKeyActive())

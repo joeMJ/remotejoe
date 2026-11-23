@@ -6,8 +6,9 @@ pub const ISSUE_URL: &str = "https://github.com/joeMJ/remotejoe/issues/new";
 
 /// Obergrenze der Adresse; längere Texte werden gekürzt. Ohne Anmeldung leitet GitHub über die Anmeldeseite um und
 /// kodiert die Adresse dabei erneut; ab etwa 5000 Zeichen antwortet es dann mit „Internal server error“ oder verliert den
-/// Text (gemessen 2026-10-21), daher mit Abstand darunter.
-pub const MAX_URL: usize = 4000;
+/// Text (gemessen 2026-10-21). Unter Windows reicht der Aufruf des Browsers (ShellExecute) Adressen über etwa 2048
+/// Zeichen nicht weiter – der Browser öffnete sich dann gar nicht (Nutzer 2026-11-23); daher darunter.
+pub const MAX_URL: usize = 2000;
 
 /// Interne Angaben ersetzen: IPv4-Adressen, Mailadressen, IPv6-Adressen und die übergebenen Wörter
 /// (Rechner- und Benutzername, Namen und Adressen der Ziele).

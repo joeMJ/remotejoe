@@ -1,3 +1,16 @@
+## 0.1.65 – Tab-Wechsel, Cipher-Suites und Web-Anmeldung
+
+*Veröffentlicht am 23.11.2026*
+
+**Wichtig für ältere Geräte:** Ältere, unsichere SSH-Verfahren bietet remotejoe nur noch an, wenn sie unter Einstellungen → Sicherheit → Cipher-Suites zugelassen sind (Vorgabe: aus). Geräte, die nur solche Verfahren können, melden nach dem Update „Schlüsselaustausch gescheitert“ mit Verweis auf diese Einstellung. Vorher bitte prüfen, ob für das Gerät neuere Firmware verfügbar ist.
+
+- Cipher-Suites (neu, Einstellungen → Sicherheit): zwei Stufen. „Ältere SSH-Verfahren“ (SHA-1-Schlüsselaustausch, AES-CBC, HMAC-SHA1, DSA-Schlüssel) und zusätzlich „sehr alte Verfahren“ (3DES, Diffie-Hellman-Gruppe 1). Sie werden nur angeboten, wenn ein Gerät die aktuellen nicht kann. Die Option „Ältere Verfahren“ an einem Ziel bzw. Tunnel wirkt nur mit dieser Freigabe.
+- Tabs wechseln: Strg+Umschalt+Bild↑/↓ wechselt zum Tab links bzw. rechts (mit Umlauf). Einstellungen → Tastatur: Tastenfolgen frei belegbar, wahlweise nur außerhalb von Sitzungen. Strg+Bild↑/↓ wechselt weiterhin immer. Extras → „Tastenkürzel …“ öffnet die Seite.
+- Web-Anmeldung: Die Feldkennungen der Anmeldeseite (Verbindung) heißen jetzt „Feldkennung Benutzername / Kennwort / Anmeldeknopf (CSS-Selektor)“ und stehen unter „Erweitert: Felder der Anmeldeseite“ (aufgeklappt, sobald etwas eingetragen ist). Wird eine eingetragene Kennung auf der Seite nicht gefunden, nimmt remotejoe die automatische Erkennung und meldet das einmal, statt die Anmeldung abzubrechen.
+- Fehler melden: Die Knöpfe heißen „Fehler an GitHub melden“ und „Abbrechen“; der Browser öffnet sich wieder. Ist der Text zu lang für die Adresse oder öffnet sich kein Browser, liegt der vollständige Text in der Zwischenablage.
+- Erweiterungen: „ד schließt auch Tabs der Erweiterungen. Erweiterungen können HTTPS-Schnittstellen eines Ziels nutzen, ohne Zugangsdaten zu sehen (über ein Ticket des Programms, Zertifikat per Fingerabdruck bestätigt). Ein Ziel kann dafür ein benanntes Geheimnis tragen (z. B. einen API-Schlüssel), das nie angezeigt wird.
+- Parallele Abfragen über Tickets: Ein gerade benutztes Ticket bleibt gültig; gleichzeitige Abfragen brechen nicht mehr ab. Meldungen sagen „Ticket“ statt „Zugangsschein“.
+
 ## 0.1.64 – Neuigkeiten und Tabs
 
 *Veröffentlicht am 22.11.2026*

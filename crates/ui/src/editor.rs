@@ -503,6 +503,7 @@ impl App {
             "bulk_preview" => self.op_bulk(&c, false),
             "bulk_add" => self.op_bulk(&c, true),
             "update" => self.op_update(&c),
+            "secret_state" => Ok(json!({ "set": id_of(&c, "id").is_some_and(|id| self.secret_state(id, str_of(&c, "name").unwrap_or_default())) })),
             "move" => self.simple("Verschieben", |idx| {
                 let id = id_of(&c, "id").ok_or(EditError::NotFound)?;
                 let parent = id_of(&c, "parent").unwrap_or(idx.root.id);
@@ -670,10 +671,15 @@ impl App {
                 "lock_after_idle_mins": self.config.security.lock_after_idle_mins,
                 "disconnect_on_lock": self.config.security.disconnect_on_lock,
                 "accept_key_errors": self.config.security.accept_key_errors,
+                "ssh_legacy_ciphers": self.config.security.ssh_legacy_ciphers,
+                "ssh_very_old_ciphers": self.config.security.ssh_very_old_ciphers,
                 "connect_all_parallel": self.config.connection.connect_all_parallel,
                 "keyboard_capture": self.config.connection.keyboard_capture,
                 "close_tab_key": self.config.connection.close_tab_key,
                 "find_key": self.config.connection.find_key,
+                "tab_switch_key": self.config.connection.tab_switch_key,
+                "tab_prev_keys": self.config.connection.tab_prev_keys,
+                "tab_next_keys": self.config.connection.tab_next_keys,
                 "admin_keys_layout": self.config.connection.admin_keys_layout,
                 "admin_keys_timeout_mins": self.config.connection.admin_keys_timeout_mins,
                 "admin_keys_layouts": crate::adminkeys::NAMES.iter().map(|(k, n)| json!({ "klid": k, "name": n, "available": crate::adminkeys::Layout::find(crate::adminkeys::builtin(), k).is_some() })).collect::<Vec<_>>(),
@@ -697,6 +703,17 @@ impl App {
                     self.config.security.accept_key_errors = a;
                     crate::keyerrors::set(a);
                 }
+                // Cipher-Suites: Stufe 2 nur zusammen mit Stufe 1.
+                if let Some(a) = c.get("ssh_legacy_ciphers").and_then(Value::as_bool) {
+                    self.config.security.ssh_legacy_ciphers = a;
+                }
+                if let Some(a) = c.get("ssh_very_old_ciphers").and_then(Value::as_bool) {
+                    self.config.security.ssh_very_old_ciphers = a;
+                }
+                if !self.config.security.ssh_legacy_ciphers {
+                    self.config.security.ssh_very_old_ciphers = false;
+                }
+                rj_ssh::client::set_legacy_allowed(self.config.security.ssh_legacy_level());
                 if let Some(n) = c.get("connect_all_parallel").and_then(Value::as_u64) {
                     self.config.connection.connect_all_parallel = n.clamp(1, 64) as u32;
                 }
@@ -708,6 +725,20 @@ impl App {
                 }
                 if let Some(k) = c.get("find_key").and_then(Value::as_str).filter(|k| matches!(*k, "outside" | "always" | "never")) {
                     self.config.connection.find_key = k.to_string();
+                }
+                if let Some(k) = c.get("tab_switch_key").and_then(Value::as_str).filter(|k| matches!(*k, "outside" | "always" | "never")) {
+                    self.config.connection.tab_switch_key = k.to_string();
+                }
+                // Tastenfolgen: Qt-Schreibweise, leer = keine; Steuerzeichen und Überlänge ablehnen.
+                for (key, slot) in [("tab_prev_keys", 0), ("tab_next_keys", 1)] {
+                    if let Some(k) = c.get(key).and_then(Value::as_str).filter(|k| k.len() <= 64 && !k.chars().any(char::is_control)) {
+                        let k = k.trim().to_string();
+                        if slot == 0 {
+                            self.config.connection.tab_prev_keys = k;
+                        } else {
+                            self.config.connection.tab_next_keys = k;
+                        }
+                    }
                 }
                 if let Some(k) = c.get("admin_keys_layout").and_then(Value::as_str).filter(|k| crate::adminkeys::NAMES.iter().any(|(n, _)| n == k)) {
                     self.config.connection.admin_keys_layout = k.to_string();
@@ -1317,6 +1348,13 @@ impl App {
         // Zweiter Zugangsdatensatz „Sitzung“ für die Tastenfolge.
         if let Some(aux) = c.get("aux_credential") {
             if let Err(e) = self.apply_aux_credential(id, aux) {
+                self.index = before;
+                return Err(e);
+            }
+        }
+        // Benannte Geheimnisse des Ziels (z. B. API-Schlüssel aus einer Seite einer Erweiterung).
+        if let Some(sec) = f.get("secrets").and_then(Value::as_object) {
+            if let Err(e) = self.apply_secrets(id, sec) {
                 self.index = before;
                 return Err(e);
             }
@@ -2030,6 +2068,52 @@ impl App {
         let old = vault.credential(entry).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
         let new = vault.add_credential(CredentialData { title: title.clone(), ..old.data }).map_err(|e| e.to_string())?;
         Ok(Some(CredentialRef { entry: new, last_title: Some(title) }))
+    }
+
+    /// Geheimnisse eines Ziels setzen: `name` → Text (neuer Wert; leer = unverändert) oder `null` (entfernen). Je
+    /// Geheimnis ein eigener KDBX-Eintrag „Ziel – Name“ (Kennwort), vorhandene eigene Einträge werden geändert.
+    pub(crate) fn apply_secrets(&mut self, id: Uuid, sec: &serde_json::Map<String, Value>) -> Result<(), String> {
+        let Some(Node::Target(t)) = edit::node(&self.index, id).cloned() else { return Err("Geheimnisse gibt es nur an Zielen".into()) };
+        let shared: Vec<Uuid> = rj_core::shared::shared(&self.index).into_iter().map(|(e, _)| e).collect();
+        let mut refs = t.settings.secrets.clone();
+        for (name, v) in sec {
+            let name = name.trim();
+            if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
+                return Err("Ungültiger Name eines Geheimnisses".into());
+            }
+            match v {
+                Value::Null => {
+                    refs.remove(name);
+                }
+                Value::String(val) if val.is_empty() => {}
+                Value::String(val) => {
+                    let vault = self.vault.as_mut().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
+                    let title = format!("{} – {name}", t.name);
+                    let data = CredentialData { title: title.clone(), username: String::new(), password: rj_core::Secret::from_str_exact(val.trim()), ..Default::default() };
+                    let entry = match refs.get(name).map(|r| r.entry).filter(|e| !shared.contains(e) && vault.is_own_entry(*e)) {
+                        Some(e) => {
+                            let old = vault.credential(e).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
+                            vault.update_credential(e, CredentialData { notes: old.data.notes, url: old.data.url, otp: old.data.otp, ..data }).map_err(|e| e.to_string())?;
+                            e
+                        }
+                        None => vault.add_credential(data).map_err(|e| e.to_string())?,
+                    };
+                    refs.insert(name.to_string(), CredentialRef { entry, last_title: Some(title) });
+                }
+                _ => return Err("Geheimnis: Text oder null erwartet".into()),
+            }
+        }
+        if let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut self.index.root, id) {
+            t.settings.secrets = refs;
+        }
+        Ok(())
+    }
+
+    /// Ist am Ziel das Geheimnis `name` hinterlegt (Eintrag vorhanden, nicht leer)? Ohne den Wert preiszugeben.
+    pub(crate) fn secret_state(&self, id: Uuid, name: &str) -> bool {
+        let Some(Node::Target(t)) = edit::node(&self.index, id) else { return false };
+        let Some(r) = t.settings.secrets.get(name) else { return false };
+        self.vault.as_ref().and_then(|v| v.credential(r.entry)).is_some_and(|c| !c.data.password.as_bytes().is_empty())
     }
 
     /// Eigene Zugangsdaten der Wege: vorhandenen eigenen Eintrag ändern (leeres Kennwort = unverändert), sonst einen

@@ -659,6 +659,10 @@ pub struct Settings {
     /// `inherit::resolve_inventory`: bei Web-Zielen aus).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inventory: Option<bool>,
+    /// Benannte Geheimnisse eines Ziels (z. B. ein API-Schlüssel), je ein eigener KDBX-Eintrag (Kennwort). Werden nicht
+    /// vererbt und nie angezeigt; Erweiterungen können sie nur setzen und über ein HTTPS-Ticket nutzen.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: BTreeMap<String, CredentialRef>,
 }
 
 impl Settings {
@@ -673,6 +677,7 @@ impl Settings {
             && self.clipboard.is_none()
             && self.login.is_none()
             && self.inventory.is_none()
+            && self.secrets.is_empty()
     }
 }
 

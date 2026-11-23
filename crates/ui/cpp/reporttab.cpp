@@ -51,7 +51,7 @@ ReportTab::ReportTab(RjBackend* backend, QWidget* parent)
 	hh->addLayout(hv, 1);
 	m_open = new QPushButton(T("report.open"), head);
 	m_open->setDefault(true);
-	auto* close = new QPushButton(T("mass.close"), head);
+	auto* close = new QPushButton(T("report.cancel"), head);
 	hh->addWidget(m_open, 0, Qt::AlignTop);
 	hh->addWidget(close, 0, Qt::AlignTop);
 	hin->addLayout(hh);
@@ -93,7 +93,7 @@ QJsonObject ReportTab::build() const
 {
 	QJsonObject cmd{ { QStringLiteral("op"), QStringLiteral("report_build") },
 		             { QStringLiteral("kind"), m_kind->currentData().toString() },
-		             { QStringLiteral("title"), m_title->text() },
+		             { QStringLiteral("title"), effectiveTitle() },
 		             { QStringLiteral("text"), m_text->toPlainText() },
 		             { QStringLiteral("version"), m_backend->appVersion() },
 		             { QStringLiteral("os"), QSysInfo::prettyProductName() + QStringLiteral(" (") + QSysInfo::currentCpuArchitecture() + QStringLiteral(")") } };
@@ -106,7 +106,8 @@ void ReportTab::preview()
 {
 	const QJsonObject r = build();
 	m_preview->setPlainText(r.value(QStringLiteral("title")).toString() + QStringLiteral("\n\n") + r.value(QStringLiteral("body")).toString());
-	m_open->setEnabled(!m_title->text().trimmed().isEmpty());
+	// Ohne Titel nimmt der Bericht die erste Zeile der Beschreibung (siehe build); nur ganz leer geht nichts.
+	m_open->setEnabled(!m_title->text().trimmed().isEmpty() || !m_text->toPlainText().trimmed().isEmpty());
 }
 
 void ReportTab::open()
@@ -121,5 +122,23 @@ void ReportTab::open()
 	}
 	else
 		m_state->setText(T("report.opened"));
-	QDesktopServices::openUrl(QUrl(r.value(QStringLiteral("url")).toString(), QUrl::StrictMode));
+	const QUrl url(r.value(QStringLiteral("url")).toString(), QUrl::TolerantMode);
+	if (!url.isValid() || !QDesktopServices::openUrl(url))
+	{
+		// Browser ließ sich nicht starten: Adresse und Text in die Zwischenablage, damit nichts verloren geht.
+		QGuiApplication::clipboard()->setText(url.toString() + QStringLiteral("\n\n") + r.value(QStringLiteral("title")).toString() + QStringLiteral("\n\n") + r.value(QStringLiteral("body")).toString());
+		m_state->setText(T("report.failed"));
+	}
+}
+
+QString ReportTab::effectiveTitle() const
+{
+	const QString t = m_title->text().trimmed();
+	if (!t.isEmpty())
+		return t;
+	// Erste nicht leere Zeile der Beschreibung, höchstens 80 Zeichen.
+	for (const QString& l : m_text->toPlainText().split(QLatin1Char('\n')))
+		if (!l.trimmed().isEmpty())
+			return l.trimmed().left(80);
+	return m_kind->currentText();
 }

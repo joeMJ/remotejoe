@@ -252,11 +252,11 @@ pub trait HostExt {
     }
     /// Zugangsschein für Befehlszeilen-Sitzungen zu einem Ziel (SSH mit den Zugangsdaten des Ziels bzw. Wegs).
     fn cli_ticket(&mut self, target: Uuid) -> Result<CliTicket, String> {
-        self.call_json("cli_ticket", json!({ "target": target })).and_then(|v| v.get("ticket").and_then(Value::as_u64).map(CliTicket).ok_or_else(|| "Kein Zugangsschein".to_string()))
+        self.call_json("cli_ticket", json!({ "target": target })).and_then(|v| v.get("ticket").and_then(Value::as_u64).map(CliTicket).ok_or_else(|| "Kein Ticket".to_string()))
     }
     /// Zugangsschein mit den Zugangsdaten eines Ziels, aber für eine andere Adresse (z. B. AP des Controllers).
     fn cli_ticket_at(&mut self, target: Uuid, host: &str, port: u16) -> Result<CliTicket, String> {
-        self.call_json("cli_ticket", json!({ "target": target, "host": host, "port": port })).and_then(|v| v.get("ticket").and_then(Value::as_u64).map(CliTicket).ok_or_else(|| "Kein Zugangsschein".to_string()))
+        self.call_json("cli_ticket", json!({ "target": target, "host": host, "port": port })).and_then(|v| v.get("ticket").and_then(Value::as_u64).map(CliTicket).ok_or_else(|| "Kein Ticket".to_string()))
     }
     /// Ampel eines Ziels (wie im Baum), falls bekannt.
     fn light(&mut self, id: Uuid) -> Value {
@@ -268,11 +268,36 @@ pub trait HostExt {
         let mut a = how;
         a["host"] = json!(host);
         a["port"] = json!(port);
-        self.call_json("cli_ticket", a).and_then(|v| v.get("ticket").and_then(Value::as_u64).map(CliTicket).ok_or_else(|| "Kein Zugangsschein".to_string()))
+        self.call_json("cli_ticket", a).and_then(|v| v.get("ticket").and_then(Value::as_u64).map(CliTicket).ok_or_else(|| "Kein Ticket".to_string()))
     }
     /// Hat der Ordner (oder einer darüber) den benannten Zugangsdatensatz `slot`?
     fn folder_has_slot(&mut self, folder: Uuid, slot: &str) -> bool {
         self.call_json("folder_has_slot", json!({ "folder": folder, "slot": slot })).ok().and_then(|v| v.as_bool()).unwrap_or(false)
+    }
+    /// HTTPS-Ticket: Der Kern ruft HTTPS mit Zugangsdaten auf, die die Erweiterung nie sieht. `how`: `target`
+    /// (Kennung) mit optionalem `secret` (benanntes Geheimnis des Ziels) oder `way` (Name oder Kennung eines
+    /// Zugangswegs) und `port`; die Adresse kommt immer aus dem
+    /// Ziel bzw. Weg. `auth`: `{"kind":"header","name":"X-API-KEY"}`, `{"kind":"bearer"}`, `{"kind":"basic"}` oder
+    /// `{"kind":"none"}`. Anfragen mit [`HostShared::http_request`].
+    fn http_ticket(&mut self, how: Value) -> Result<CliTicket, String> {
+        self.call_json("http_ticket", how).and_then(|v| v.get("ticket").and_then(Value::as_u64).map(CliTicket).ok_or_else(|| "Kein HTTPS-Ticket".to_string()))
+    }
+    /// Ist am Ziel das benannte Geheimnis (z. B. „API-Schlüssel“) hinterlegt? Der Wert selbst ist nie lesbar; gesetzt
+    /// wird er über die Eigenschaften (Feld `secrets` beim Speichern) und genutzt über ein HTTPS-Ticket
+    /// (`{"target", "secret"}`).
+    fn secret_state(&mut self, target: Uuid, name: &str) -> bool {
+        self.call_json("secret_state", json!({ "target": target, "name": name })).ok().and_then(|v| v["set"].as_bool()).unwrap_or(false)
+    }
+    /// Eigene Zugangsdaten des Zugangswegs `way` als Geheimnis `name` des Ziels übernehmen und den Weg entfernen
+    /// (Umstellung älterer Einrichtungen; der Wert verlässt den Kern nicht). `true`, wenn umgestellt.
+    fn secret_from_way(&mut self, target: Uuid, way: &str, name: &str) -> Result<bool, String> {
+        self.call_json("secret_from_way", json!({ "target": target, "way": way, "name": name })).map(|v| v["moved"].as_bool().unwrap_or(false))
+    }
+    /// Zertifikat (`host:port`, SHA-256-Fingerabdruck) für HTTPS-Tickets annehmen – nur nach Bestätigung durch den
+    /// Anwender (Rückfrage der Erweiterung bei einer Antwort `{"certificate":{…}}`) und nur den Abdruck, den der Server
+    /// zuletzt vorgelegt hat.
+    fn https_accept_certificate(&mut self, host_port: &str, fingerprint: &str) -> Result<(), String> {
+        self.call_json("https_accept_certificate", json!({ "host": host_port, "fingerprint": fingerprint })).map(|_| ())
     }
     /// Zugangsdaten eines Ziels bzw. Ordners für SNMP als Schein.
     fn snmp_ticket(&mut self, folder: Uuid) -> Result<CliTicket, String> {
@@ -394,6 +419,14 @@ pub trait HostSharedExt {
     fn cli_run_steps(&self, ticket: CliTicket, steps: &[DialogStep], opts: &CliOptions) -> Result<CliOutput, String> {
         let v = self.call_json("cli_run", json!({ "ticket": ticket.0, "steps": steps, "options": opts }))?;
         serde_json::from_value(v).map_err(|e| e.to_string())
+    }
+    /// HTTPS-Anfrage über ein HTTPS-Ticket. `req`: `method`, `path` (mit Abfrage), `body` (JSON) oder `body_text`,
+    /// `headers`, `timeout_secs`. Antwort: `status`, `headers`, `json` bzw. `body`/`body_b64`. Bei unbekanntem oder
+    /// geändertem Zertifikat ist der Fehler JSON `{"certificate":{"host","fingerprint","old"}}`.
+    fn http_request(&self, ticket: CliTicket, req: Value) -> Result<Value, String> {
+        let mut a = req;
+        a["ticket"] = json!(ticket.0);
+        self.call_json("http_request", a)
     }
     /// Adresse und Port hinter einem Schein (ohne Zugangsdaten), z. B. für Protokolle.
     fn cli_ticket_info(&self, ticket: CliTicket) -> Value {

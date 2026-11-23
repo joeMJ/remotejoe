@@ -264,6 +264,13 @@ pub struct ConnectionDefaults {
     /// Strg+F springt in die Suche über dem Baum: „outside“ (nur wenn der Fokus nicht in einer Sitzung liegt),
     /// „always“ oder „never“. Die Suche in einer Web-Seite bleibt davon unberührt.
     pub find_key: String,
+    /// Tab nach links/rechts wechseln (Tastenfolgen `tab_prev_keys`/`tab_next_keys`): „outside“ (nur wenn der Fokus
+    /// nicht in einer Sitzung liegt), „always“ oder „never“.
+    pub tab_switch_key: String,
+    /// Tastenfolge „Tab nach links“ (Qt-Schreibweise, z. B. „Ctrl+Shift+PgUp“).
+    pub tab_prev_keys: String,
+    /// Tastenfolge „Tab nach rechts“.
+    pub tab_next_keys: String,
     /// Administrativer Tastaturmodus (RDP): Belegung (KLID, z. B. „00000407“), wenn das Ziel keine eigene nennt.
     pub admin_keys_layout: String,
     /// … und Abschalten nach so vielen Minuten ohne Eingabe (0 = nie).
@@ -282,6 +289,9 @@ impl Default for ConnectionDefaults {
             keyboard_capture: true,
             close_tab_key: "outside".into(),
             find_key: "outside".into(),
+            tab_switch_key: "outside".into(),
+            tab_prev_keys: "Ctrl+Shift+PgUp".into(),
+            tab_next_keys: "Ctrl+Shift+PgDown".into(),
             admin_keys_layout: "00000407".into(),
             admin_keys_timeout_mins: 10,
         }
@@ -302,11 +312,28 @@ pub struct SecurityDefaults {
     /// Bei Schlüsselfehlern (unbekannte oder geänderte Host-Schlüssel und Zertifikate) ohne Rückfrage fortfahren,
     /// nur für die jeweilige Verbindung; gemeldet wird es trotzdem. Vorgabe: aus.
     pub accept_key_errors: bool,
+    /// Cipher-Suites, Stufe 1: ältere SSH-Verfahren für Altgeräte zulassen (SHA-1-Schlüsselaustausch, AES-CBC,
+    /// HMAC-SHA1, DSA-Schlüssel). Vorgabe: aus. Ohne diese Stufe bietet remotejoe nur aktuelle Verfahren an, auch
+    /// wenn ein Ziel „Ältere Verfahren“ eingeschaltet hat.
+    pub ssh_legacy_ciphers: bool,
+    /// Cipher-Suites, Stufe 2 (nur zusammen mit Stufe 1): sehr alte Verfahren (3DES, Diffie-Hellman-Gruppe 1).
+    pub ssh_very_old_ciphers: bool,
+}
+
+impl SecurityDefaults {
+    /// Zugelassene Stufe älterer SSH-Verfahren: 0 keine, 1 ältere, 2 auch sehr alte.
+    pub fn ssh_legacy_level(&self) -> u8 {
+        match (self.ssh_legacy_ciphers, self.ssh_very_old_ciphers) {
+            (false, _) => 0,
+            (true, false) => 1,
+            (true, true) => 2,
+        }
+    }
 }
 
 impl Default for SecurityDefaults {
     fn default() -> Self {
-        SecurityDefaults { lock_after_idle_mins: 0, disconnect_on_lock: false, clipboard_clear_secs: 30, keyring_unlock: false, accept_key_errors: false }
+        SecurityDefaults { lock_after_idle_mins: 0, disconnect_on_lock: false, clipboard_clear_secs: 30, keyring_unlock: false, accept_key_errors: false, ssh_legacy_ciphers: false, ssh_very_old_ciphers: false }
     }
 }
 

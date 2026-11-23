@@ -177,6 +177,20 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.tabs()->removeTab(w.tabs()->indexOf(t));
 		t->deleteLater();
 	}
+	// „Fehler melden …“ (Hilfe-Menü) und die Seite Tastatur der Einstellungen.
+	for (QAction* a : w.findChildren<QAction*>())
+		if (a->text().remove(QLatin1Char('&')) == w.backend()->text(QStringLiteral("menu.help.issues")).remove(QLatin1Char('&')))
+		{
+			a->trigger();
+			pump(400);
+			save(&w, dir, QStringLiteral("fehler-melden.png"));
+			if (auto* t = w.findChild<QWidget*>(QStringLiteral("reportTab")))
+				w.closeToolTab(t);
+			break;
+		}
+	w.openSettings(QStringLiteral("keys"));
+	pump(400);
+	save(&w, dir, QStringLiteral("einstellungen-tastatur.png"));
 	// Module (nur mit dem jeweiligen Modul gebaut).
 	w.moduleScreenshots(pump, [&](const QString& name) { save(&w, dir, name); });
 	w.patchdayForFirstTargets(25);

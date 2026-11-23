@@ -301,6 +301,9 @@ impl Worker {
                 // Ergebnisse sind feste Kennungen (rj:…) ohne Eingabewerte.
                 self.trace(&format!("Schritt {step:?} nach {tries} Wiederholungen: {}", text.chars().take(80).collect::<String>()));
                 let next = self.0.flow.borrow_mut().step_result(step, &text);
+                if let Some(n) = self.0.flow.borrow_mut().take_note() {
+                    self.send(FromWorker::Notice(n));
+                }
                 self.drive(next);
             }
             Msg::Typed(action) => {

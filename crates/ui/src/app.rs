@@ -131,6 +131,7 @@ impl App {
         let config_path = rj_core::config::default_config_path();
         let config = config_path.as_deref().map(Config::load).and_then(Result::ok).unwrap_or_default();
         crate::keyerrors::set(config.security.accept_key_errors);
+        rj_ssh::client::set_legacy_allowed(config.security.ssh_legacy_level());
         let reconnect = Reconnect { auto: config.connection.auto_reconnect, max: Duration::from_secs(config.connection.reconnect_max_secs as u64) };
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("Laufzeit");
         let known_hosts = KnownHosts::default_location().unwrap_or_else(|| KnownHosts::new(std::env::temp_dir().join("remotejoe-known_hosts")));
@@ -965,6 +966,10 @@ impl App {
         };
         if v.get("clipboard_limit").is_none() {
             v["clipboard_limit"] = json!(self.config.connection.clipboard_limit);
+        }
+        // Zugelassene Stufe älterer SSH-Verfahren (Cipher-Suites) für den SSH-Worker.
+        if matches!(t.options, ProtocolOptions::Ssh(_)) || t.protocol == Protocol::Ssh {
+            v["legacy_allowed"] = json!(self.config.security.ssh_legacy_level());
         }
         v.to_string()
     }

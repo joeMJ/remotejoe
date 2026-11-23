@@ -171,8 +171,8 @@ pub fn login_script(l: &FormLogin, username: &str, password: &Secret) -> Result<
         // Textfeld als Benutzerfeld, Knopf im selben Formular).
         format!(
             "var us={us},ps={ps},ss={ss};\
-var pe=ps?q(ps):(qa('input[type=password]').filter(vis)[0]||null);if(!pe)return '{RESULT_NO_PASSWORD_FIELD}';\
-var ue=null;if(us){{ue=q(us);if(!ue)return '{RESULT_NO_USERNAME_FIELD}';}}else{{var box=pe.form||pe.getRootNode(),all=[].slice.call(box.querySelectorAll('input')).filter(vis),i=all.indexOf(pe);\
+var pe=ps?q(ps):null;if(!pe)pe=qa('input[type=password]').filter(vis)[0]||null;if(!pe)return '{RESULT_NO_PASSWORD_FIELD}';\
+var ue=us?q(us):null;if(!ue){{var box=pe.form||pe.getRootNode(),all=[].slice.call(box.querySelectorAll('input')).filter(vis),i=all.indexOf(pe);\
 for(i=i-1;i>=0;i--){{var t=(all[i].type||'text').toLowerCase();if(['text','email','tel','search','url'].indexOf(t)>=0){{ue=all[i];break;}}}}}}\
 if(ue)fill(ue,u);fill(pe,p);\
 var se=ss?q(ss):btn(pe);\
@@ -238,9 +238,11 @@ pub const RESULT_INPUT_MISSING: &str = "rj:eingabe-fehlt";
 pub const RESULT_BUTTON_LOCKED: &str = "rj:knopf-gesperrt";
 
 /// Suche der Felder: gleiche Regeln wie im alten Anmeldeskript (Selektor oder Automatik).
-const FIELDS: &str = r####"function fields(us,ps){var pe=ps?q(ps):(qa('input[type=password]').filter(vis)[0]||null);if(!pe)return null;var ue=null;
-if(us){ue=q(us);}else{var box=pe.form||pe.getRootNode(),all=[].slice.call(box.querySelectorAll('input')).filter(vis),i=all.indexOf(pe);
-for(i=i-1;i>=0;i--){var t=(all[i].type||'text').toLowerCase();if(['text','email','tel','search','url'].indexOf(t)>=0){ue=all[i];break;}}}return {u:ue,p:pe};}
+const FIELDS: &str = r####"function fields(us,ps){var fb=[];var pe=ps?q(ps):null;if(ps&&!pe){pe=qa('input[type=password]').filter(vis)[0]||null;if(pe)fb.push('kennwort');}
+if(!ps)pe=qa('input[type=password]').filter(vis)[0]||null;if(!pe)return null;var ue=us?q(us):null;if(us&&!ue)fb.push('benutzer');
+if(!ue){var box=pe.form||pe.getRootNode(),all=[].slice.call(box.querySelectorAll('input')).filter(vis),i=all.indexOf(pe);
+for(i=i-1;i>=0;i--){var t=(all[i].type||'text').toLowerCase();if(['text','email','tel','search','url'].indexOf(t)>=0){ue=all[i];break;}}}return {u:ue,p:pe,fb:fb};}
+function tag(f){return f.fb.length?':auto:'+f.fb.join(','):'';}
 function focusSel(e){try{e.scrollIntoView({block:'center'});}catch(x){}e.focus();try{if(e.select)e.select();}catch(x){}}
 function locked(b){return !b||b.disabled||b.getAttribute('aria-disabled')==='true'||/(^|\s)(disabled|is-disabled)(\s|$)/.test(String(b.className||''));}"####;
 
@@ -260,9 +262,9 @@ pub fn step_script(l: &FormLogin, step: Step, user_len: usize, pw_len: usize) ->
     let (us, ps, ss) = (js_opt(&l.username_selector), js_opt(&l.password_selector), js_opt(&l.submit_selector));
     let body = match step {
         Step::FocusUser => format!(
-            "var f=fields({us},{ps});if(!f)return '{RESULT_NO_PASSWORD_FIELD}';if(!f.u)return {us}?'{RESULT_NO_USERNAME_FIELD}':'{RESULT_NO_USER_AUTO}';focusSel(f.u);return '{RESULT_FOCUS_USER}';"
+            "var f=fields({us},{ps});if(!f)return '{RESULT_NO_PASSWORD_FIELD}';if(!f.u)return '{RESULT_NO_USER_AUTO}'+tag(f);focusSel(f.u);return '{RESULT_FOCUS_USER}'+tag(f);"
         ),
-        Step::FocusPassword => format!("var f=fields({us},{ps});if(!f)return '{RESULT_NO_PASSWORD_FIELD}';focusSel(f.p);return '{RESULT_FOCUS_PASSWORD}';"),
+        Step::FocusPassword => format!("var f=fields({us},{ps});if(!f)return '{RESULT_NO_PASSWORD_FIELD}';focusSel(f.p);return '{RESULT_FOCUS_PASSWORD}'+tag(f);"),
         Step::Check => format!(
             "var f=fields({us},{ps});if(!f)return '{RESULT_NO_PASSWORD_FIELD}';var n=function(v){{return Array.from(String(v)).length;}},m=[];if(f.u&&n(f.u.value)!=={user_len})m.push('benutzer');if(n(f.p.value)!=={pw_len})m.push('kennwort');return m.length?'{RESULT_INPUT_MISSING}:'+m.join(','):'{RESULT_INPUT_OK}';"
         ),
@@ -312,6 +314,9 @@ pub struct LoginFlow {
     /// Laufende Anmeldung in Schritten: Art der Eingabe und zuletzt getipptes Feld.
     mode: TypeMode,
     last: Option<Typed>,
+    /// Rückfall auf die Automatik schon gemeldet; Hinweis, der noch an die Oberfläche geht.
+    fallback_noted: bool,
+    note: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,7 +330,7 @@ impl LoginFlow {
     pub const MAX_ATTEMPTS: u32 = 3;
 
     pub fn new(login: Option<FormLogin>) -> Self {
-        LoginFlow { login, attempts: 0, done: false, submitted: false, rejected_noted: false, rejected_cleared: false, rechecks: 0, mode: TypeMode::Insert, last: None }
+        LoginFlow { login, attempts: 0, done: false, submitted: false, rejected_noted: false, rejected_cleared: false, rechecks: 0, mode: TypeMode::Insert, last: None, fallback_noted: false, note: None }
     }
 
     pub fn page_loaded(&mut self, url: &str) -> FlowAction {
@@ -412,6 +417,18 @@ impl LoginFlow {
     /// Ergebnis eines Schritt-Skripts (nach den Wiederholungen aus `step_retry`).
     pub fn step_result(&mut self, step: Step, result: &str) -> FlowAction {
         let r = result.trim_matches('"');
+        // Eingetragene Feldkennung nicht gefunden: Automatik verwendet (Hinweis einmal je Anmeldung).
+        let r = match r.split_once(":auto:") {
+            Some((head, which)) => {
+                if !self.fallback_noted {
+                    self.fallback_noted = true;
+                    let what = which.split(',').map(|w| if w == "kennwort" { "Kennwort" } else { "Benutzername" }).collect::<Vec<_>>().join(" und ");
+                    self.note = Some(format!("Feldkennung {what} (unter Verbindung) auf der Seite nicht gefunden – automatische Erkennung verwendet."));
+                }
+                head
+            }
+            None => r,
+        };
         match (step, r) {
             (Step::FocusUser, RESULT_FOCUS_USER) => FlowAction::Type(Field::User, self.mode),
             (Step::FocusUser, RESULT_NO_USER_AUTO) => FlowAction::Script(Step::FocusPassword),
@@ -454,6 +471,11 @@ impl LoginFlow {
 
     pub fn login(&self) -> Option<&FormLogin> {
         self.login.as_ref()
+    }
+
+    /// Hinweis für die Fußzeile, der neben dem nächsten Schritt anfällt (z. B. Rückfall auf die Automatik).
+    pub fn take_note(&mut self) -> Option<String> {
+        self.note.take()
     }
 
     pub fn attempts(&self) -> u32 {

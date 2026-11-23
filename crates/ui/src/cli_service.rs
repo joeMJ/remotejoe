@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rj_plugin_api::{CliOptions, CliOutput, CliTicket, DialogStep};
@@ -22,6 +22,8 @@ enum Ticket {
     Open { open: OpenSsh },
     /// SNMP-Zugangsdaten eines Geräts.
     Snmp { device: rj_snmp::Device },
+    /// HTTPS mit den Zugangsdaten eines Ziels bzw. Wegs (siehe [`crate::https_ticket`]).
+    Http { spec: Arc<crate::https_ticket::HttpSpec> },
     /// Wird gerade benutzt (aus der Tabelle genommen).
     Busy,
 }
@@ -68,6 +70,22 @@ impl CliService {
         self.put(Ticket::Snmp { device })
     }
 
+    /// Schein für HTTPS-Anfragen (Zugangsdaten bleiben im Kern).
+    pub fn issue_http(&self, spec: crate::https_ticket::HttpSpec) -> CliTicket {
+        self.put(Ticket::Http { spec: Arc::new(spec) })
+    }
+
+    /// HTTPS-Anfrage über einen Schein (siehe [`crate::https_ticket::request`]); mehrere Anfragen dürfen gleichzeitig
+    /// laufen.
+    pub fn http(&self, t: CliTicket, a: &Value) -> Result<Value, String> {
+        let spec = match lock(&self.tickets).get(&t.0) {
+            Some(Ticket::Http { spec }) => spec.clone(),
+            Some(_) => return Err("Kein HTTPS-Ticket".into()),
+            None => return Err("Ticket unbekannt oder verfallen (Schlüsseldatenbank gesperrt?)".into()),
+        };
+        crate::https_ticket::request(&spec, a)
+    }
+
     pub fn take_open(&self, t: CliTicket) -> Option<OpenSsh> {
         match lock(&self.tickets).remove(&t.0) {
             Some(Ticket::Open { open }) => Some(open),
@@ -89,6 +107,7 @@ impl CliService {
         match lock(&self.tickets).get(&t.0) {
             Some(Ticket::Cli { spec, cred, .. }) => json!({ "host": spec.host, "port": spec.port, "user": spec.credentials.username, "legacy": spec.legacy, "cred_id": cred }),
             Some(Ticket::Snmp { device }) => json!({ "host": device.host, "port": device.port }),
+            Some(Ticket::Http { spec }) => json!({ "https": true, "host": spec.host, "port": spec.port, "user": spec.credentials.username }),
             Some(Ticket::Open { open }) => json!({ "open": true, "host": open.params.host, "port": open.params.port, "user": open.params.user }),
             Some(Ticket::Busy) => json!({ "busy": true }),
             None => Value::Null,
@@ -99,9 +118,17 @@ impl CliService {
     /// Schlüsseltausch ältere Verfahren, bei abgelehnter Verbindung Telnet (wenn erlaubt). Sonst die einfache Shell
     /// mit Eingabeaufforderung (Controller, APs) über die offene bzw. neue Verbindung.
     pub fn run(&self, t: CliTicket, steps: &[DialogStep], o: &CliOptions) -> Result<CliOutput, String> {
-        let taken = lock(&self.tickets).remove(&t.0).ok_or("Zugangsschein unbekannt oder verfallen (Schlüsseldatenbank gesperrt?)")?;
-        // Während der Sitzung steht der Schein als „in Benutzung“ in der Tabelle, damit ein Sperren ihn verwirft.
-        lock(&self.tickets).insert(t.0, Ticket::Busy);
+        // Ein Ticket in Benutzung bleibt unangetastet (sonst ginge es dem verloren, der es gerade benutzt).
+        let taken = {
+            let mut tab = lock(&self.tickets);
+            if matches!(tab.get(&t.0), Some(Ticket::Busy)) {
+                return Err("Ticket ist gerade in Benutzung".into());
+            }
+            let taken = tab.remove(&t.0).ok_or("Ticket unbekannt oder verfallen (Schlüsseldatenbank gesperrt?)")?;
+            // Während der Sitzung steht das Ticket als „in Benutzung“ in der Tabelle, damit ein Sperren es verwirft.
+            tab.insert(t.0, Ticket::Busy);
+            taken
+        };
         let limit = Duration::from_secs(o.limit_secs.max(1));
         let (result, back) = match taken {
             Ticket::Cli { spec, known, cred } => {
@@ -127,7 +154,8 @@ impl CliService {
                 (r, Some(Ticket::Open { open }))
             }
             Ticket::Snmp { device } => (Err("Kein Befehlszeilen-Schein".into()), Some(Ticket::Snmp { device })),
-            Ticket::Busy => (Err("Zugangsschein ist in Benutzung".into()), None),
+            Ticket::Http { spec } => (Err("Kein Befehlszeilen-Schein".into()), Some(Ticket::Http { spec })),
+            Ticket::Busy => (Err("Ticket ist gerade in Benutzung".into()), None),
         };
         let mut tab = lock(&self.tickets);
         match (tab.remove(&t.0), back) {
@@ -168,7 +196,7 @@ impl CliService {
     pub fn run_external(&self, t: CliTicket, program: &str, args: &[String], env: &serde_json::Map<String, Value>, cwd: &str, log: &str, stdin: Option<&str>) -> Result<u32, String> {
         let (user, pass) = match lock(&self.tickets).get(&t.0) {
             Some(Ticket::Cli { spec, .. }) => (spec.credentials.username.clone(), String::from_utf8_lossy(&spec.credentials.password.0).into_owned()),
-            _ => return Err("Kein Zugangsschein".into()),
+            _ => return Err("Kein Ticket".into()),
         };
         // JSON-gerecht einsetzen (Anführungszeichen und Rückstriche im Kennwort).
         let fill = |s: &str| s.replace("{{user}}", &json_inner(&user)).replace("{{password}}", &json_inner(&pass));
@@ -279,11 +307,22 @@ fn switch_session(spec: &JobSpec, known: &KnownHosts, steps: &[DialogStep], o: &
         _ => String::new(),
     };
     let m = msg(&r);
-    if o.legacy_retry && !spec.legacy && (m.contains("key exchange") || m.contains("kex") || m.contains("no common")) {
+    let kex_failed = m.contains("key exchange") || m.contains("kex") || m.contains("no common");
+    // Ältere Verfahren nur, wenn die Einstellungen sie zulassen (Cipher-Suites).
+    if o.legacy_retry && !spec.legacy && kex_failed && rj_ssh::client::legacy_allowed() > 0 {
         if o.marks {
             log.push_str("\n----- erneut mit älteren SSH-Verfahren -----\n");
         }
         r = ssh_try(ip, &cred, true, known, &cmds, limit, &mut log);
+    }
+    // Scheitert der Schlüsselaustausch weiter (bzw. ohne Rückfall), den Weg zur Einstellung nennen.
+    if rj_ssh::client::legacy_allowed() < 2 {
+        let m = msg(&r);
+        if m.contains("key exchange") || m.contains("kex") || m.contains("no common") {
+            if let Err(CliError::Other(e)) = &mut r {
+                e.push_str(&format!(" – {}", rj_ssh::client::LEGACY_HINT));
+            }
+        }
     }
     let m = msg(&r);
     if o.telnet && (m.contains("refused") || m.contains("verbind") || m.contains("connect")) {

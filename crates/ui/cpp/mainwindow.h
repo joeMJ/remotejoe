@@ -20,6 +20,7 @@
 #include <vector>
 
 class QFrame;
+class QShortcut;
 
 class RjBackend;
 class SessionPane;
@@ -244,6 +245,8 @@ public:
 
 public:
 	/// Bildschirmfotos der Module (Vorführung).
+	/// Einstellungen öffnen (Bereich `section`, z. B. „keys“).
+	void openSettings(const QString& section);
 	void moduleScreenshots(const std::function<void(int)>& pump, const std::function<void(const QString&)>& shot)
 	{
 		for (const auto& h : m_modules.screenshots)
@@ -341,12 +344,17 @@ private:
 	bool closeTabKeyActive() const;
 	/// Strg+F geht an die Suche über dem Baum (sonst an die Sitzung); eine Web-Sitzung sucht immer in der Seite.
 	bool findKeyActive() const;
+	/// Tab-Wechsel per Tastenfolge erlaubt (Modus wie bei Strg+Umschalt+W)?
+	bool tabSwitchKeyActive() const;
+	/// Tastenfolgen für den Tab-Wechsel setzen (leer = keine).
+	void applyTabSwitchKeys(const QString& mode, const QString& prev, const QString& next);
+	/// Aktiven Tab um `step` verschieben (mit Umlauf).
+	void stepTab(int step);
 	/// Fokus in einer Web-Sitzung: deren Bereich, sonst nullptr.
 	SessionPane* focusedWebPane() const;
 	void updateConnInfo();
 	void openTerminalSettings();
 	void openAppearance();
-	void openSettings(const QString& section);
 	void openExport();
 	/// Schema und Fokusrahmen aus den Einstellungen anwenden.
 	void applyAppearance();
@@ -397,6 +405,9 @@ private:
 	/// Strg+Umschalt+W: „outside“, „always“ oder „never“.
 	QString m_closeTabKey = QStringLiteral("outside");
 	QString m_findKey = QStringLiteral("outside");
+	QString m_tabSwitchKey = QStringLiteral("outside");
+	QShortcut* m_tabPrevShortcut = nullptr;
+	QShortcut* m_tabNextShortcut = nullptr;
 	bool m_macroShelfOpen = false;
 	QStandardItemModel* m_model = nullptr;
 	QTabWidget* m_tabs = nullptr;

@@ -13,6 +13,28 @@ use crate::cli_service::CliService;
 use crate::jobs::ExternalJobs;
 use crate::sessions::UiEvent;
 
+fn empty_payload() -> rj_ipc::msg::CredentialPayload {
+    rj_ipc::msg::CredentialPayload { username: String::new(), domain: None, password: rj_ipc::msg::SecretBytes(Vec::new()), private_key: None }
+}
+
+/// Adresse und Port aus einer Adresse oder URL (`https://host:8443/pfad`, `[::1]:443`, `host`).
+fn split_host(raw: &str, port: Option<u16>) -> (String, Option<u16>) {
+    let s = raw.trim();
+    let s = s.split_once("://").map(|(_, r)| r).unwrap_or(s);
+    let s = s.split(['/', '?', '#']).next().unwrap_or_default();
+    let s = s.rsplit_once('@').map(|(_, r)| r).unwrap_or(s);
+    if let Some(rest) = s.strip_prefix('[') {
+        if let Some((h, tail)) = rest.split_once(']') {
+            let p = tail.strip_prefix(':').and_then(|p| p.parse().ok());
+            return (h.to_string(), port.or(p));
+        }
+    }
+    match s.rsplit_once(':') {
+        Some((h, p)) if !h.contains(':') => (h.to_string(), port.or(p.parse().ok())),
+        _ => (s.to_string(), port),
+    }
+}
+
 fn id_of(a: &Value, k: &str) -> Result<Uuid, String> {
     a.get(k).and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok()).ok_or_else(|| format!("{k}: keine Kennung"))
 }
@@ -57,6 +79,7 @@ impl HostShared for AppShared {
                 serde_json::to_value(out).map_err(|e| e.to_string())
             }
             "cli_ticket_info" => Ok(self.cli.info(CliTicket(a["ticket"].as_u64().unwrap_or(0)))),
+            "http_request" => self.cli.http(CliTicket(a["ticket"].as_u64().unwrap_or(0)), &a),
             "snmp_get" => {
                 let oids: Vec<String> = a["oids"].as_array().map(|l| l.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
                 self.cli.snmp_get(CliTicket(a["ticket"].as_u64().unwrap_or(0)), a["host"].as_str().unwrap_or_default(), &oids)
@@ -134,6 +157,56 @@ impl App {
         let cred = rc.reference.entry;
         let spec = crate::patch::JobSpec { protocol: Protocol::Ssh, host: host.to_string(), port, credentials: payload, transport: None, legacy };
         Ok(self.cli.issue(spec, self.known_hosts_ref(), Some(cred)))
+    }
+
+    /// HTTPS-Ticket: Zugangsdaten aus einem benannten Geheimnis des Ziels (`target` + `secret`), einem Zugangsweg des
+    /// Ziels (`target` + `way`: Name oder Kennung) bzw. dem Ziel selbst (`target`). Adresse aus dem Weg bzw. Ziel (bei Web aus der URL), `port` darf abweichen, Vorgabe 443; eine
+    /// fremde Adresse ist nicht möglich. `auth` siehe [`crate::https_ticket::HttpAuth::from_json`].
+    fn http_ticket(&self, a: &Value) -> Result<CliTicket, String> {
+        let auth = crate::https_ticket::HttpAuth::from_json(&a["auth"])?;
+        let (payload, host, port) = if let Some(target) = a.get("target").and_then(Value::as_str) {
+            let t = self.target(Uuid::parse_str(target).map_err(|e| e.to_string())?).cloned().ok_or("Ziel nicht gefunden")?;
+            let way = match a.get("way").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                Some(w) => Some(t.ways.iter().find(|x| x.id.to_string() == w || x.label().eq_ignore_ascii_case(w)).cloned().ok_or_else(|| format!("Zugangsweg „{w}“ fehlt am Ziel"))?),
+                None => None,
+            };
+            let secret = a.get("secret").and_then(Value::as_str).filter(|n| !n.is_empty());
+            let payload = if auth == crate::https_ticket::HttpAuth::None {
+                empty_payload()
+            } else if let Some(name) = secret {
+                // Benanntes Geheimnis des Ziels (z. B. API-Schlüssel).
+                let r = t.settings.secrets.get(name).ok_or_else(|| format!("{name} fehlt (Eigenschaften des Ziels)"))?;
+                let vault = self.vault.as_ref().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
+                let c = vault.credential(r.entry).ok_or_else(|| format!("{name}: Eintrag nicht in der Schlüsseldatenbank"))?;
+                if c.data.password.as_bytes().is_empty() {
+                    return Err(format!("{name} fehlt (Eigenschaften des Ziels)"));
+                }
+                rj_ipc::msg::CredentialPayload { username: String::new(), domain: None, password: rj_ipc::msg::SecretBytes(c.data.password.as_bytes().to_vec()), private_key: None }
+            } else {
+                let (r, _) = self.check_credential(&t, way.as_ref())?;
+                self.credential_payload(&r, Protocol::Web)?
+            };
+            let (h, p) = match &way {
+                Some(w) if !w.host.trim().is_empty() => split_host(&w.host, w.port),
+                Some(w) => split_host(&t.host, w.port),
+                None => split_host(&t.host, t.port),
+            };
+            (payload, h, p)
+        } else {
+            // Nur Ziele: ihre Zugangsdaten gehen ausschließlich an ihre eigene Adresse.
+            return Err("Ziel fehlt".into());
+        };
+        let explicit = a.get("host").and_then(Value::as_str).filter(|h| !h.trim().is_empty()).map(|h| h.trim().to_string());
+        // Zugangsdaten eines Ziels gehen nur an dessen eigene Adresse (bzw. die seines Wegs), nie an eine fremde.
+        if explicit.is_some() && a.get("target").is_some() {
+            return Err("Bei einem Ziel kommt die Adresse aus dem Ziel bzw. Zugangsweg".into());
+        }
+        let host = explicit.unwrap_or(host);
+        if host.is_empty() {
+            return Err("Keine Adresse".into());
+        }
+        let port = a.get("port").and_then(Value::as_u64).map(|p| p as u16).or(port).unwrap_or(443);
+        Ok(self.cli.issue_http(crate::https_ticket::HttpSpec { host, port, auth, credentials: payload }))
     }
 
     /// Hat der Ordner (oder einer darüber) den benannten Zugangsdatensatz `slot`?
@@ -311,6 +384,34 @@ impl App {
                 };
                 Ok(json!({ "ticket": t.0 }))
             }
+            "http_ticket" => Ok(json!({ "ticket": self.http_ticket(&a)?.0 })),
+            "secret_state" => Ok(json!({ "set": self.secret_state(id_of(&a, "target")?, a["name"].as_str().unwrap_or_default()) })),
+            // Eigene Zugangsdaten eines Zugangswegs als Geheimnis des Ziels übernehmen und den Weg entfernen (Umstellung
+            // älterer Einrichtungen; der Wert verlässt den Kern dabei nicht).
+            "secret_from_way" => {
+                let id = id_of(&a, "target")?;
+                let (way, name) = (a["way"].as_str().unwrap_or_default().to_string(), a["name"].as_str().unwrap_or_default().to_string());
+                if name.is_empty() || way.is_empty() {
+                    return Err("Weg und Name nötig".into());
+                }
+                let mut idx = self.index.clone();
+                let Some(Node::Target(t)) = rj_core::inherit::find_node_mut(&mut idx.root, id) else { return Err("Ziel nicht gefunden".into()) };
+                let Some(pos) = t.ways.iter().position(|w| w.label().eq_ignore_ascii_case(&way)) else { return Ok(json!({ "moved": false })) };
+                let w = t.ways.remove(pos);
+                if let Some(own) = w.own {
+                    t.settings.secrets.entry(name).or_insert(own);
+                }
+                if t.open_with == Some(w.id) {
+                    t.open_with = None;
+                }
+                let before = std::mem::replace(&mut self.index, idx);
+                self.commit("Geheimnis aus Zugangsweg übernehmen", before);
+                Ok(json!({ "moved": true }))
+            }
+            "https_accept_certificate" => {
+                crate::https_ticket::accept(a["host"].as_str().unwrap_or_default(), a["fingerprint"].as_str().unwrap_or_default())?;
+                Ok(Value::Null)
+            }
             "folder_has_slot" => Ok(json!(self.folder_has_slot(id_of(&a, "folder")?, a["slot"].as_str().unwrap_or_default()))),
             "busy_set" => {
                 self.overview.set_busy(a["key"].as_str().unwrap_or_default(), a["job"].as_u64().unwrap_or(0));
@@ -357,5 +458,52 @@ impl Host for App {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod https_tests {
+    use super::split_host;
+
+    #[test]
+    fn host_and_port_come_from_address_or_url() {
+        assert_eq!(split_host("https://192.0.2.5:8443/manage", None), ("192.0.2.5".into(), Some(8443)));
+        assert_eq!(split_host("controller.local", None), ("controller.local".into(), None));
+        assert_eq!(split_host("192.0.2.5:11443", Some(443)), ("192.0.2.5".into(), Some(443)));
+        assert_eq!(split_host("https://[2001:db8::1]:8443/", None), ("2001:db8::1".into(), Some(8443)));
+        assert_eq!(split_host("2001:db8::1", None), ("2001:db8::1".into(), None));
+    }
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use crate::testing::{app_with_vault, cmd};
+    use rj_plugin_api::{Host, HostExt, HostSharedExt};
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn secret_is_stored_hidden_and_only_usable_by_ticket_to_the_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _p, _k) = app_with_vault(dir.path());
+        let root = app.index.root.id;
+        let id = Uuid::parse_str(cmd(&mut app, json!({ "op": "add", "parent": root, "kind": "web", "name": "Ctrl" }))["id"].as_str().unwrap()).unwrap();
+        let r = cmd(&mut app, json!({ "op": "update", "id": id, "fields": { "options": { "url": "https://192.0.2.7/" }, "secrets": { "API-Schlüssel": "abc123" } } }));
+        assert!(r.get("error").is_none() && r.get("errors").is_none(), "{r}");
+        assert_eq!(cmd(&mut app, json!({ "op": "secret_state", "id": id, "name": "API-Schlüssel" }))["set"], true);
+        // Nicht in den Eigenschaften als Text.
+        assert!(!app.properties_json(id).contains("abc123"));
+        let host: &mut dyn Host = &mut app;
+        assert!(host.secret_state(id, "API-Schlüssel"));
+        assert!(!host.secret_state(id, "anderes"));
+        let t = host.http_ticket(json!({ "target": id, "secret": "API-Schlüssel", "auth": { "kind": "header", "name": "X-API-KEY" } })).unwrap();
+        let info = host.shared().cli_ticket_info(t);
+        assert_eq!(info["host"], "192.0.2.7");
+        assert!(host.http_ticket(json!({ "target": id, "secret": "fehlt", "auth": { "kind": "header", "name": "X-API-KEY" } })).unwrap_err().contains("fehlt"));
+        // Leer = unverändert, null = entfernen.
+        let _ = cmd(&mut app, json!({ "op": "update", "id": id, "fields": { "secrets": { "API-Schlüssel": "" } } }));
+        assert_eq!(cmd(&mut app, json!({ "op": "secret_state", "id": id, "name": "API-Schlüssel" }))["set"], true);
+        let _ = cmd(&mut app, json!({ "op": "update", "id": id, "fields": { "secrets": { "API-Schlüssel": null } } }));
+        assert_eq!(cmd(&mut app, json!({ "op": "secret_state", "id": id, "name": "API-Schlüssel" }))["set"], false);
     }
 }

@@ -21,6 +21,7 @@ pub mod cfgstore;
 pub mod redact;
 pub mod cli;
 pub mod cli_service;
+pub mod https_ticket;
 pub mod host;
 pub mod kdbxbackup;
 pub mod keys;

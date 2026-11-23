@@ -795,6 +795,9 @@ impl Worker {
             }
             me.trace(&format!("Schritt {step:?} nach {tries} Wiederholungen: {}", text.chars().take(80).collect::<String>()));
             let next = me.0.flow.borrow_mut().step_result(step, &text);
+                if let Some(n) = me.0.flow.borrow_mut().take_note() {
+                    me.send(FromWorker::Notice(n));
+                }
             me.drive(next);
         });
     }

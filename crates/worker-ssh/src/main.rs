@@ -24,6 +24,8 @@ struct Options {
     host_key_alias: Option<String>,
     /// Ältere, unsichere Verfahren zusätzlich anbieten (Option am Ziel).
     legacy_algorithms: bool,
+    /// Zugelassene Stufe älterer Verfahren laut Einstellungen (0 keine, 1 ältere, 2 auch sehr alte); Vorgabe 0.
+    legacy_allowed: u8,
 }
 
 fn main() {
@@ -229,6 +231,7 @@ async fn establish(
         keepalive: Duration::from_secs(r.keepalive_secs.max(1) as u64),
         legacy: opts.legacy_algorithms,
     };
+    rj_ssh::client::set_legacy_allowed(opts.legacy_allowed);
     let alias = opts.host_key_alias.as_deref().and_then(|a| a.rsplit_once(':')).and_then(|(h, p)| Some((h.to_string(), p.parse::<u16>().ok()?)));
     let attempt = |params: SshParams, known: KnownHosts, ask: rj_ssh::client::HostKeyAsk, alias: Option<(String, u16)>| async move {
         match alias {
@@ -247,10 +250,14 @@ async fn establish(
     let mut legacy_retry = false;
     let conn = match attempt(params.clone(), known.clone(), ask.clone(), alias.clone()).await {
         Ok(c) => c,
-        Err(e) if !params.legacy && (e.contains("Key exchange init failed") || e.contains("No common")) => {
+        // Ältere Verfahren nur, wenn die Einstellungen sie zulassen (Cipher-Suites); sonst der Hinweis dorthin.
+        Err(e) if !params.legacy && rj_ssh::client::is_kex_failure(&e) && opts.legacy_allowed > 0 => {
             legacy_retry = true;
-            attempt(SshParams { legacy: true, ..params.clone() }, known, ask, alias).await.map_err(|e2| format!("{e2} (auch mit älteren Verfahren)"))?
+            attempt(SshParams { legacy: true, ..params.clone() }, known, ask, alias).await.map_err(|e2| {
+                if opts.legacy_allowed < 2 && rj_ssh::client::is_kex_failure(&e2) { format!("{e2} (auch mit älteren Verfahren) – {}", rj_ssh::client::LEGACY_HINT) } else { format!("{e2} (auch mit älteren Verfahren)") }
+            })?
         }
+        Err(e) if rj_ssh::client::is_kex_failure(&e) && opts.legacy_allowed < 2 => return Err(format!("{e} – {}", rj_ssh::client::LEGACY_HINT)),
         Err(e) => return Err(e),
     };
     let term = opts.term.unwrap_or_else(|| "xterm-256color".into());

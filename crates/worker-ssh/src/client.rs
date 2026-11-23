@@ -202,8 +202,37 @@ fn pw_str(s: &Secret) -> Result<String, SshError> {
 /// ECDH dann vor alle DH-Verfahren und der Gruppenaustausch (`diffie-hellman-group-exchange-*`) ans Ende: Manche
 /// Geräte (z. B. ältere Switches) schicken beim Gruppenaustausch eine Gruppe, die die Bibliothek
 /// ablehnt („Key exchange init failed“), während ECDH mit ihnen funktioniert.
+/// Zugelassene Stufe älterer Verfahren (Einstellungen → Sicherheit → Cipher-Suites): 0 keine, 1 ältere,
+/// 2 auch sehr alte (3DES, Diffie-Hellman-Gruppe 1). Gilt für den ganzen Prozess; Vorgabe 0.
+static LEGACY_ALLOWED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Stufe älterer Verfahren für diesen Prozess setzen (Oberfläche beim Start und bei Änderung, Worker beim Start).
+pub fn set_legacy_allowed(level: u8) {
+    LEGACY_ALLOWED.store(level.min(2), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Zugelassene Stufe älterer Verfahren (0–2).
+pub fn legacy_allowed() -> u8 {
+    LEGACY_ALLOWED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Hinweis, wenn der Schlüsselaustausch mit den angebotenen Verfahren scheitert.
+pub const LEGACY_HINT: &str = "Das Gerät kann womöglich nur ältere, unsichere Verfahren. Prüfe zuerst, ob neuere Firmware verfügbar ist; sonst unter Einstellungen → Sicherheit → Cipher-Suites ältere Verfahren zulassen.";
+
+/// Scheiterte der Schlüsselaustausch, weil es keine gemeinsamen Verfahren gab?
+pub fn is_kex_failure(text: &str) -> bool {
+    text.contains("Key exchange init failed") || text.contains("No common")
+}
+
 fn preferred(legacy: bool) -> russh::Preferred {
+    preferred_with(legacy, legacy_allowed())
+}
+
+/// Wie `preferred`, mit ausdrücklicher Stufe: Ältere Verfahren kommen nur hinzu, wenn das Ziel sie wünscht
+/// (`legacy`) und die Einstellung sie zulässt (`level`); die Rangfolge (ECDH vor DH) ändert sich schon beim Wunsch.
+fn preferred_with(legacy: bool, level: u8) -> russh::Preferred {
     use russh::{cipher, kex, mac};
+    let level = if legacy { level } else { 0 };
     fn add<T: Clone + PartialEq>(list: &mut Vec<T>, extra: impl IntoIterator<Item = T>) {
         for e in extra {
             if !list.contains(&e) {
@@ -215,7 +244,12 @@ fn preferred(legacy: bool) -> russh::Preferred {
     let mut k = p.kex.to_vec();
     add(&mut k, [kex::ECDH_SHA2_NISTP256, kex::ECDH_SHA2_NISTP384, kex::ECDH_SHA2_NISTP521]);
     if legacy {
-        add(&mut k, [kex::DH_GEX_SHA1, kex::DH_G14_SHA1, kex::DH_G1_SHA1]);
+        if level >= 1 {
+            add(&mut k, [kex::DH_GEX_SHA1, kex::DH_G14_SHA1]);
+        }
+        if level >= 2 {
+            add(&mut k, [kex::DH_G1_SHA1]);
+        }
         // Reihenfolge: hybride bzw. curve25519 wie bisher, dann ECDH, feste DH-Gruppen, Gruppenaustausch, group1.
         let rank = |n: &kex::Name| -> u8 {
             if [kex::ECDH_SHA2_NISTP256, kex::ECDH_SHA2_NISTP384, kex::ECDH_SHA2_NISTP521].contains(n) {
@@ -233,8 +267,14 @@ fn preferred(legacy: bool) -> russh::Preferred {
             }
         };
         k.sort_by_key(rank);
+    }
+    if legacy && level >= 1 {
         let mut c = p.cipher.to_vec();
         add(&mut c, [cipher::AES_128_CBC, cipher::AES_192_CBC, cipher::AES_256_CBC]);
+        // Sehr alte Switches bieten nur noch 3DES an (nur Stufe 2).
+        if level >= 2 {
+            add(&mut c, [cipher::TRIPLE_DES_CBC]);
+        }
         p.cipher = c.into();
         let mut m = p.mac.to_vec();
         add(&mut m, [mac::HMAC_SHA1, mac::HMAC_SHA1_ETM]);
@@ -463,8 +503,26 @@ impl rj_tasks::macros::MacroIo for BlockingShell<'_> {
 
 #[cfg(test)]
 mod preferred_tests {
-    use super::preferred;
+    use super::preferred_with;
     use russh::{cipher, kex};
+    fn preferred(legacy: bool) -> russh::Preferred {
+        preferred_with(legacy, 2)
+    }
+
+    #[test]
+    fn weak_methods_only_with_the_allowed_level() {
+        // Vorgabe (Stufe 0): auch mit Wunsch am Ziel keine schwachen Verfahren, nur die Rangfolge ändert sich.
+        let off = preferred_with(true, 0);
+        assert!(!off.kex.contains(&kex::DH_G14_SHA1) && !off.cipher.contains(&cipher::AES_128_CBC) && !off.mac.contains(&russh::mac::HMAC_SHA1));
+        // Stufe 1: ältere, aber kein 3DES und keine Gruppe 1.
+        let one = preferred_with(true, 1);
+        assert!(one.kex.contains(&kex::DH_G14_SHA1) && one.cipher.contains(&cipher::AES_128_CBC));
+        assert!(!one.cipher.contains(&cipher::TRIPLE_DES_CBC) && !one.kex.contains(&kex::DH_G1_SHA1));
+        // Stufe 2: auch 3DES und Gruppe 1; ohne Wunsch am Ziel nie.
+        let two = preferred_with(true, 2);
+        assert!(two.cipher.contains(&cipher::TRIPLE_DES_CBC) && two.kex.contains(&kex::DH_G1_SHA1));
+        assert!(!preferred_with(false, 2).cipher.contains(&cipher::AES_128_CBC));
+    }
 
     #[test]
     fn ecdh_is_always_offered_and_weak_methods_only_on_request() {
@@ -472,7 +530,8 @@ mod preferred_tests {
         assert!(p.kex.contains(&kex::ECDH_SHA2_NISTP256) && p.kex.contains(&kex::ECDH_SHA2_NISTP521));
         assert!(!p.kex.contains(&kex::DH_G14_SHA1) && !p.cipher.contains(&cipher::AES_128_CBC));
         let l = preferred(true);
-        assert!(l.kex.contains(&kex::DH_G14_SHA1) && l.cipher.contains(&cipher::AES_128_CBC));
+        assert!(l.kex.contains(&kex::DH_G14_SHA1) && l.cipher.contains(&cipher::AES_128_CBC) && l.cipher.contains(&cipher::TRIPLE_DES_CBC));
+        assert!(!p.cipher.contains(&cipher::TRIPLE_DES_CBC), "3DES nur im Rückfall");
         assert_eq!(l.kex.iter().position(|k| *k == kex::MLKEM768X25519_SHA256), p.kex.iter().position(|k| *k == kex::MLKEM768X25519_SHA256), "Reihenfolge der sicheren bleibt");
     }
 

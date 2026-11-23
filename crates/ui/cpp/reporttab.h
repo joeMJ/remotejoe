@@ -22,6 +22,8 @@ public:
 
 private:
 	QJsonObject build() const;
+	/// Titel des Berichts; ohne eigenen Titel die erste Zeile der Beschreibung.
+	QString effectiveTitle() const;
 	void preview();
 	void open();
 	RjBackend* m_backend;

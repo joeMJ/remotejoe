@@ -243,3 +243,38 @@ fn old_launch_files_are_found_others_stay() {
     assert!(crate::stale_launch_files(d.path(), std::time::Duration::from_secs(3600)).is_empty(), "frische Dateien bleiben");
     assert!(crate::stale_launch_files(&d.path().join("fehlt"), std::time::Duration::ZERO).is_empty());
 }
+
+/// Eingetragene Feldkennung nicht auf der Seite: Automatik, ein Hinweis, Anmeldung läuft weiter.
+#[test]
+fn missing_selector_falls_back_to_automatic_with_one_note() {
+    let mut f = LoginFlow::new(Some(FormLogin { username_selector: Some("benutzer.name".into()), ..Default::default() }));
+    assert_eq!(f.step_result(Step::FocusUser, "\"rj:fokus-benutzer:auto:benutzer\""), FlowAction::Type(Field::User, TypeMode::Insert));
+    let n = f.take_note().expect("Hinweis");
+    assert!(n.contains("Benutzername") && n.contains("automatische Erkennung"), "{n}");
+    assert_eq!(f.step_result(Step::FocusPassword, "rj:fokus-kennwort:auto:benutzer"), FlowAction::Type(Field::Password, TypeMode::Insert));
+    assert!(f.take_note().is_none(), "nur einmal");
+    // Das Schritt-Skript fällt bei fehlender Kennung auf die Automatik zurück, statt abzubrechen.
+    let s = step_script(f.login().unwrap(), Step::FocusUser, 0, 0);
+    assert!(!s.contains(&format!("'{RESULT_NO_USERNAME_FIELD}'")) && s.contains(":auto:"));
+}
+
+/// Alle Schritt-Skripte (mit und ohne Feldkennungen) sind gültiges JavaScript (Prüfung mit node, wenn vorhanden).
+#[test]
+fn step_scripts_parse() {
+    let node = std::env::var("RJ_NODE").unwrap_or_else(|_| "node".into());
+    if std::process::Command::new(&node).arg("--version").output().is_err() {
+        eprintln!("ÜBERSPRUNGEN: node nicht vorhanden");
+        return;
+    }
+    let logins = [FormLogin::default(), FormLogin { username_selector: Some("#u".into()), password_selector: Some("#p".into()), submit_selector: Some("#go".into()), ..Default::default() }];
+    for l in &logins {
+        for step in [Step::FocusUser, Step::FocusPassword, Step::Check, Step::Submit, Step::FocusForEnter] {
+            let s = step_script(l, step, 3, 4);
+            let out = std::process::Command::new(&node).arg("-e").arg(format!("new Function({});", serde_json::to_string(&s).unwrap())).output().unwrap();
+            assert!(out.status.success(), "{step:?}: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        let script = login_script(l, "admin", &Secret::from_str_exact("pw")).unwrap();
+        let out = std::process::Command::new(&node).arg("-e").arg(format!("new Function({});", serde_json::to_string(script.as_str()).unwrap())).output().unwrap();
+        assert!(out.status.success(), "Anmeldeskript: {}", String::from_utf8_lossy(&out.stderr));
+    }
+}

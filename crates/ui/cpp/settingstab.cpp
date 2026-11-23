@@ -26,6 +26,7 @@ RjHostBackend* SettingsTab::hostBackend() const
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
+#include <QtWidgets/QKeySequenceEdit>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QListWidget>
 #include <QtGui/QClipboard>
@@ -120,6 +121,7 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 	addGroupIcon(QStringLiteral("shield-halved"), T("settings.group.security"), 0);
 	addArea(QStringLiteral("lock"), T("settings.lock.entry"), pageLock(), true, 1);
 	addArea(QStringLiteral("keys"), T("settings.keys"), pageKeys(), true, 1);
+	addArea(QStringLiteral("ciphers"), T("settings.ciphers"), pageCiphers(), true, 1);
 	addGroupIcon(QStringLiteral("palette"), T("settings.group.look"), 0);
 	m_appearance = new AppearanceTab(m_backend);
 	connect(m_appearance, &AppearanceTab::appearanceChanged, this, &SettingsTab::appearanceChanged);
@@ -184,6 +186,7 @@ void SettingsTab::addArea(const QString& key, const QString& title, QWidget* pag
 	// Symbol je Bereich; Bereiche der Erweiterungen bekommen ein allgemeines.
 	static const QHash<QString, QString> glyphs = {
 		{ QStringLiteral("lock"), QStringLiteral("lock") }, { QStringLiteral("keys"), QStringLiteral("keyboard") },
+		{ QStringLiteral("ciphers"), QStringLiteral("key") },
 		{ QStringLiteral("terminal"), QStringLiteral("terminal") }, { QStringLiteral("appearance"), QStringLiteral("palette") },
 		{ QStringLiteral("backup"), QStringLiteral("clock-rotate-left") }, { QStringLiteral("license"), QStringLiteral("certificate") },
 		{ QStringLiteral("mcp"), QStringLiteral("robot") },
@@ -264,6 +267,17 @@ QWidget* SettingsTab::pageLock()
 	return w;
 }
 
+void SettingsTab::saveTabSwitchKeys()
+{
+	// Nur die erste Tastenkombination zählt (ältere Qt-Fassungen nehmen bis zu vier auf).
+	auto first = [](QKeySequenceEdit* e) { return e->keySequence().isEmpty() ? QString() : QKeySequence(e->keySequence()[0]).toString(QKeySequence::PortableText); };
+	const QString mode = m_tabSwitch->currentData().toString();
+	const QString prev = first(m_tabPrev);
+	const QString next = first(m_tabNext);
+	edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("tab_switch_key"), mode }, { QStringLiteral("tab_prev_keys"), prev }, { QStringLiteral("tab_next_keys"), next } });
+	emit tabSwitchKeysChanged(mode, prev, next);
+}
+
 QWidget* SettingsTab::pageKeys()
 {
 	auto T = [this](const char* k) { return rjText(m_backend, k); };
@@ -283,6 +297,29 @@ QWidget* SettingsTab::pageKeys()
 		m_findKey->addItem(rjText(m_backend, (QByteArray("settings.closetab.") + mode).constData()), QString::fromLatin1(mode));
 	f->addRow(T("settings.findkey"), m_findKey);
 	f->addRow(QString(), hint(T("settings.findkey.hint"), w));
+	// Tab nach links/rechts wechseln: Modus wie bei Strg+Umschalt+W, Tastenfolgen frei belegbar.
+	m_tabSwitch = new QComboBox(w);
+	for (const char* mode : { "outside", "always", "never" })
+		m_tabSwitch->addItem(rjText(m_backend, (QByteArray("settings.closetab.") + mode).constData()), QString::fromLatin1(mode));
+	f->addRow(T("settings.tabswitch"), m_tabSwitch);
+	auto keyEdit = [w] {
+		auto* e = new QKeySequenceEdit(w);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		e->setMaximumSequenceLength(1);
+		e->setClearButtonEnabled(true);
+#endif
+		return e;
+	};
+	m_tabPrev = keyEdit();
+	m_tabNext = keyEdit();
+	f->addRow(T("settings.tabswitch.prev"), m_tabPrev);
+	f->addRow(T("settings.tabswitch.next"), m_tabNext);
+	auto* tabReset = new QPushButton(T("settings.tabswitch.reset"), w);
+	auto* tabResetRow = new QHBoxLayout;
+	tabResetRow->addWidget(tabReset);
+	tabResetRow->addStretch(1);
+	f->addRow(QString(), tabResetRow);
+	f->addRow(QString(), hint(T("settings.tabswitch.hint"), w));
 	// Administrativer Tastaturmodus (RDP, je Sitzung über das Kontextmenü des Tabs).
 	m_adminLayout = new QComboBox(w);
 	f->addRow(T("settings.adminkeys.layout"), m_adminLayout);
@@ -329,6 +366,29 @@ QWidget* SettingsTab::pageKeys()
 		const QString mode = m_findKey->currentData().toString();
 		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("find_key"), mode } });
 		emit findKeyChanged(mode);
+	});
+	connect(m_tabSwitch, &QComboBox::currentIndexChanged, this, [this] {
+		if (!m_loading)
+			saveTabSwitchKeys();
+	});
+	for (QKeySequenceEdit* e : { m_tabPrev, m_tabNext })
+	{
+		connect(e, &QKeySequenceEdit::editingFinished, this, [this] {
+			if (!m_loading)
+				saveTabSwitchKeys();
+		});
+		// Leeren über den Löschknopf meldet kein editingFinished.
+		connect(e, &QKeySequenceEdit::keySequenceChanged, this, [this, e](const QKeySequence& k) {
+			if (!m_loading && k.isEmpty() && !e->hasFocus())
+				saveTabSwitchKeys();
+		});
+	}
+	connect(tabReset, &QPushButton::clicked, this, [this] {
+		m_loading = true;
+		m_tabPrev->setKeySequence(QKeySequence(QStringLiteral("Ctrl+Shift+PgUp")));
+		m_tabNext->setKeySequence(QKeySequence(QStringLiteral("Ctrl+Shift+PgDown")));
+		m_loading = false;
+		saveTabSwitchKeys();
 	});
 	return w;
 }
@@ -594,6 +654,46 @@ void SettingsTab::reloadBackup()
 	refreshSummaries();
 }
 
+// Cipher-Suites: ältere SSH-Verfahren für Altgeräte, in zwei Stufen, Vorgabe aus; mit Warnung.
+QWidget* SettingsTab::pageCiphers()
+{
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	auto* w = new QWidget;
+	auto* v = new QVBoxLayout(w);
+	auto* warn = rjui::pill(T("settings.ciphers.warn"), QStringLiteral("warn"), w);
+	warn->setWordWrap(true);
+	v->addWidget(warn);
+	auto* f = new QFormLayout;
+	m_cipherOld = new QCheckBox(T("settings.ciphers.old"), w);
+	f->addRow(QString(), m_cipherOld);
+	f->addRow(QString(), hint(T("settings.ciphers.old.hint"), w));
+	m_cipherVeryOld = new QCheckBox(T("settings.ciphers.veryold"), w);
+	f->addRow(QString(), m_cipherVeryOld);
+	f->addRow(QString(), hint(T("settings.ciphers.veryold.hint"), w));
+	f->addRow(QString(), hint(T("settings.ciphers.target.hint"), w));
+	v->addLayout(f);
+	v->addStretch(1);
+	auto save = [this] {
+		if (m_loading)
+			return;
+		// Stufe 2 nur zusammen mit Stufe 1.
+		if (!m_cipherOld->isChecked() && m_cipherVeryOld->isChecked())
+		{
+			const bool was = m_loading;
+			m_loading = true;
+			m_cipherVeryOld->setChecked(false);
+			m_loading = was;
+		}
+		m_cipherVeryOld->setEnabled(m_cipherOld->isChecked());
+		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("ssh_legacy_ciphers"), m_cipherOld->isChecked() },
+		       { QStringLiteral("ssh_very_old_ciphers"), m_cipherVeryOld->isChecked() } });
+		refreshSummaries();
+	};
+	connect(m_cipherOld, &QCheckBox::toggled, this, save);
+	connect(m_cipherVeryOld, &QCheckBox::toggled, this, save);
+	return w;
+}
+
 void SettingsTab::reload()
 {
 	m_loading = true;
@@ -602,12 +702,19 @@ void SettingsTab::reload()
 		m_idle->setCurrentIndex(i);
 	m_disconnect->setChecked(s.value(QStringLiteral("disconnect_on_lock")).toBool());
 	m_keyErrors->setChecked(s.value(QStringLiteral("accept_key_errors")).toBool());
+	m_cipherOld->setChecked(s.value(QStringLiteral("ssh_legacy_ciphers")).toBool());
+	m_cipherVeryOld->setChecked(s.value(QStringLiteral("ssh_very_old_ciphers")).toBool());
+	m_cipherVeryOld->setEnabled(m_cipherOld->isChecked());
 	m_clipSecs->setValue(m_backend->clipboardClearSecs());
 	m_keyCapture->setChecked(FrameView::s_keyCapture);
 	if (const int i = m_closeTab->findData(s.value(QStringLiteral("close_tab_key")).toString(QStringLiteral("outside"))); i >= 0)
 		m_closeTab->setCurrentIndex(i);
 	if (const int i = m_findKey->findData(s.value(QStringLiteral("find_key")).toString(QStringLiteral("outside"))); i >= 0)
 		m_findKey->setCurrentIndex(i);
+	if (const int i = m_tabSwitch->findData(s.value(QStringLiteral("tab_switch_key")).toString(QStringLiteral("outside"))); i >= 0)
+		m_tabSwitch->setCurrentIndex(i);
+	m_tabPrev->setKeySequence(QKeySequence(s.value(QStringLiteral("tab_prev_keys")).toString(QStringLiteral("Ctrl+Shift+PgUp")), QKeySequence::PortableText));
+	m_tabNext->setKeySequence(QKeySequence(s.value(QStringLiteral("tab_next_keys")).toString(QStringLiteral("Ctrl+Shift+PgDown")), QKeySequence::PortableText));
 	m_adminLayout->clear();
 	for (const QJsonValue& l : s.value(QStringLiteral("admin_keys_layouts")).toArray())
 	{
@@ -647,6 +754,7 @@ void SettingsTab::refreshSummaries()
 	              .arg(secs == 0 ? T("settings.clip.never") : QString::number(secs) + T("settings.clip.suffix"))
 	            + (m_keyErrors->isChecked() ? T("settings.keyerrors.sum") : QString()));
 	set("keys", T(m_keyCapture->isChecked() ? "settings.keys.sum.on" : "settings.keys.sum.off"));
+	set("ciphers", T("settings.ciphers.sum").arg(T(!m_cipherOld->isChecked() ? "settings.ciphers.sum.off" : m_cipherVeryOld->isChecked() ? "settings.ciphers.sum.veryold" : "settings.ciphers.sum.old")));
 	set("terminal", T("settings.terminal.sum"));
 	set("appearance", T("settings.appearance.sum"));
 	set("backup", m_bkEnabled->isChecked() ? T("settings.backup.sum.on").arg(m_bkLast->value()).arg(m_bkDays->value())

@@ -1019,15 +1019,35 @@ QWidget* PropertiesTab::pageConnection()
 				if (auto* ue = qobject_cast<QLineEdit*>(m_opts.value(QStringLiteral("url"))); ue && ue->text().isEmpty())
 					ue->setPlaceholderText(m_data.value(QStringLiteral("default_url")).toString().isEmpty() ? QStringLiteral("https://rechner/") : m_data.value(QStringLiteral("default_url")).toString());
 			check("ignore_certificate", "edit.opt.ignore_certificate");
-			if (proto == QLatin1String("web"))
-			{
-				auto* help = new QLabel(rjText(m_backend, "edit.web.help"), w);
-				help->setWordWrap(true);
-				f->addRow(QString(), help);
-			}
+			// Feldkennungen der Anmeldeseite: technische Angaben für Sonderfälle, keine Zugangsdaten. Eingeklappt,
+			// solange nichts eingetragen ist (sonst hält man sie leicht für Benutzername und Kennwort).
+			auto* advanced = new QToolButton(w);
+			advanced->setObjectName(QStringLiteral("webLoginFields"));
+			advanced->setCheckable(true);
+			advanced->setAutoRaise(true);
+			advanced->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+			advanced->setText(rjText(m_backend, "edit.web.advanced"));
+			f->addRow(QString(), advanced);
+			QList<QWidget*> advRows;
+			auto* help = new QLabel(rjText(m_backend, "edit.web.help"), w);
+			help->setWordWrap(true);
+			f->addRow(QString(), help);
+			advRows << help;
 			text("user_selector", "edit.opt.user_selector");
 			text("password_selector", "edit.opt.password_selector");
 			text("submit_selector", "edit.opt.submit_selector");
+			bool anySelector = false;
+			for (const char* key : { "user_selector", "password_selector", "submit_selector" })
+			{
+				const QString k = QString::fromLatin1(key);
+				if (auto* e = qobject_cast<QLineEdit*>(m_opts.value(k)))
+				{
+					advRows << e;
+					anySelector = anySelector || !e->text().trimmed().isEmpty();
+				}
+				if (QWidget* err = m_errors.value(k))
+					advRows << err;
+			}
 			for (const char* key : { "user_selector", "password_selector", "submit_selector" })
 			{
 				auto* e = qobject_cast<QLineEdit*>(m_opts.value(QString::fromLatin1(key)));
@@ -1063,6 +1083,7 @@ QWidget* PropertiesTab::pageConnection()
 				m_detectStatus->setObjectName(QStringLiteral("detectStatus"));
 				f->addRow(QString(), m_detectButton);
 				f->addRow(QString(), m_detectStatus);
+				advRows << m_detectButton << m_detectStatus;
 				connect(m_detectButton, &QPushButton::clicked, this, [this] {
 					auto* urlEdit = qobject_cast<QLineEdit*>(m_opts.value(QStringLiteral("url")));
 					auto* certCheck = qobject_cast<QCheckBox*>(m_opts.value(QStringLiteral("ignore_certificate")));
@@ -1076,6 +1097,14 @@ QWidget* PropertiesTab::pageConnection()
 					m_detectStatus->setText(rjText(m_backend, "edit.web.detect.running"));
 				});
 			}
+			auto show = [f, advanced, advRows](bool on) {
+				advanced->setArrowType(on ? Qt::DownArrow : Qt::RightArrow);
+				for (QWidget* r : advRows)
+					f->setRowVisible(r, on);
+			};
+			connect(advanced, &QToolButton::toggled, this, show);
+			advanced->setChecked(anySelector);
+			show(anySelector);
 		}
 	}
 	// PowerShell-Transport und SNMP (vererbbar).
