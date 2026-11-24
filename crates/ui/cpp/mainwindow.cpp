@@ -1820,7 +1820,8 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 			mt->deleteLater();
 			return;
 		}
-		if (m_tabs->widget(i)->objectName() == QLatin1String("newsTab"))
+		// Neuigkeiten (Programm „newsTab“ und Erweiterungen „newsTabExt“): einfach schließen.
+		if (m_tabs->widget(i)->objectName().startsWith(QLatin1String("newsTab")))
 		{
 			QWidget* news = m_tabs->widget(i);
 			m_tabs->removeTab(i);

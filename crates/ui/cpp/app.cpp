@@ -414,6 +414,25 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.openNews(true);
 		pump(400);
 		save(w.tabs()->currentWidget(), dir, QStringLiteral("neuigkeiten-erweiterungen.png"));
+		// Prüfung: Beide Neuigkeiten-Tabs lassen sich über das Kreuz schließen (Signal tabCloseRequested).
+		for (const char* name : { "newsTabExt", "newsTab" })
+		{
+			int idx = -1;
+			for (int i = 0; i < w.tabs()->count(); ++i)
+				if (w.tabs()->widget(i)->objectName() == QLatin1String(name))
+					idx = i;
+			if (idx < 0)
+			{
+				std::fprintf(stderr, "[prüfbild] Neuigkeiten schließen (%s): Tab nicht offen\n", name);
+				continue;
+			}
+			emit w.tabs()->tabCloseRequested(idx);
+			pump(200);
+			bool still = false;
+			for (int i = 0; i < w.tabs()->count(); ++i)
+				still = still || w.tabs()->widget(i)->objectName() == QLatin1String(name);
+			std::fprintf(stderr, "[prüfbild] Neuigkeiten schließen (%s): %s\n", name, still ? "FEHLER, Tab bleibt" : "geschlossen");
+		}
 		save(&w, dir, QStringLiteral("neuigkeiten-fenster.png"));
 		// Schließen prüfen: das Kreuz löst tabCloseRequested aus.
 		const int before = w.tabs()->count();

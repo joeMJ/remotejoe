@@ -1,3 +1,7 @@
+## 0.1.71 – Neuigkeiten schließen
+
+- Hilfe → Neuigkeiten: Der Tab „Neuigkeiten Erweiterungen“ lässt sich wieder über das Kreuz schließen (in 0.1.69 und 0.1.70 blieb er offen).
+
 ## 0.1.70 – Einfügen unter Ubuntu 24.04
 
 - Linux (Ubuntu 24.04): remotejoe stürzte beim Einfügen aus der Zwischenablage in ein mehrzeiliges Feld ab (z. B. beim Einfügen der Lizenz, per Rechtsklick → Einfügen oder Strg+V). Ursache war die Qt-Fassung von Ubuntu 24.04 unter Wayland. remotejoe fügt in diese Felder jetzt selbst als reinen Text ein; der Absturz tritt nicht mehr auf.
