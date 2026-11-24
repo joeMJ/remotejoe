@@ -35,9 +35,11 @@ remotejoe bündelt alle Fernzugänge in einem schlanken, schnellen Programm:
 - [`docs/BAUEN.md`](docs/BAUEN.md) – remotejoe unter Ubuntu und Windows bauen
 - [`docs/DATENSCHUTZ.md`](docs/DATENSCHUTZ.md) – Datenschutz und Netzwerkzugriffe
 - [`docs/MCP.md`](docs/MCP.md) – Claude-Anbindung (MCP): remotejoe als Werkzeug für Claude Desktop
+- [`docs/EINSTELLUNGEN.md`](docs/EINSTELLUNGEN.md) – alle Einstellungen (Extras → Einstellungen) mit Vorgaben und Wirkung
 - [`docs/TASTATUR.md`](docs/TASTATUR.md) – Tastatur in RDP-Sitzungen, administrativer Tastaturmodus für Fenster „als Administrator“
 - [`docs/ZIELE-EINRICHTEN.md`](docs/ZIELE-EINRICHTEN.md) – Windows-Ziele für RDP und PowerShell-Remoting einrichten (mit Skripten unter [`tools/ziel-einrichten/`](tools/ziel-einrichten/))
 - [`THIRD_PARTY.md`](THIRD_PARTY.md) – verwendete Bibliotheken Dritter mit Lizenzen
+- [`SECURITY.md`](SECURITY.md) – Sicherheitslücken vertraulich melden
 
 > [!WARNING]
 > **Privates Hobbyprojekt – nicht gepflegt / unmaintained.**
@@ -218,7 +220,7 @@ neu aufklappen.
   gemeldet, ein geänderter nie (außer mit „Bei Schlüsselfehlern trotzdem fortfahren“, siehe Einstellungen). Gäste von Proxmox und Hyper-V zeigen ihr Inventar vom Hypervisor. Das Inventar liegt
   als Datei im Datenordner (`inventar/`), nicht in der Schlüsseldatenbank.
   Ob sich das Inventar an einem Ziel anmelden darf, ist je Ziel bzw. Ordner einstellbar („Abfragen erlaubt“ in der
-  Übersicht, Einstellungen → Allgemein → Inventar). Web-Ziele sind ohne eigene Festlegung aus; ein „an“ am Ordner
+  Übersicht, Eigenschaften → Allgemein → Inventar). Web-Ziele sind ohne eigene Festlegung aus; ein „an“ am Ordner
   schaltet sie nicht ein.
 - **Ordnerübersicht beim Einfachklick auf einen Ordner:** die Elemente direkt im Ordner als Tabelle mit Typ (Symbol wie
   im Baum), Name, Adresse und den Werten aus dem gespeicherten Inventar (Version, System, CPUs, Speicher, Laufzeit,
@@ -391,7 +393,12 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
    bleiben im Feld stehen.
    Baum per Tastatur: F2 umbenennen, Entf löschen, Strg+D duplizieren, Strg+Umschalt+M
    verschieben (auch Ziehen und Ablegen, Alt+↑/↓), Strg+B Favorit, Strg+Z rückgängig.
-   Über dem Baum lässt sich zwischen allen Zielen, Favoriten und eigenen Ansichten wählen.
+   Suche über dem Baum (Strg+F): öffnet nur die Ordner auf dem Weg zu Treffern; nach dem Leeren kommt der
+   Aufklappzustand von vorher zurück. Ab wie vielen Zeichen, beim Tippen oder erst mit Enter und die Wartezeit sind
+   einstellbar (Einstellungen → Darstellung → Suche im Zielbaum). **Alle zuklappen** (Knopf in der Kopfzeile „Ziele“)
+   klappt den ganzen Baum zu; Rechtsklick in den Baum → **Aufklappzustand als Start speichern** legt fest, was beim
+   Start offen ist. Rechtsklick auf einen Tab: abtrennen, Anordnung, **Tab schließen**, **Alle Tabs schließen**.
+   **Hilfe → Neuigkeiten** zeigt die Releasenotes.
 6. Rückfragen zu unbekannten Host-Schlüsseln und Zertifikaten erscheinen als Leiste im Tab der
    Sitzung mit Schlüsseltyp und vollständigem Fingerabdruck; Standard ist „Ablehnen“, ohne
    Antwort wird nach 120 s abgelehnt. Ein geänderter Schlüssel wird deutlich gewarnt (alter und
@@ -404,8 +411,7 @@ Verbindungsereignisse, keine Kennwörter, Eingaben oder Inhalte der Zwischenabla
    **Datei → Sperren** (Strg+L) verwirft Schlüssel und Kennwörter im Speicher; laufende
    Sitzungen bleiben bestehen, ihre Bilder sind verdeckt. **Extras → Einstellungen**, Bereich „Sperre und
    Zwischenablage“, schaltet das automatische Sperren ein und legt fest, wann ein kopiertes Kennwort aus der
-   Zwischenablage verschwindet; der Bereich **SNMP-Geräte** verwaltet SNMP-Zugänge (v3 mit getrennten
-   Kennwörtern für Authentisierung und Verschlüsselung).
+   Zwischenablage verschwindet. Alle Einstellungen im Überblick: [docs/EINSTELLUNGEN.md](docs/EINSTELLUNGEN.md).
 
 9. **Fußzeile:** zeigt für die vordere Sitzung den Verbindungstyp, das Ziel, seit wann und als wer
    Sie verbunden sind.
