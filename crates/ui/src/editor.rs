@@ -948,6 +948,17 @@ impl App {
             "plugins_pw_reset" => crate::license::kennwort_setzen(None),
             "update_demo_source" => self.update_demo_source(str_of(&c, "base_url").unwrap_or_default()),
             "update_check" => self.update_check(),
+            // Windows: läuft gerade eine andere Installation (dann vor dem Update warten)?
+            "update_installer_busy" => Ok(json!({ "busy": rj_update::msi::installer_busy(), "minuten": rj_update::msi::WAIT_MINUTES })),
+            // Nach dem Neustart: Rückgabewert von msiexec als verständlicher Text (mit Protokoll).
+            "update_msi_result" => {
+                let code: i32 = str_of(&c, "code").and_then(|x| x.trim().parse().ok()).unwrap_or(-1);
+                let log = str_of(&c, "log").filter(|l| !l.is_empty()).map(std::path::Path::new);
+                Ok(match rj_update::msi::msiexec_text(code, log) {
+                    None => json!({ "ok": true }),
+                    Some(t) => json!({ "ok": false, "text": t }),
+                })
+            }
             "plugins_update" => self.plugins_update(),
             // Erweiterungen aus Datei: erst prüfen (Prüfdialog), dann einspielen (prüft erneut).
             "plugins_file_check" => self.plugins_file_check(&strings_of(&c, "dateien")),

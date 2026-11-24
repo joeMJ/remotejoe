@@ -1,3 +1,18 @@
+## 0.1.68 – Windows-Update, Tabs und Zielbaum
+
+**Windows-Update:** Läuft gerade eine andere Installation (z. B. Windows Update), wartet remotejoe jetzt, statt mit einer Fehlermeldung des Windows Installers abzubrechen, und installiert danach von selbst (Issue #1).
+
+- Windows-Update: „Windows installiert gerade etwas anderes – warte, das Update startet danach von selbst …“ mit „Nicht warten“, höchstens 10 Minuten. Fehler des Windows Installers werden verständlich gemeldet, mit Hinweis, was zu tun ist. Jede Installation schreibt ein Protokoll in den Datenordner (`update\`, die letzten 5); die Meldung nennt die Datei.
+- Zielbaum: Neuer Knopf „Alle zuklappen“ in der Kopfzeile „Ziele“ (neben der Stecknadel). Er klappt den ganzen Baum auf einmal zu; der Baum bleibt auch nach einer Suche zu.
+- Tabs: Das Rechtsklick-Menü eines Tabs hat „Tab schließen“ und „Alle Tabs schließen“ (mit Rückfrage).
+- Übersicht: Erweiterungen können festlegen, welche vier Kacheln die Übersicht eines Ziels zeigt.
+- Schlüsseldatenbank: Braucht eine Datenbank eine neuere Fassung von remotejoe, meldet remotejoe ab dieser Fassung klar „Diese Schlüsseldatenbank braucht remotejoe … oder neuer“ und lässt die Daten unverändert, statt mit einem unverständlichen Ladefehler abzubrechen.
+
+**Bekannte Probleme:**
+
+- Suche im Zielbaum: Eine Suche klappt alle Ordner auf, auch die gesamten Inhalte gefundener Ordner. Nach der Suche bleibt der Baum teilweise ganz aufgeklappt. Abhilfe bis zur Behebung: „Alle zuklappen“.
+- Windows: Der Zielbaum kann nach dem Start ganz aufgeklappt sein, auch wenn ein Startzustand gespeichert ist. Die Ursache wird untersucht. Abhilfe: „Alle zuklappen“.
+
 ## 0.1.67 – Speicherplatz der Web-Ziele, robuste Erweiterungen
 
 **Speicherplatz:** In 0.1.66 hat das Aufräumen des Web-Zwischenspeichers die eigentlichen Platzfresser nicht erfasst. Das ist jetzt behoben. Nach dem ersten Entsperren räumt remotejoe den Altbestand im Hintergrund weg.

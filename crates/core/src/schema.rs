@@ -17,6 +17,28 @@ pub enum SchemaError {
     Migration { from: u32, reason: String },
     #[error("Index ist schreibgeschützt geöffnet (Schema-Version {found} ist neuer als {supported})")]
     ReadOnly { found: u32, supported: u32 },
+    #[error("Diese Schlüsseldatenbank braucht remotejoe {needed} oder neuer (dieses Programm: {own}). Bitte remotejoe aktualisieren; die Daten bleiben unverändert.")]
+    ProgramTooOld { needed: String, own: String },
+}
+
+/// Version dieses Programms (alle Kisten teilen die Version des Arbeitsbereichs).
+pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Name der Angabe im gespeicherten Index: älteste Programmversion, die diese Daten lesen kann.
+pub const MIN_PROGRAM_KEY: &str = "min_program";
+
+/// Älteste Programmversion, die `index` lesen kann – gesetzt, sobald die Daten einen neuen **Wert** in einem
+/// bestehenden Feld enthalten (z. B. eine neue Ordnerrolle). Neue **Felder** brauchen das nicht: Ältere Fassungen
+/// überlesen sie. Fassungen ab 0.1.68 prüfen die Angabe vor dem Einlesen und melden klar, welche Version nötig ist;
+/// 0.1.67 und älter kennen sie nicht – neue Werte deshalb frühestens in der Fassung nach 0.1.68.
+pub fn required_program(_index: &Index) -> Option<&'static str> {
+    None
+}
+
+/// `a` älter als `b` (Versionen „x.y.z“, Vorabzusätze wie „-beta.3“ zählen nicht).
+fn older(a: &str, b: &str) -> bool {
+    let parts = |v: &str| -> Vec<u64> { v.split(['-', '+']).next().unwrap_or("").split('.').map(|p| p.parse().unwrap_or(0)).collect() };
+    parts(a) < parts(b)
 }
 
 /// Ein geladener Index mit Angaben zur Herkunft.
@@ -50,6 +72,9 @@ impl LoadedIndex {
 pub fn to_json(index: &Index) -> Result<Vec<u8>, SchemaError> {
     let mut value = serde_json::to_value(index)?;
     value["schema_version"] = Value::from(written_version(index));
+    if let Some(min) = required_program(index) {
+        value[MIN_PROGRAM_KEY] = Value::from(min);
+    }
     Ok(serde_json::to_vec_pretty(&value)?)
 }
 
@@ -80,6 +105,13 @@ pub fn written_version(index: &Index) -> u32 {
 pub fn from_json(bytes: &[u8], source_name: &str) -> Result<LoadedIndex, SchemaError> {
     let text = validate_utf8(bytes, source_name)?;
     let mut value: Value = serde_json::from_str(text)?;
+    // Zuerst: Braucht die Datei ein neueres Programm? Dann nicht einlesen (neue Werte würden das Einlesen scheitern
+    // lassen), sondern klar melden.
+    if let Some(min) = value.get(MIN_PROGRAM_KEY).and_then(Value::as_str) {
+        if older(PROGRAM_VERSION, min) {
+            return Err(SchemaError::ProgramTooOld { needed: min.to_string(), own: PROGRAM_VERSION.to_string() });
+        }
+    }
     let version = value
         .get("schema_version")
         .and_then(Value::as_u64)
@@ -368,5 +400,22 @@ mod tests {
         idx.for_each_target(|_| n += 1);
         assert_eq!(n, 2);
     }
+
+    /// Mindest-Programmversion: Ein zu altes Programm liest die Daten nicht ein, sondern meldet klar die nötige Version
+    /// – auch wenn sie Werte enthalten, die es nicht kennt. Ein ausreichend neues Programm liest normal.
+    #[test]
+    fn data_needing_a_newer_program_is_refused_with_a_clear_message() {
+        let mut v: Value = serde_json::from_slice(&to_json(&sample()).unwrap()).unwrap();
+        assert!(v.get(MIN_PROGRAM_KEY).is_none(), "ohne neue Werte keine Angabe");
+        v[MIN_PROGRAM_KEY] = Value::from("99.0.0");
+        v["root"]["role"] = Value::from("unbekannte_rolle_aus_der_zukunft");
+        let e = from_json(v.to_string().as_bytes(), "t").unwrap_err().to_string();
+        assert!(e.contains("braucht remotejoe 99.0.0 oder neuer") && e.contains(PROGRAM_VERSION), "{e}");
+        let mut ok: Value = serde_json::from_slice(&to_json(&sample()).unwrap()).unwrap();
+        ok[MIN_PROGRAM_KEY] = Value::from("0.1.0");
+        assert!(from_json(ok.to_string().as_bytes(), "t").is_ok());
+        assert!(older("0.1.67", "0.1.68") && !older("0.1.68", "0.1.68") && !older("0.1.69-beta.2", "0.1.68") && older("0.1.9", "0.1.10"));
+    }
+
 }
 

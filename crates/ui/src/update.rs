@@ -302,7 +302,10 @@ impl App {
                 crate::kdbxbackup::wait(std::time::Duration::from_secs(10));
             }
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            rj_update::msi::install_after_exit(&path, &exe, std::process::id()).map_err(|e| e.to_string())?;
+            // Protokoll von msiexec im Datenordner (die letzten fünf bleiben); die Meldung nach dem Neustart nennt es.
+            let logs = rj_core::config::data_dir().map(|d| d.join("update")).unwrap_or_else(rj_update::msi::download_dir);
+            let log = rj_update::msi::new_log_path(&logs, &version.to_string(), 5);
+            rj_update::msi::install_after_exit(&path, &exe, std::process::id(), &log).map_err(|e| e.to_string())?;
             Ok(json!({ "state": "applying", "version": version }))
         }
         #[cfg(not(windows))]

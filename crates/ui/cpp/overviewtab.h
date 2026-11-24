@@ -106,6 +106,10 @@ private:
 	QLabel* m_tileCap[4] = {};
 	/// Felder der vier Kacheln; bei Netzgeräten Laufzeit und Seriennummer statt vCPU und Speicher.
 	QStringList m_tileKeys;
+	/// Kachelanordnung, die eine Erweiterung für dieses Ziel vorgibt (Übersicht, Feld `tiles`: vier Feldnamen und
+	/// optional Werte), sonst leer.
+	QStringList m_extTileKeys;
+	QJsonObject m_extTileValues;
 	QLabel* m_inventorySource;
 	QWidget* m_pendingBox;
 	QVBoxLayout* m_pending;

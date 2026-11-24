@@ -1355,8 +1355,22 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		m_pinButton->setFocusPolicy(Qt::NoFocus);
 		m_pinButton->setFixedSize(28, 24);
 		connect(m_pinButton, &QToolButton::clicked, this, [this] { setPinned(!m_pinned, true); });
+		// Alle zuklappen: klappt den ganzen Baum zu; auch nach einer Suche bleibt er danach zu.
+		auto* collapse = new QToolButton(header);
+		collapse->setObjectName(QStringLiteral("treeCollapseAll"));
+		collapse->setAutoRaise(true);
+		collapse->setFocusPolicy(Qt::NoFocus);
+		collapse->setFixedSize(28, 24);
+		collapse->setIcon(faIcon(QStringLiteral("r-square-minus")));
+		collapse->setToolTip(T(m_backend, "tree.collapse.all"));
+		collapse->setAccessibleName(T(m_backend, "tree.collapse.all"));
+		connect(collapse, &QToolButton::clicked, this, [this] {
+			m_tree->collapseAll();
+			m_expandedIds.clear();
+		});
 		hl->addWidget(title);
 		hl->addStretch(1);
+		hl->addWidget(collapse);
 		hl->addWidget(m_pinButton);
 		leftLay->addWidget(header);
 	}
@@ -1889,8 +1903,12 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	if (const QString code = qEnvironmentVariable("RJ_UPDATE_RESULT"); !code.isEmpty())
 	{
 		qunsetenv("RJ_UPDATE_RESULT");
-		const bool ok = code == QLatin1String("0") || code == QLatin1String("3010");
-		g_updateNotice = ok ? T(m_backend, "update.applied.ok").arg(m_backend->appVersion()) : T(m_backend, "update.applied.failed").arg(code);
+		const QString log = qEnvironmentVariable("RJ_UPDATE_LOG");
+		qunsetenv("RJ_UPDATE_LOG");
+		// Verständlicher Text mit Handlungshinweis und Protokoll (msi.rs).
+		const QJsonObject r = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("update_msi_result") }, { QStringLiteral("code"), code }, { QStringLiteral("log"), log } }));
+		g_updateNotice = r.value(QStringLiteral("ok")).toBool() ? T(m_backend, "update.applied.ok").arg(m_backend->appVersion())
+		                                                         : T(m_backend, "update.applied.failed").arg(r.value(QStringLiteral("text")).toString(code));
 	}
 #endif
 	// Claude-Anbindung: lokaler Kanal für rj-mcp; freigegebene Aktionen führt das Hauptfenster aus.
@@ -3492,6 +3510,27 @@ void MainWindow::tabContextMenu(QTabWidget* tabs, const QPoint& pos)
 		return;
 	const auto tab = tabs->widget(idx)->property("tab").toULongLong();
 	QMenu menu(this);
+	if (tabs == m_tabs)
+	{
+		// Schließen wie mit dem Kreuz am Tab (gleiche Schutzregeln, z. B. ungespeicherte Makros).
+		QAction* close = menu.addAction(faIcon(QStringLiteral("xmark")), T(m_backend, "tab.close"), this, [this, idx] {
+			if (idx < m_tabs->count())
+				emit m_tabs->tabCloseRequested(idx);
+		});
+		close->setObjectName(QStringLiteral("tabClose"));
+		QAction* all = menu.addAction(T(m_backend, "tab.closeall"), this, [this] {
+			const int n = m_tabs->count();
+			ask(T(m_backend, "tab.closeall.ask").arg(n), { T(m_backend, "tab.closeall.yes") }, [this](int b) {
+				if (b != 0)
+					return;
+				// Von hinten, damit die Positionen der übrigen Tabs gültig bleiben.
+				for (int i = m_tabs->count() - 1; i >= 0; --i)
+					emit m_tabs->tabCloseRequested(i);
+			});
+		});
+		all->setObjectName(QStringLiteral("tabCloseAll"));
+		menu.addSeparator();
+	}
 	if (tabs == m_tabs)
 		menu.addAction(T(m_backend, "menu.view.detach"), this, [this, tab] {
 			if (m_backend->detachTab(tab))

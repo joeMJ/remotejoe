@@ -24,6 +24,7 @@ RjHostBackend* PropertiesTab::hostBackend() const
 #include <QtWidgets/QMenu>
 #include <QtCore/QTimer>
 #include <QtCore/QElapsedTimer>
+#include <memory>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QStyle>
 #include <QtGui/QDesktopServices>
@@ -4836,13 +4837,52 @@ void UpdateTab::apply()
 			w->show();
 		logState(m_backend->text(QStringLiteral("update.error")).arg(r.value(QStringLiteral("error")).toString()));
 	};
-	if (open > 0)
-		m_bar->ask(m_backend->text(QStringLiteral("update.apply.confirm")).arg(open), { m_backend->text(QStringLiteral("update.apply")) }, [go](int b) {
-			if (b == 0)
+	// Windows Installer beschäftigt (eine andere Installation läuft): warten und dann selbst starten, höchstens
+	// so lange wie der Hilfsprozess (msi.rs, WAIT_MINUTES); „Nicht warten“ bricht ab.
+	auto start = [this, go] {
+		const QJsonObject b = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_installer_busy\"}")).toUtf8()).object();
+		if (!b.value(QStringLiteral("busy")).toBool())
+		{
+			go();
+			return;
+		}
+		const int minutes = b.value(QStringLiteral("minuten")).toInt(10);
+		auto* timer = new QTimer(this);
+		timer->setInterval(5000);
+		auto deadline = std::make_shared<QElapsedTimer>();
+		deadline->start();
+		logState(m_backend->text(QStringLiteral("update.wait.busy")));
+		m_bar->ask(m_backend->text(QStringLiteral("update.wait.busy")), { m_backend->text(QStringLiteral("update.wait.stop")) }, [this, timer](int) {
+			timer->stop();
+			timer->deleteLater();
+			logState(m_backend->text(QStringLiteral("update.wait.stopped")));
+		});
+		connect(timer, &QTimer::timeout, this, [this, timer, deadline, minutes, go] {
+			const QJsonObject b = QJsonDocument::fromJson(m_backend->edit(QStringLiteral("{\"op\":\"update_installer_busy\"}")).toUtf8()).object();
+			if (!b.value(QStringLiteral("busy")).toBool())
+			{
+				timer->stop();
+				timer->deleteLater();
+				m_bar->dismiss();
 				go();
+			}
+			else if (deadline->elapsed() > qint64(minutes) * 60 * 1000)
+			{
+				timer->stop();
+				timer->deleteLater();
+				m_bar->dismiss();
+				logState(m_backend->text(QStringLiteral("update.wait.timeout")).arg(minutes));
+			}
+		});
+		timer->start();
+	};
+	if (open > 0)
+		m_bar->ask(m_backend->text(QStringLiteral("update.apply.confirm")).arg(open), { m_backend->text(QStringLiteral("update.apply")) }, [start](int b) {
+			if (b == 0)
+				start();
 		});
 	else
-		go();
+		start();
 }
 
 void UpdateTab::handleResult(const QString& kind, const QJsonObject& r)

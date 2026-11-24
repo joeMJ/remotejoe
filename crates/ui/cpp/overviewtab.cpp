@@ -375,6 +375,15 @@ void OverviewTab::load()
 	m_notesCard->setVisible(!guest);
 	emit titleChanged();
 	renderServices(r.value(QStringLiteral("services")));
+	// Kachelanordnung einer Erweiterung: `tiles` = { "keys": [vier Feldnamen], "values": { Feld: { value, source } } }.
+	{
+		const QJsonObject t = r.value(QStringLiteral("tiles")).toObject();
+		QStringList keys;
+		for (const QJsonValue& k : t.value(QStringLiteral("keys")).toArray())
+			keys << k.toString();
+		m_extTileKeys = keys.size() == 4 ? keys : QStringList();
+		m_extTileValues = m_extTileKeys.isEmpty() ? QJsonObject() : t.value(QStringLiteral("values")).toObject();
+	}
 	renderInventory(r.value(QStringLiteral("inventory")).toArray());
 	setQueryState(QString());
 	m_notesEditable = r.value(QStringLiteral("notes_editable")).toBool();
@@ -537,8 +546,11 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 {
 	// Gerät mit eigener Geräteart: Laufzeit, IP-Adresse und – hervorgehoben – Seriennummer und Version; die MAC
 	// steht in der Kopfzeile.
-	const bool device = isNetworkDevice(fields);
-	const QStringList keys = device ? QStringList{ QStringLiteral("uptime"), QStringLiteral("ip"), QStringLiteral("serial"), QStringLiteral("version") }
+	const bool netDevice = isNetworkDevice(fields) && m_extTileKeys.isEmpty();
+	// Eigene Anordnung einer Erweiterung: wie ein Gerät dargestellt (Festbreitenschrift, markierbar).
+	const bool device = netDevice || !m_extTileKeys.isEmpty();
+	const QStringList keys = !m_extTileKeys.isEmpty() ? m_extTileKeys
+	                       : device              ? QStringList{ QStringLiteral("uptime"), QStringLiteral("ip"), QStringLiteral("serial"), QStringLiteral("version") }
 	                               : QStringList{ QString::fromLatin1(kTiles[0]), QString::fromLatin1(kTiles[1]), QString::fromLatin1(kTiles[2]), QString::fromLatin1(kTiles[3]) };
 	if (keys != m_tileKeys)
 	{
@@ -584,7 +596,7 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 				m_tileValue[i]->setText(value.isEmpty() ? QStringLiteral("–") : value);
 				m_tileValue[i]->setToolTip(f.value(QStringLiteral("source")).toString());
 			}
-		if (device && key == QLatin1String("system"))
+		if (netDevice && key == QLatin1String("system"))
 			if (const QString version = splitDeviceVersion(f.value(QStringLiteral("value")).toString()).second; !version.isEmpty())
 			{
 				m_tileValue[3]->setText(version);
@@ -595,6 +607,16 @@ void OverviewTab::renderInventory(const QJsonArray& fields)
 		{
 			latest = at;
 			latestSource = f.value(QStringLiteral("source")).toString();
+		}
+	}
+	// Werte, die die Erweiterung zur eigenen Anordnung mitliefert (z. B. aus einer Controller-Abfrage).
+	for (int i = 0; i < 4 && !m_extTileValues.isEmpty(); ++i)
+	{
+		const QJsonObject o = m_extTileValues.value(m_tileKeys.value(i)).toObject();
+		if (const QString value = o.value(QStringLiteral("value")).toString(); !value.isEmpty())
+		{
+			m_tileValue[i]->setText(value);
+			m_tileValue[i]->setToolTip(o.value(QStringLiteral("source")).toString());
 		}
 	}
 	m_inventorySource->setText(latest > 0 ? m_backend->text(QStringLiteral("ov.inventory.source")).arg(latestSource, when(latest))

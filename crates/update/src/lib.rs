@@ -10,7 +10,7 @@ pub mod archive;
 pub mod erweiterungen;
 #[cfg(windows)]
 pub mod authenticode;
-#[cfg(windows)]
+/// MSI-Update (Start des Hilfsprozesses nur unter Windows; Texte und Protokollablage überall, auch für Tests).
 pub mod msi;
 pub mod github;
 pub mod http;
