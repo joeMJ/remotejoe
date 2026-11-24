@@ -303,6 +303,7 @@ impl App {
             "redact" => Ok(self.redact(a)),
             "login_kinds" => Ok(json!(crate::sitesetup::login_kinds())),
             "edition" => Ok(json!(crate::plugins::edition())),
+            "program_version" => Ok(json!(rj_update::CURRENT_VERSION)),
             "mcp_target" => self.mcp_target_arg(&a).and_then(|t| serde_json::to_value(t).map_err(|e| e.to_string())),
             "plugin_op" => crate::plugins::dispatch(self, a["op"].as_str().unwrap_or_default(), &a["args"]).unwrap_or_else(|| Err("Unbekannte Operation der Erweiterung".into())),
             // Vermittlung zwischen Erweiterungen: Operation einer anderen, Anbieter einer Anschlussstelle.

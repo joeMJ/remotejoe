@@ -58,6 +58,9 @@ private:
 	QCheckBox* m_favorites = nullptr;
 	class QSpinBox* m_flyOpen = nullptr;
 	class QSpinBox* m_flyClose = nullptr;
+	class QSpinBox* m_searchMin = nullptr;
+	QComboBox* m_searchMode = nullptr;
+	class QSpinBox* m_searchDelay = nullptr;
 	QComboBox* m_iconStyle;
 	QCheckBox* m_ownIcons;
 	QWidget* m_iconBox;

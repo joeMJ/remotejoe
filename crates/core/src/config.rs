@@ -175,6 +175,13 @@ pub struct AppearanceSettings {
     pub first_hints_off: bool,
     /// Zuletzt gezeigte Releasenotes (Programmversion); leer = noch nie.
     pub notes_seen: String,
+    /// Zuletzt gezeigter Stand der Releasenotes der Erweiterungen (erste Überschrift); leer = noch nie.
+    pub ext_notes_seen: String,
+    /// Suche im Zielbaum: erst ab so vielen Zeichen (Enter sucht immer), nur mit Enter oder schon beim Tippen, beim
+    /// Tippen nach so vielen Sekunden Pause.
+    pub search_min_chars: u32,
+    pub search_on_enter: bool,
+    pub search_delay_s: u32,
 }
 
 impl Default for AppearanceSettings {
@@ -194,6 +201,10 @@ impl Default for AppearanceSettings {
             flyout_close_ms: 500,
             first_hints_off: false,
             notes_seen: String::new(),
+            ext_notes_seen: String::new(),
+            search_min_chars: 4,
+            search_on_enter: false,
+            search_delay_s: 3,
         }
     }
 }

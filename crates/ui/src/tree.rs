@@ -55,6 +55,10 @@ pub struct UiNode {
     /// Rolle eines Ordners (eigenes Symbol): templates, login_templates, network, servers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<&'static str>,
+    /// Treffer einer Suche (nicht die Inhalte eines gefundenen Ordners): Die Oberfläche klappt nur die Ordner auf dem
+    /// Weg zu Treffern auf; ein gefundener Ordner bleibt zu.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hit: bool,
 }
 
 fn matches(name: &str, host: Option<&str>, q: &[String]) -> bool {
@@ -70,7 +74,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                 let children = build(sub, q, lights, logins);
                 let hit = matches(&sub.name, None, q);
                 if q.is_empty() || hit || !children.is_empty() {
-                    // Bei einem Ordnertreffer alle Kinder zeigen.
+                    // Bei einem Ordnertreffer alle Kinder liefern (aufklappbar), aber nicht als Treffer markiert.
                     let children = if hit && !q.is_empty() { build(sub, &[], lights, logins) } else { children };
                     out.push(UiNode {
                         id: sub.id,
@@ -89,6 +93,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         site: crate::plugins::folder_marked(sub),
                         vswitch: false,
                         role: sub.role.map(|r| r.as_str()),
+                        hit: hit && !q.is_empty(),
                     });
                 }
             }
@@ -111,6 +116,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         site: false,
                         vswitch: false,
                         role: None,
+                        hit: !q.is_empty(),
                     });
                 }
             }
@@ -137,6 +143,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                 site: false,
                 vswitch: true,
                 role: None,
+                hit: !q.is_empty(),
             });
         }
     }
@@ -160,6 +167,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                 site: false,
                 vswitch: false,
                 role: None,
+                hit: !q.is_empty(),
             });
         }
     }
@@ -254,6 +262,31 @@ pub fn demo_index(targets: usize) -> Index {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Suche: Nur echte Treffer tragen `hit`; der Inhalt eines gefundenen Ordners wird geliefert, ist aber kein
+    /// Treffer (die Oberfläche klappt den Ordner deshalb nicht auf).
+    #[test]
+    fn search_marks_only_real_hits() {
+        let idx = demo_index(40);
+        let t = tree(&idx, "Standort Nord", &|_| None);
+        assert_eq!(t.len(), 1);
+        assert!(t[0].hit, "gefundener Ordner");
+        assert!(!t[0].children.is_empty() && t[0].children.iter().all(|c| !c.hit), "Inhalt geliefert, aber keine Treffer");
+        let t = tree(&idx, "ssh-001", &|_| None);
+        assert!(!t[0].hit, "übergeordneter Ordner ist kein Treffer");
+        fn hits(n: &[UiNode], out: &mut Vec<String>) {
+            for x in n {
+                if x.hit {
+                    out.push(x.name.clone());
+                }
+                hits(&x.children, out);
+            }
+        }
+        let mut h = Vec::new();
+        hits(&t, &mut h);
+        assert!(!h.is_empty() && h.iter().all(|n| !n.starts_with("Standort")), "nur Ziele als Treffer: {h:?}");
+        assert!(!tree(&idx, "", &|_| None).iter().any(|n| n.hit), "ohne Suche keine Treffer");
+    }
 
     #[test]
     fn order_and_marking() {

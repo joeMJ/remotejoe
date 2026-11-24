@@ -54,6 +54,33 @@ fn partial_prompt_at(lines: &[&str], from: usize, typed: &str) -> bool {
     is_partial_prompt(&joined, typed)
 }
 
+/// Gerätename aus einer Eingabeaufforderung mit Leerzeichen, wie sie direkt nach der Anmeldung steht (manche Switches
+/// erlaubt Leerzeichen im Namen: „SW1 Halle#“). Nur kurze Zeilen, die auf `#` oder `>` enden und sonst keine
+/// Sonderzeichen tragen; Tabellenköpfe wie „Serial #“ stehen nie allein nach der Anmeldung.
+fn learn_prompt(line: &str) -> Option<String> {
+    let l = line.trim();
+    let base = l.strip_suffix('#').or_else(|| l.strip_suffix('>'))?.trim_end();
+    let ok = !base.is_empty() && base.len() <= 64 && base.contains(' ') && !base.contains(['#', '>', ':', '(', ')']);
+    ok.then(|| base.to_string())
+}
+
+/// Eingabeaufforderung: wie [`is_prompt`] oder der gelernte Gerätename mit Leerzeichen, auch im Untermodus
+/// („SW1 Halle(config)#“).
+fn prompt_with(line: &str, learned: Option<&str>) -> bool {
+    if is_prompt(line) {
+        return true;
+    }
+    let Some(base) = learned else { return false };
+    let l = line.trim();
+    let Some(rest) = l.strip_prefix(base) else { return false };
+    let rest = rest.strip_suffix('#').or_else(|| rest.strip_suffix('>'));
+    match rest {
+        Some("") => true,
+        Some(r) => r.starts_with('(') && r.ends_with(')') && !r[1..r.len() - 1].contains(char::is_whitespace),
+        None => false,
+    }
+}
+
 
 
 /// Kanal zu einem Gerät: Daten lesen (mit Frist) und schreiben.
@@ -134,6 +161,8 @@ pub fn run_logged(chan: &mut dyn Chan, login: Option<(&str, &str)>, cmds: &[&str
     let mut user_sent = false;
     let mut pass_sent = 0;
     let mut keys = 0;
+    // Gelernter Gerätename mit Leerzeichen (siehe `learn_prompt`).
+    let mut learned: Option<String> = None;
     let mut idx = 0usize;
     let mut started = false;
     let mut mark = 0usize;
@@ -201,7 +230,11 @@ pub fn run_logged(chan: &mut dyn Chan, login: Option<(&str, &str)>, cmds: &[&str
                     buf.clear();
                 continue;
             }
-            let prompt = is_prompt(last_line(&text));
+            // Eingabeaufforderung mit Leerzeichen im Namen: nach der Anmeldung lernen, danach wie jede andere behandeln.
+            if learned.is_none() && !is_prompt(last_line(&text)) {
+                learned = learn_prompt(last_line(&text));
+            }
+            let prompt = prompt_with(last_line(&text), learned.as_deref());
             if prompt || quiet_since.elapsed() > Duration::from_secs(4) {
                 if cmds.is_empty() {
                     break;
@@ -245,7 +278,7 @@ pub fn run_logged(chan: &mut dyn Chan, login: Option<(&str, &str)>, cmds: &[&str
                 let partial = |h: &str| last > echo && partial_prompt_at(&lines, echo + 1, h);
                 let done = match help {
                     Some(h) => partial(h) || help_over,
-                    None => last > echo && is_prompt(lines[last]),
+                    None => last > echo && prompt_with(lines[last], learned.as_deref()),
                 };
                 if done {
                     // Hilfe nach Fristablauf: alles nach dem Echo, ohne angefangene Eingabezeile.
@@ -272,7 +305,7 @@ pub fn run_logged(chan: &mut dyn Chan, login: Option<(&str, &str)>, cmds: &[&str
                                 buf.extend_from_slice(&d);
                             }
                             let seg = clean(&buf[from..]);
-                            if seg.lines().filter(|l| !l.trim().is_empty()).count() >= 1 && is_prompt(last_line(&seg)) {
+                            if seg.lines().filter(|l| !l.trim().is_empty()).count() >= 1 && prompt_with(last_line(&seg), learned.as_deref()) {
                                 break;
                             }
                         }
@@ -455,5 +488,69 @@ pub fn ssh_try(ip: std::net::Ipv4Addr, c: &Cred, legacy: bool, known: &rj_ssh::k
         },
         Err(e) if e.to_lowercase().contains("anmeld") || e.to_lowercase().contains("auth") => Err(CliError::Auth),
         Err(e) => Err(CliError::Other(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    /// Nachgestellter Switch mit Leerzeichen im Namen (Rohantwort eines echten Geräts vom 24.11.2026, ohne Adressen):
+    /// Hinweistext, „Press any key“, dann „SW1 Halle# “; je Befehl Echo, Ausgabe und Eingabeaufforderung.
+    struct Switch {
+        out: VecDeque<Vec<u8>>,
+        line: String,
+        after_key: bool,
+    }
+
+    impl Switch {
+        fn new() -> Self {
+            let banner = "Beispiel X100 Switch\r\nSoftware revision AB.16.11.0027\r\n\r\n (C) Copyright 2025 Beispiel GmbH\r\n\r\nPress any key to continue";
+            Switch { out: VecDeque::from([banner.as_bytes().to_vec()]), line: String::new(), after_key: false }
+        }
+    }
+
+    impl Chan for Switch {
+        fn recv(&mut self, _timeout: Duration) -> Result<Option<Vec<u8>>, String> {
+            Ok(self.out.pop_front())
+        }
+        fn send(&mut self, data: &[u8]) -> Result<(), String> {
+            if !self.after_key {
+                self.after_key = true;
+                self.out.push_back(b"\r\nYour previous successful login (as manager) was on 2026-01-01 08:00:00\r\nSW1 Halle# ".to_vec());
+                return Ok(());
+            }
+            self.line.push_str(&String::from_utf8_lossy(data));
+            if let Some(cmd) = self.line.strip_suffix('\r').or_else(|| self.line.strip_suffix('\n')).map(|c| c.trim().to_string()) {
+                self.line.clear();
+                let body = match cmd.as_str() {
+                    "show version" => "Image stamp:    /build/beispiel\r\n Software revision  : AB.16.11.0027\r\n",
+                    "show system" => " System Name        : SW1 Halle\r\n Serial Number      : CN00000000\r\n",
+                    _ => "",
+                };
+                self.out.push_back(format!("{cmd}\r\n{body}\r\nSW1 Halle# ").into_bytes());
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn prompt_with_spaces_in_the_switch_name_is_learned() {
+        let s = run(&mut Switch::new(), None, &["no page", "show version", "show system"], Duration::from_secs(20)).unwrap();
+        assert!(!s.timed_out, "alle Befehle beantwortet");
+        assert_eq!(s.outputs.len(), 3);
+        assert!(s.outputs[1].contains("AB.16.11.0027") && s.outputs[2].contains("SW1 Halle"), "{:?}", s.outputs);
+    }
+
+    #[test]
+    fn learned_prompt_rules() {
+        assert_eq!(learn_prompt("SW1 Halle# ").as_deref(), Some("SW1 Halle"));
+        assert_eq!(learn_prompt("SW1 Halle>").as_deref(), Some("SW1 Halle"));
+        assert_eq!(learn_prompt("sw-1#"), None, "ohne Leerzeichen gilt die normale Regel");
+        assert!(prompt_with("SW1 Halle#", Some("SW1 Halle")) && prompt_with("SW1 Halle(config)#", Some("SW1 Halle")));
+        assert!(!prompt_with("Name  IP Address  Serial #", Some("SW1 Halle")), "Tabellenkopf bleibt keine Eingabeaufforderung");
+        assert!(!prompt_with("SW1 Halle uptime #", Some("SW1 Halle")));
+        assert!(!prompt_with("Name  IP Address  Serial #", None));
     }
 }

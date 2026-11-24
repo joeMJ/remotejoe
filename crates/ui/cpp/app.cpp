@@ -181,6 +181,20 @@ void screenshots(MainWindow& w, const QString& dir)
 		std::fprintf(stderr, "[prüfbild] Suche: aufgeklappt vorher %lld, nachher %lld, %s\n", static_cast<long long>(before.size()),
 		             static_cast<long long>(after.size()), before == after ? "gleich" : "ABWEICHUNG");
 	}
+	// Prüfung: Die Suche klappt nur den Weg zu Treffern auf. Ein gefundener Ordner der obersten Ebene bleibt zu
+	// (0 aufgeklappt); bei Zielen nur deren übergeordnete Ordner, nie der ganze Baum.
+	{
+		w.setFilter(QStringLiteral("Standort Nord"));
+		pump(300);
+		const qsizetype folderHit = w.expandedIdsForCheck().size();
+		w.setFilter(QStringLiteral("ssh-001"));
+		pump(300);
+		const qsizetype targetHit = w.expandedIdsForCheck().size();
+		w.setFilter(QString());
+		pump(300);
+		std::fprintf(stderr, "[prüfbild] Suche Ordner: aufgeklappt %lld (%s); Suche Ziel: aufgeklappt %lld\n", static_cast<long long>(folderHit),
+		             folderHit == 0 ? "richtig" : "FALSCH", static_cast<long long>(targetHit));
+	}
 	w.setFilter(QStringLiteral("ssh-00"));
 	pump(300);
 	save(&w, dir, QStringLiteral("suche.png"));
@@ -396,6 +410,10 @@ void screenshots(MainWindow& w, const QString& dir)
 		w.openNews();
 		pump(400);
 		save(w.tabs()->currentWidget(), dir, QStringLiteral("neuigkeiten.png"));
+		// Releasenotes der Erweiterungen (nur, wenn sie im Datenordner liegen).
+		w.openNews(true);
+		pump(400);
+		save(w.tabs()->currentWidget(), dir, QStringLiteral("neuigkeiten-erweiterungen.png"));
 		save(&w, dir, QStringLiteral("neuigkeiten-fenster.png"));
 		// Schließen prüfen: das Kreuz löst tabCloseRequested aus.
 		const int before = w.tabs()->count();
@@ -647,6 +665,7 @@ std::int32_t rjRunApplication()
 	if (!demo)
 		QTimer::singleShot(400, &w, [&w] {
 			w.showNewsIfNew();
+			w.showExtNewsIfNew();
 			w.showFirstHints();
 		});
 	if (!demo)

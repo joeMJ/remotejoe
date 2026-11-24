@@ -343,7 +343,12 @@ impl qobject::RjBackend {
     }
 
     fn legal_text(&self, which: &QString) -> QString {
-        q(crate::legal::text(&which.to_string()).to_string())
+        let which = which.to_string();
+        // Releasenotes der Erweiterungen: aus dem Datenordner (beim Abgleich mit der Update-Quelle geladen).
+        if which == "releasenotes_ext" {
+            return q(crate::plugin_fetch::notes_text());
+        }
+        q(crate::legal::text(&which).to_string())
     }
 
     fn modules_active(&self) -> bool {

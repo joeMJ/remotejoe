@@ -338,6 +338,11 @@ pub trait HostExt {
     fn edition(&mut self) -> String {
         self.call_json("edition", Value::Null).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "remotejoe".into())
     }
+    /// Fassung des laufenden Programms (z. B. „0.1.69“), nicht die der Erweiterung. Ein älterer Kern ohne diese Abfrage
+    /// liefert die Fassung des Kerns, gegen den die Erweiterung gebaut wurde.
+    fn program_version(&mut self) -> String {
+        self.call_json("program_version", Value::Null).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| rj_core::schema::PROGRAM_VERSION.into())
+    }
     /// Baum neu laden lassen (nach Änderungen am Index durch die Erweiterung).
     fn tree_changed(&mut self) {
         let _ = self.call_json("tree_changed", Value::Null);

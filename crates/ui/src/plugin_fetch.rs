@@ -42,6 +42,27 @@ pub fn quelle_dir(id: &str, platform: &str) -> Result<String, String> {
 /// Ordner der Erweiterungen in der Quelle (Katalog).
 pub const QUELLE_ERWEITERUNGEN: &str = "/erweiterungen/";
 
+/// Releasenotes der Erweiterungen in der Quelle (neben dem Katalog, über die signierten `SHA256SUMS` geprüft) und im
+/// Datenordner (`<Datenordner>/plugins/RELEASENOTES-ERWEITERUNGEN.md`).
+pub const NOTES_FILE: &str = "RELEASENOTES-ERWEITERUNGEN.md";
+
+/// Zuletzt geladene Releasenotes der Erweiterungen (Markdown), sonst leer.
+pub fn notes_text() -> String {
+    plugins_dir().and_then(|d| std::fs::read(d.join(NOTES_FILE)).ok()).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+}
+
+/// Kennung des neuesten Eintrags (erste Überschrift „## …“), für „schon gesehen“.
+pub fn notes_head(text: &str) -> String {
+    text.lines().find_map(|l| l.strip_prefix("## ")).map(|h| h.trim().to_string()).unwrap_or_default()
+}
+
+fn notes_speichern(b: &[u8]) {
+    if let Some(d) = plugins_dir() {
+        let _ = std::fs::create_dir_all(&d);
+        let _ = rj_core::fsutil::atomic_write_with_backup(&d.join(NOTES_FILE), b);
+    }
+}
+
 /// Zuletzt aus der Quelle geladener Katalog (`<Datenordner>/plugins/katalog.json`), sonst leer.
 pub fn katalog() -> Katalog {
     plugins_dir().and_then(|d| std::fs::read(d.join(KATALOG_FILE)).ok()).and_then(|b| Katalog::parse(&b).ok()).unwrap_or_default()
@@ -457,14 +478,22 @@ impl App {
         let job = self.jobs.spawn_cancellable("Erweiterungen mit der Update-Quelle abgleichen".to_string(), move |job, cancel| {
             let r = (|| -> Result<(Vec<(String, Out)>, Vec<(String, String)>), String> {
                 let s = ablage::Sitzung::anmelden(&url, &kennwort, Some(&*cancel))?;
-                // Katalog: fehlt er in der Quelle oder scheitert er, bleibt der zuletzt geladene.
+                // Katalog: fehlt er in der Quelle oder scheitert er, bleibt der zuletzt geladene. Ebenso die Releasenotes
+                // der Erweiterungen (nur mit gültiger Signatur übernommen).
+                let liste = s.ordner(QUELLE_ERWEITERUNGEN, Some(&*cancel));
+                let small = Limits { max_bytes: 1024 * 1024, timeout: std::time::Duration::from_secs(60) };
                 let k = (|| -> Result<Option<Katalog>, String> {
-                    if !s.ordner(QUELLE_ERWEITERUNGEN, Some(&*cancel))?.is_some_and(|e| e.iter().any(|x| x.name == KATALOG_FILE)) {
+                    if !liste.as_ref().map_err(Clone::clone)?.as_ref().is_some_and(|e| e.iter().any(|x| x.name == KATALOG_FILE)) {
                         return Ok(None);
                     }
-                    let small = Limits { max_bytes: 1024 * 1024, timeout: std::time::Duration::from_secs(60) };
                     Ok(Some(Katalog::parse(&ablage::datei_geprueft(&s, QUELLE_ERWEITERUNGEN, KATALOG_FILE, &key, small, Some(&*cancel), None)?)?))
                 })();
+                if liste.as_ref().ok().and_then(|l| l.as_ref()).is_some_and(|e| e.iter().any(|x| x.name == NOTES_FILE)) {
+                    match ablage::datei_geprueft(&s, QUELLE_ERWEITERUNGEN, NOTES_FILE, &key, small, Some(&*cancel), None) {
+                        Ok(b) => notes_speichern(&b),
+                        Err(e) => eprintln!("remotejoe: Releasenotes der Erweiterungen nicht geladen: {e}"),
+                    }
+                }
                 match &k {
                     Ok(Some(k)) => katalog_speichern(k),
                     Ok(None) => {}
@@ -591,6 +620,12 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_head_is_the_newest_heading() {
+        assert_eq!(notes_head("## Erweiterung A 1.3.1 – Neu\n\n- a\n\n## Erweiterung A 1.3.0\n"), "Erweiterung A 1.3.1 – Neu");
+        assert_eq!(notes_head("ohne Überschrift"), "");
+    }
 
     #[test]
     fn package_names_and_source_folders_follow_the_platform() {

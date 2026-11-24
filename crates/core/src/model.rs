@@ -107,7 +107,7 @@ pub struct Folder {
 }
 
 /// Rolle eines Ordners: Vorlagenordner (`Templates`, im Root immer oben), darin die Vorlagen der Anmeldeobjekte
-/// (`Loginobjects`), sowie Unterordner für Netzwerk- und Serverkomponenten.
+/// (`Loginobjects`), sowie Unterordner für Netzwerk- und Serverkomponenten und für Zugangsdaten.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FolderRole {
@@ -115,6 +115,8 @@ pub enum FolderRole {
     LoginTemplates,
     Network,
     Servers,
+    /// Zugangsdaten eines Standorts (Anmeldeobjekte); ab remotejoe 0.1.69, siehe `schema::required_program`.
+    Credentials,
 }
 
 impl FolderRole {
@@ -124,6 +126,7 @@ impl FolderRole {
             FolderRole::LoginTemplates => "login_templates",
             FolderRole::Network => "network",
             FolderRole::Servers => "servers",
+            FolderRole::Credentials => "credentials",
         }
     }
 }

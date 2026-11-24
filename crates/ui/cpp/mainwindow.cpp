@@ -203,6 +203,7 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 		{ "tplfolder", "r-clone", "#5c6bc0" },
 		{ "netfolder", "sitemap", "#00695c" },
 		{ "srvfolder", "server", "#37474f" },
+		{ "credfolder", "key", "#6a1b9a" },
 		{ "multi", "r-window-restore", "#0b5cad" },
 		{ "macro", "play", "#6a1b9a" },
 	};
@@ -306,6 +307,7 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		const QString role = n.value(QStringLiteral("role")).toString();
 		const QString roleKind = role == QLatin1String("network")   ? QStringLiteral("netfolder")
 		                         : role == QLatin1String("servers") ? QStringLiteral("srvfolder")
+		                         : role == QLatin1String("credentials") ? QStringLiteral("credfolder")
 		                         : !role.isEmpty()                  ? QStringLiteral("tplfolder")
 		                                                            : QString();
 		const QString iconKind = site                                                                         ? QStringLiteral("site")
@@ -1379,6 +1381,10 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	leftLay->addWidget(m_bar);
 	leftLay->addWidget(m_tree, 1);
 	leftLay->addWidget(m_search);
+	m_searchHint = new QLabel(leftInner);
+	m_searchHint->setObjectName(QStringLiteral("rjMuted"));
+	m_searchHint->hide();
+	leftLay->addWidget(m_searchHint);
 
 	m_tabs = new RjTabWidget(this);
 	m_tabs->setTabsClosable(true);
@@ -1564,6 +1570,12 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		connect(s, &QShortcut::activated, this, fn);
 	};
 	auto activate = [this] {
+		// Enter im Suchfeld: Das Kürzel des Zielbereichs fängt die Taste vor dem Feld ab – hier die Suche auslösen.
+		if (m_search->hasFocus())
+		{
+			searchEnter();
+			return;
+		}
 		const QModelIndex i = m_tree->currentIndex();
 		if (!m_tree->hasFocus() || !i.isValid())
 			return;
@@ -1756,7 +1768,22 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 	connect(m_tree, &QTreeView::customContextMenuRequested, this, &MainWindow::treeContextMenu);
 	m_filterTimer.setSingleShot(true);
 	m_filterTimer.setInterval(150);
-	connect(m_search, &QLineEdit::textChanged, this, [this] { m_filterTimer.start(); });
+	// Suche: beim Tippen nach der eingestellten Pause (ab der Mindestzahl Zeichen) oder nur mit Enter; ein geleertes
+	// Feld beendet die Suche sofort.
+	connect(m_search, &QLineEdit::textChanged, this, [this](const QString& t) {
+		m_searchForced = false;
+		updateSearchHint();
+		if (t.trimmed().isEmpty() || (m_searchApplied && searchText().isEmpty()))
+		{
+			m_filterTimer.stop();
+			applySearch();
+			return;
+		}
+		if (!m_searchOnEnter && !searchText().isEmpty())
+			m_filterTimer.start();
+		else
+			m_filterTimer.stop();
+	});
 	connect(&m_filterTimer, &QTimer::timeout, this, &MainWindow::applySearch);
 	connect(m_tabs, &QTabWidget::tabCloseRequested, this, [this](int i) {
 		if (auto* st = qobject_cast<SnmpTab*>(m_tabs->widget(i)))
@@ -1880,7 +1907,8 @@ MainWindow::MainWindow(RjBackend* backend, QWidget* parent)
 		const QJsonObject st = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("settings") } }));
 		applyTabSwitchKeys(st.value(QStringLiteral("tab_switch_key")).toString(QStringLiteral("outside")), st.value(QStringLiteral("tab_prev_keys")).toString(QStringLiteral("Ctrl+Shift+PgUp")), st.value(QStringLiteral("tab_next_keys")).toString(QStringLiteral("Ctrl+Shift+PgDown")));
 	}
-	connect(m_search, &QLineEdit::returnPressed, this, [this] { m_tree->setFocus(); m_tree->setCurrentIndex(m_model->index(0, 0)); });
+	// Enter sucht sofort, auch unter der Mindestzahl Zeichen; danach geht der Fokus in den Baum.
+	connect(m_search, &QLineEdit::returnPressed, this, &MainWindow::searchEnter);
 
 	m_poll.setInterval(16);
 	connect(&m_poll, &QTimer::timeout, this, &MainWindow::poll);
@@ -2177,7 +2205,14 @@ void MainWindow::buildMenus()
 	view->addAction(T(m_backend, "menu.view.tree"), QKeySequence(Qt::Key_F9), this, [this] { setTreeVisible(m_treeHidden); });
 	view->addAction(T(m_backend, "menu.view.reset_window"), this, [this] { resetWindow(); });
 	help = m_menuBar->addMenu(T(m_backend, "menu.help"));
-	help->addAction(T(m_backend, "menu.help.news"), this, [this] { openNews(); });
+	// Neuigkeiten: Programm und – sobald Releasenotes der Erweiterungen vorliegen – Erweiterungen.
+	{
+		auto* news = help->addMenu(T(m_backend, "menu.help.news"));
+		news->setObjectName(QStringLiteral("menuHelpNews"));
+		news->addAction(T(m_backend, "menu.help.news.program"), this, [this] { openNews(false); });
+		auto* ext = news->addAction(T(m_backend, "menu.help.news.ext"), this, [this] { openNews(true); });
+		connect(news, &QMenu::aboutToShow, this, [this, ext] { ext->setVisible(!m_backend->legalText(QStringLiteral("releasenotes_ext")).trimmed().isEmpty()); });
+	}
 	help->addAction(T(m_backend, "menu.help.firststeps"), this, [this] { showFirstHints(true); });
 	help->addAction(T(m_backend, "menu.help.update"), this, [this] { openUpdateTab(); });
 	help->addAction(T(m_backend, "menu.help.help"), QKeySequence::HelpContents, this, [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kHelpUrl))); });
@@ -2448,7 +2483,7 @@ void MainWindow::reloadTree()
 	// Aufgeklappte Ordner, Auswahl und Bildlauf merken, damit eine Änderung den Baum nicht zuklappt.
 	// Während einer Suche klappt alles auf; dann bleibt der zuletzt bekannte Zustand ohne Suche erhalten. Gemerkt wird
 	// nur, solange der Baum noch nicht durch die Suche aufgeklappt ist (auch wenn der Suchtext schon getippt ist).
-	const bool searching = !m_search->text().isEmpty();
+	const bool searching = !searchText().isEmpty();
 	if (m_treeLoaded && !m_searchApplied)
 	{
 		m_expandedIds.clear();
@@ -2615,14 +2650,53 @@ void MainWindow::updateSessionMarks()
 	walk(m_model->invisibleRootItem());
 }
 
+void MainWindow::searchEnter()
+{
+	if (!m_search->text().trimmed().isEmpty())
+	{
+		m_searchForced = true;
+		m_filterTimer.stop();
+		applySearch();
+	}
+	m_tree->setFocus();
+	m_tree->setCurrentIndex(m_model->index(0, 0));
+}
+
+QString MainWindow::searchText() const
+{
+	const QString t = m_search->text().trimmed();
+	if (t.isEmpty())
+		return QString();
+	// Mit Enter immer; sonst nur beim Tippen und ab der Mindestzahl Zeichen.
+	if (m_searchForced || (!m_searchOnEnter && t.size() >= m_searchMinChars))
+		return m_search->text();
+	return QString();
+}
+
+void MainWindow::updateSearchHint()
+{
+	if (!m_searchHint || !m_search)
+		return;
+	const QString t = m_search->text().trimmed();
+	if (t.isEmpty() || !searchText().isEmpty())
+	{
+		m_searchHint->hide();
+		return;
+	}
+	const int missing = m_searchMinChars - int(t.size());
+	m_searchHint->setText(m_searchOnEnter || missing <= 0 ? T(m_backend, "search.hint.enter") : T(m_backend, "search.hint.more").arg(missing));
+	m_searchHint->show();
+}
+
 void MainWindow::applySearch()
 {
 	QElapsedTimer t;
 	t.start();
-	const QString text = m_search->text();
+	const QString text = searchText();
+	updateSearchHint();
 	if (text.isEmpty())
 	{
-		// Suche verlassen: einmal neu aufbauen, damit Aufklappzustand und Makro-Fach zurückkommen.
+		// Suche verlassen (auch: Suchtext unter der Schwelle): einmal neu aufbauen, damit Aufklappzustand und Makro-Fach zurückkommen.
 		// m_searchApplied bleibt dabei gesetzt, damit reloadTree den aufgeklappten Suchbaum nicht als Zustand merkt.
 		if (m_searchApplied)
 			reloadTree();
@@ -2644,12 +2718,14 @@ void MainWindow::applySearch()
 		collect(QModelIndex());
 	}
 	// Treffer samt übergeordneter Ordner liefert Rust; hier werden nur Zeilen aus- und eingeblendet.
-	QSet<QString> keep;
+	QSet<QString> keep, hits;
 	std::function<void(const QJsonArray&)> ids = [&](const QJsonArray& nodes) {
 		for (const QJsonValue& v : nodes)
 		{
 			const QJsonObject n = v.toObject();
 			keep.insert(n.value(QStringLiteral("id")).toString());
+			if (n.value(QStringLiteral("hit")).toBool())
+				hits.insert(n.value(QStringLiteral("id")).toString());
 			ids(n.value(QStringLiteral("children")).toArray());
 		}
 	};
@@ -2669,8 +2745,24 @@ void MainWindow::applySearch()
 		}
 	};
 	apply(QModelIndex());
+	// Nur die Ordner auf dem Weg zu einem Treffer aufklappen; ein gefundener Ordner selbst bleibt zu (sein Inhalt ist
+	// mit dem Pfeil erreichbar). Alles andere bleibt zu – bei vielen Standorten sonst ein vollständig offener Baum.
 	m_autoExpand = true;
-	m_tree->expandAll();
+	m_tree->collapseAll();
+	std::function<void(const QModelIndex&)> open = [&](const QModelIndex& parent) {
+		for (int r = 0; r < m_model->rowCount(parent); ++r)
+		{
+			if (m_tree->isRowHidden(r, parent))
+				continue;
+			const QModelIndex i = m_model->index(r, 0, parent);
+			if (hits.contains(i.data(RoleId).toString()))
+				for (QModelIndex p = parent; p.isValid(); p = p.parent())
+					m_tree->expand(p);
+			if (!i.data(RoleGuest).isValid())
+				open(i);
+		}
+	};
+	open(QModelIndex());
 	collapseUnloadedHypervisors();
 	m_autoExpand = false;
 	m_tree->setUpdatesEnabled(true);
@@ -2684,7 +2776,7 @@ void MainWindow::applySearch()
 void MainWindow::addMacroShelf()
 {
 	// Das Fach erscheint nur in der Ansicht „Alle Ziele“ und ohne Suchtext.
-	if (!m_search->text().isEmpty() || !m_viewBox->currentData().toString().isEmpty())
+	if (!searchText().isEmpty() || !m_viewBox->currentData().toString().isEmpty())
 		return;
 	const QJsonArray macros = QJsonDocument::fromJson(edit({ { QStringLiteral("op"), QStringLiteral("macro_list") } }).toUtf8()).array();
 	auto* shelf = new QStandardItem(protocolIcon(QString(), QString(), true), T(m_backend, "macro.shelf"));
@@ -2722,7 +2814,7 @@ void MainWindow::updateEmptyHint()
 	const bool open = m_backend->isVaultOpen();
 	m_emptyLabel->setText(T(m_backend, open ? "tree.empty" : "tree.locked"));
 	m_emptyButton->setText(T(m_backend, open ? "tree.empty.add" : "tree.locked.open"));
-	m_emptyHint->setVisible((rows <= 0 || !open) && m_search->text().isEmpty());
+	m_emptyHint->setVisible((rows <= 0 || !open) && searchText().isEmpty());
 	m_emptyHint->raise();
 }
 
@@ -2747,6 +2839,7 @@ int MainWindow::treeRowCount() const
 void MainWindow::setFilter(const QString& text)
 {
 	m_search->setText(text);
+	m_searchForced = true;
 	reloadTree();
 }
 
@@ -5981,6 +6074,10 @@ void MainWindow::applyTreePrefs()
 	const QJsonObject a = parseObject(m_backend->uiPrefsJson());
 	m_flyOpenMs = a.value(QStringLiteral("flyout_open_ms")).toInt(300);
 	m_flyCloseMs = a.value(QStringLiteral("flyout_close_ms")).toInt(500);
+	m_searchMinChars = qMax(1, a.value(QStringLiteral("search_min_chars")).toInt(4));
+	m_searchOnEnter = a.value(QStringLiteral("search_on_enter")).toBool(false);
+	m_filterTimer.setInterval(qMax(150, a.value(QStringLiteral("search_delay_s")).toInt(3) * 1000));
+	updateSearchHint();
 	const bool favs = a.value(QStringLiteral("show_favorites")).toBool(true);
 	if (favs != m_showFavorites)
 	{
@@ -6099,35 +6196,37 @@ void MainWindow::flyoutForScreenshot(bool unpinned, bool open)
 		openFlyout();
 }
 
-void MainWindow::openNews()
+void MainWindow::openNews(bool ext)
 {
+	const QString name = ext ? QStringLiteral("newsTabExt") : QStringLiteral("newsTab");
 	for (int i = 0; i < m_tabs->count(); ++i)
-		if (m_tabs->widget(i)->objectName() == QLatin1String("newsTab"))
+		if (m_tabs->widget(i)->objectName() == name)
 		{
 			m_tabs->setCurrentIndex(i);
 			return;
 		}
 	auto* view = new QTextBrowser(m_tabs);
-	view->setObjectName(QStringLiteral("newsTab"));
+	view->setObjectName(name);
 	view->setOpenExternalLinks(true);
 	view->setFrameShape(QFrame::NoFrame);
 	view->document()->setDocumentMargin(24);
 	// Kopf mittig (Logo, Titel, Link auf GitHub), darunter die Releasenotes aus dem Markdown.
 	{
 		QTextDocument md;
-		md.setMarkdown(m_backend->legalText(QStringLiteral("releasenotes")));
+		md.setMarkdown(m_backend->legalText(ext ? QStringLiteral("releasenotes_ext") : QStringLiteral("releasenotes")));
 		QString body = md.toHtml();
 		const int open = body.indexOf(QStringLiteral("<body"));
 		const int start = open >= 0 ? body.indexOf(QLatin1Char('>'), open) + 1 : 0;
 		const int end = body.lastIndexOf(QStringLiteral("</body>"));
 		body = body.mid(start, end > start ? end - start : -1);
+		// Erweiterungen: ohne Verweis auf GitHub (ihre Releasenotes stehen nur in der Update-Quelle).
+		const QString link = ext ? QString() : QStringLiteral("<p align=\"center\"><a href=\"https://github.com/joeMJ/remotejoe\">github.com/joeMJ/remotejoe</a></p>");
 		const QString head = QStringLiteral("<p align=\"center\"><img src=\":/logo/remotejoe-128.png\" width=\"96\" height=\"96\"></p>"
-		                                    "<p align=\"center\" style=\"font-size: x-large; font-weight: 600;\">%1</p>"
-		                                    "<p align=\"center\"><a href=\"https://github.com/joeMJ/remotejoe\">github.com/joeMJ/remotejoe</a></p><hr>")
-		                       .arg(T(m_backend, "news.heading").toHtmlEscaped());
+		                                    "<p align=\"center\" style=\"font-size: x-large; font-weight: 600;\">%1</p>%2<hr>")
+		                       .arg(T(m_backend, ext ? "news.heading.ext" : "news.heading").toHtmlEscaped(), link);
 		view->setHtml(head + body);
 	}
-	const int i = m_tabs->addTab(view, faIcon(QStringLiteral("r-lightbulb")), T(m_backend, "news.title"));
+	const int i = m_tabs->addTab(view, faIcon(QStringLiteral("r-lightbulb")), T(m_backend, ext ? "news.title.ext" : "news.title"));
 	m_tabs->setCurrentIndex(i);
 }
 
@@ -6142,6 +6241,17 @@ void MainWindow::showNewsIfNew()
 	m_backend->setAppearance(QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("notes_seen"), version } }).toJson(QJsonDocument::Compact)));
 	if (used)
 		openNews();
+}
+
+void MainWindow::showExtNewsIfNew()
+{
+	// Neuer Eintrag in den Releasenotes der Erweiterungen (nach „Erweiterungen aktualisieren“ und Neustart): einmal zeigen.
+	const QJsonObject a = parseObject(m_backend->uiPrefsJson());
+	const QString head = a.value(QStringLiteral("ext_notes_head")).toString();
+	if (head.isEmpty() || head == a.value(QStringLiteral("ext_notes_seen")).toString())
+		return;
+	m_backend->setAppearance(QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("ext_notes_seen"), head } }).toJson(QJsonDocument::Compact)));
+	openNews(true);
 }
 
 QWidget* MainWindow::showFirstHints(bool force)

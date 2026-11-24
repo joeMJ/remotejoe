@@ -200,6 +200,24 @@ AppearanceTab::AppearanceTab(RjBackend* backend, QWidget* parent)
 	}
 	form->addRow(T("appearance.flyout_open"), m_flyOpen);
 	form->addRow(T("appearance.flyout_close"), m_flyClose);
+	// Suche im Zielbaum: ab wie vielen Zeichen, beim Tippen oder erst mit Enter, Wartezeit beim Tippen.
+	{
+		auto* head = new QLabel(QStringLiteral("<b>%1</b>").arg(T("appearance.search").toHtmlEscaped()), page);
+		form->addRow(head);
+		m_searchMin = new QSpinBox(page);
+		m_searchMin->setRange(1, 20);
+		m_searchMin->setSuffix(T("appearance.search.chars.suffix"));
+		form->addRow(T("appearance.search.chars"), m_searchMin);
+		m_searchMode = new QComboBox(page);
+		m_searchMode->addItem(T("appearance.search.typing"), false);
+		m_searchMode->addItem(T("appearance.search.enter"), true);
+		form->addRow(T("appearance.search.mode"), m_searchMode);
+		m_searchDelay = new QSpinBox(page);
+		m_searchDelay->setRange(0, 30);
+		m_searchDelay->setSuffix(T("appearance.search.delay.suffix"));
+		m_searchDelay->setToolTip(T("appearance.search.delay.tip"));
+		form->addRow(T("appearance.search.delay"), m_searchDelay);
+	}
 	// Symbolfarben: dem Theme folgen oder eigene Farbe je Art.
 	m_iconStyle = new QComboBox(page);
 	for (const char* s : { "einheitlich", "je_typ" })
@@ -322,6 +340,19 @@ AppearanceTab::AppearanceTab(RjBackend* backend, QWidget* parent)
 		if (!m_loading)
 			apply({ { QStringLiteral("flyout_close_ms"), m_flyClose->value() } });
 	});
+	connect(m_searchMin, &QSpinBox::editingFinished, this, [this] {
+		if (!m_loading)
+			apply({ { QStringLiteral("search_min_chars"), m_searchMin->value() } });
+	});
+	connect(m_searchDelay, &QSpinBox::editingFinished, this, [this] {
+		if (!m_loading)
+			apply({ { QStringLiteral("search_delay_s"), m_searchDelay->value() } });
+	});
+	connect(m_searchMode, &QComboBox::currentIndexChanged, this, [this] {
+		m_searchDelay->setEnabled(!m_searchMode->currentData().toBool());
+		if (!m_loading)
+			apply({ { QStringLiteral("search_on_enter"), m_searchMode->currentData().toBool() } });
+	});
 	connect(m_iconStyle, &QComboBox::currentIndexChanged, this, [this] {
 		if (!m_loading)
 			apply({ { QStringLiteral("icon_style"), m_iconStyle->currentData().toString() } });
@@ -390,6 +421,10 @@ void AppearanceTab::reload()
 	m_favorites->setChecked(m_state.value(QStringLiteral("show_favorites")).toBool(true));
 	m_flyOpen->setValue(m_state.value(QStringLiteral("flyout_open_ms")).toInt(300));
 	m_flyClose->setValue(m_state.value(QStringLiteral("flyout_close_ms")).toInt(500));
+	m_searchMin->setValue(m_state.value(QStringLiteral("search_min_chars")).toInt(4));
+	m_searchMode->setCurrentIndex(m_state.value(QStringLiteral("search_on_enter")).toBool() ? 1 : 0);
+	m_searchDelay->setValue(m_state.value(QStringLiteral("search_delay_s")).toInt(3));
+	m_searchDelay->setEnabled(!m_state.value(QStringLiteral("search_on_enter")).toBool());
 	{
 		// Eigene Farben aus der Einstellung, sonst die Farben des Themes anzeigen.
 		const QJsonObject own = m_state.value(QStringLiteral("icon_colors")).toObject();

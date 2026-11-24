@@ -1,3 +1,10 @@
+## 0.1.69 – Suche im Zielbaum
+
+- Suche im Zielbaum: Eine Suche klappt nur noch die Ordner auf dem Weg zu Treffern auf; ein gefundener Ordner bleibt zu (sein Inhalt ist mit dem Pfeil erreichbar). Nach der Suche kommt der Aufklappzustand von vorher zurück. Behebt das bekannte Problem aus 0.1.68.
+- Suche einstellbar (Einstellungen → Darstellung → Suche im Zielbaum): Suchen ab 4 Zeichen, Suche beim Tippen oder erst mit Enter, beim Tippen 3 Sekunden Pause (alles änderbar). Enter sucht immer sofort, auch mit weniger Zeichen. Unter dem Suchfeld steht, wie viele Zeichen noch fehlen.
+- Enter im Suchfeld wirkt wieder (sucht und springt in den Baum); bisher kam die Taste dort nicht an.
+- Schlüsseldatenbank: Enthält sie etwas, das erst eine neuere Fassung lesen kann, steht die nötige Fassung in der Datei; ältere Fassungen ab 0.1.68 melden das klar, statt mit einem Ladefehler abzubrechen.
+
 ## 0.1.68 – Windows-Update, Tabs und Zielbaum
 
 **Windows-Update:** Läuft gerade eine andere Installation (z. B. Windows Update), wartet remotejoe jetzt, statt mit einer Fehlermeldung des Windows Installers abzubrechen, und installiert danach von selbst (Issue #1).

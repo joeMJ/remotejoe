@@ -166,6 +166,8 @@ public:
 
 	/// Beim ersten Start einer neuen Version die Neuigkeiten zeigen (nicht bei einer neuen Installation).
 	void showNewsIfNew();
+	/// Releasenotes der Erweiterungen zeigen, wenn ein neuer Eintrag da ist (einmal je Stand).
+	void showExtNewsIfNew();
 	/// Hinweise beim allerersten Start (Pfeile auf Menü und „Hinzufügen“), solange es kein Ziel gibt und sie nicht
 	/// abgeschaltet sind; `force` zeigt sie immer (Bildschirmfotos). Liefert die Hinweisfläche.
 	QWidget* showFirstHints(bool force = false);
@@ -206,7 +208,7 @@ public:
 
 public slots:
 	/// Tab „Neuigkeiten“ (Releasenotes, neueste oben).
-	void openNews();
+	void openNews(bool ext = false);
 
 protected:
 	void paintEvent(QPaintEvent*) override;
@@ -386,6 +388,16 @@ private:
 	void collapseUnloadedHypervisors();
 	/// Suche aktiv (Zeilen ausgeblendet); beim Verlassen wird der Baum einmal neu aufgebaut.
 	bool m_searchApplied = false;
+	/// Suche: mit Enter ausgelöst (gilt auch unter der Mindestzahl Zeichen), Schwellen aus den Einstellungen.
+	bool m_searchForced = false;
+	bool m_searchOnEnter = false;
+	int m_searchMinChars = 4;
+	class QLabel* m_searchHint = nullptr;
+	/// Wirksamer Suchtext (leer = keine Suche: Feld leer oder unter der Schwelle ohne Enter).
+	QString searchText() const;
+	void updateSearchHint();
+	/// Enter im Suchfeld: sofort suchen (auch unter der Schwelle), dann in den Baum.
+	void searchEnter();
 	bool m_keepExpanded = false; // reloadTree während einer Suche: gemerkten Aufklappzustand behalten
 	QSet<QString> m_expandedIds;
 	QTimer* m_clipTimer = nullptr;

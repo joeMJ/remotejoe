@@ -31,8 +31,13 @@ pub const MIN_PROGRAM_KEY: &str = "min_program";
 /// bestehenden Feld enthalten (z. B. eine neue Ordnerrolle). Neue **Felder** brauchen das nicht: Ältere Fassungen
 /// überlesen sie. Fassungen ab 0.1.68 prüfen die Angabe vor dem Einlesen und melden klar, welche Version nötig ist;
 /// 0.1.67 und älter kennen sie nicht – neue Werte deshalb frühestens in der Fassung nach 0.1.68.
-pub fn required_program(_index: &Index) -> Option<&'static str> {
-    None
+pub fn required_program(index: &Index) -> Option<&'static str> {
+    // 0.1.69: Ordnerrolle „Zugangsdaten“ (`credentials`); ältere Fassungen scheitern sonst am unbekannten Wert.
+    fn uses_credentials(f: &crate::model::Folder) -> bool {
+        f.role == Some(crate::model::FolderRole::Credentials)
+            || f.children.iter().any(|n| matches!(n, crate::model::Node::Folder(sub) if uses_credentials(sub)))
+    }
+    uses_credentials(&index.root).then_some("0.1.69")
 }
 
 /// `a` älter als `b` (Versionen „x.y.z“, Vorabzusätze wie „-beta.3“ zählen nicht).
@@ -415,6 +420,19 @@ mod tests {
         ok[MIN_PROGRAM_KEY] = Value::from("0.1.0");
         assert!(from_json(ok.to_string().as_bytes(), "t").is_ok());
         assert!(older("0.1.67", "0.1.68") && !older("0.1.68", "0.1.68") && !older("0.1.69-beta.2", "0.1.68") && older("0.1.9", "0.1.10"));
+    }
+
+    /// Ordnerrolle „Zugangsdaten“ (neu in 0.1.69): Wer sie benutzt, schreibt „braucht 0.1.69“ in die Datei.
+    #[test]
+    fn credentials_folder_requires_0_1_69() {
+        let mut idx = sample();
+        let mut f = crate::model::Folder::new("Zugangsdaten");
+        f.role = Some(crate::model::FolderRole::Credentials);
+        idx.root.children.push(crate::model::Node::Folder(f));
+        let v: Value = serde_json::from_slice(&to_json(&idx).unwrap()).unwrap();
+        assert_eq!(v[MIN_PROGRAM_KEY], "0.1.69");
+        let back = from_json(&to_json(&idx).unwrap(), "t").unwrap();
+        assert_eq!(required_program(&back.index), Some("0.1.69"));
     }
 
 }

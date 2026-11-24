@@ -39,6 +39,11 @@ impl App {
             "flyout_close_ms": a.flyout_close_ms,
             "first_hints_off": a.first_hints_off,
             "notes_seen": a.notes_seen,
+            "ext_notes_seen": a.ext_notes_seen,
+            "ext_notes_head": crate::plugin_fetch::notes_head(&crate::plugin_fetch::notes_text()),
+            "search_min_chars": a.search_min_chars,
+            "search_on_enter": a.search_on_enter,
+            "search_delay_s": a.search_delay_s,
             "palettes": palettes,
             "dir": theme::custom_dir().map(|d| d.display().to_string()),
             "notes": notes,
@@ -57,6 +62,11 @@ impl App {
             "flyout_close_ms": a.flyout_close_ms,
             "first_hints_off": a.first_hints_off,
             "notes_seen": a.notes_seen,
+            "ext_notes_seen": a.ext_notes_seen,
+            "ext_notes_head": crate::plugin_fetch::notes_head(&crate::plugin_fetch::notes_text()),
+            "search_min_chars": a.search_min_chars,
+            "search_on_enter": a.search_on_enter,
+            "search_delay_s": a.search_delay_s,
         })
     }
 
@@ -92,7 +102,7 @@ impl App {
         }
         {
             let a = &mut self.config.appearance;
-            for (key, slot) in [("round_corners", &mut a.round_corners), ("show_favorites", &mut a.show_favorites), ("tree_pinned", &mut a.tree_pinned), ("first_hints_off", &mut a.first_hints_off)] {
+            for (key, slot) in [("round_corners", &mut a.round_corners), ("show_favorites", &mut a.show_favorites), ("tree_pinned", &mut a.tree_pinned), ("first_hints_off", &mut a.first_hints_off), ("search_on_enter", &mut a.search_on_enter)] {
                 if let Some(b) = c.get(key).and_then(Value::as_bool) {
                     *slot = b;
                 }
@@ -102,8 +112,17 @@ impl App {
                     *slot = n.min(5000) as u32;
                 }
             }
+            if let Some(n) = c.get("search_min_chars").and_then(Value::as_u64) {
+                a.search_min_chars = n.clamp(1, 20) as u32;
+            }
+            if let Some(n) = c.get("search_delay_s").and_then(Value::as_u64) {
+                a.search_delay_s = n.min(30) as u32;
+            }
             if let Some(s) = c.get("notes_seen").and_then(Value::as_str) {
                 a.notes_seen = s.chars().take(40).collect();
+            }
+            if let Some(s) = c.get("ext_notes_seen").and_then(Value::as_str) {
+                a.ext_notes_seen = s.chars().take(200).collect();
             }
         }
         if let Some(s) = c.get("tree_size").and_then(Value::as_str) {
