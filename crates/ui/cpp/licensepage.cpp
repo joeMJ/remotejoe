@@ -2,6 +2,7 @@
 // der Kern zeigt sie neutral (Namen der Erweiterungen aus ihrer Anmeldung).
 
 #include "mainwindow.h"
+#include "rjtextedit.h"
 #include "settingstab.h"
 
 #include "remotejoe-ui/src/bridge.cxxqt.h"
@@ -123,7 +124,7 @@ void SettingsTab::buildLicensePage(QVBoxLayout* v, QWidget* w)
 	auto* pasteBox = new QWidget(w);
 	auto* pb = new QVBoxLayout(pasteBox);
 	pb->setContentsMargins(0, 0, 0, 0);
-	auto* editBox = new QPlainTextEdit(pasteBox);
+	auto* editBox = new RjPlainTextEdit(pasteBox);
 	editBox->setPlaceholderText(QStringLiteral("-----BEGIN REMOTEJOE LIZENZ-----\n…\n-----END REMOTEJOE LIZENZ-----"));
 	editBox->setMinimumHeight(120);
 	pb->addWidget(editBox);
@@ -654,7 +655,7 @@ QWidget* SettingsTab::pageExtensions()
 	head->setFont(hf);
 	head->setContentsMargins(0, 10, 0, 2);
 	v->addWidget(head);
-	m_extLog = new QPlainTextEdit(w);
+	m_extLog = new RjPlainTextEdit(w);
 	m_extLog->setReadOnly(true);
 	m_extLog->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 	m_extLog->setMinimumHeight(110);

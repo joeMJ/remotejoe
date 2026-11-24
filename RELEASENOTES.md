@@ -1,3 +1,7 @@
+## 0.1.70 – Einfügen unter Ubuntu 24.04
+
+- Linux (Ubuntu 24.04): remotejoe stürzte beim Einfügen aus der Zwischenablage in ein mehrzeiliges Feld ab (z. B. beim Einfügen der Lizenz, per Rechtsklick → Einfügen oder Strg+V). Ursache war die Qt-Fassung von Ubuntu 24.04 unter Wayland. remotejoe fügt in diese Felder jetzt selbst als reinen Text ein; der Absturz tritt nicht mehr auf.
+
 ## 0.1.69 – Suche im Zielbaum
 
 - Suche im Zielbaum: Eine Suche klappt nur noch die Ordner auf dem Weg zu Treffern auf; ein gefundener Ordner bleibt zu (sein Inhalt ist mit dem Pfeil erreichbar). Nach der Suche kommt der Aufklappzustand von vorher zurück. Behebt das bekannte Problem aus 0.1.68.

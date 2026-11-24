@@ -1,4 +1,5 @@
 #include "overviewtab.h"
+#include "rjtextedit.h"
 
 
 #include "cards.h"
@@ -193,7 +194,7 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	// Notizen
 	m_notesCard = rjui::card(page, &in);
 	in->addWidget(rjui::section(T("ov.notes"), m_notesCard));
-	m_notes = new QPlainTextEdit(m_notesCard);
+	m_notes = new RjPlainTextEdit(m_notesCard);
 	m_notes->setTabChangesFocus(true);
 	m_notes->setMinimumHeight(60);
 	m_notes->setMaximumHeight(120);
@@ -226,7 +227,7 @@ OverviewTab::OverviewTab(RjBackend* backend, QWidget* parent)
 	ch->addWidget(m_trace);
 	ch->addWidget(m_stop);
 	in->addLayout(ch);
-	m_output = new QPlainTextEdit(chk);
+	m_output = new RjPlainTextEdit(chk);
 	m_output->setReadOnly(true);
 	m_output->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 	m_output->setMinimumHeight(160);

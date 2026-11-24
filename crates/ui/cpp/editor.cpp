@@ -1,4 +1,5 @@
 #include "editor.h"
+#include "rjtextedit.h"
 #include "faicons.h"
 #include <QtGui/QGuiApplication>
 #include <QtGui/QClipboard>
@@ -941,7 +942,7 @@ QWidget* PropertiesTab::pageConnection()
 			m_akEnabled->setChecked(ak.value(QStringLiteral("enabled")).toBool());
 			track(m_akEnabled, QStringLiteral("options"));
 			f->addRow(QString(), m_akEnabled);
-			m_akScript = new QPlainTextEdit(ak.value(QStringLiteral("script")).toString(), w);
+			m_akScript = new RjPlainTextEdit(ak.value(QStringLiteral("script")).toString(), w);
 			m_akScript->setPlaceholderText(rjText(m_backend, "edit.autokeys.placeholder"));
 			m_akScript->setTabChangesFocus(true);
 			m_akScript->setMinimumHeight(110);
@@ -1443,7 +1444,7 @@ QWidget* PropertiesTab::pageTasks()
 	auto* f = new QFormLayout;
 	m_taskName = new QLineEdit(w);
 	m_taskKind = new QLineEdit(w);
-	m_taskBody = new QPlainTextEdit(w);
+	m_taskBody = new RjPlainTextEdit(w);
 	m_taskBody->setMaximumHeight(120);
 	auto* bodyLabel = new QLabel(rjText(m_backend, "edit.tasks.params"), w);
 	f->addRow(rjText(m_backend, "edit.tasks.name"), m_taskName);
@@ -1720,7 +1721,7 @@ QWidget* PropertiesTab::pageOrganisation()
 	auto* w = new QWidget;
 	auto* v = new QVBoxLayout(w);
 	auto* nl = new QLabel(rjText(m_backend, "edit.notes"), w);
-	m_notes = new QPlainTextEdit(m_data.value(QStringLiteral("notes")).toString(), w);
+	m_notes = new RjPlainTextEdit(m_data.value(QStringLiteral("notes")).toString(), w);
 	m_notes->setTabChangesFocus(true);
 	nl->setBuddy(m_notes);
 	track(m_notes, QStringLiteral("notes"));
@@ -2377,7 +2378,7 @@ MacroTab::MacroTab(RjBackend* backend, const QString& id, QWidget* parent)
 		m_waitTimeout = new QSpinBox(waitPage);
 		m_waitTimeout->setRange(1, 600);
 		m_waitTimeout->setSuffix(QStringLiteral(" s"));
-		m_waitErrors = new QPlainTextEdit(waitPage);
+		m_waitErrors = new RjPlainTextEdit(waitPage);
 		m_waitErrors->setMaximumHeight(70);
 		f->addRow(new QLabel(rjText(backend, "macro.wait.kind"), waitPage), m_waitKind);
 		f->addRow(new QLabel(rjText(backend, "macro.wait.pattern"), waitPage), m_waitPattern);
@@ -2390,7 +2391,7 @@ MacroTab::MacroTab(RjBackend* backend, const QString& id, QWidget* parent)
 		auto* l = new QVBoxLayout(advPage);
 		auto* t = new QLabel(rjText(backend, "macro.adv.hint"), advPage);
 		t->setWordWrap(true);
-		m_json = new QPlainTextEdit(advPage);
+		m_json = new RjPlainTextEdit(advPage);
 		m_json->setMaximumHeight(140);
 		m_jsonError = new QLabel(advPage);
 		m_jsonError->setObjectName(QStringLiteral("fieldError"));
@@ -3371,7 +3372,7 @@ BulkAddTab::BulkAddTab(RjBackend* backend, const QString& parentId, QWidget* par
 	auto* kl = new QLabel(rjText(backend, "bulk.kind"), left);
 	kl->setBuddy(m_kind);
 	f->addRow(kl, m_kind);
-	m_hosts = new QPlainTextEdit(left);
+	m_hosts = new RjPlainTextEdit(left);
 	m_hosts->setObjectName(QStringLiteral("bulkHosts"));
 	m_hosts->setTabChangesFocus(true);
 	m_hosts->setPlaceholderText(rjText(backend, "bulk.hosts.placeholder"));
@@ -3940,7 +3941,7 @@ ImportTab::ImportTab(RjBackend* backend, const QString& path, const QJsonObject&
 	if (report.isEmpty())
 	{
 		// Ohne strukturierten Bericht: der Text als Ganzes.
-		auto* text = new QPlainTextEdit(summary, this);
+		auto* text = new RjPlainTextEdit(summary, this);
 		text->setObjectName(QStringLiteral("importSummary"));
 		text->setReadOnly(true);
 		text->setAccessibleName(rjText(backend, "import.summary"));
@@ -4050,7 +4051,7 @@ PatchdayTab::PatchdayTab(RjBackend* backend, const QStringList& ids, QWidget* pa
 	m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	m_table->verticalHeader()->setDefaultSectionSize(30);
 	m_table->setAccessibleName(rjText(backend, "patch.title"));
-	m_log = new QPlainTextEdit(this);
+	m_log = new RjPlainTextEdit(this);
 	m_log->setReadOnly(true);
 	m_log->setMaximumHeight(160);
 	m_log->setAccessibleName(rjText(backend, "patch.log"));
@@ -4578,7 +4579,7 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 	auto* notesLabel = new QLabel(T("update.notes"), this);
 	m_notesLabel = notesLabel;
 	notesLabel->setObjectName(QStringLiteral("rjMuted"));
-	m_notes = new QPlainTextEdit(this);
+	m_notes = new RjPlainTextEdit(this);
 	m_notes->setReadOnly(true);
 	m_notes->setMaximumHeight(140);
 	notesLabel->setBuddy(m_notes);
@@ -4632,7 +4633,7 @@ UpdateTab::UpdateTab(RjBackend* backend, QWidget* parent)
 	lay->addWidget(both);
 	// Protokoll: jede Meldung der Suche und Installation mit Uhrzeit, zum Kopieren.
 	section(T("update.sec.log"));
-	m_log = new QPlainTextEdit(this);
+	m_log = new RjPlainTextEdit(this);
 	m_log->setReadOnly(true);
 	m_log->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 	m_log->setMinimumHeight(110);

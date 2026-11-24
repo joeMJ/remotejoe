@@ -1,4 +1,5 @@
 #include "reporttab.h"
+#include "rjtextedit.h"
 
 #include "cards.h"
 #include "diag.h"
@@ -65,7 +66,7 @@ ReportTab::ReportTab(RjBackend* backend, QWidget* parent)
 	m_kind->addItem(T("report.kind.wish"), QStringLiteral("wish"));
 	m_title = new QLineEdit(card);
 	m_title->setPlaceholderText(T("report.title.ph"));
-	m_text = new QPlainTextEdit(card);
+	m_text = new RjPlainTextEdit(card);
 	m_text->setPlaceholderText(T("report.text.ph"));
 	m_diag = new QCheckBox(T("report.diag"), card);
 	m_diag->setChecked(true);
@@ -75,7 +76,7 @@ ReportTab::ReportTab(RjBackend* backend, QWidget* parent)
 	form->addRow(QString(), m_diag);
 	fin->addLayout(form, 1);
 	fin->addWidget(rjui::section(T("report.preview"), card));
-	m_preview = new QPlainTextEdit(card);
+	m_preview = new RjPlainTextEdit(card);
 	m_preview->setReadOnly(true);
 	fin->addWidget(m_preview, 1);
 	lay->addWidget(card, 1);
