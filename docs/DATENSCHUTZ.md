@@ -25,4 +25,8 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
   [`MCP.md`](MCP.md).
 - **Zugangsdaten prüfen** meldet sich nur an den ausgewählten Zielen an und trennt sofort; unbekannte Zertifikate
   werden dabei nicht angenommen.
+- **Ansprechpartner:** Zu Ordnern lassen sich Ansprechpartner hinterlegen (Name, E-Mail, Rufnummer,
+  Kundennummer). Das liegt im Interesse des Anwenders und ist freiwillig – die Funktion kann genutzt
+  werden, muss aber nicht. Die Angaben bleiben wie die Ziele in der verschlüsselten Schlüsseldatenbank (KDBX) und
+  gehen nicht an Dritte, auch nicht über die Claude-Anbindung.
 - Es gibt keine Telemetrie und keine Nutzungsstatistik.

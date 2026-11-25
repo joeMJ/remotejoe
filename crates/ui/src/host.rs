@@ -80,6 +80,10 @@ impl HostShared for AppShared {
             }
             "cli_ticket_info" => Ok(self.cli.info(CliTicket(a["ticket"].as_u64().unwrap_or(0)))),
             "http_request" => self.cli.http(CliTicket(a["ticket"].as_u64().unwrap_or(0)), &a),
+            "snmp_walk" => {
+                let max = a["max"].as_u64().unwrap_or(500).min(5000) as usize;
+                self.cli.snmp_walk(CliTicket(a["ticket"].as_u64().unwrap_or(0)), a["host"].as_str().unwrap_or_default(), a["prefix"].as_str().unwrap_or_default(), max)
+            }
             "snmp_get" => {
                 let oids: Vec<String> = a["oids"].as_array().map(|l| l.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
                 self.cli.snmp_get(CliTicket(a["ticket"].as_u64().unwrap_or(0)), a["host"].as_str().unwrap_or_default(), &oids)
@@ -223,6 +227,31 @@ impl App {
         let payload = rj_ipc::msg::CredentialPayload { username: user.to_string(), domain: dom.map(str::to_string), password: rj_ipc::msg::SecretBytes(c.data.password.as_bytes().to_vec()), private_key: None };
         let spec = crate::patch::JobSpec { protocol: Protocol::Ssh, host: host.to_string(), port, credentials: payload, transport: None, legacy };
         Ok(self.cli.issue(spec, self.known_hosts_ref(), Some(l.entry.entry)))
+    }
+
+    /// SNMPv3-Schein aus einem Anmeldeobjekt: `login`, `host`, `port` (Vorgabe 161), `auth` (`sha256`, `sha1`),
+    /// `priv` (`aes128`, `none`), `lenient` (Höchstgröße der Gegenstelle begrenzen statt ablehnen). Die Werte
+    /// verlassen den Kern nicht.
+    fn snmp_ticket_for_login(&self, a: &Value) -> Result<CliTicket, String> {
+        let login = id_of(a, "login")?;
+        let host = a.get("host").and_then(Value::as_str).filter(|h| !h.is_empty()).ok_or("Adresse fehlt")?;
+        let l = self.index.logins.iter().find(|l| l.id == login).ok_or("Anmeldeobjekt nicht gefunden")?;
+        let vault = self.vault.as_ref().ok_or("Die Schlüsseldatenbank ist gesperrt")?;
+        let c = vault.credential(l.entry.entry).ok_or("Eintrag nicht in der Schlüsseldatenbank")?;
+        let auth = match a.get("auth").and_then(Value::as_str).unwrap_or("sha256") {
+            "sha1" => rj_snmp::AuthProto::Sha1,
+            "sha256" => rj_snmp::AuthProto::Sha256,
+            other => return Err(format!("SNMP-Authentisierung „{other}“ wird nicht unterstützt")),
+        };
+        let privacy = match a.get("priv").and_then(Value::as_str).unwrap_or("aes128") {
+            "none" => None,
+            "aes128" => Some((rj_snmp::PrivProto::Aes128, vault.field(c.uuid, rj_core::SNMP_PRIV_FIELD).unwrap_or_else(|| c.data.password.clone()))),
+            other => return Err(format!("SNMP-Verschlüsselung „{other}“ wird nicht unterstützt")),
+        };
+        let credentials = rj_snmp::Credentials::V3 { user: c.data.username.clone(), auth, auth_password: c.data.password.clone(), privacy };
+        let port = a.get("port").and_then(Value::as_u64).map(|p| p as u16).unwrap_or(161);
+        let dev = rj_snmp::Device { host: host.to_string(), port, credentials, timeout: std::time::Duration::from_secs(2) };
+        Ok(self.cli.issue_snmp_with(dev, a.get("lenient").and_then(Value::as_bool).unwrap_or(false)))
     }
 
     /// SNMP-Gerät eines Ordners (Einstellung „SNMP“ auf dem Weg zur Wurzel) mit Zugangsdaten als Schein.
@@ -428,6 +457,12 @@ impl App {
                 Ok(Value::Null)
             }
             "snmp_ticket" => {
+                // Mit `login`: SNMPv3 über ein Anmeldeobjekt (Benutzer, Kennwort zur Authentisierung, geschütztes Feld
+                // zur Verschlüsselung) für `host`; ohne: SNMP-Gerät des Ordners.
+                if a.get("login").is_some() {
+                    let t = self.snmp_ticket_for_login(&a)?;
+                    return Ok(json!({ "ticket": t.0 }));
+                }
                 let (t, name) = self.snmp_ticket_for_folder(id_of(&a, "folder")?)?;
                 Ok(json!({ "ticket": t.0, "name": name }))
             }

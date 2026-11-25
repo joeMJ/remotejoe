@@ -517,6 +517,36 @@ pub fn folder_marked(f: &Folder) -> bool {
     all().into_iter().any(|p| p.folder_marked(f))
 }
 
+/// Gerätearten von Zielen, die Erweiterungen an Ordnern führen (Ziel-ID → Klasse), für das Symbol im Baum. Gefragt
+/// werden nur Ordner mit Angaben von Erweiterungen.
+pub fn folder_devices(index: &rj_core::Index) -> std::collections::HashMap<Uuid, &'static str> {
+    fn walk<'a>(nodes: &'a [rj_core::Node], out: &mut Vec<&'a Folder>) {
+        for n in nodes {
+            if let rj_core::Node::Folder(f) = n {
+                if !f.extra.is_empty() {
+                    out.push(f);
+                }
+                walk(&f.children, out);
+            }
+        }
+    }
+    let mut folders = Vec::new();
+    walk(&index.root.children, &mut folders);
+    let mut out = std::collections::HashMap::new();
+    if folders.is_empty() {
+        return out;
+    }
+    for p in all() {
+        for f in &folders {
+            for (id, class) in p.folder_devices(f) {
+                let d = rj_plugin_api::DeviceInfo { class, label: String::new(), key: String::new(), web_port: None };
+                out.insert(id, d.class_key());
+            }
+        }
+    }
+    out
+}
+
 pub fn folder_virtual_children(f: &Folder) -> Vec<VirtualChild> {
     all().into_iter().flat_map(|p| p.folder_virtual_children(f)).collect()
 }

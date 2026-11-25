@@ -266,6 +266,10 @@ pub fn plugin_call(p: &dyn Plugin, host: Option<&mut dyn Host>, shared: Option<A
             Ok(f) => ok(json!(p.folder_virtual_children(&f).into_iter().map(|c| json!({ "id": c.id, "name": c.name })).collect::<Vec<_>>())),
             Err(e) => err(e),
         },
+        "folder_devices" => match de::<rj_core::model::Folder>(a.get("f").cloned().unwrap_or(Value::Null)) {
+            Ok(f) => ok(json!(p.folder_devices(&f))),
+            Err(e) => err(e),
+        },
         "folder_editor_json" => match (host, de::<rj_core::model::Folder>(a.get("f").cloned().unwrap_or(Value::Null))) {
             (Some(h), Ok(f)) => {
                 let mut v = a.get("v").cloned().unwrap_or(Value::Null);
@@ -623,6 +627,9 @@ pub mod host {
         }
         fn folder_marked(&self, f: &rj_core::model::Folder) -> bool {
             self.get(None, "folder_marked", json!({ "f": f })).as_bool().unwrap_or(false)
+        }
+        fn folder_devices(&self, f: &rj_core::model::Folder) -> Vec<(uuid::Uuid, String)> {
+            serde_json::from_value(self.get(None, "folder_devices", json!({ "f": f }))).unwrap_or_default()
         }
         fn folder_virtual_children(&self, f: &rj_core::model::Folder) -> Vec<VirtualChild> {
             let v = self.get(None, "folder_virtual_children", json!({ "f": f }));

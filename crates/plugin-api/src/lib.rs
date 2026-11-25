@@ -42,7 +42,7 @@ pub struct VirtualChild {
 /// Geräteart eines Ziels, wie eine Erweiterung sie aus dem Inventar erkennt (neutral für Baum, Symbole, Übersicht).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DeviceInfo {
-    /// Klasse: `switch`, `controller`, `ap`, `gateway`.
+    /// Klasse: `switch`, `controller`, `ap`, `gateway`, `router` (eigenes Symbol im Baum).
     pub class: String,
     /// Anzeigename, z. B. „WiFi-Controller (Serie X)“.
     pub label: String,
@@ -68,6 +68,7 @@ impl DeviceInfo {
             "controller" => "controller",
             "ap" => "ap",
             "gateway" => "gateway",
+            "router" => "router",
             _ => "device",
         }
     }
@@ -132,11 +133,21 @@ pub struct CliOptions {
     pub host: Option<String>,
     /// Nur Telnet (Port 23), kein SSH.
     pub telnet_only: bool,
+    /// Einfache Shell: auch eine Zeile, die auf `>` endet, als Eingabeaufforderung werten (Vorgabe: nur `#`). Ab 0.1.72.
+    pub prompt_gt: bool,
+    /// Einfache Shell: Befehle mit Wagenrücklauf (CR) statt Zeilenvorschub abschließen. Ab 0.1.72.
+    pub newline_cr: bool,
+    /// Einfache Shell: Höhe des Terminals in Zeilen (0 = Vorgabe 50); groß wählen, wenn das Gerät sonst blättert.
+    /// Ab 0.1.72.
+    pub rows: u32,
+    /// Einfache Shell: Text, mit dem das Gerät beim Blättern wartet (z. B. eine „weiter“-Zeile); darauf antwortet
+    /// der Kern mit der Leertaste, die Zeile entfällt in der Ausgabe. Leer = aus. Ab 0.1.72.
+    pub pager: String,
 }
 
 impl Default for CliOptions {
     fn default() -> Self {
-        CliOptions { legacy_retry: true, telnet: false, marks: false, cols: 200, limit_secs: 30, switch_cli: true, fresh: false, host: None, telnet_only: false }
+        CliOptions { legacy_retry: true, telnet: false, marks: false, cols: 200, limit_secs: 30, switch_cli: true, fresh: false, host: None, telnet_only: false, prompt_gt: false, newline_cr: false, rows: 0, pager: String::new() }
     }
 }
 
@@ -303,6 +314,13 @@ pub trait HostExt {
     fn snmp_ticket(&mut self, folder: Uuid) -> Result<CliTicket, String> {
         self.call_json("snmp_ticket", json!({ "folder": folder })).and_then(|v| v.get("ticket").and_then(Value::as_u64).map(CliTicket).ok_or_else(|| "Kein SNMP-Zugang".to_string()))
     }
+    /// SNMPv3-Schein aus einem Anmeldeobjekt (Benutzer, Kennwort zur Authentisierung, geschütztes Feld zur
+    /// Verschlüsselung) für eine Adresse; `auth`: `sha256` oder `sha1`, `priv`: `aes128` oder `none`; `lenient`:
+    /// eine angegebene Höchstgröße der Gegenstelle über der eigenen Puffergröße begrenzen statt ablehnen. Ab 0.1.72.
+    fn snmp_ticket_login(&mut self, login: Uuid, host: &str, auth: &str, privacy: &str, lenient: bool) -> Result<CliTicket, String> {
+        self.call_json("snmp_ticket", json!({ "login": login, "host": host, "auth": auth, "priv": privacy, "lenient": lenient }))
+            .and_then(|v| v.get("ticket").and_then(Value::as_u64).map(CliTicket).ok_or_else(|| "Kein SNMP-Zugang".to_string()))
+    }
     /// Konfigablage eines Ordners: Stand (`path`, `exists`, `needs_entry`).
     fn cfgstore_state(&mut self, folder: Uuid, name: &str) -> Result<Value, String> {
         self.call_json("cfgstore_state", json!({ "folder": folder, "name": name }))
@@ -440,6 +458,10 @@ pub trait HostSharedExt {
     /// SNMP: Werte lesen (`oids`) über den Schein eines Ordners.
     fn snmp_get(&self, ticket: CliTicket, host: &str, oids: &[&str]) -> Result<Value, String> {
         self.call_json("snmp_get", json!({ "ticket": ticket.0, "host": host, "oids": oids }))
+    }
+    /// SNMP: Teilbaum lesen (`prefix`, höchstens `max` Werte) über einen Schein. Ab 0.1.72.
+    fn snmp_walk(&self, ticket: CliTicket, host: &str, prefix: &str, max: usize) -> Result<Value, String> {
+        self.call_json("snmp_walk", json!({ "ticket": ticket.0, "host": host, "prefix": prefix, "max": max }))
     }
     /// Externes Programm mit den Zugangsdaten eines Scheins starten: `{{user}}`/`{{password}}` in Argumenten,
     /// Umgebungsvariablen und der ersten Eingabezeile (`stdin`) werden vom Kern ersetzt. Liefert die Prozessnummer;
@@ -620,6 +642,11 @@ pub trait Plugin: Sync + Send {
         false
     }
     fn folder_virtual_children(&self, _f: &Folder) -> Vec<VirtualChild> {
+        Vec::new()
+    }
+    /// Gerätearten von Zielen, die die Erweiterung an diesem Ordner führt (Ziel-ID → Klasse wie in [`DeviceInfo`]),
+    /// für das Symbol im Baum. Aufgerufen nur für Ordner mit Angaben von Erweiterungen.
+    fn folder_devices(&self, _f: &Folder) -> Vec<(Uuid, String)> {
         Vec::new()
     }
     /// Angaben für die Eigenschaften eines Ordners ergänzen.

@@ -1,3 +1,13 @@
+## 0.1.72 – Kontextmenü aufgeräumt
+
+- Zielbaum, Kontextmenü: neues Untermenü „Umwandeln“; Umwandeln und „Aufgaben“ stehen jetzt in einem eigenen Abschnitt zwischen Trennlinien.
+- „Benutzernamen kopieren“ und „Kennwort kopieren“ sind rot hinterlegt, damit sie im Menü auffallen.
+- Hilfe → Neuigkeiten: die Menüpunkte ohne Auslassungspunkte.
+- Übersicht: Ziele mit erkannter Geräteart (Switch, Controller, AP, Router) zeigen immer die Geräte-Anordnung – Laufzeit, IP-Adresse, Seriennummer und Version als Kacheln, die MAC in der Kopfzeile.
+- Zielbaum: Router haben ein eigenes Symbol.
+- SNMP: Geräte, die eine sehr große Nachrichtengröße angeben, lassen sich lesen (angepasste Kopie der Bibliothek snmp2).
+- Datenschutzhinweise: neuer Absatz zu Ansprechpartnern an Ordnern; sie sind freiwillig und bleiben in der verschlüsselten Schlüsseldatenbank.
+
 ## 0.1.71 – Neuigkeiten schließen
 
 - Hilfe → Neuigkeiten: Der Tab „Neuigkeiten Erweiterungen“ lässt sich wieder über das Kreuz schließen (in 0.1.69 und 0.1.70 blieb er offen).

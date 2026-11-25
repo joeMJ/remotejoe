@@ -854,7 +854,9 @@ impl App {
                 None => tree::tree(&self.index, filter, &lights),
             },
         };
-        tree::mark_devices(&mut nodes, &|id| self.overview.devices.get(&id).map(crate::overview::inventory::device_key));
+        // Von Erweiterungen geführte Gerätearten gehen vor dem Inventar (ausdrücklich so eingerichtet).
+        let marked = crate::plugins::folder_devices(&self.index);
+        tree::mark_devices(&mut nodes, &|id| marked.get(&id).copied().or_else(|| self.overview.devices.get(&id).map(crate::overview::inventory::device_key)));
         serde_json::to_string(&nodes).unwrap_or_else(|_| "[]".into())
     }
 
@@ -1098,7 +1100,7 @@ impl App {
     pub fn connect_way(&mut self, target: Uuid, sel: WaySel, credential: Option<&str>, remember: bool, width: u32, height: u32) -> String {
         let Some(base) = self.target(target).cloned() else { return json!({ "error": "Ziel nicht gefunden" }).to_string() };
         let way = match sel {
-            WaySel::Main | WaySel::SshHost(_) | WaySel::WebHost(_) => None,
+            WaySel::Main | WaySel::SshHost(_) | WaySel::WebHost(..) => None,
             WaySel::Default => base.open_with,
             WaySel::Way(w) => Some(w),
         };
@@ -1121,13 +1123,18 @@ impl App {
             t.port = None;
             t.name = format!("{} – {ip}", t.name);
         }
-        if let WaySel::WebHost(ip) = sel {
+        if let WaySel::WebHost(ip, port) = sel {
             // Zertifikat wie bei jedem Web-Ziel: Rückfrage beim ersten Mal, je Rechner und Port gemerkt.
-            let url = format!("https://{ip}:4343/");
+            let port = port.unwrap_or(4343);
+            let host = match ip {
+                std::net::IpAddr::V6(v6) => format!("[{v6}]"),
+                v4 => v4.to_string(),
+            };
+            let url = format!("https://{host}:{port}/");
             t.options = ProtocolOptions::Web(rj_core::model::WebOptions { url: Some(url.clone()), ..Default::default() });
             t.protocol = Protocol::Web;
             t.host = url;
-            t.port = Some(4343);
+            t.port = Some(port);
             t.name = format!("{} – {ip}", t.name);
         }
         let resolved = match (way_cred, credential) {
@@ -1856,9 +1863,17 @@ pub enum WaySel {
     Way(Uuid),
     /// SSH zu einer anderen Adresse mit den Zugangsdaten des Ziels (z. B. ein einzelnes Gerät einer Gruppe).
     SshHost(std::net::IpAddr),
-    /// Web-Oberfläche (https, Port 4343) einer anderen Adresse mit den Zugangsdaten des Ziels (z. B. Gerät aus der
-    /// Suche nach Clusteraufbrüchen).
-    WebHost(std::net::IpAddr),
+    /// Web-Oberfläche (https; Port wie angegeben, sonst 4343) einer anderen Adresse mit den Zugangsdaten des Ziels
+    /// (z. B. Gerät aus der Suche nach Clusteraufbrüchen). Schreibweise `web:<Adresse>` bzw. `web:<Adresse>:<Port>`.
+    WebHost(std::net::IpAddr, Option<u16>),
+}
+
+/// `<Adresse>` oder `<Adresse>:<Port>` (IPv6 mit Port in eckigen Klammern).
+fn web_host(s: &str) -> Option<WaySel> {
+    if let Ok(ip) = s.parse::<std::net::IpAddr>() {
+        return Some(WaySel::WebHost(ip, None));
+    }
+    s.parse::<std::net::SocketAddr>().ok().map(|a| WaySel::WebHost(a.ip(), Some(a.port())))
 }
 
 impl WaySel {
@@ -1867,7 +1882,7 @@ impl WaySel {
         match id.split_once('#') {
             Some((t, "main")) => (t, WaySel::Main),
             Some((t, w)) if w.starts_with("ssh:") => (t, w[4..].parse().map(WaySel::SshHost).unwrap_or(WaySel::Default)),
-            Some((t, w)) if w.starts_with("web:") => (t, w[4..].parse().map(WaySel::WebHost).unwrap_or(WaySel::Default)),
+            Some((t, w)) if w.starts_with("web:") => (t, web_host(&w[4..]).unwrap_or(WaySel::Default)),
             Some((t, w)) => (t, Uuid::parse_str(w).map(WaySel::Way).unwrap_or(WaySel::Default)),
             None => (id, WaySel::Default),
         }
@@ -1884,7 +1899,9 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         assert_eq!(WaySel::split(&format!("{id}#ssh:192.0.2.211")).1, WaySel::SshHost("192.0.2.211".parse().unwrap()));
         assert_eq!(WaySel::split(&format!("{id}#ssh:kein-ip")).1, WaySel::Default);
-        assert_eq!(WaySel::split(&format!("{id}#web:192.0.2.212")).1, WaySel::WebHost("192.0.2.212".parse().unwrap()));
+        assert_eq!(WaySel::split(&format!("{id}#web:192.0.2.212")).1, WaySel::WebHost("192.0.2.212".parse().unwrap(), None));
+        assert_eq!(WaySel::split(&format!("{id}#web:192.0.2.212:443")).1, WaySel::WebHost("192.0.2.212".parse().unwrap(), Some(443)));
+        assert_eq!(WaySel::split(&format!("{id}#web:[2001:db8::1]:8443")).1, WaySel::WebHost("2001:db8::1".parse().unwrap(), Some(8443)));
         assert_eq!(WaySel::split(&format!("{id}#main")).1, WaySel::Main);
         assert_eq!(WaySel::split(&id).1, WaySel::Default);
     }

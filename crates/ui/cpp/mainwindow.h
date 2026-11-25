@@ -142,6 +142,8 @@ public:
 	/// Für Bildschirmfotos: Eigenschaften des ersten Ziels, Hinzufügen-Menü, Entsperren.
 	PropertiesTab* openFirstTargetProperties(const QString& protocol = QStringLiteral("rdp"));
 	QMenu* popupAddMenu();
+	/// Für Prüfbilder: Kontextmenü des ersten Ordners (`folder`) bzw. ersten Ziels öffnen (blockiert bis zum Schließen).
+	bool popupFirstTreeMenu(bool folder);
 	BulkAddTab* openBulkAdd(const QString& parentId);
 	void showUnlock(bool locked);
 	void showNewVault();

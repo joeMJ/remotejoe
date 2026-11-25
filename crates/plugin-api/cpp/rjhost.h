@@ -88,6 +88,9 @@ struct RjModuleHooks
 	std::vector<std::function<bool(const QString&, const QString&)>> mcpAction;
 	/// Bildschirmfotos der Vorführung (warten, Bild speichern unter Name).
 	std::vector<std::function<void(const std::function<void(int)>&, const std::function<void(const QString&)>&)>> screenshots;
+	/// Untermenü „Umwandeln“ eines Baumeintrags (Untermenü, Eintrag, Kennung, Ordner); ohne Einträge ausgeblendet.
+	/// Neu ab 0.1.72 – am Ende angefügt, damit ältere Erweiterungen die übrigen Felder unverändert sehen.
+	std::vector<std::function<void(QMenu*, const QModelIndex&, const QString&, bool)>> convertMenu;
 };
 
 /// Das Hauptfenster aus Sicht der Erweiterung.

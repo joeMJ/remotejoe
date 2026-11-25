@@ -376,6 +376,7 @@ void OverviewTab::load()
 	m_notesCard->setVisible(!guest);
 	emit titleChanged();
 	renderServices(r.value(QStringLiteral("services")));
+	m_deviceClass = r.value(QStringLiteral("device_class")).toString();
 	// Kachelanordnung einer Erweiterung: `tiles` = { "keys": [vier Feldnamen], "values": { Feld: { value, source } } }.
 	{
 		const QJsonObject t = r.value(QStringLiteral("tiles")).toObject();
@@ -509,6 +510,9 @@ std::pair<QString, QString> OverviewTab::splitDeviceVersion(const QString& syste
 
 bool OverviewTab::isNetworkDevice(const QJsonArray& fields) const
 {
+	// Erkannte Geräteart (außer der allgemeinen „device“) zählt auch ohne eigene Prüfung einer Erweiterung.
+	if (!m_deviceClass.isEmpty() && m_deviceClass != QLatin1String("device"))
+		return true;
 	for (RjPluginUi* p : rjPluginUis(m_backend))
 		if (p->isNetworkDevice(fields))
 			return true;

@@ -321,6 +321,21 @@ void screenshots(MainWindow& w, const QString& dir)
 		save(m, dir, QStringLiteral("hinzufuegen-menue.png"));
 		m->close();
 	}
+	// Kontextmenü des Baums: Abschnitt der Untermenüs (Ordner) und rot hinterlegte Kopier-Einträge (Ziel).
+	for (const bool folder : { true, false })
+	{
+		const QString name = folder ? QStringLiteral("kontextmenue-ordner.png") : QStringLiteral("kontextmenue-ziel.png");
+		QTimer::singleShot(500, [dir, name] {
+			if (QWidget* p = QApplication::activePopupWidget())
+			{
+				save(p, dir, name);
+				p->close();
+			}
+		});
+		if (!w.popupFirstTreeMenu(folder))
+			std::fprintf(stderr, "[prüfbild] Kontextmenü (%s): kein Eintrag gefunden\n", folder ? "Ordner" : "Ziel");
+		pump(200);
+	}
 	QString extra;
 	if (BulkAddTab* b = w.openBulkAdd(QString()))
 	{

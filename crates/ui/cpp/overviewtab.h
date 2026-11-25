@@ -109,6 +109,8 @@ private:
 	/// Kachelanordnung, die eine Erweiterung für dieses Ziel vorgibt (Übersicht, Feld `tiles`: vier Feldnamen und
 	/// optional Werte), sonst leer.
 	QStringList m_extTileKeys;
+	/// Erkannte Geräteart des Ziels (switch, controller, ap, router …); leer = keine.
+	QString m_deviceClass;
 	QJsonObject m_extTileValues;
 	QLabel* m_inventorySource;
 	QWidget* m_pendingBox;

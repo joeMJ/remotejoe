@@ -76,7 +76,9 @@
 #include <QtWidgets/QMenuBar>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QStatusBar>
+#include <QtWidgets/QProxyStyle>
 #include <QtWidgets/QStyleFactory>
+#include <QtWidgets/QStyleOption>
 #include <QtGui/QStyleHints>
 #include <QtGui/QDesktopServices>
 #include <QtGui/QWindow>
@@ -199,6 +201,7 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 		{ "login", "key", "#6a1b9a" },
 		{ "controller", "wifi", "#00897b" },
 		{ "switch", "network-wired", "#00695c" },
+		{ "router", "route", "#00695c" },
 		{ "site", "building", "#6d4c41" },
 		{ "tplfolder", "r-clone", "#5c6bc0" },
 		{ "netfolder", "sitemap", "#00695c" },
@@ -314,6 +317,7 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		                         : !roleKind.isEmpty()                                                       ? roleKind
 		                         : device == QLatin1String("switch")                                           ? QStringLiteral("switch")
 		                         : device == QLatin1String("controller")                                       ? QStringLiteral("controller")
+		                         : device == QLatin1String("router")                                           ? QStringLiteral("router")
 		                         : n.value(QStringLiteral("multi")).toBool()                                ? QStringLiteral("multi")
 		                                                                                                    : n.value(QStringLiteral("protocol")).toString();
 		item->setData(iconKind, RoleIconKind);
@@ -1967,6 +1971,61 @@ MainWindow::~MainWindow() = default;
 
 namespace
 {
+/// Hinterlegt bestimmte Menüeinträge (über ihren Text) mit der Farbe der roten Plaketten; Schrift und Symbol rot.
+class RedMenuItemStyle : public QProxyStyle
+{
+public:
+	explicit RedMenuItemStyle(const QStringList& texts)
+	  : m_texts(texts)
+	{
+	}
+	void drawControl(ControlElement el, const QStyleOption* opt, QPainter* p, const QWidget* w) const override
+	{
+		const auto* mi = qstyleoption_cast<const QStyleOptionMenuItem*>(opt);
+		if (el != CE_MenuItem || !mi || !m_texts.contains(mi->text.section(QLatin1Char('\t'), 0, 0)))
+		{
+			QProxyStyle::drawControl(el, opt, p, w);
+			return;
+		}
+		const QColor base = opt->palette.color(QPalette::Base);
+		const bool dark = base.lightness() < 128;
+		auto mix = [](const QColor& a, const QColor& b, int pctA) {
+			return QColor((a.red() * pctA + b.red() * (100 - pctA)) / 100, (a.green() * pctA + b.green() * (100 - pctA)) / 100, (a.blue() * pctA + b.blue() * (100 - pctA)) / 100);
+		};
+		const bool sel = mi->state & State_Selected;
+		const QColor bg = mix(QColor(0xd9, 0x30, 0x25), base, dark ? (sel ? 45 : 30) : (sel ? 28 : 16));
+		const QColor fg = dark ? QColor(0xf2, 0x8b, 0x82) : QColor(0xb3, 0x26, 0x1e);
+		p->save();
+		p->setRenderHint(QPainter::Antialiasing);
+		p->setPen(Qt::NoPen);
+		p->setBrush(bg);
+		p->drawRoundedRect(QRectF(mi->rect).adjusted(3, 1, -3, -1), 4, 4);
+		p->restore();
+		QStyleOptionMenuItem o(*mi);
+		o.state &= ~State_Selected;
+		o.palette.setColor(QPalette::Text, fg);
+		o.palette.setColor(QPalette::ButtonText, fg);
+		o.palette.setColor(QPalette::WindowText, fg);
+		o.palette.setColor(QPalette::Window, Qt::transparent);
+		o.palette.setColor(QPalette::Button, Qt::transparent);
+		if (!o.icon.isNull())
+		{
+			const int s = pixelMetric(PM_SmallIconSize, opt, w);
+			QPixmap pm = o.icon.pixmap(s, s);
+			QPainter ip(&pm);
+			ip.setCompositionMode(QPainter::CompositionMode_SourceIn);
+			ip.fillRect(pm.rect(), fg);
+			ip.end();
+			o.icon = QIcon(pm);
+		}
+		// Fusion malt den Hintergrund nur für markierte Einträge; ohne Markierung bleibt unser Grund sichtbar.
+		QProxyStyle::drawControl(el, &o, p, w);
+	}
+
+private:
+	QStringList m_texts;
+};
+
 /// Setzt beim Öffnen jedes Menüs (auch der Erweiterungen) sprechende Symbole, zugeordnet über den Text des Eintrags.
 class MenuIconizer : public QObject
 {
@@ -2037,7 +2096,7 @@ void MainWindow::applyMenuIcons()
 		{ "menu.help.about", "circle-info" }, { "menu.help.news", "r-lightbulb" }, { "menu.help.firststeps", "circle-info" },
 		// Kontextmenü des Baums
 		{ "ctx.connect", "plug" }, { "ctx.tile", "table-columns" }, { "ctx.copy.user", "user" }, { "ctx.copy.password", "key" },
-		{ "ctx.add", "plus" }, { "ctx.properties", "pen-to-square" }, { "ctx.tasks", "list-check" }, { "ctx.mass", "magnifying-glass-chart" },
+		{ "ctx.add", "plus" }, { "ctx.properties", "pen-to-square" }, { "ctx.tasks", "list-check" }, { "ctx.convert", "arrow-right-arrow-left" }, { "ctx.mass", "magnifying-glass-chart" },
 		{ "ctx.certcheck", "shield-halved" }, { "ctx.credcheck", "user-check" }, { "ctx.credmerge", "object-group" },
 		{ "ctx.merge", "arrows-to-circle" }, { "ctx.merge.manual", "object-ungroup" }, { "ctx.up", "arrow-up" }, { "ctx.down", "chevron-down" },
 		{ "ctx.all.connect", "plug" }, { "ctx.all.reconnect", "arrows-rotate" }, { "ctx.all.disconnect", "link-slash" },
@@ -3481,8 +3540,13 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 	if (!i.data(RoleFolder).toBool())
 	{
 		menu.addSeparator();
-		menu.addAction(T(m_backend, "ctx.copy.user"), this, [this, id] { copyCredential(id, QStringLiteral("user")); });
-		menu.addAction(T(m_backend, "ctx.copy.password"), this, [this, id] { copyCredential(id, QStringLiteral("password")); });
+		// Zugangsdaten in die Zwischenablage: rot hinterlegt (Farbe der roten Plaketten), damit sie auffallen.
+		const QString user = T(m_backend, "ctx.copy.user"), password = T(m_backend, "ctx.copy.password");
+		menu.addAction(user, this, [this, id] { copyCredential(id, QStringLiteral("user")); });
+		menu.addAction(password, this, [this, id] { copyCredential(id, QStringLiteral("password")); });
+		auto* red = new RedMenuItemStyle({ user, password });
+		red->setParent(&menu);
+		menu.setStyle(red);
 		menu.addSeparator();
 	}
 	const bool folder = i.data(RoleFolder).toBool();
@@ -3503,6 +3567,13 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 	}
 	const bool fav = parseObject(edit({ { QStringLiteral("op"), QStringLiteral("editor") }, { QStringLiteral("id"), id } })).value(QStringLiteral("favorite")).toBool();
 	menu.addAction(T(m_backend, fav ? "ctx.favorite.off" : "ctx.favorite.on") + QStringLiteral("\tCtrl+B"), this, [this] { toggleFavorite(); });
+	// Abschnitt der Untermenüs: „Umwandeln“, Untermenüs der Erweiterungen, „Aufgaben“ – zwischen zwei Linien.
+	// Die Marke merkt sich die Stelle; die Untermenüs werden am Ende davor einsortiert.
+	QAction* sectionEnd = menu.addSeparator();
+	QMenu* convert = new QMenu(T(m_backend, "ctx.convert"), &menu);
+	convert->setObjectName(QStringLiteral("ctxConvert"));
+	for (const auto& h : m_modules.convertMenu)
+		h(convert, i, id, folder);
 	if (folder)
 	{
 		menu.addSeparator();
@@ -3530,8 +3601,14 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 		connect(t, &MassInventoryTab::finished, this, [this] { reloadTree(); });
 		addToolTab(t, T(m_backend, "mass.tab"));
 	});
+	const QList<QAction*> beforeSelection = menu.actions();
 	for (const auto& h : m_modules.selectionMenu)
 		h(menu);
+	// Untermenüs, die Erweiterungen hier angefügt haben, gehören in den Abschnitt der Untermenüs.
+	QList<QAction*> moduleSubmenus;
+	for (QAction* a : menu.actions())
+		if (!beforeSelection.contains(a) && a->menu())
+			moduleSubmenus << a;
 	menu.addAction(T(m_backend, "ctx.credcheck"), this, [this] {
 		const QStringList ids = selectedIds();
 		if (ids.isEmpty())
@@ -3561,16 +3638,59 @@ void MainWindow::treeContextMenu(const QPoint& pos)
 	// Mehrere markierte Ziele: zu einem Ziel zusammenfassen, gleich welche Adresse.
 	if (const QStringList sel = selectedTargets(m_tree, m_model); sel.size() > 1)
 		menu.addAction(T(m_backend, "ctx.merge.manual"), this, [this, sel] { openMerge(sel, T(m_backend, "mass.title.n").arg(sel.size()), true); });
-	QMenu* tasks = menu.addMenu(T(m_backend, "ctx.tasks"));
+	QMenu* tasks = new QMenu(T(m_backend, "ctx.tasks"), &menu);
 	tasks->addAction(T(m_backend, "ctx.tasks.updates"), this, [this] {
 		const QStringList ids = selectedTargets(m_tree, m_model);
 		if (!ids.isEmpty())
 			openPatchday(ids);
 	});
+	// Abschnitt füllen: Umwandeln (nur mit Einträgen), Untermenüs der Erweiterungen, Aufgaben; Linie davor.
+	{
+		QList<QAction*> section;
+		if (!convert->isEmpty())
+			section << convert->menuAction();
+		for (QAction* a : moduleSubmenus)
+		{
+			menu.removeAction(a);
+			section << a;
+		}
+		section << tasks->menuAction();
+		menu.insertSeparator(sectionEnd);
+		for (QAction* a : section)
+			menu.insertAction(sectionEnd, a);
+	}
+	menu.addSeparator();
 	menu.addAction(T(m_backend, "ctx.properties") + QStringLiteral("\tF4"), this, [this, id] { openProperties(id); });
 	menu.addSeparator();
 	addTreeStartActions(&menu);
 	menu.exec(m_tree->viewport()->mapToGlobal(pos));
+}
+
+bool MainWindow::popupFirstTreeMenu(bool folder)
+{
+	std::function<QModelIndex(const QModelIndex&)> find = [&](const QModelIndex& parent) -> QModelIndex {
+		for (int r = 0; r < m_model->rowCount(parent); ++r)
+		{
+			const QModelIndex i = m_model->index(r, 0, parent);
+			// Favoriten haben ein eigenes Menü.
+			if (i.data(RoleFavFolder).toBool() || i.data(RoleFavLink).toBool() || i.data(RoleMacro).toInt() != 0)
+				continue;
+			const bool f = i.data(RoleFolder).toBool();
+			if (f == folder && !i.data(RoleId).toString().isEmpty() && (folder || (!i.data(RoleLogin).toBool() && i.data(RoleGuest).toString().isEmpty())))
+				return i;
+			if (const QModelIndex c = find(i); c.isValid())
+				return c;
+		}
+		return {};
+	};
+	const QModelIndex i = find(QModelIndex());
+	if (!i.isValid())
+		return false;
+	m_tree->scrollTo(i);
+	m_tree->setCurrentIndex(i);
+	m_tree->selectionModel()->select(i, QItemSelectionModel::ClearAndSelect);
+	treeContextMenu(m_tree->visualRect(i).center());
+	return true;
 }
 
 void MainWindow::addTreeStartActions(QMenu* menu)

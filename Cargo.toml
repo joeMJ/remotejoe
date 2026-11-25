@@ -1,11 +1,12 @@
 [workspace]
 resolver = "2"
 members = ["crates/*", "tools/update"]
+exclude = ["vendor/snmp2"]
 
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-version = "0.1.71"
+version = "0.1.72"
 authors = ["John Lose (joeMJ)"]
 publish = false
 
@@ -29,3 +30,7 @@ panic = "unwind"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# snmp2 mit einer zusätzlichen Option (msgMaxSize der Gegenstelle begrenzen statt ablehnen), siehe vendor/snmp2.
+[patch.crates-io]
+snmp2 = { path = "vendor/snmp2" }

@@ -262,6 +262,8 @@ impl App {
                 v["main_way"] = json!(protocol_label(t.protocol));
                 v["ways"] = json!(t.ways.iter().map(|w| json!({ "id": w.id, "label": w.label(), "protocol": w.protocol.as_str() })).collect::<Vec<_>>());
                 v["open_with"] = json!(t.open_with);
+                // Erkannte Geräteart (Inventar bzw. von einer Erweiterung geführt): Geräte-Anordnung der Übersicht.
+                v["device_class"] = json!(crate::plugins::folder_devices(&self.index).get(&t.id).copied().or_else(|| self.overview.devices.get(&t.id).map(inventory::device_key)));
                 v["notes_editable"] = json!(!read_only && !self.demo);
                 let (on, src) = rj_core::inherit::resolve_inventory(&self.index, t.id).unwrap_or((false, rj_core::inherit::InventorySource::Default));
                 v["can_query"] = json!(on);

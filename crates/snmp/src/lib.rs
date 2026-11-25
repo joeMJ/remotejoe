@@ -106,6 +106,12 @@ fn map_err(e: snmp2::Error, device: &str) -> SnmpError {
 
 impl Client {
     pub fn open(d: &Device) -> Result<Client, SnmpError> {
+        Self::open_with(d, false)
+    }
+
+    /// Wie [`Client::open`]; `lenient`: eine angegebene Höchstgröße der Gegenstelle über der eigenen Puffergröße
+    /// begrenzen statt ablehnen (manche Geräte melden mehr als 65 507 Byte).
+    pub fn open_with(d: &Device, lenient: bool) -> Result<Client, SnmpError> {
         let addr = format!("{}:{}", d.host, d.port);
         let sess = match &d.credentials {
             Credentials::V2c { community } => SyncSession::new_v2c(addr.as_str(), community.as_bytes(), Some(d.timeout), 0)?,
@@ -125,7 +131,7 @@ impl Client {
                         privacy_password: pw.as_bytes().to_vec(),
                     },
                 };
-                let sec = snmp2::v3::Security::new(user.as_bytes(), auth_password.as_bytes()).with_auth_protocol(proto).with_auth(level);
+                let sec = snmp2::v3::Security::new(user.as_bytes(), auth_password.as_bytes()).with_auth_protocol(proto).with_auth(level).with_lenient_max_size(lenient);
                 let mut s = SyncSession::new_v3(addr.as_str(), Some(d.timeout), 0, sec)?;
                 s.init().map_err(|e| map_err(e, &addr))?;
                 s

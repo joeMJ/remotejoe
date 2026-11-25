@@ -21,7 +21,8 @@ enum Ticket {
     /// für eine frische Verbindung (Geräte, die nach einem Befehl den Kanal schließen).
     Open { open: OpenSsh },
     /// SNMP-Zugangsdaten eines Geräts.
-    Snmp { device: rj_snmp::Device },
+    /// `lenient`: Höchstgröße der Gegenstelle begrenzen statt ablehnen (siehe `rj_snmp::Client::open_with`).
+    Snmp { device: rj_snmp::Device, lenient: bool },
     /// HTTPS mit den Zugangsdaten eines Ziels bzw. Wegs (siehe [`crate::https_ticket`]).
     Http { spec: Arc<crate::https_ticket::HttpSpec> },
     /// Wird gerade benutzt (aus der Tabelle genommen).
@@ -67,7 +68,12 @@ impl CliService {
     }
 
     pub fn issue_snmp(&self, device: rj_snmp::Device) -> CliTicket {
-        self.put(Ticket::Snmp { device })
+        self.put(Ticket::Snmp { device, lenient: false })
+    }
+
+    /// SNMP-Schein mit Option „Höchstgröße der Gegenstelle begrenzen“.
+    pub fn issue_snmp_with(&self, device: rj_snmp::Device, lenient: bool) -> CliTicket {
+        self.put(Ticket::Snmp { device, lenient })
     }
 
     /// Schein für HTTPS-Anfragen (Zugangsdaten bleiben im Kern).
@@ -106,7 +112,7 @@ impl CliService {
     pub fn info(&self, t: CliTicket) -> Value {
         match lock(&self.tickets).get(&t.0) {
             Some(Ticket::Cli { spec, cred, .. }) => json!({ "host": spec.host, "port": spec.port, "user": spec.credentials.username, "legacy": spec.legacy, "cred_id": cred }),
-            Some(Ticket::Snmp { device }) => json!({ "host": device.host, "port": device.port }),
+            Some(Ticket::Snmp { device, .. }) => json!({ "host": device.host, "port": device.port }),
             Some(Ticket::Http { spec }) => json!({ "https": true, "host": spec.host, "port": spec.port, "user": spec.credentials.username }),
             Some(Ticket::Open { open }) => json!({ "open": true, "host": open.params.host, "port": open.params.port, "user": open.params.user }),
             Some(Ticket::Busy) => json!({ "busy": true }),
@@ -136,7 +142,7 @@ impl CliService {
                     Some(h) if !h.is_empty() => JobSpec { protocol: spec.protocol, host: h.clone(), port: spec.port, credentials: spec.credentials.clone(), transport: spec.transport.clone(), legacy: spec.legacy },
                     _ => JobSpec { protocol: spec.protocol, host: spec.host.clone(), port: spec.port, credentials: spec.credentials.clone(), transport: spec.transport.clone(), legacy: spec.legacy },
                 };
-                let r = if o.switch_cli { switch_session(&used, &known, steps, o, limit) } else { shell_session(&used, known.clone(), steps, limit) };
+                let r = if o.switch_cli { switch_session(&used, &known, steps, o, limit) } else { shell_session(&used, known.clone(), steps, o, limit) };
                 (r, Some(Ticket::Cli { spec, known, cred }))
             }
             Ticket::Open { mut open } => {
@@ -153,7 +159,7 @@ impl CliService {
                 let r = open_session(&open, steps, o, limit);
                 (r, Some(Ticket::Open { open }))
             }
-            Ticket::Snmp { device } => (Err("Kein Befehlszeilen-Schein".into()), Some(Ticket::Snmp { device })),
+            Ticket::Snmp { device, lenient } => (Err("Kein Befehlszeilen-Schein".into()), Some(Ticket::Snmp { device, lenient })),
             Ticket::Http { spec } => (Err("Kein Befehlszeilen-Schein".into()), Some(Ticket::Http { spec })),
             Ticket::Busy => (Err("Ticket ist gerade in Benutzung".into()), None),
         };
@@ -170,24 +176,26 @@ impl CliService {
 
     /// SNMP-Werte über den Schein eines Geräts.
     pub fn snmp_get(&self, t: CliTicket, host: &str, oids: &[String]) -> Result<Value, String> {
-        let device = match lock(&self.tickets).get(&t.0) {
-            Some(Ticket::Snmp { device }) => rj_snmp::Device { host: if host.is_empty() { device.host.clone() } else { host.to_string() }, ..device.clone() },
-            _ => return Err("Kein SNMP-Schein".into()),
-        };
-        let mut cl = rj_snmp::Client::open(&device).map_err(|e| e.to_string())?;
+        let (d, lenient) = self.snmp_device(t, host)?;
+        let mut cl = rj_snmp::Client::open_with(&d, lenient).map_err(|e| e.to_string())?;
         let refs: Vec<&str> = oids.iter().map(String::as_str).collect();
-        let mut out = serde_json::Map::new();
-        for (oid, v) in cl.get(&refs).map_err(|e| e.to_string())? {
-            let j = match v {
-                rj_snmp::Val::Int(i) => json!(i),
-                rj_snmp::Val::Counter32(c) | rj_snmp::Val::Gauge(c) | rj_snmp::Val::Ticks(c) => json!(c),
-                rj_snmp::Val::Counter64(c) => json!(c),
-                rj_snmp::Val::Text(t) | rj_snmp::Val::Oid(t) => json!(t),
-                rj_snmp::Val::Missing => Value::Null,
-            };
-            out.insert(oid, j);
+        Ok(snmp_json(cl.get(&refs).map_err(|e| e.to_string())?))
+    }
+
+    /// SNMP: Teilbaum lesen (GETNEXT bis zum Ende des Präfixes), höchstens `max` Werte.
+    pub fn snmp_walk(&self, t: CliTicket, host: &str, prefix: &str, max: usize) -> Result<Value, String> {
+        let (d, lenient) = self.snmp_device(t, host)?;
+        let mut cl = rj_snmp::Client::open_with(&d, lenient).map_err(|e| e.to_string())?;
+        let mut all = cl.walk(prefix).map_err(|e| e.to_string())?;
+        all.truncate(max.max(1));
+        Ok(snmp_json(all))
+    }
+
+    fn snmp_device(&self, t: CliTicket, host: &str) -> Result<(rj_snmp::Device, bool), String> {
+        match lock(&self.tickets).get(&t.0) {
+            Some(Ticket::Snmp { device, lenient }) => Ok((rj_snmp::Device { host: if host.is_empty() { device.host.clone() } else { host.to_string() }, ..device.clone() }, *lenient)),
+            _ => Err("Kein SNMP-Schein".into()),
         }
-        Ok(Value::Object(out))
     }
 
     /// Externes Programm mit den Zugangsdaten eines Scheins: `{{user}}`/`{{password}}` in Argumenten, Umgebung und
@@ -276,7 +284,7 @@ fn open_session(open: &OpenSsh, steps: &[DialogStep], o: &CliOptions, limit: Dur
         };
     }
     let st: Vec<crate::overview::remote::CliStep> = steps.iter().map(|s| crate::overview::remote::CliStep { command: s.command.clone(), prompt: s.prompt.clone(), answer: s.answer.clone() }).collect();
-    let r = open.rt.block_on(crate::overview::remote::cli_session_steps(&open.conn, &st, limit))?;
+    let r = open.rt.block_on(crate::overview::remote::cli_session_steps_with(&open.conn, &st, limit, &style_of(o)))?;
     Ok(CliOutput { timed_out: r.outputs.len() < steps.len(), outputs: r.outputs, log: r.raw, note: None, via: "ssh".into(), times: Vec::new() })
 }
 
@@ -345,11 +353,32 @@ fn switch_session(spec: &JobSpec, known: &KnownHosts, steps: &[DialogStep], o: &
 }
 
 /// Einfache Shell mit Eingabeaufforderung (Controller, AP): Verbindung öffnen, Schritte, trennen.
-fn shell_session(spec: &JobSpec, known: KnownHosts, steps: &[DialogStep], limit: Duration) -> Result<CliOutput, String> {
+fn shell_session(spec: &JobSpec, known: KnownHosts, steps: &[DialogStep], o: &CliOptions, limit: Duration) -> Result<CliOutput, String> {
     let (rt, conn, note, _, _) = crate::overview::remote::ssh_open(spec, spec.port, known)?;
     let st: Vec<crate::overview::remote::CliStep> = steps.iter().map(|s| crate::overview::remote::CliStep { command: s.command.clone(), prompt: s.prompt.clone(), answer: s.answer.clone() }).collect();
-    let r = rt.block_on(crate::overview::remote::cli_session_steps(&conn, &st, limit));
+    let r = rt.block_on(crate::overview::remote::cli_session_steps_with(&conn, &st, limit, &style_of(o)));
     rt.block_on(conn.disconnect());
     let r = r?;
     Ok(CliOutput { timed_out: r.outputs.len() < steps.len(), outputs: r.outputs, log: r.raw, note, via: "ssh".into(), times: Vec::new() })
+}
+
+/// Behandlung von Eingabeaufforderung und Zeilenende laut Optionen.
+fn style_of(o: &CliOptions) -> crate::overview::remote::ShellStyle {
+    crate::overview::remote::ShellStyle { prompt_gt: o.prompt_gt, newline_cr: o.newline_cr, rows: o.rows, pager: o.pager.clone() }
+}
+
+/// SNMP-Werte als JSON-Objekt (OID → Zahl, Text oder `null`).
+fn snmp_json(values: Vec<(String, rj_snmp::Val)>) -> Value {
+    let mut out = serde_json::Map::new();
+    for (oid, v) in values {
+        let j = match v {
+            rj_snmp::Val::Int(i) => json!(i),
+            rj_snmp::Val::Counter32(c) | rj_snmp::Val::Gauge(c) | rj_snmp::Val::Ticks(c) => json!(c),
+            rj_snmp::Val::Counter64(c) => json!(c),
+            rj_snmp::Val::Text(t) | rj_snmp::Val::Oid(t) => json!(t),
+            rj_snmp::Val::Missing => Value::Null,
+        };
+        out.insert(oid, j);
+    }
+    Value::Object(out)
 }

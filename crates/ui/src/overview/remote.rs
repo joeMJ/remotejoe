@@ -346,11 +346,33 @@ pub struct CliResult {
     pub outputs: Vec<String>,
 }
 
+/// Wie eine Sitzung Eingabeaufforderung und Zeilenende behandelt (Vorgabe: nur `#`, Zeilenvorschub).
+#[derive(Debug, Clone, Default)]
+pub struct ShellStyle {
+    /// Auch eine Zeile, die auf `>` endet (allein oder `name>`), gilt als Eingabeaufforderung.
+    pub prompt_gt: bool,
+    /// Befehle mit Wagenrücklauf abschließen.
+    pub newline_cr: bool,
+    /// Höhe des Terminals in Zeilen (0 = 50).
+    pub rows: u32,
+    /// Text der Blätter-Rückfrage (leer = aus): mit Leertaste beantworten, Zeile aus der Ausgabe entfernen.
+    pub pager: String,
+}
+
 /// Letzte nicht leere Zeile ist eine Eingabeaufforderung wie `name#` (ohne Leerzeichen; „Serial #“ in der Kopfzeile
 /// von `show aps` endet ebenfalls auf „#“, enthält aber ein Leerzeichen).
 fn is_prompt(line: &str) -> bool {
     let l = line.trim();
     l.ends_with('#') && l.len() > 1 && !l.contains(char::is_whitespace)
+}
+
+fn is_prompt_with(line: &str, style: &ShellStyle) -> bool {
+    if is_prompt(line) {
+        return true;
+    }
+    let l = line.trim();
+    // `name>` ohne Leerzeichen, oder eine kurze Zeile, die mit `>` beginnt (z. B. `>` bzw. `>(ro)`).
+    style.prompt_gt && ((l.ends_with('>') && !l.starts_with('<') && !l.contains(char::is_whitespace)) || (l.starts_with('>') && l.chars().count() <= 24))
 }
 
 fn seg_lines(seg: &str) -> Vec<&str> {
@@ -359,11 +381,23 @@ fn seg_lines(seg: &str) -> Vec<&str> {
 
 /// Ausgabe eines Befehls fertig? Erst das Echo des Befehls, danach eine Eingabeaufforderung als letzte Zeile.
 /// Eine Eingabeaufforderung vor dem Echo (z. B. eine verirrte leere Zeile) zählt nicht.
+#[cfg(test)]
 fn command_done(seg: &str, cmd: &str) -> Option<String> {
+    command_done_with(seg, cmd, &ShellStyle::default())
+}
+
+fn command_done_with(seg: &str, cmd: &str, style: &ShellStyle) -> Option<String> {
+    let cleaned: String;
+    let seg = if style.pager.is_empty() {
+        seg
+    } else {
+        cleaned = seg.replace(&format!("{}\r", style.pager), "").replace(style.pager.as_str(), "");
+        cleaned.as_str()
+    };
     let lines = seg_lines(seg);
     let echo = lines.iter().position(|l| l.contains(cmd))?;
     let last = lines.iter().rposition(|l| !l.trim().is_empty())?;
-    (last > echo && is_prompt(lines[last])).then(|| lines[echo + 1..last].join("\n"))
+    (last > echo && is_prompt_with(lines[last], style)).then(|| lines[echo + 1..last].join("\n"))
 }
 
 /// Interaktive Shell: auf die Eingabeaufforderung warten, dann
@@ -387,8 +421,14 @@ pub struct CliStep {
 /// Wie [`cli_session`], aber je Schritt mit möglicher Rückfrage: Erscheint nach dem Befehl der erwartete Teiltext,
 /// wird die Antwort gesendet und weiter auf die Eingabeaufforderung gewartet. Gesamtfrist `limit`.
 pub async fn cli_session_steps(conn: &SshConnection, steps: &[CliStep], limit: Duration) -> Result<CliResult, String> {
+    cli_session_steps_with(conn, steps, limit, &ShellStyle::default()).await
+}
+
+/// Wie [`cli_session_steps`], mit eigener Behandlung von Eingabeaufforderung und Zeilenende.
+pub async fn cli_session_steps_with(conn: &SshConnection, steps: &[CliStep], limit: Duration, style: &ShellStyle) -> Result<CliResult, String> {
+    let nl = if style.newline_cr { "\r" } else { "\n" };
     let cmds: Vec<&str> = steps.iter().map(|s| s.command.as_str()).collect();
-    let mut sh = conn.open_shell("vt100", 1000, 50).await.map_err(|e| e.to_string())?;
+    let mut sh = conn.open_shell("vt100", 1000, if style.rows == 0 { 50 } else { style.rows }).await.map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     let mut outputs = Vec::new();
     let deadline = tokio::time::Instant::now() + limit;
@@ -398,6 +438,8 @@ pub async fn cli_session_steps(conn: &SshConnection, steps: &[CliStep], limit: D
     let first_wait = tokio::time::Instant::now() + Duration::from_secs(3);
     let mut idx = 0;
     let mut mark = 0;
+    // Position nach der letzten beantworteten Blätter-Rückfrage.
+    let mut pager_mark = 0;
     while idx < cmds.len() {
         let now = tokio::time::Instant::now();
         let until = if waiting { first_wait.min(deadline) } else { deadline };
@@ -409,17 +451,21 @@ pub async fn cli_session_steps(conn: &SshConnection, steps: &[CliStep], limit: D
                 buf.extend_from_slice(&d);
                 let text = String::from_utf8_lossy(&buf[mark..]).into_owned();
                 if waiting {
-                    if seg_lines(&text).iter().rev().find(|l| !l.trim().is_empty()).is_some_and(|l| is_prompt(l)) {
+                    if seg_lines(&text).iter().rev().find(|l| !l.trim().is_empty()).is_some_and(|l| is_prompt_with(l, style)) {
                         waiting = false;
-                        sh.write(format!("{}\n", cmds[0]).as_bytes()).await.map_err(|e| e.to_string())?;
+                        sh.write(format!("{}{nl}", cmds[0]).as_bytes()).await.map_err(|e| e.to_string())?;
                         mark = buf.len();
                     }
-                } else if let Some(out) = command_done(&text, cmds[idx]) {
+                } else if !style.pager.is_empty() && String::from_utf8_lossy(&buf[pager_mark.max(mark)..]).trim_end().ends_with(style.pager.trim_end()) {
+                    // Gerät blättert: weiter mit der Leertaste (die Zeile entfällt in der Ausgabe).
+                    sh.write(b" ").await.map_err(|e| e.to_string())?;
+                    pager_mark = buf.len();
+                } else if let Some(out) = command_done_with(&text, cmds[idx], style) {
                     outputs.push(out);
                     idx += 1;
                     answered = false;
                     if idx < cmds.len() {
-                        sh.write(format!("{}\n", cmds[idx]).as_bytes()).await.map_err(|e| e.to_string())?;
+                        sh.write(format!("{}{nl}", cmds[idx]).as_bytes()).await.map_err(|e| e.to_string())?;
                     }
                     mark = buf.len();
                 } else if !answered {
@@ -427,7 +473,7 @@ pub async fn cli_session_steps(conn: &SshConnection, steps: &[CliStep], limit: D
                     if let (Some(p), Some(a)) = (&steps[idx].prompt, &steps[idx].answer) {
                         if text.contains(p.as_str()) {
                             answered = true;
-                            sh.write(format!("{a}\n").as_bytes()).await.map_err(|e| e.to_string())?;
+                            sh.write(format!("{a}{nl}").as_bytes()).await.map_err(|e| e.to_string())?;
                         }
                     }
                 }
@@ -435,7 +481,7 @@ pub async fn cli_session_steps(conn: &SshConnection, steps: &[CliStep], limit: D
             Ok(Some(_)) | Ok(None) => break,
             Err(_) if waiting => {
                 waiting = false;
-                sh.write(format!("{}\n", cmds[0]).as_bytes()).await.map_err(|e| e.to_string())?;
+                sh.write(format!("{}{nl}", cmds[0]).as_bytes()).await.map_err(|e| e.to_string())?;
                 mark = buf.len();
             }
             Err(_) => break,
@@ -463,6 +509,27 @@ pub async fn cli_session_steps(conn: &SshConnection, steps: &[CliStep], limit: D
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gt_prompt_only_with_option() {
+        let gt = ShellStyle { prompt_gt: true, newline_cr: true, rows: 0, pager: String::new() };
+        let gt = &gt;
+        let seg = "> show uptime\r\nLaufzeit 3 Tage\r\n\r\nuser@GW:/\r\n> ";
+        assert_eq!(command_done(seg, "show uptime"), None, "ohne Option wie bisher");
+        assert_eq!(command_done_with(seg, "show uptime", gt).as_deref(), Some("Laufzeit 3 Tage\n\nuser@GW:/"));
+        assert!(is_prompt_with("router>", gt) && is_prompt_with(">", gt));
+        assert!(is_prompt_with(">(ro) ", gt));
+        let ro = "\r\n>(ro) show uptime\r\n\r\nLaufzeit 3 Tage\r\n\r\nuser@GW:/\r\n>(ro) ";
+        assert!(command_done_with(ro, "show uptime", gt).is_some());
+        assert!(!is_prompt_with("<br>", gt) && !is_prompt_with("a -> b>", gt));
+        assert!(!is_prompt_with("> eine lange Zeile, die mit einem Pfeil beginnt", gt));
+        assert!(!is_prompt_with("router>", &ShellStyle::default()));
+        assert!(is_prompt_with("sw1#", &ShellStyle::default()));
+        // Blätter-Rückfrage wird aus der Ausgabe entfernt.
+        let pg = ShellStyle { prompt_gt: true, newline_cr: true, rows: 0, pager: "-- weiter --".into() };
+        let paged = ">(ro) show a\r\nZeile 1\r\n-- weiter --\rZeile 2\r\n\r\nuser@GW:/\r\n>(ro) ";
+        assert_eq!(command_done_with(paged, "show a", &pg).as_deref(), Some("Zeile 1\nZeile 2\n\nuser@GW:/"));
+    }
 
     #[test]
     fn linux_uptime_from_proc() {
