@@ -416,8 +416,20 @@ public:
 		if (type != "windows_generic_MSG")
 			return false;
 		const MSG* m = static_cast<const MSG*>(message);
-		if (!m_hwnd || m->hwnd != m_hwnd)
+		if (!m_hwnd)
 			return false;
+		if (m->hwnd != m_hwnd)
+		{
+			// Eigene native Kindfenster (nach dem ersten Web-Tab macht Qt Baum, Tab-Bereich und Fensterknöpfe zu
+			// eigenen Fenstern) reichen bis an die Fensterkante: In der Größenzone die Abfrage ans Hauptfenster
+			// weiterreichen, sonst bekäme Windows dort „Inhalt“ und die Größe ließe sich nicht mehr ändern.
+			if (m->message == WM_NCHITTEST && IsChild(m_hwnd, m->hwnd) && edgeHit(m->lParam))
+			{
+				*result = HTTRANSPARENT;
+				return true;
+			}
+			return false;
+		}
 		switch (m->message)
 		{
 			case WM_NCCALCSIZE:
@@ -428,40 +440,12 @@ public:
 				}
 				break;
 			case WM_NCHITTEST:
-			{
-				if (IsZoomed(m_hwnd) || m_window->isFullScreen())
-					break;
-				RECT r;
-				GetWindowRect(m_hwnd, &r);
-				const int x = GET_X_LPARAM(m->lParam), y = GET_Y_LPARAM(m->lParam);
-				const int b = border(), c = 2 * b;
-				const bool left = x < r.left + b, right = x >= r.right - b, top = y < r.top + b, bottom = y >= r.bottom - b;
-				// Ecken etwas größer, damit sie leicht zu treffen sind.
-				const bool nearLeft = x < r.left + c, nearRight = x >= r.right - c, nearTop = y < r.top + c, nearBottom = y >= r.bottom - c;
-				LRESULT hit = 0;
-				if ((top && nearLeft) || (left && nearTop))
-					hit = HTTOPLEFT;
-				else if ((top && nearRight) || (right && nearTop))
-					hit = HTTOPRIGHT;
-				else if ((bottom && nearLeft) || (left && nearBottom))
-					hit = HTBOTTOMLEFT;
-				else if ((bottom && nearRight) || (right && nearBottom))
-					hit = HTBOTTOMRIGHT;
-				else if (left)
-					hit = HTLEFT;
-				else if (right)
-					hit = HTRIGHT;
-				else if (top)
-					hit = HTTOP;
-				else if (bottom)
-					hit = HTBOTTOM;
-				if (hit)
+				if (const LRESULT hit = edgeHit(m->lParam))
 				{
 					*result = hit;
 					return true;
 				}
 				break;
-			}
 			case WM_SIZE:
 			case WM_DPICHANGED:
 				QTimer::singleShot(0, this, [this] { updateInset(); });
@@ -473,6 +457,38 @@ public:
 	}
 
 private:
+	/// Rand oder Ecke unter dem Punkt (Bildschirmkoordinaten aus lParam), 0 außerhalb der Größenzone sowie maximiert
+	/// und im Vollbild.
+	LRESULT edgeHit(LPARAM lParam) const
+	{
+		if (IsZoomed(m_hwnd) || m_window->isFullScreen())
+			return 0;
+		RECT r;
+		GetWindowRect(m_hwnd, &r);
+		const int x = GET_X_LPARAM(lParam), y = GET_Y_LPARAM(lParam);
+		const int b = border(), c = 2 * b;
+		const bool left = x < r.left + b, right = x >= r.right - b, top = y < r.top + b, bottom = y >= r.bottom - b;
+		// Ecken etwas größer, damit sie leicht zu treffen sind.
+		const bool nearLeft = x < r.left + c, nearRight = x >= r.right - c, nearTop = y < r.top + c, nearBottom = y >= r.bottom - c;
+		if ((top && nearLeft) || (left && nearTop))
+			return HTTOPLEFT;
+		if ((top && nearRight) || (right && nearTop))
+			return HTTOPRIGHT;
+		if ((bottom && nearLeft) || (left && nearBottom))
+			return HTBOTTOMLEFT;
+		if ((bottom && nearRight) || (right && nearBottom))
+			return HTBOTTOMRIGHT;
+		if (left)
+			return HTLEFT;
+		if (right)
+			return HTRIGHT;
+		if (top)
+			return HTTOP;
+		if (bottom)
+			return HTBOTTOM;
+		return 0;
+	}
+
 	/// Breite der Größenzone in Gerätepixeln (Systemrahmen für die DPI des Bildschirms, bei 100 % 8 px).
 	int border() const
 	{

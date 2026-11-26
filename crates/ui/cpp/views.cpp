@@ -277,9 +277,29 @@ void FrameView::sendBounds()
 	if (!m_embedded || !testAttribute(Qt::WA_WState_Created))
 		return;
 	const qreal dpr = devicePixelRatioF();
-	webCommand(QStringLiteral("{\"op\":\"bounds\",\"x\":0,\"y\":0,\"w\":%1,\"h\":%2,\"scale\":%3}")
-	             .arg(qMax(1, qRound(width() * dpr)))
-	             .arg(qMax(1, qRound(height() * dpr)))
+	const int w = qMax(1, qRound(width() * dpr)), h = qMax(1, qRound(height() * dpr));
+	// Die Seite läuft in einem fremden Prozess; ihre Randabfrage kann remotejoe nicht weiterreichen. Reicht die
+	// Seite an eine Fensterkante, bleibt dort die Größenzone frei (Breite des Systemrahmens), sonst ließe sich das
+	// Fenster über diesen Rand nicht mehr ziehen. Maximiert und im Vollbild gibt es keine Größenzone.
+	int l = 0, t = 0, r = 0, b = 0;
+	QWidget* top = window();
+	if (top && top->isWindow() && !top->isMaximized() && !top->isFullScreen() && top->testAttribute(Qt::WA_WState_Created))
+	{
+		const UINT dpi = GetDpiForWindow(reinterpret_cast<HWND>(top->winId()));
+		const int zone = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+		const QPoint o = mapTo(top, QPoint(0, 0));
+		const int ox = qRound(o.x() * dpr), oy = qRound(o.y() * dpr);
+		const int tw = qRound(top->width() * dpr), th = qRound(top->height() * dpr);
+		l = qMax(0, zone - ox);
+		t = qMax(0, zone - oy);
+		r = qMax(0, ox + w - (tw - zone));
+		b = qMax(0, oy + h - (th - zone));
+	}
+	webCommand(QStringLiteral("{\"op\":\"bounds\",\"x\":%1,\"y\":%2,\"w\":%3,\"h\":%4,\"scale\":%5}")
+	             .arg(l)
+	             .arg(t)
+	             .arg(qMax(1, w - l - r))
+	             .arg(qMax(1, h - t - b))
 	             .arg(qRound(dpr * 100)));
 #endif
 }

@@ -1,3 +1,7 @@
+## 0.1.73 – Fenstergröße unter Windows
+
+- Windows: Nach dem Öffnen einer Web-Seite ließ sich das Fenster nicht mehr über die Ränder in der Größe ändern. Das geht jetzt wieder an allen Kanten und Ecken, auch mit offener Web-Seite. Reicht eine Web-Seite bis an den Fensterrand, bleibt neben ihr ein schmaler Streifen zum Ziehen frei.
+
 ## 0.1.72 – Kontextmenü aufgeräumt
 
 - Zielbaum, Kontextmenü: neues Untermenü „Umwandeln“; Umwandeln und „Aufgaben“ stehen jetzt in einem eigenen Abschnitt zwischen Trennlinien.

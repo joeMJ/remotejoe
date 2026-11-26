@@ -29,12 +29,21 @@ jobs:
       CARGO_TERM_COLOR: always
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
     steps:
+      # Die Ubuntu-Paketquellen sind beim Verteilen von Updates kurz uneinheitlich (Verzeichnis nennt eine Fassung,
+      # deren Datei noch fehlt: 404). Darum bis zu sechs Versuche, jeweils mit neu geholtem Verzeichnis.
       - name: Systempakete
         run: |
-          apt-get update
-          apt-get install -y build-essential pkg-config cmake clang libclang-dev lld \
-            qt6-base-dev qt6-base-dev-tools qt6-svg-dev qmake6 freerdp3-dev libwinpr3-dev \
-            libwebkit2gtk-4.1-dev libgtk-3-dev git curl ca-certificates zstd
+          for i in 1 2 3 4 5 6; do
+            if apt-get update && apt-get install -y -o Acquire::Retries=3 \
+                 build-essential pkg-config cmake clang libclang-dev lld \
+                 qt6-base-dev qt6-base-dev-tools qt6-svg-dev qmake6 freerdp3-dev libwinpr3-dev \
+                 libwebkit2gtk-4.1-dev libgtk-3-dev git curl ca-certificates zstd; then
+              exit 0
+            fi
+            echo "Systempakete: Versuch $i fehlgeschlagen, neuer Versuch in 120 s …"
+            sleep 120
+          done
+          exit 1
 
       - name: Quellen holen
         uses: actions/checkout@v5
