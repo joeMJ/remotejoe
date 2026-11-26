@@ -12,6 +12,7 @@ pub mod app;
 pub mod bridge;
 pub mod certcheck;
 pub mod credcheck;
+pub mod diag;
 pub mod editor;
 pub mod hyper;
 pub mod icons;

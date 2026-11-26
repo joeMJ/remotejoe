@@ -31,13 +31,38 @@ pub const MIN_PROGRAM_KEY: &str = "min_program";
 /// bestehenden Feld enthalten (z. B. eine neue Ordnerrolle). Neue **Felder** brauchen das nicht: Ältere Fassungen
 /// überlesen sie. Fassungen ab 0.1.68 prüfen die Angabe vor dem Einlesen und melden klar, welche Version nötig ist;
 /// 0.1.67 und älter kennen sie nicht – neue Werte deshalb frühestens in der Fassung nach 0.1.68.
-pub fn required_program(index: &Index) -> Option<&'static str> {
-    // 0.1.69: Ordnerrolle „Zugangsdaten“ (`credentials`); ältere Fassungen scheitern sonst am unbekannten Wert.
-    fn uses_credentials(f: &crate::model::Folder) -> bool {
-        f.role == Some(crate::model::FolderRole::Credentials)
-            || f.children.iter().any(|n| matches!(n, crate::model::Node::Folder(sub) if uses_credentials(sub)))
+///
+/// Ab 0.1.74 können auch Erweiterungen eine Mindestversion für ihre Daten vorschreiben: Angabe
+/// [`MIN_PROGRAM_KEY`] („x.y.z“) unter den Angaben der Erweiterung an einem Ordner. Es gilt die höchste Angabe.
+pub fn required_program(index: &Index) -> Option<String> {
+    fn walk(f: &crate::model::Folder, best: &mut Option<String>) {
+        // 0.1.69: Ordnerrolle „Zugangsdaten“ (`credentials`); ältere Fassungen scheitern sonst am unbekannten Wert.
+        if f.role == Some(crate::model::FolderRole::Credentials) {
+            raise(best, "0.1.69");
+        }
+        if let Some(v) = f.extra.get(MIN_PROGRAM_KEY).and_then(serde_json::Value::as_str).filter(|v| valid_version(v)) {
+            raise(best, v);
+        }
+        for n in &f.children {
+            if let crate::model::Node::Folder(sub) = n {
+                walk(sub, best);
+            }
+        }
     }
-    uses_credentials(&index.root).then_some("0.1.69")
+    fn raise(best: &mut Option<String>, v: &str) {
+        if best.as_deref().is_none_or(|b| older(b, v)) {
+            *best = Some(v.to_string());
+        }
+    }
+    let mut best = None;
+    walk(&index.root, &mut best);
+    best
+}
+
+/// „x.y.z“ aus Ziffern (für Angaben von Erweiterungen).
+fn valid_version(v: &str) -> bool {
+    let p: Vec<&str> = v.split('.').collect();
+    p.len() == 3 && p.iter().all(|x| !x.is_empty() && x.len() <= 6 && x.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// `a` älter als `b` (Versionen „x.y.z“, Vorabzusätze wie „-beta.3“ zählen nicht).
@@ -432,7 +457,29 @@ mod tests {
         let v: Value = serde_json::from_slice(&to_json(&idx).unwrap()).unwrap();
         assert_eq!(v[MIN_PROGRAM_KEY], "0.1.69");
         let back = from_json(&to_json(&idx).unwrap(), "t").unwrap();
-        assert_eq!(required_program(&back.index), Some("0.1.69"));
+        assert_eq!(required_program(&back.index).as_deref(), Some("0.1.69"));
+    }
+
+    /// Erweiterungsdaten an einem Ordner schreiben ihre Mindestversion vor; die höchste Angabe gilt, ungültige zählen nicht.
+    #[test]
+    fn extension_data_can_require_a_program_version() {
+        let mut idx = sample();
+        let mut a = crate::model::Folder::new("A");
+        a.extra.insert(MIN_PROGRAM_KEY.into(), Value::from("0.1.74"));
+        let mut b = crate::model::Folder::new("B");
+        b.extra.insert(MIN_PROGRAM_KEY.into(), Value::from("0.1.70"));
+        let mut c = crate::model::Folder::new("C");
+        c.extra.insert(MIN_PROGRAM_KEY.into(), Value::from("kaputt"));
+        b.children.push(crate::model::Node::Folder(c));
+        idx.root.children.push(crate::model::Node::Folder(a));
+        idx.root.children.push(crate::model::Node::Folder(b));
+        let v: Value = serde_json::from_slice(&to_json(&idx).unwrap()).unwrap();
+        assert_eq!(v[MIN_PROGRAM_KEY], "0.1.74");
+        let mut f = crate::model::Folder::new("Zugangsdaten");
+        f.role = Some(crate::model::FolderRole::Credentials);
+        idx.root.children.push(crate::model::Node::Folder(f));
+        assert_eq!(required_program(&idx).as_deref(), Some("0.1.74"));
+        assert!(!valid_version("0.1") && !valid_version("0.1.x") && valid_version("1.40.0"));
     }
 
 }

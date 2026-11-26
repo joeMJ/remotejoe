@@ -29,4 +29,8 @@ remotejoe verbindet sich nur mit den Zielen, die du einträgst, und – für Upd
   Kundennummer). Das liegt im Interesse des Anwenders und ist freiwillig – die Funktion kann genutzt
   werden, muss aber nicht. Die Angaben bleiben wie die Ziele in der verschlüsselten Schlüsseldatenbank (KDBX) und
   gehen nicht an Dritte, auch nicht über die Claude-Anbindung.
+- **Diagnoseprotokoll:** Nur wenn unter Einstellungen → Diagnose eingeschaltet, schreibt das Programm ein Protokoll in
+  den Temp-Ordner des Rechners: Ereignisse der Oberfläche (Fenster, Fokus, Mausklicks, Umschalttasten – keine
+  getippten Zeichen, keine Titel fremder Fenster) und Name und Dauer langsamer Aufrufe von Erweiterungen, ohne
+  Inhalte und ohne Kennwörter. Es wird nirgends hin übertragen.
 - Es gibt keine Telemetrie und keine Nutzungsstatistik.

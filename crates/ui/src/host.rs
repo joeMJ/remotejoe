@@ -495,6 +495,18 @@ impl Host for App {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
+    /// Neu gebaut nur, wenn sich der Index seit dem letzten Mal geändert hat (Vergleich statt Buchführung über
+    /// alle Stellen, die ihn ändern; der Vergleich kostet nur einen Bruchteil des Serialisierens).
+    fn index_cached(&mut self) -> Option<(u64, Arc<String>)> {
+        let fresh = matches!(&self.index_cache, Some((_, copy, _)) if *copy == self.index);
+        if !fresh {
+            let json = serde_json::to_string(&self.index).ok()?;
+            self.index_gen += 1;
+            self.index_cache = Some((self.index_gen, self.index.clone(), Arc::new(json)));
+        }
+        self.index_cache.as_ref().map(|(g, _, j)| (*g, j.clone()))
+    }
 }
 
 #[cfg(test)]

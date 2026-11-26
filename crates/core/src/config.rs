@@ -116,6 +116,8 @@ pub struct FeatureSettings {
     pub mcp_folders: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub mcp_logins: std::collections::BTreeMap<String, Vec<String>>,
+    /// Diagnoseprotokoll schreiben (Einstellungen; zusätzlich mit `RJ_DIAG=1`), Vorgabe aus.
+    pub diag: bool,
     /// Einstellungen von Erweiterungen (Schlüssel → Wert), unverändert durchgereicht.
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, toml::Value>,
@@ -123,7 +125,7 @@ pub struct FeatureSettings {
 
 impl Default for FeatureSettings {
     fn default() -> Self {
-        FeatureSettings { mcp: false, mcp_hide_addresses: false, mcp_hide_serials: false, mcp_folders: Default::default(), mcp_logins: Default::default(), extra: Default::default() }
+        FeatureSettings { mcp: false, mcp_hide_addresses: false, mcp_hide_serials: false, mcp_folders: Default::default(), mcp_logins: Default::default(), diag: false, extra: Default::default() }
     }
 }
 

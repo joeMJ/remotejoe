@@ -6,8 +6,10 @@
 // Fremde Fenstertitel und gedrückte Zeichentasten werden nicht aufgezeichnet (nur Programm, Klasse und
 // Umschalt-/Strg-/Alt-/Windows-Tasten).
 //
-// Falldateien: %TEMP%/remotejoe-diag/fall-*.txt (die neuesten 20 bleiben). Mit RJ_DIAG=1 zusätzlich laufend
-// nach %TEMP%/remotejoe-diag/laufend.log. Strg+Umschalt+F12 schreibt jederzeit eine Falldatei von Hand.
+// Falldateien: %TEMP%/remotejoe-diag/fall-*.txt (die neuesten 20 bleiben). Mit dem Schalter in den Einstellungen
+// („Diagnoseprotokoll schreiben“) oder RJ_DIAG=1 zusätzlich laufend nach %TEMP%/remotejoe-diag/laufend.log, dann
+// auch mit den langsamen Aufrufen von Erweiterungen (aus Rust, rjDiagLogLine). Strg+Umschalt+F12 schreibt jederzeit
+// eine Falldatei von Hand.
 
 #include <QtCore/QString>
 
@@ -26,4 +28,10 @@ void log(const QString& line);
 QString incident(const QString& reason);
 /// Die letzten `n` Zeilen des Verlaufs (für „Fehler melden“).
 QStringList recent(int n);
+/// Laufendes Protokoll ein- oder ausschalten (mit RJ_DIAG bleibt es an).
+void setLive(bool on);
 } // namespace rjdiag
+
+/// Für die Rust-Seite (Brücke): Zeile ins Protokoll bzw. laufendes Protokoll schalten.
+void rjDiagLogLine(const QString& line);
+void rjDiagSetLive(bool on);

@@ -689,6 +689,9 @@ impl App {
                 "admin_keys_timeout_mins": self.config.connection.admin_keys_timeout_mins,
                 "admin_keys_layouts": crate::adminkeys::NAMES.iter().map(|(k, n)| json!({ "klid": k, "name": n, "available": crate::adminkeys::Layout::find(crate::adminkeys::builtin(), k).is_some() })).collect::<Vec<_>>(),
                 "backup": self.backup_settings_json(),
+                "diag": self.config.features.diag,
+                "diag_env": std::env::var_os("RJ_DIAG").is_some(),
+                "diag_dir": crate::diag::dir(),
                 });
                 // Einstellungen der Module.
                 if let Some(m) = v.as_object_mut() {
@@ -707,6 +710,10 @@ impl App {
                 if let Some(a) = c.get("accept_key_errors").and_then(Value::as_bool) {
                     self.config.security.accept_key_errors = a;
                     crate::keyerrors::set(a);
+                }
+                if let Some(d) = c.get("diag").and_then(Value::as_bool) {
+                    self.config.features.diag = d;
+                    crate::diag::apply(d);
                 }
                 // Cipher-Suites: Stufe 2 nur zusammen mit Stufe 1.
                 if let Some(a) = c.get("ssh_legacy_ciphers").and_then(Value::as_bool) {

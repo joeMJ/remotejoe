@@ -106,6 +106,7 @@ private:
 	QString licenseSummary() const;
 	QWidget* pageBackup();
 	QWidget* pageWebCache();
+	QWidget* pageDiag();
 	QWidget* pageMcp();
 	void saveMcp();
 	void reloadMcp();
@@ -180,6 +181,9 @@ private:
 	QSpinBox* m_wcDays = nullptr;
 	QLabel* m_wcState = nullptr;
 	QLabel* m_wcResult = nullptr;
+	QCheckBox* m_diag = nullptr;
+	QLabel* m_diagDir = nullptr;
+	QLabel* m_diagEnv = nullptr;
 	/// Beiträge der Erweiterungen (Bereiche unter „Erweiterungen“).
 	std::vector<class RjSettingsPart*> m_parts;
 	// Eingebettete Bereiche

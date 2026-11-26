@@ -164,6 +164,11 @@ pub trait Host {
     /// spricht. Entfällt mit dem Laden aus Bibliotheken.
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn as_any(&self) -> &dyn Any;
+    /// Fertig serialisierter Index (JSON) mit Stand: Der Kern hält ihn bereit und baut ihn nur neu, wenn sich der
+    /// Index geändert hat. Gleicher Stand = gleicher Index. `None`: nicht verfügbar (dann wie bisher über „index“).
+    fn index_cached(&mut self) -> Option<(u64, Arc<String>)> {
+        None
+    }
 }
 
 /// Zugang des Kerns aus beliebigen Fäden: Ereignisse an die Oberfläche, Aufträge in der Auftragsliste,

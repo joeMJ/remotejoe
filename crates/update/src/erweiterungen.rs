@@ -71,9 +71,12 @@ impl Index {
 
     /// Neueste Fassung, die zu diesem Kern passt (Schnittstelle `api`, Mindestversion ≤ `current`).
     pub fn pick(&self, current: &Version, api: u32) -> Option<&Fassung> {
+        // Eine Vorabversion zählt als die Version, auf die sie hinführt (wie beim Laden der Erweiterungen).
+        let mut current = current.clone();
+        current.pre.clear();
         self.fassungen
             .iter()
-            .filter(|f| f.api == api && Version::parse(&f.min_remotejoe).is_ok_and(|m| &m <= current))
+            .filter(|f| f.api == api && Version::parse(&f.min_remotejoe).is_ok_and(|m| m <= current))
             .filter_map(|f| Version::parse(&f.version).ok().map(|v| (v, f)))
             .max_by(|a, b| a.0.cmp(&b.0))
             .map(|(_, f)| f)

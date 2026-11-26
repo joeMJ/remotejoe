@@ -760,6 +760,26 @@ void log(const QString& line)
 	}
 }
 
+void setLive(bool on)
+{
+	QMutexLocker lock(&g_mutex);
+	if (on && !g_live)
+	{
+		g_live = new QFile(QDir(diagDir()).filePath(QStringLiteral("laufend.log")));
+		if (!g_live->open(QIODevice::Append | QIODevice::Text))
+		{
+			delete g_live;
+			g_live = nullptr;
+		}
+	}
+	else if (!on && g_live && !qEnvironmentVariableIsSet("RJ_DIAG"))
+	{
+		g_live->close();
+		delete g_live;
+		g_live = nullptr;
+	}
+}
+
 QStringList recent(int n)
 {
 	QMutexLocker lock(&g_mutex);
@@ -797,14 +817,7 @@ void init(QApplication& app)
 		return;
 	g_started = true;
 	if (qEnvironmentVariableIsSet("RJ_DIAG"))
-	{
-		g_live = new QFile(QDir(diagDir()).filePath(QStringLiteral("laufend.log")));
-		if (!g_live->open(QIODevice::Append | QIODevice::Text))
-		{
-			delete g_live;
-			g_live = nullptr;
-		}
-	}
+		setLive(true);
 	log(QStringLiteral("[start] Aufzeichnung läuft, Qt %1, %2").arg(QLatin1String(qVersion()), QSysInfo::prettyProductName()));
 	app.installEventFilter(new QtFilter(&app));
 	QObject::connect(&app, &QApplication::focusChanged, &app, [](QWidget* from, QWidget* to) {
@@ -829,3 +842,14 @@ void attachShortcut(QWidget* mainWindow)
 	});
 }
 } // namespace rjdiag
+
+void rjDiagLogLine(const QString& line)
+{
+	rjdiag::log(line);
+}
+
+void rjDiagSetLive(bool on)
+{
+	rjdiag::setLive(on);
+	rjdiag::log(on ? QStringLiteral("[diag] laufendes Protokoll an") : QStringLiteral("[diag] laufendes Protokoll aus"));
+}

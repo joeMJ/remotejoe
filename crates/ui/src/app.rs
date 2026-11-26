@@ -42,6 +42,9 @@ pub struct App {
     pub vault: Option<Vault>,
     /// Index zur Anzeige (aus dem Tresor oder Vorführdaten).
     pub index: Index,
+    /// Fertig serialisierter Index für Erweiterungen (Stand, Kopie zum Vergleich, JSON), siehe `Host::index_cached`.
+    pub(crate) index_cache: Option<(u64, Index, std::sync::Arc<String>)>,
+    pub(crate) index_gen: u64,
     pub demo: bool,
     pub sessions: Manager,
     pub workspace: Workspace,
@@ -131,6 +134,7 @@ impl App {
         let config_path = rj_core::config::default_config_path();
         let config = config_path.as_deref().map(Config::load).and_then(Result::ok).unwrap_or_default();
         crate::keyerrors::set(config.security.accept_key_errors);
+        crate::diag::apply(config.features.diag);
         rj_ssh::client::set_legacy_allowed(config.security.ssh_legacy_level());
         let reconnect = Reconnect { auto: config.connection.auto_reconnect, max: Duration::from_secs(config.connection.reconnect_max_secs as u64) };
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("Laufzeit");
@@ -192,6 +196,8 @@ impl App {
             config_path,
             vault: None,
             index: if demo { tree::demo_index(500) } else { Index::default() },
+            index_cache: None,
+            index_gen: 0,
             demo,
             workspace: Workspace::default(),
             unlocking: None,

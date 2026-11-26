@@ -286,6 +286,16 @@ pub mod qobject {
         #[cxx_name = "rjRunApplication"]
         fn run_application() -> i32;
     }
+
+    unsafe extern "C++" {
+        include!("diag.h");
+        /// Eine Zeile ins Diagnoseprotokoll (fadensicher).
+        #[cxx_name = "rjDiagLogLine"]
+        fn diag_log_line(line: &QString);
+        /// Laufendes Diagnoseprotokoll ein- bzw. ausschalten (RJ_DIAG bleibt davon unberührt an).
+        #[cxx_name = "rjDiagSetLive"]
+        fn diag_set_live(on: bool);
+    }
 }
 
 /// Befehlszeile für die Oberfläche (siehe Brücke).

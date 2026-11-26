@@ -134,6 +134,7 @@ SettingsTab::SettingsTab(RjBackend* backend, QWidget* parent)
 	addGroupIcon(QStringLiteral("hard-drive"), T("settings.group.data"), 0);
 	addArea(QStringLiteral("backup"), T("settings.backup"), pageBackup(), true, 1);
 	addArea(QStringLiteral("webcache"), T("settings.webcache"), pageWebCache(), true, 1);
+	addArea(QStringLiteral("diag"), T("settings.diag"), pageDiag(), true, 1);
 	for (RjPluginUi* p : rjPluginUis(m_backend))
 		if (RjSettingsPart* part = p->settingsPart(this))
 			m_parts.push_back(part);
@@ -190,7 +191,7 @@ void SettingsTab::addArea(const QString& key, const QString& title, QWidget* pag
 		{ QStringLiteral("lock"), QStringLiteral("lock") }, { QStringLiteral("keys"), QStringLiteral("keyboard") },
 		{ QStringLiteral("ciphers"), QStringLiteral("key") },
 		{ QStringLiteral("terminal"), QStringLiteral("terminal") }, { QStringLiteral("appearance"), QStringLiteral("palette") },
-		{ QStringLiteral("backup"), QStringLiteral("clock-rotate-left") }, { QStringLiteral("webcache"), QStringLiteral("eraser") }, { QStringLiteral("license"), QStringLiteral("certificate") },
+		{ QStringLiteral("backup"), QStringLiteral("clock-rotate-left") }, { QStringLiteral("webcache"), QStringLiteral("eraser") }, { QStringLiteral("diag"), QStringLiteral("bug") }, { QStringLiteral("license"), QStringLiteral("certificate") },
 		{ QStringLiteral("mcp"), QStringLiteral("robot") },
 		{ QStringLiteral("updates_program"), QStringLiteral("download") }, { QStringLiteral("updates_ext"), QStringLiteral("puzzle-piece") },
 	};
@@ -661,6 +662,43 @@ QWidget* SettingsTab::pageWebCache()
 	return w;
 }
 
+QWidget* SettingsTab::pageDiag()
+{
+	auto T = [this](const char* k) { return rjText(m_backend, k); };
+	auto* w = new QWidget;
+	auto* v = new QVBoxLayout(w);
+	auto* f = new QFormLayout;
+	m_diag = new QCheckBox(T("settings.diag.on"), w);
+	m_diag->setObjectName(QStringLiteral("diagSwitch"));
+	f->addRow(QString(), m_diag);
+	f->addRow(QString(), hint(T("settings.diag.hint"), w));
+	m_diagEnv = hint(T("settings.diag.env"), w);
+	f->addRow(QString(), m_diagEnv);
+	m_diagDir = new QLabel(w);
+	m_diagDir->setWordWrap(true);
+	m_diagDir->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	f->addRow(T("settings.diag.dir"), m_diagDir);
+	auto* buttons = new QHBoxLayout;
+	auto* open = new QPushButton(T("settings.diag.open"), w);
+	buttons->addWidget(open);
+	buttons->addStretch(1);
+	f->addRow(QString(), buttons);
+	v->addLayout(f);
+	v->addStretch(1);
+	connect(m_diag, &QCheckBox::toggled, this, [this](bool on) {
+		if (m_loading)
+			return;
+		edit({ { QStringLiteral("op"), QStringLiteral("set_settings") }, { QStringLiteral("diag"), on } });
+		refreshSummaries();
+	});
+	connect(open, &QPushButton::clicked, this, [this] {
+		const QString d = m_diagDir->text();
+		if (!d.isEmpty() && QDir().mkpath(d))
+			QDesktopServices::openUrl(QUrl::fromLocalFile(d));
+	});
+	return w;
+}
+
 void SettingsTab::saveWebCache()
 {
 	if (m_loading)
@@ -787,6 +825,10 @@ void SettingsTab::reload()
 		m_idle->setCurrentIndex(i);
 	m_disconnect->setChecked(s.value(QStringLiteral("disconnect_on_lock")).toBool());
 	m_keyErrors->setChecked(s.value(QStringLiteral("accept_key_errors")).toBool());
+	m_diag->setChecked(s.value(QStringLiteral("diag")).toBool() || s.value(QStringLiteral("diag_env")).toBool());
+	m_diag->setEnabled(!s.value(QStringLiteral("diag_env")).toBool());
+	m_diagEnv->setVisible(s.value(QStringLiteral("diag_env")).toBool());
+	m_diagDir->setText(QDir::toNativeSeparators(s.value(QStringLiteral("diag_dir")).toString()));
 	m_cipherOld->setChecked(s.value(QStringLiteral("ssh_legacy_ciphers")).toBool());
 	m_cipherVeryOld->setChecked(s.value(QStringLiteral("ssh_very_old_ciphers")).toBool());
 	m_cipherVeryOld->setEnabled(m_cipherOld->isChecked());
@@ -847,6 +889,7 @@ void SettingsTab::refreshSummaries()
 	                                       + (m_bkSecond->isChecked() && !m_bkDir->text().trimmed().isEmpty() ? T("settings.backup.sum.second") : QString())
 	                                       : T("settings.backup.sum.off"));
 	set("webcache", T("settings.webcache.sum").arg(m_wcLimit->value()).arg(m_wcDays->value()));
+	set("diag", T(m_diag->isChecked() ? "settings.diag.sum.on" : "settings.diag.sum.off"));
 	if (m_mcp)
 		set("mcp", T(m_mcp->isChecked() ? "settings.mcp.sum.on" : "settings.mcp.sum.off"));
 	for (RjSettingsPart* part : m_parts)

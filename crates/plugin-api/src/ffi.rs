@@ -130,8 +130,12 @@ fn intern(s: &str) -> &'static str {
 /// Der Kern aus Sicht der Bibliothek, nur während eines Aufrufs gültig.
 pub struct FfiHost {
     vt: *const RjHostVt,
-    index: std::cell::OnceCell<rj_core::Index>,
+    index: std::cell::OnceCell<Arc<rj_core::Index>>,
 }
+
+/// Zuletzt eingelesener Index dieser Bibliothek mit seinem Stand im Kern (gilt über alle Aufrufe hinweg; neu geholt
+/// nur, wenn der Kern einen anderen Stand meldet).
+static INDEX_CACHE: std::sync::Mutex<Option<(u64, Arc<rj_core::Index>)>> = std::sync::Mutex::new(None);
 
 /// Operationen, nach denen der zwischengespeicherte Index weiter gilt.
 const READ_ONLY_OPS: &[&str] = &[
@@ -145,6 +149,42 @@ impl FfiHost {
     /// `vt` muss für die Lebensdauer des `FfiHost` gültig bleiben.
     pub unsafe fn new(vt: *const RjHostVt) -> Self {
         FfiHost { vt, index: std::cell::OnceCell::new() }
+    }
+
+    /// Index direkt aus der Antwort einlesen (`{"ok": {…}}`), ohne Umweg über `Value`.
+    fn raw_index(&self) -> Option<rj_core::Index> {
+        #[derive(serde::Deserialize)]
+        struct Wrap {
+            ok: rj_core::Index,
+        }
+        let vt = unsafe { &*self.vt };
+        let op = CString::new("index").ok()?;
+        let p = unsafe { (vt.call)(vt.ctx, op.as_ptr(), c"null".as_ptr()) };
+        if p.is_null() {
+            return None;
+        }
+        let r = serde_json::from_slice::<Wrap>(unsafe { CStr::from_ptr(p) }.to_bytes()).ok().map(|w| w.ok);
+        unsafe { (vt.free)(p) };
+        r
+    }
+
+    fn load_index(&self) -> Arc<rj_core::Index> {
+        if let Some(generation) = self.raw("index_generation", Value::Null).ok().and_then(|v| v.as_u64()) {
+            if let Some((g, idx)) = INDEX_CACHE.lock().ok().and_then(|c| c.clone()) {
+                if g == generation {
+                    return idx;
+                }
+            }
+            if let Some(idx) = self.raw_index() {
+                let idx = Arc::new(idx);
+                if let Ok(mut c) = INDEX_CACHE.lock() {
+                    *c = Some((generation, idx.clone()));
+                }
+                return idx;
+            }
+        }
+        // Ältere Kerne ohne Stand: wie bisher.
+        Arc::new(self.raw("index", Value::Null).ok().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default())
     }
 
     fn raw(&self, op: &str, args: Value) -> Result<Value, String> {
@@ -175,7 +215,7 @@ impl Host for FfiHost {
     }
 
     fn index_ref(&self) -> &rj_core::Index {
-        self.index.get_or_init(|| self.raw("index", Value::Null).ok().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default())
+        self.index.get_or_init(|| self.load_index())
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
@@ -431,19 +471,125 @@ pub mod host {
 
     type HostCtx = *mut dyn Host;
 
+    /// Zeitprotokoll für die Fehlerdiagnose: Aufrufe von Erweiterungen und Operationen an den Kern, die länger als
+    /// [`diag::LIMIT_MS`] dauern, gehen an die eingestellte Ausgabe (der Kern schreibt sie ins Diagnoseprotokoll).
+    /// Ausgeschaltet kostet es je Aufruf nur das Lesen eines Merkers.
+    pub mod diag {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::RwLock;
+        use std::time::Instant;
+
+        /// Schwelle in Millisekunden.
+        pub const LIMIT_MS: u128 = 50;
+        static ON: AtomicBool = AtomicBool::new(false);
+        static SINK: RwLock<Option<fn(&str)>> = RwLock::new(None);
+
+        /// Ausgabe festlegen und einschalten (`None` = aus).
+        pub fn set(sink: Option<fn(&str)>) {
+            if let Ok(mut s) = SINK.write() {
+                *s = sink;
+            }
+            ON.store(sink.is_some(), Ordering::Relaxed);
+        }
+
+        pub fn on() -> bool {
+            ON.load(Ordering::Relaxed)
+        }
+
+        /// Startzeit, nur wenn eingeschaltet.
+        pub(crate) fn start() -> Option<Instant> {
+            on().then(Instant::now)
+        }
+
+        /// Zeile ausgeben, wenn seit `t0` mehr als die Schwelle verging; `detail` wird nur dann gebildet.
+        pub(crate) fn done(t0: Option<Instant>, what: impl FnOnce() -> String) {
+            let Some(t0) = t0 else { return };
+            let ms = t0.elapsed().as_millis();
+            if ms < LIMIT_MS {
+                return;
+            }
+            if let Ok(s) = SINK.read() {
+                if let Some(f) = *s {
+                    f(&format!("{} {} ms", what(), ms));
+                }
+            }
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+            use std::sync::Mutex;
+
+            static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+            fn sink(l: &str) {
+                LINES.lock().unwrap().push(l.to_string());
+            }
+
+            /// Aus: keine Zeit gemessen. An: nur Aufrufe über der Schwelle werden geschrieben, mit Name und Dauer.
+            #[test]
+            fn only_slow_calls_are_logged() {
+                set(None);
+                assert!(start().is_none());
+                set(Some(sink));
+                done(start(), || "[erw] schnell".into());
+                let t0 = start();
+                std::thread::sleep(std::time::Duration::from_millis(LIMIT_MS as u64 + 10));
+                done(t0, || format!("[kern] index, Antwort {}", size(3 << 20)));
+                set(None);
+                let l = LINES.lock().unwrap().clone();
+                assert_eq!(l.len(), 1, "{l:?}");
+                assert!(l[0].starts_with("[kern] index, Antwort 3.0 MB ") && l[0].ends_with(" ms"), "{}", l[0]);
+                assert_eq!(size(1500), "2 KB");
+            }
+        }
+
+        /// Größe einer Antwort lesbar (für Operationen wie „index“).
+        pub(crate) fn size(bytes: usize) -> String {
+            if bytes >= 1 << 20 {
+                format!("{:.1} MB", bytes as f64 / (1u64 << 20) as f64)
+            } else {
+                format!("{} KB", bytes.div_ceil(1024))
+            }
+        }
+    }
+
     unsafe extern "C" fn host_call(ctx: *mut c_void, op: *const c_char, args: *const c_char) -> *mut c_char {
         if ctx.is_null() || op.is_null() {
             return to_c(&err("Aufruf ohne Kontext"));
         }
+        let t0 = diag::start();
+        let mut name = String::new();
+        // Index: fertig serialisiert aus dem Zwischenspeicher des Kerns (ohne Umweg über `Value`).
+        let fast = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let op = CStr::from_ptr(op).to_bytes();
+            if op != b"index" && op != b"index_generation" {
+                return None;
+            }
+            let h: &mut dyn Host = &mut **(ctx as *mut HostCtx);
+            let (generation, json) = h.index_cached()?;
+            Some(if op == b"index" { format!("{{\"ok\":{json}}}") } else { format!("{{\"ok\":{generation}}}") })
+        }))
+        .ok()
+        .flatten();
+        if let Some(s) = fast {
+            let p = CString::new(s).unwrap_or_default().into_raw();
+            diag::done(t0, || format!("[kern] {}, Antwort {} (Zwischenspeicher)", CStr::from_ptr(op).to_string_lossy(), diag::size(CStr::from_ptr(p).to_bytes().len())));
+            return p;
+        }
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let h: &mut dyn Host = &mut **(ctx as *mut HostCtx);
             let op = CStr::from_ptr(op).to_string_lossy().into_owned();
+            if t0.is_some() {
+                name = op.clone();
+            }
             res(h.call(&op, from_c(args)))
         }));
-        match r {
+        let p = match r {
             Ok(v) => to_c(&v),
             Err(_) => to_c(&err("Panik im Kern")),
-        }
+        };
+        diag::done(t0, || format!("[kern] {name}, Antwort {}", diag::size(if p.is_null() { 0 } else { CStr::from_ptr(p).to_bytes().len() })));
+        p
     }
 
     unsafe extern "C" fn host_shared(ctx: *mut c_void) -> RjSharedVt {
@@ -466,15 +612,22 @@ pub mod host {
         if ctx.is_null() || op.is_null() {
             return to_c(&err("Zugang zum Kern nicht verfügbar"));
         }
+        let t0 = diag::start();
+        let mut name = String::new();
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let s: &Arc<dyn HostShared> = &*(ctx as *const Arc<dyn HostShared>);
             let op = CStr::from_ptr(op).to_string_lossy().into_owned();
+            if t0.is_some() {
+                name = op.clone();
+            }
             res(s.call(&op, from_c(args)))
         }));
-        match r {
+        let p = match r {
             Ok(v) => to_c(&v),
             Err(_) => to_c(&err("Panik im Kern")),
-        }
+        };
+        diag::done(t0, || format!("[kern, nebenläufig] {name}, Antwort {}", diag::size(if p.is_null() { 0 } else { CStr::from_ptr(p).to_bytes().len() })));
+        p
     }
 
     unsafe extern "C" fn shared_clone(ctx: *mut c_void) -> *mut c_void {
@@ -563,6 +716,15 @@ pub mod host {
 
     impl RemotePlugin {
         fn raw(&self, host: Option<&mut dyn Host>, shared: Option<&Arc<dyn HostShared>>, op: &str, args: Value) -> Value {
+            let t0 = diag::start();
+            // Bei „handle“ und ähnlichen die eigentliche Operation mitschreiben.
+            let inner = if t0.is_some() { args.get("op").and_then(Value::as_str).map(|s| format!(" {s}")).unwrap_or_default() } else { String::new() };
+            let v = self.raw_inner(host, shared, op, args);
+            diag::done(t0, || format!("[erw] {} {op}{inner}", self.info.id));
+            v
+        }
+
+        fn raw_inner(&self, host: Option<&mut dyn Host>, shared: Option<&Arc<dyn HostShared>>, op: &str, args: Value) -> Value {
             let op_c = CString::new(op).unwrap_or_default();
             let args_c = CString::new(args.to_string()).unwrap_or_default();
             // SAFETY: Der Zeiger lebt nur für diesen Aufruf; die Bibliothek darf ihn nicht behalten (Vertrag der Schnittstelle).

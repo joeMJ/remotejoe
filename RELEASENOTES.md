@@ -1,3 +1,10 @@
+## 0.1.74 – Schneller mit Erweiterungen, Diagnoseprotokoll
+
+- Spürbar schneller mit Erweiterungen: Das Programm reicht den Datenbestand jetzt nur noch nach einer Änderung neu an die Erweiterungen weiter.
+- Einstellungen → Diagnose: neuer Schalter „Diagnoseprotokoll schreiben“. Er zeichnet für die Fehlersuche auf, was in der Oberfläche geschieht, und welche Aufrufe von Erweiterungen länger als 50 ms dauern. Das Protokoll bleibt auf dem Rechner; „Ordner öffnen“ zeigt es an.
+- Erweiterungen können festlegen, ab welcher Programmversion ihre Daten gelesen werden. Eine ältere Fassung meldet dann klar, welche Version nötig ist.
+- Datenschutzhinweise: neuer Absatz zum Diagnoseprotokoll.
+
 ## 0.1.73 – Fenstergröße unter Windows
 
 - Windows: Nach dem Öffnen einer Web-Seite ließ sich das Fenster nicht mehr über die Ränder in der Größe ändern. Das geht jetzt wieder an allen Kanten und Ecken, auch mit offener Web-Seite. Reicht eine Web-Seite bis an den Fensterrand, bleibt neben ihr ein schmaler Streifen zum Ziehen frei.

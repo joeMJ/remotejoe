@@ -218,7 +218,10 @@ pub fn check_manifest(m: &Manifest, current: &str) -> Result<(), String> {
         return Err(format!("Schnittstelle {}, der Kern hat {}", m.api, rj_plugin_api::API_VERSION));
     }
     let min = rj_update::Version::parse(&m.min_remotejoe).map_err(|_| format!("min_remotejoe „{}“ ist keine Version", m.min_remotejoe))?;
-    let cur = rj_update::Version::parse(current).map_err(|_| format!("Programmversion „{current}“ unlesbar"))?;
+    let mut cur = rj_update::Version::parse(current).map_err(|_| format!("Programmversion „{current}“ unlesbar"))?;
+    // Eine Vorabversion (z. B. 0.1.74-beta.1) zählt als die Version, auf die sie hinführt: Erweiterungen für 0.1.74
+    // lassen sich damit vor dem Release testen (wie die Mindestversion der Daten, `rj_core::schema`).
+    cur.pre.clear();
     if cur < min {
         return Err(format!("braucht remotejoe {} oder neuer, dies ist {current}", m.min_remotejoe));
     }
@@ -695,6 +698,8 @@ mod lib_tests {
         assert!(check_manifest(&m, "0.1.60").is_ok());
         assert!(check_manifest(&m, "0.2.0").is_ok());
         assert!(check_manifest(&m, "0.1.59").unwrap_err().contains("0.1.60 oder neuer"));
+        assert!(check_manifest(&m, "0.1.60-beta.1").is_ok(), "Vorabversion zählt als die Version");
+        assert!(check_manifest(&m, "0.1.59-beta.9").is_err());
         let mut old = m.clone();
         old.api = 99;
         assert!(check_manifest(&old, "0.1.60").unwrap_err().contains("Schnittstelle"));
