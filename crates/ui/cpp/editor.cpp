@@ -3367,7 +3367,7 @@ BulkAddTab::BulkAddTab(RjBackend* backend, const QString& parentId, QWidget* par
 	top->addLayout(f, 3);
 	m_kind = new QComboBox(left);
 	m_kind->setObjectName(QStringLiteral("bulkKind"));
-	for (const char* k : { "rdp", "ssh", "vnc", "web", "proxmox", "hyperv", "psrp" })
+	for (const char* k : { "rdp", "ssh", "vnc", "web", "proxmox", "hyperv", "psrp", "telnet" })
 		m_kind->addItem(rjText(backend, (QByteArray("add.") + k).constData()).remove(QLatin1Char('&')), QString::fromLatin1(k));
 	auto* kl = new QLabel(rjText(backend, "bulk.kind"), left);
 	kl->setBuddy(m_kind);
@@ -4969,7 +4969,7 @@ QString PropertiesTab::protocolGlyph(const QString& protocol)
 		{ QStringLiteral("rdp"), QStringLiteral("display") }, { QStringLiteral("ssh"), QStringLiteral("terminal") },
 		{ QStringLiteral("vnc"), QStringLiteral("desktop") }, { QStringLiteral("web"), QStringLiteral("globe") },
 		{ QStringLiteral("psrp"), QStringLiteral("code") }, { QStringLiteral("proxmox"), QStringLiteral("cubes") },
-		{ QStringLiteral("hyperv"), QStringLiteral("layer-group") },
+		{ QStringLiteral("hyperv"), QStringLiteral("layer-group") }, { QStringLiteral("telnet"), QStringLiteral("keyboard") },
 	};
 	return map.value(protocol, QStringLiteral("plug"));
 }

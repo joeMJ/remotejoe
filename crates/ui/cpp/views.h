@@ -204,11 +204,12 @@ public:
 	void setState(const QString& state, const QString& detail);
 	/// Hinweis für die Fußzeile; `severe` zeigt ihn rot (z. B. übergangener Schlüsselfehler).
 	void setNotice(const QString& text, bool severe = false);
-	QString notice() const { return m_noticeText; }
+	/// Hinweis samt dauerhaftem Telnet-Hinweis (unverschlüsselt).
+	QString notice() const { return m_telnetHint.isEmpty() ? m_noticeText : m_noticeText.isEmpty() ? m_telnetHint : m_telnetHint + QStringLiteral(" · ") + m_noticeText; }
 	/// Zustand für die Fußzeile des Hauptfensters; leer bei „Verbunden“.
 	QString statusLine() const { return m_state.isEmpty() || m_state == QLatin1String("connected") ? QString() : m_stateText; }
 	/// Schwerer Fehler (Verbindung fehlgeschlagen oder Worker abgestürzt).
-	bool severe() const { return m_noticeSevere || m_state == QLatin1String("failed") || m_state == QLatin1String("crashed"); }
+	bool severe() const { return m_noticeSevere || !m_telnetHint.isEmpty() || m_state == QLatin1String("failed") || m_state == QLatin1String("crashed"); }
 	FrameView* frame() const { return m_frame; }
 	TerminalView* terminal() const { return m_terminal; }
 	QWidget* view() const;
@@ -272,6 +273,7 @@ private:
 	QLabel* m_header;
 	QLabel* m_notice;
 	QString m_noticeText;
+	QString m_telnetHint;
 	bool m_noticeSevere = false;
 	QPushButton* m_reconnect;
 	SecurityBar* m_security;

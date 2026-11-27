@@ -100,6 +100,8 @@ fn protocol(kind: &str) -> Option<Protocol> {
         Protocol::Hyperv
     } else if k.starts_with("powershell") {
         Protocol::Psrp
+    } else if k.starts_with("telnet") {
+        Protocol::Telnet
     } else {
         return None;
     })

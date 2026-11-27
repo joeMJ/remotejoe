@@ -91,6 +91,7 @@ fn csv_type(p: Protocol) -> &'static str {
         Protocol::Proxmox => "Proxmox",
         Protocol::Hyperv => "Hyper-V",
         Protocol::Psrp => "PowerShell",
+        Protocol::Telnet => "Telnet",
     }
 }
 

@@ -1358,11 +1358,15 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 	connect(m_reconnect, &QPushButton::clicked, this, [this] { m_backend->reconnect(m_session); });
 	m_security = new SecurityBar(backend, this);
 	m_ask = new ActionBar(backend, this);
-	// Kopfzeile: Name und Zustand, bei SSH außerdem die Makro-Schaltflächen.
+	// Kopfzeile: Name und Zustand, bei Terminal-Sitzungen (SSH, Telnet) außerdem die Makro-Schaltflächen.
+	const bool terminal = protocol == QLatin1String("ssh") || protocol == QLatin1String("telnet");
+	// Telnet ist unverschlüsselt: dauerhafter Hinweis in der Fußzeile (rot, fett).
+	if (protocol == QLatin1String("telnet"))
+		m_telnetHint = backend->text(QStringLiteral("session.telnet.unencrypted"));
 	auto* headRow = new QWidget(this);
 	auto* hl = new QHBoxLayout(headRow);
 	hl->setContentsMargins(0, 0, 0, 0);
-	if (protocol == QLatin1String("ssh"))
+	if (terminal)
 	{
 		m_macroState = new QLabel(headRow);
 		m_macroState->hide();
@@ -1480,13 +1484,13 @@ SessionPane::SessionPane(RjBackend* backend, std::uint64_t session, const QStrin
 		connect(esc, &QShortcut::activated, this, closeFind);
 	}
 	// Ohne Bedienknöpfe (RDP, VNC) entfällt die Zeile; sie erscheint, sobald es dort Knöpfe gibt.
-	headRow->setVisible(protocol == QLatin1String("ssh") || protocol == QLatin1String("web") || protocol == QLatin1String("proxmox"));
+	headRow->setVisible(terminal || protocol == QLatin1String("web") || protocol == QLatin1String("proxmox"));
 	lay->addWidget(headRow);
 	lay->addWidget(m_notice);
 	lay->addWidget(m_security);
 	lay->addWidget(m_ask);
 	lay->addWidget(m_reconnect);
-	if (protocol == QLatin1String("ssh"))
+	if (terminal)
 	{
 		m_terminal = new TerminalView(backend, session, this);
 		lay->addWidget(m_terminal, 1);

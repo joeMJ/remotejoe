@@ -3,4 +3,5 @@
 pub mod client;
 pub mod host;
 pub mod known_hosts;
+pub mod telnet;
 pub mod terminal;

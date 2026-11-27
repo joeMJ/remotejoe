@@ -30,6 +30,7 @@ fn protocol(kind: &str) -> Option<Protocol> {
         "PowerShell" | "PowerShellRemoteConsole" | "59" => Protocol::Psrp,
         "HyperV" | "16" => Protocol::Hyperv,
         "Proxmox" => Protocol::Proxmox,
+        "Telnet" => Protocol::Telnet,
         _ => return None,
     })
 }

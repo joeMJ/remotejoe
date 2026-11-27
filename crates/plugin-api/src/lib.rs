@@ -370,6 +370,13 @@ pub trait HostExt {
     fn tree_changed(&mut self) {
         let _ = self.call_json("tree_changed", Value::Null);
     }
+    /// Nur Darstellung im Baum: Ziele unter einem anderen Ziel desselben Ordners zeigen (`parents`: Kind → Eltern);
+    /// ersetzt die frühere Meldung derselben Quelle (`source`, Kennung der Erweiterung), leer = keine. Der Bestand
+    /// bleibt unverändert. Ab 0.1.75; ältere Kerne kennen die Operation nicht (Fehler, wird ignoriert).
+    fn tree_display_parents(&mut self, source: &str, parents: &std::collections::HashMap<Uuid, Uuid>) {
+        let map: Map<String, Value> = parents.iter().map(|(c, p)| (c.to_string(), Value::from(p.to_string()))).collect();
+        let _ = self.call_json("tree_display_parents", json!({ "source": source, "parents": map }));
+    }
     /// Kurzform: Name und Pfad eines Knotens.
     fn node_path(&mut self, id: Uuid) -> String {
         self.call_json("node_path", json!({ "id": id })).ok().map(|v| s(&v, "path")).unwrap_or_default()

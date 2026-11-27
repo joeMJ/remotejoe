@@ -71,6 +71,7 @@ pub fn default_keep(index: &Index, members: &[Uuid]) -> Option<Uuid> {
     let rank = |p: Protocol| match p {
         Protocol::Hyperv | Protocol::Proxmox => -1,
         Protocol::Ssh => 0,
+        Protocol::Telnet => 1,
         Protocol::Psrp => 1,
         Protocol::Rdp => 2,
         Protocol::Vnc => 3,

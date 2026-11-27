@@ -74,6 +74,8 @@ pub struct App {
     pub(crate) macro_input_tx: mpsc::Sender<(SessionId, Vec<u8>)>,
     macro_input_rx: Receiver<(SessionId, Vec<u8>)>,
     pub(crate) lights: std::collections::HashMap<Uuid, Light>,
+    /// Nur Darstellung im Baum: Ziel unter einem anderen Ziel zeigen, je Erweiterung (Kennung → Kind → Eltern).
+    pub(crate) display_parents: std::collections::BTreeMap<String, std::collections::HashMap<Uuid, Uuid>>,
     _rt: tokio::runtime::Runtime,
     /// Tunnel; aufgebaut wird in Hintergrundaufgaben.
     pub(crate) tunnels: std::sync::Arc<std::sync::Mutex<TunnelManager>>,
@@ -213,6 +215,7 @@ impl App {
             vault_lock: None,
             probe: None,
             lights: Default::default(),
+            display_parents: Default::default(),
             update: Default::default(),
             plugin_jobs: Default::default(),
             plugin_auto_done: false,
@@ -863,6 +866,11 @@ impl App {
         // Von Erweiterungen geführte Gerätearten gehen vor dem Inventar (ausdrücklich so eingerichtet).
         let marked = crate::plugins::folder_devices(&self.index);
         tree::mark_devices(&mut nodes, &|id| marked.get(&id).copied().or_else(|| self.overview.devices.get(&id).map(crate::overview::inventory::device_key)));
+        // Von Erweiterungen gemeldete Anzeige-Eltern (nur im normalen Baum, nicht bei einer Suche).
+        if self.view.is_empty() && filter.trim().is_empty() {
+            let parents: std::collections::HashMap<Uuid, Uuid> = self.display_parents.values().flat_map(|m| m.iter().map(|(c, p)| (*c, *p))).collect();
+            tree::nest(&mut nodes, &parents);
+        }
         serde_json::to_string(&nodes).unwrap_or_else(|_| "[]".into())
     }
 
@@ -978,6 +986,10 @@ impl App {
         // Zugelassene Stufe älterer SSH-Verfahren (Cipher-Suites) für den SSH-Worker.
         if matches!(t.options, ProtocolOptions::Ssh(_)) || t.protocol == Protocol::Ssh {
             v["legacy_allowed"] = json!(self.config.security.ssh_legacy_level());
+        }
+        // Telnet: derselbe Terminal-Worker, ohne SSH.
+        if t.protocol == Protocol::Telnet {
+            v["telnet"] = json!(true);
         }
         v.to_string()
     }
@@ -1199,7 +1211,7 @@ impl App {
             ProtocolOptions::Rdp(o) => o.width.zip(o.height),
             _ => None,
         };
-        let (w, h) = if t.protocol == Protocol::Ssh {
+        let (w, h) = if t.protocol.is_terminal() {
             (width.clamp(20, 500), height.clamp(5, 300))
         } else if let Some((fw, fh)) = fixed {
             (fw.clamp(200, 8192), fh.clamp(200, 8192))

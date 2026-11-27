@@ -144,7 +144,7 @@ QString protocolName(const QString& p)
 	static const QHash<QString, QString> names = { { QStringLiteral("ssh"), QStringLiteral("SSH") },     { QStringLiteral("rdp"), QStringLiteral("RDP") },
 		                                           { QStringLiteral("vnc"), QStringLiteral("VNC") },     { QStringLiteral("web"), QStringLiteral("Web") },
 		                                           { QStringLiteral("psrp"), QStringLiteral("PowerShell") }, { QStringLiteral("proxmox"), QStringLiteral("Proxmox") },
-		                                           { QStringLiteral("hyperv"), QStringLiteral("Hyper-V") } };
+		                                           { QStringLiteral("hyperv"), QStringLiteral("Hyper-V") }, { QStringLiteral("telnet"), QStringLiteral("Telnet") } };
 	return names.value(p, p.toUpper());
 }
 
@@ -193,6 +193,7 @@ QIcon protocolIcon(const QString& protocol, const QString& light, bool folder, i
 	static const P table[] = {
 		{ "rdp", "display", "#0b5cad" },
 		{ "ssh", "terminal", "#1b6e20" },
+		{ "telnet", "keyboard", "#1b6e20" },
 		{ "vnc", "desktop", "#7a3e9d" },
 		{ "web", "globe", "#8a5300" },
 		{ "psrp", "code", "#005f73" },
@@ -347,6 +348,9 @@ void addNodes(QStandardItem* parent, const QJsonArray& nodes)
 		const QString proto = n.value(QStringLiteral("protocol")).toString();
 		item->setData(proto, RoleProtocol);
 		item->setData(n.value(QStringLiteral("other_way")).toBool(), RoleOtherWay);
+		// Ziele, die nur in der Anzeige darunter stehen (von einer Erweiterung gemeldet): Anzahl neben dem Namen.
+		if (const int nested = n.value(QStringLiteral("nested")).toInt(); nested > 0)
+			item->setText(item->text() + QStringLiteral(" (%1)").arg(nested));
 		parent->appendRow(item);
 		addNodes(item, n.value(QStringLiteral("children")).toArray());
 		if (proto == QStringLiteral("proxmox") || proto == QStringLiteral("hyperv"))
@@ -5621,7 +5625,7 @@ void MainWindow::buildAddMenu(QMenu* menu, const QString& parentId)
 {
 	const char* kinds[][2] = { { "folder", "add.folder" }, { "rdp", "add.rdp" },         { "ssh", "add.ssh" },     { "vnc", "add.vnc" },
 		                       { "web", "add.web" },       { "proxmox", "add.proxmox" }, { "hyperv", "add.hyperv" }, { "psrp", "add.psrp" },
-		                       { "task", "add.task" },     { "macro", "add.macro" } };
+		                       { "telnet", "add.telnet" }, { "task", "add.task" },     { "macro", "add.macro" } };
 	auto run = [this, parentId](QJsonObject cmd) {
 		if (!parentId.isEmpty())
 			cmd.insert(QStringLiteral("parent"), parentId);
@@ -5719,7 +5723,7 @@ void MainWindow::openFolderOverview(const QModelIndex& folder, bool activate)
 		static const QMap<QString, QString> names = { { QStringLiteral("rdp"), QStringLiteral("RDP") },        { QStringLiteral("ssh"), QStringLiteral("SSH") },
 			                                          { QStringLiteral("vnc"), QStringLiteral("VNC") },        { QStringLiteral("web"), QStringLiteral("Web") },
 			                                          { QStringLiteral("proxmox"), QStringLiteral("Proxmox") }, { QStringLiteral("hyperv"), QStringLiteral("Hyper-V") },
-			                                          { QStringLiteral("psrp"), QStringLiteral("PowerShell") },
+			                                          { QStringLiteral("psrp"), QStringLiteral("PowerShell") }, { QStringLiteral("telnet"), QStringLiteral("Telnet") },
 			                                          { QStringLiteral("task"), QStringLiteral("Aufgabe") },   { QStringLiteral("multi"), QStringLiteral("Mehrere Wege") } };
 		for (RjPluginUi* p : rjPluginUis(m_backend))
 			if (const QString n = p->kindName(kind); !n.isEmpty())

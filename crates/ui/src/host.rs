@@ -470,6 +470,25 @@ impl App {
                 self.plugin_events.lock().unwrap_or_else(|e| e.into_inner()).push(UiEvent::TreeChanged);
                 Ok(Value::Null)
             }
+            // Nur Darstellung: `source` (Kennung der Erweiterung) meldet, welche Ziele unter welchem Ziel stehen
+            // (`parents`: Kind → Eltern); ersetzt die frühere Meldung derselben Quelle. Ab 0.1.75.
+            "tree_display_parents" => {
+                let source = a["source"].as_str().filter(|s| !s.is_empty()).ok_or("Quelle fehlt")?.to_string();
+                let map: std::collections::HashMap<Uuid, Uuid> = a["parents"]
+                    .as_object()
+                    .map(|o| o.iter().filter_map(|(c, p)| Some((Uuid::parse_str(c).ok()?, Uuid::parse_str(p.as_str()?).ok()?))).collect())
+                    .unwrap_or_default();
+                let changed = self.display_parents.get(&source) != Some(&map);
+                if map.is_empty() {
+                    self.display_parents.remove(&source);
+                } else {
+                    self.display_parents.insert(source, map);
+                }
+                if changed {
+                    self.plugin_events.lock().unwrap_or_else(|e| e.into_inner()).push(UiEvent::TreeChanged);
+                }
+                Ok(json!({ "changed": changed }))
+            }
             other => self.shared().call(other, a),
         }
     }

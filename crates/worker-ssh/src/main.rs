@@ -26,6 +26,8 @@ struct Options {
     legacy_algorithms: bool,
     /// Zugelassene Stufe älterer Verfahren laut Einstellungen (0 keine, 1 ältere, 2 auch sehr alte); Vorgabe 0.
     legacy_allowed: u8,
+    /// Telnet statt SSH (Zieltyp Telnet, unverschlüsselt).
+    telnet: bool,
 }
 
 fn main() {
@@ -72,7 +74,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<ToWorker>, out: rj_ipc::worker::Sen
     let (ask_tx, mut ask_rx) = mpsc::unbounded_channel();
     let mut pending: HashMap<u32, oneshot::Sender<rj_ssh::client::HostKeyAnswer>> = HashMap::new();
     let mut next_q = 1u32;
-    let mut connecting: Option<tokio::task::JoinHandle<Result<(SshConnection, Shell, bool), String>>> = None;
+    let mut connecting: Option<tokio::task::JoinHandle<Result<(Option<SshConnection>, Shell, bool), String>>> = None;
     let mut host = TermHost::default();
     // Hängt der Emulator, endet der Worker; der Supervisor meldet die Sitzung als abgestürzt.
     host.watchdog().spawn(watchdog_limit(), || {
@@ -168,7 +170,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<ToWorker>, out: rj_ipc::worker::Sen
                         if legacy_retry {
                             send(FromWorker::Log("Ältere SSH-Verfahren verwendet: der Schlüsselaustausch mit den üblichen ist gescheitert".into()));
                         }
-                        conn = Some(c);
+                        conn = c;
                         shell = Some(s);
                         send(FromWorker::State(SessionState::Connected));
                     }
@@ -206,8 +208,14 @@ async fn establish(
     r: ConnectRequest,
     c: CredentialPayload,
     ask: rj_ssh::client::HostKeyAsk,
-) -> Result<(SshConnection, Shell, bool), String> {
+) -> Result<(Option<SshConnection>, Shell, bool), String> {
     let opts: Options = serde_json::from_str(&r.options_json).unwrap_or_default();
+    if opts.telnet {
+        let term = opts.term.clone().unwrap_or_else(|| "xterm".into());
+        let timeout = Duration::from_secs(r.connect_timeout_secs.max(1) as u64);
+        let shell = rj_ssh::telnet::open(&r.host, r.port, timeout, c.username.clone(), Secret::from_bytes(c.password.0.clone()), &term, r.width, r.height).await?;
+        return Ok((None, shell, false));
+    }
     let known = opts
         .known_hosts
         .map(KnownHosts::new)
@@ -262,5 +270,5 @@ async fn establish(
     };
     let term = opts.term.unwrap_or_else(|| "xterm-256color".into());
     let shell = conn.open_shell(&term, r.width, r.height).await.map_err(|e| e.to_string())?;
-    Ok((conn, shell, legacy_retry))
+    Ok((Some(conn), shell, legacy_retry))
 }

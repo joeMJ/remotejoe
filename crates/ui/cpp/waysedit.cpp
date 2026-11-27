@@ -19,7 +19,7 @@
 
 namespace
 {
-const char* const kProtocols[] = { "web", "ssh", "rdp", "vnc", "psrp" };
+const char* const kProtocols[] = { "web", "ssh", "rdp", "vnc", "psrp", "telnet" };
 
 QString protocolLabel(const QString& p)
 {
@@ -27,6 +27,8 @@ QString protocolLabel(const QString& p)
 		return QStringLiteral("Web");
 	if (p == QLatin1String("psrp"))
 		return QStringLiteral("PowerShell");
+	if (p == QLatin1String("telnet"))
+		return QStringLiteral("Telnet");
 	return p.toUpper();
 }
 } // namespace

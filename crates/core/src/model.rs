@@ -192,6 +192,8 @@ pub enum Protocol {
     Proxmox,
     Hyperv,
     Psrp,
+    /// Terminal über Telnet (unverschlüsselt; Ziele dieses Typs verlangen 0.1.75, siehe `schema::required_program`).
+    Telnet,
 }
 
 impl Protocol {
@@ -205,6 +207,7 @@ impl Protocol {
             Protocol::Proxmox => "Proxmox",
             Protocol::Hyperv => "Hyper-V",
             Protocol::Psrp => "PowerShell",
+            Protocol::Telnet => "Telnet",
         }
     }
 
@@ -216,6 +219,7 @@ impl Protocol {
             Protocol::Web => 443,
             Protocol::Proxmox => 8006,
             Protocol::Psrp => 5986,
+            Protocol::Telnet => 23,
         }
     }
 
@@ -228,7 +232,13 @@ impl Protocol {
             Protocol::Proxmox => "proxmox",
             Protocol::Hyperv => "hyperv",
             Protocol::Psrp => "psrp",
+            Protocol::Telnet => "telnet",
         }
+    }
+
+    /// Sitzung mit Terminal (SSH oder Telnet): gleiche Darstellung, Tastenfolgen und Makros.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Protocol::Ssh | Protocol::Telnet)
     }
 }
 

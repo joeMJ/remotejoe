@@ -59,6 +59,40 @@ pub struct UiNode {
     /// Weg zu Treffern auf; ein gefundener Ordner bleibt zu.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub hit: bool,
+    /// Anzahl der Ziele, die nur in der Anzeige unter diesem Ziel stehen (siehe [`nest`]); die Oberfläche zeigt sie
+    /// neben dem Namen.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub nested: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// Nur Darstellung: Ziele unter einem anderen Ziel desselben Ordners zeigen (`parents`: Kind → Eltern). Der Bestand
+/// bleibt unverändert. Eine Stufe: Ein Eltern-Ziel, das selbst als Kind eingetragen ist, nimmt keine Kinder auf;
+/// Ziele mit eigenen Kindern (Hypervisor-Gäste) werden nicht umgehängt.
+pub fn nest(nodes: &mut Vec<UiNode>, parents: &std::collections::HashMap<Uuid, Uuid>) {
+    for n in nodes.iter_mut().filter(|n| n.folder) {
+        nest(&mut n.children, parents);
+    }
+    if parents.is_empty() {
+        return;
+    }
+    let here: std::collections::HashSet<Uuid> = nodes.iter().filter(|n| !n.folder).map(|n| n.id).collect();
+    let movable = |n: &UiNode| !n.folder && n.children.is_empty() && parents.get(&n.id).is_some_and(|p| *p != n.id && here.contains(p) && parents.get(p).is_none_or(|pp| pp == p));
+    if !nodes.iter().any(movable) {
+        return;
+    }
+    let (moved, kept): (Vec<UiNode>, Vec<UiNode>) = std::mem::take(nodes).into_iter().partition(|n| movable(n));
+    *nodes = kept;
+    for m in moved {
+        let p = parents[&m.id];
+        if let Some(parent) = nodes.iter_mut().find(|x| x.id == p) {
+            parent.nested += 1;
+            parent.children.push(m);
+        }
+    }
 }
 
 fn matches(name: &str, host: Option<&str>, q: &[String]) -> bool {
@@ -94,6 +128,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         vswitch: false,
                         role: sub.role.map(|r| r.as_str()),
                         hit: hit && !q.is_empty(),
+                        nested: 0,
                     });
                 }
             }
@@ -117,6 +152,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                         vswitch: false,
                         role: None,
                         hit: !q.is_empty(),
+                        nested: 0,
                     });
                 }
             }
@@ -144,6 +180,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                 vswitch: true,
                 role: None,
                 hit: !q.is_empty(),
+                nested: 0,
             });
         }
     }
@@ -168,6 +205,7 @@ fn build(f: &Folder, q: &[String], lights: &dyn Fn(Uuid) -> Option<Light>, login
                 vswitch: false,
                 role: None,
                 hit: !q.is_empty(),
+                nested: 0,
             });
         }
     }
@@ -297,6 +335,38 @@ mod tests {
         let all = serde_json::to_string(&t).unwrap();
         assert!(all.contains("versteckt⟦U+200B⟧name"));
         assert_eq!(count(&t), 40 + 20 + 5, "40 Ziele, 20 Gruppen, 5 Standorte");
+    }
+
+    /// Nur Darstellung: APs stehen unter ihrem Controller (gleicher Ordner), zugeklappt mit Anzahl; Ziele in anderen
+    /// Ordnern, Ketten und Selbstverweise bleiben, wo sie sind.
+    #[test]
+    fn display_parents_nest_targets_of_the_same_folder() {
+        let mut idx = Index::default();
+        let mut f = Folder::new("Gruppe");
+        let ctl = rj_core::Target::new("ctl", Protocol::Ssh, "192.0.2.10");
+        let ap1 = rj_core::Target::new("ap1", Protocol::Ssh, "192.0.2.11");
+        let ap2 = rj_core::Target::new("ap2", Protocol::Ssh, "192.0.2.12");
+        let other = rj_core::Target::new("anders", Protocol::Ssh, "192.0.2.20");
+        let (ctlid, ap1id, ap2id, otherid) = (ctl.id, ap1.id, ap2.id, other.id);
+        for t in [ctl, ap1, ap2] {
+            f.children.push(Node::Target(t));
+        }
+        idx.root.children.push(Node::Folder(f));
+        idx.root.children.push(Node::Target(other));
+        let mut nodes = tree(&idx, "", &|_| None);
+        let parents: std::collections::HashMap<Uuid, Uuid> = [(ap1id, ctlid), (ap2id, ctlid), (otherid, ctlid), (ctlid, ctlid)].into();
+        nest(&mut nodes, &parents);
+        let site = nodes.iter().find(|n| n.folder).unwrap();
+        assert_eq!(site.children.len(), 1, "nur noch der Controller auf der Ebene");
+        assert_eq!(site.children[0].id, ctlid);
+        assert_eq!(site.children[0].nested, 2);
+        assert_eq!(site.children[0].children.iter().map(|n| n.id).collect::<Vec<_>>(), [ap1id, ap2id]);
+        assert!(nodes.iter().any(|n| n.id == otherid), "anderer Ordner bleibt");
+        // Kette: Eltern, das selbst Kind ist, nimmt nichts auf.
+        let mut nodes = tree(&idx, "", &|_| None);
+        nest(&mut nodes, &[(ap1id, ap2id), (ap2id, ctlid)].into());
+        let site = nodes.iter().find(|n| n.folder).unwrap();
+        assert_eq!(site.children.len(), 2);
     }
 
     #[test]

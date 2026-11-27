@@ -1,3 +1,12 @@
+## 0.1.75 – Telnet
+
+- Neuer Zieltyp „Telnet“ (Port 23) für ältere Geräte ohne SSH: Terminal wie bei SSH, mit Kopieren, Einfügen und Tastenfolgen. Die Anmeldung mit den hinterlegten Zugangsdaten läuft von selbst (Benutzer und Kennwort je einmal); ohne Zugangsdaten meldet man sich von Hand an.
+- Telnet ist unverschlüsselt: Benutzer, Kennwort und alle Eingaben gehen im Klartext über das Netz. Die Sitzung zeigt das dauerhaft rot in der Fußzeile. Telnet nur in vertrauenswürdigen Netzen und nur für Geräte ohne SSH verwenden.
+- Wer ein Telnet-Ziel speichert, trägt „braucht remotejoe 0.1.75“ in die Schlüsseldatenbank ein; ältere Fassungen öffnen sie danach nicht mehr.
+- Makros laufen jetzt auch in Telnet-Sitzungen.
+- Import und Export kennen den Typ Telnet.
+- Erweiterungen können im Zielbaum ein Ziel unter einem anderen Ziel desselben Ordners anzeigen lassen (nur Darstellung, zugeklappt mit Anzahl; der Datenbestand bleibt unverändert).
+
 ## 0.1.74 – Schneller mit Erweiterungen, Diagnoseprotokoll
 
 - Spürbar schneller mit Erweiterungen: Das Programm reicht den Datenbestand jetzt nur noch nach einer Änderung neu an die Erweiterungen weiter.

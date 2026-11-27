@@ -417,7 +417,7 @@ impl SshConnection {
             }
             let _ = tx.send(ShellEvent::Closed);
         });
-        Ok(Shell { write, events: rx })
+        Ok(Shell { write: Writer::Ssh(write), events: rx })
     }
 
     /// Führt einen Befehl ohne Terminal aus und sammelt Ausgabe und Rückgabewert.
@@ -456,24 +456,55 @@ pub enum ShellEvent {
     Closed,
 }
 
-/// Interaktive Shell.
+/// Befehle an eine Shell über einen einfachen Datenstrom (Telnet, siehe `crate::telnet`).
+#[derive(Debug)]
+pub enum StreamCmd {
+    Data(Vec<u8>),
+    Resize(u32, u32),
+    Close,
+}
+
+enum Writer {
+    Ssh(russh::ChannelWriteHalf<client::Msg>),
+    Stream(mpsc::UnboundedSender<StreamCmd>),
+}
+
+/// Interaktive Shell (SSH-Kanal oder Telnet-Strom).
 pub struct Shell {
-    write: russh::ChannelWriteHalf<client::Msg>,
+    write: Writer,
     pub events: mpsc::UnboundedReceiver<ShellEvent>,
 }
 
 impl Shell {
+    /// Shell über einen Datenstrom: Befehle gehen an `tx`, Ereignisse kommen über `events`.
+    pub fn from_stream(tx: mpsc::UnboundedSender<StreamCmd>, events: mpsc::UnboundedReceiver<ShellEvent>) -> Shell {
+        Shell { write: Writer::Stream(tx), events }
+    }
+
     pub async fn write(&self, data: &[u8]) -> Result<(), SshError> {
-        self.write.data_bytes(data.to_vec()).await.map_err(|_| SshError::Closed)
+        match &self.write {
+            Writer::Ssh(w) => w.data_bytes(data.to_vec()).await.map_err(|_| SshError::Closed),
+            Writer::Stream(tx) => tx.send(StreamCmd::Data(data.to_vec())).map_err(|_| SshError::Closed),
+        }
     }
 
     pub async fn resize(&self, cols: u32, rows: u32) -> Result<(), SshError> {
-        self.write.window_change(cols, rows, 0, 0).await.map_err(|_| SshError::Closed)
+        match &self.write {
+            Writer::Ssh(w) => w.window_change(cols, rows, 0, 0).await.map_err(|_| SshError::Closed),
+            Writer::Stream(tx) => tx.send(StreamCmd::Resize(cols, rows)).map_err(|_| SshError::Closed),
+        }
     }
 
     pub async fn close(&self) {
-        let _ = self.write.eof().await;
-        let _ = self.write.close().await;
+        match &self.write {
+            Writer::Ssh(w) => {
+                let _ = w.eof().await;
+                let _ = w.close().await;
+            }
+            Writer::Stream(tx) => {
+                let _ = tx.send(StreamCmd::Close);
+            }
+        }
     }
 }
 

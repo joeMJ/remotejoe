@@ -36,7 +36,7 @@ fn auto_step_messages(protocol: Protocol, creds: &CredentialPayload, named: &BTr
     match step {
         KeyStep::Pause(_) => {}
         KeyStep::Key(k) => {
-            if protocol == Protocol::Ssh {
+            if protocol.is_terminal() {
                 out.push(input(InputEvent::Bytes(k.terminal_bytes().ok_or("Taste im Terminal nicht darstellbar")?)));
             } else if let (0, Key::Char(c)) = (k.mods, k.key) {
                 // Gewöhnliche Zeichen als Text (unabhängig von der Tastaturbelegung).
@@ -63,7 +63,7 @@ fn auto_step_messages(protocol: Protocol, creds: &CredentialPayload, named: &BTr
                 }
             };
             let secret = expand_text(t, &field)?;
-            if protocol == Protocol::Ssh {
+            if protocol.is_terminal() {
                 out.push(input(InputEvent::Bytes(secret.as_bytes().to_vec())));
             } else {
                 out.push(input(InputEvent::Text(String::from_utf8(secret.as_bytes().to_vec()).map_err(|_| "Text ist kein gültiges UTF-8".to_string())?)));
@@ -304,7 +304,8 @@ pub const QUESTION_TIMEOUT: Duration = Duration::from_secs(120);
 pub fn worker_program(p: Protocol) -> Option<&'static str> {
     match p {
         Protocol::Rdp | Protocol::Hyperv => Some("rj-worker-rdp"),
-        Protocol::Ssh => Some("rj-worker-ssh"),
+        // Telnet: derselbe Terminal-Worker im Telnet-Modus (Option `telnet`).
+        Protocol::Ssh | Protocol::Telnet => Some("rj-worker-ssh"),
         Protocol::Vnc => Some("rj-worker-vnc"),
         // Proxmox: die Weboberfläche des Hosts; Gäste haben eigene Konsolen.
         Protocol::Web | Protocol::Proxmox => Some("rj-worker-web"),
@@ -388,14 +389,14 @@ impl Manager {
         }
     }
 
-    /// Sitzungen mit Terminal (SSH).
+    /// Sitzungen mit Terminal (SSH, Telnet).
     fn terminal_sessions(&self) -> Vec<SessionId> {
-        self.sessions.iter().filter(|(_, x)| x.spec.protocol == Protocol::Ssh).map(|(id, _)| *id).collect()
+        self.sessions.iter().filter(|(_, x)| x.spec.protocol.is_terminal()).map(|(id, _)| *id).collect()
     }
 
     /// Befehl an das Terminal im Worker einer SSH-Sitzung.
     fn term_cmd(&mut self, s: SessionId, cmd: TermCmd) {
-        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol == Protocol::Ssh) {
+        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol.is_terminal()) {
             self.send(s, &ToWorker::Term(cmd));
         }
     }
@@ -499,7 +500,7 @@ impl Manager {
     pub fn open(&mut self, spec: ConnectSpec) -> SessionId {
         let id = self.next;
         self.next += 1;
-        let view = (spec.protocol == Protocol::Ssh).then(|| blank_view(spec.request.width as usize, spec.request.height as usize, &self.scheme));
+        let view = (spec.protocol.is_terminal()).then(|| blank_view(spec.request.width as usize, spec.request.height as usize, &self.scheme));
         self.sessions.insert(id, Session { spec, worker: None, view, demo_term: None, state: String::new(), connected_at: None, attempts: 0, reconnect_at: None, osc52_pending: Vec::new(), auto: None, connect_count: 0, auto_reconnect: false, last_activity: Instant::now(), _demo_frame: None, admin: None });
         self.start(id);
         id
@@ -527,7 +528,7 @@ impl Manager {
                 x.worker = Some(wid);
                 let _ = self.sup.send(wid, &ToWorker::Connect(spec.request));
                 let _ = self.sup.send(wid, &ToWorker::Credentials(spec.credentials));
-                if spec.protocol == Protocol::Ssh {
+                if spec.protocol.is_terminal() {
                     // Farben und Rücklauf gelten für das neue Terminal im Worker; ein laufendes Makro behält den Abgriff.
                     let _ = self.sup.send(wid, &ToWorker::Term(TermCmd::SetScheme(TermScheme::from(&self.scheme))));
                     let _ = self.sup.send(wid, &ToWorker::Term(TermCmd::SetHistory(self.scrollback.min(u32::MAX as usize) as u32)));
@@ -615,7 +616,7 @@ impl Manager {
 
     /// Rohe Eingabe (z. B. von einem Makro) an das Terminal der Sitzung senden.
     pub fn send_bytes(&mut self, s: SessionId, bytes: Vec<u8>) {
-        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol == Protocol::Ssh) {
+        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol.is_terminal()) {
             self.send(s, &ToWorker::Input(InputEvent::Bytes(bytes)));
         }
     }
@@ -658,7 +659,7 @@ impl Manager {
             return;
         }
         let Some(sess) = self.sessions.get(&s) else { return };
-        if sess.spec.protocol == Protocol::Ssh {
+        if sess.spec.protocol.is_terminal() {
             if down {
                 let bytes = crate::keys::terminal_bytes(qt_key, modifiers, text, false);
                 if !bytes.is_empty() {
@@ -716,7 +717,7 @@ impl Manager {
     pub fn resize(&mut self, s: SessionId, w: u32, h: u32) {
         if let Some(sess) = self.sessions.get(&s) {
             // Bild-Sitzungen mit fest eingetragener Breite und Höhe folgen dem Fenster nicht.
-            if sess.spec.protocol != Protocol::Ssh && fixed_size(&sess.spec.request.options_json) {
+            if !sess.spec.protocol.is_terminal() && fixed_size(&sess.spec.request.options_json) {
                 return;
             }
         }
@@ -728,7 +729,7 @@ impl Manager {
 
     /// Einfügen ins Terminal (mit Klammerung) bzw. Zwischenablage anbieten (RDP/VNC).
     pub fn paste(&mut self, s: SessionId, text: &str) {
-        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol == Protocol::Ssh) {
+        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol.is_terminal()) {
             // Der Worker bildet die Bytes (Zeilenenden, Klammerung) und springt ans Ende.
             self.term_cmd(s, TermCmd::Paste(text.to_string()));
         } else {
@@ -759,7 +760,7 @@ impl Manager {
 
     /// Lokale Zwischenablage an eine grafische Sitzung anbieten.
     pub fn offer_clipboard(&mut self, s: SessionId, text: &str) {
-        if self.sessions.get(&s).is_some_and(|x| x.spec.protocol != Protocol::Ssh) {
+        if self.sessions.get(&s).is_some_and(|x| !x.spec.protocol.is_terminal()) {
             self.send(s, &ToWorker::Clipboard(ClipData::Text(text.to_string())));
         }
     }
@@ -1055,7 +1056,7 @@ impl Manager {
         x.admin = None;
         let (n, automatic) = (x.connect_count, std::mem::take(&mut x.auto_reconnect));
         x.auto = None;
-        if !matches!(x.spec.protocol, Protocol::Rdp | Protocol::Ssh) {
+        if !matches!(x.spec.protocol, Protocol::Rdp | Protocol::Ssh | Protocol::Telnet) {
             return;
         }
         let cfg: Option<rj_core::autokeys::AutoKeys> = serde_json::from_str::<serde_json::Value>(&x.spec.request.options_json)
@@ -1063,7 +1064,7 @@ impl Manager {
             .and_then(|v| v.get("auto_keys").cloned())
             .and_then(|v| serde_json::from_value(v).ok());
         let Some(cfg) = cfg.filter(|c| c.applies(n, automatic)) else { return };
-        match cfg.validate(x.spec.protocol == Protocol::Ssh) {
+        match cfg.validate(x.spec.protocol.is_terminal()) {
             Ok(()) => {
                 let steps = cfg.steps().unwrap_or_default();
                 let now = Instant::now();
@@ -1197,7 +1198,7 @@ impl Manager {
                 }
             }
             FromWorker::Term(TermMsg::Snapshot(v)) => {
-                if let Some(x) = self.sessions.get_mut(&s).filter(|x| x.spec.protocol == Protocol::Ssh) {
+                if let Some(x) = self.sessions.get_mut(&s).filter(|x| x.spec.protocol.is_terminal()) {
                     if valid_view(&v) {
                         x.view = Some(v);
                         // Für den Auslöser „ruhig“ der Tastenfolge: Das Terminal hat sich geändert.

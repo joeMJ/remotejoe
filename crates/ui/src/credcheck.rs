@@ -254,6 +254,7 @@ fn check_one(spec: &JobSpec, known: &rj_ssh::known_hosts::KnownHosts, worker_dir
         Protocol::Proxmox => check_proxmox(spec),
         Protocol::Vnc => check_vnc(spec),
         Protocol::Web => ("nicht prüfbar", "Web-Anmeldungen lassen sich nicht verlässlich prüfen".into()),
+        Protocol::Telnet => ("nicht prüfbar", "Telnet-Anmeldungen werden nicht geprüft (unverschlüsselt)".into()),
     }
 }
 

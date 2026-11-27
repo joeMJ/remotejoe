@@ -118,6 +118,7 @@ fn protocol_from(kind: &str) -> Option<Protocol> {
         "proxmox" => Protocol::Proxmox,
         "hyperv" => Protocol::Hyperv,
         "psrp" => Protocol::Psrp,
+        "telnet" => Protocol::Telnet,
         _ => return None,
     })
 }
@@ -219,7 +220,7 @@ fn options_from(protocol: Protocol, v: &Value) -> Result<ProtocolOptions, String
         Protocol::Ssh => serde_json::from_value(v.clone()).map(ProtocolOptions::Ssh),
         Protocol::Vnc => serde_json::from_value(v.clone()).map(ProtocolOptions::Vnc),
         Protocol::Web | Protocol::Proxmox => serde_json::from_value(v.clone()).map(ProtocolOptions::Web),
-        Protocol::Psrp => return Ok(ProtocolOptions::None),
+        Protocol::Psrp | Protocol::Telnet => return Ok(ProtocolOptions::None),
     };
     r.map_err(|e| format!("Optionen: ungültiger Wert ({e})"))
 }
@@ -1055,13 +1056,13 @@ impl App {
         json!(out)
     }
 
-    /// Startet ein Makro in einer verbundenen SSH-Sitzung.
+    /// Startet ein Makro in einer verbundenen Terminal-Sitzung (SSH oder Telnet).
     fn run_macro(&mut self, c: &Value) -> Result<Value, String> {
         use rj_core::Protocol;
         let s = c.get("session").and_then(Value::as_u64).ok_or("Sitzung fehlt")?;
         let mid = id_of(c, "macro").ok_or("Makro fehlt")?;
-        if self.sessions.protocol(s) != Some(Protocol::Ssh) {
-            return Err("Makros laufen zunächst nur in SSH-Sitzungen.".into());
+        if !self.sessions.protocol(s).is_some_and(Protocol::is_terminal) {
+            return Err("Makros laufen nur in Terminal-Sitzungen (SSH, Telnet).".into());
         }
         if self.sessions.state(s) != Some("connected") {
             return Err("Die Sitzung ist nicht verbunden.".into());
@@ -2405,7 +2406,7 @@ impl App {
         st.tick(
             |s| states.get(&s).cloned(),
             |t| {
-                let ssh = matches!(edit::node(&self.index, t), Some(Node::Target(x)) if x.protocol == Protocol::Ssh);
+                let ssh = matches!(edit::node(&self.index, t), Some(Node::Target(x)) if x.protocol.is_terminal());
                 let (cw, ch) = if ssh { (120, 40) } else { (w, h) };
                 let r: Value = serde_json::from_str(&self.connect(t, None, false, cw, ch)).unwrap_or_default();
                 match r.get("session").or_else(|| r.get("pending")).and_then(Value::as_u64) {
@@ -3420,6 +3421,7 @@ fn ways_from(v: &Value, t: &rj_core::Target, index: &Index) -> Result<(Vec<rj_co
             Some("rdp") => Protocol::Rdp,
             Some("vnc") => Protocol::Vnc,
             Some("psrp") => Protocol::Psrp,
+            Some("telnet") => Protocol::Telnet,
             _ => return Err(format!("Weg {nr}: Protokoll fehlt oder wird nicht unterstützt")),
         };
         let host = w.get("host").and_then(Value::as_str).unwrap_or_default().trim().to_string();

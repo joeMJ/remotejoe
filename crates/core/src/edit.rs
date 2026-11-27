@@ -514,7 +514,7 @@ pub fn default_options(protocol: Protocol) -> ProtocolOptions {
         Protocol::Ssh => ProtocolOptions::Ssh(serde_json::from_str("{}").expect("leere Optionen sind gültig")),
         Protocol::Vnc => ProtocolOptions::Vnc(VncOptions::default()),
         Protocol::Web | Protocol::Proxmox => ProtocolOptions::Web(WebOptions::default()),
-        Protocol::Psrp => ProtocolOptions::None,
+        Protocol::Psrp | Protocol::Telnet => ProtocolOptions::None,
     }
 }
 

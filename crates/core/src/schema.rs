@@ -44,8 +44,14 @@ pub fn required_program(index: &Index) -> Option<String> {
             raise(best, v);
         }
         for n in &f.children {
-            if let crate::model::Node::Folder(sub) = n {
-                walk(sub, best);
+            match n {
+                crate::model::Node::Folder(sub) => walk(sub, best),
+                // 0.1.75: Zieltyp Telnet (auch als weiterer Zugangsweg); ältere Fassungen kennen den Wert nicht.
+                crate::model::Node::Target(t) => {
+                    if t.protocol == crate::model::Protocol::Telnet || t.ways.iter().any(|w| w.protocol == crate::model::Protocol::Telnet) {
+                        raise(best, "0.1.75");
+                    }
+                }
             }
         }
     }
@@ -458,6 +464,20 @@ mod tests {
         assert_eq!(v[MIN_PROGRAM_KEY], "0.1.69");
         let back = from_json(&to_json(&idx).unwrap(), "t").unwrap();
         assert_eq!(required_program(&back.index).as_deref(), Some("0.1.69"));
+    }
+
+    /// Zieltyp Telnet (neu in 0.1.75), auch als weiterer Zugangsweg: Die Datei verlangt dann 0.1.75.
+    #[test]
+    fn telnet_target_requires_0_1_75() {
+        let mut idx = sample();
+        assert_ne!(required_program(&idx).as_deref(), Some("0.1.75"));
+        idx.root.children.push(crate::model::Node::Target(crate::model::Target::new("alt", crate::model::Protocol::Telnet, "192.0.2.30")));
+        let v: Value = serde_json::from_slice(&to_json(&idx).unwrap()).unwrap();
+        assert_eq!(v[MIN_PROGRAM_KEY], "0.1.75");
+        let back = from_json(&to_json(&idx).unwrap(), "t").unwrap();
+        assert_eq!(back.index.root.children.iter().filter(|n| matches!(n, crate::model::Node::Target(t) if t.protocol == crate::model::Protocol::Telnet)).count(), 1);
+        assert_eq!(crate::model::Protocol::Telnet.default_port(), 23);
+        assert!(crate::model::Protocol::Telnet.is_terminal() && crate::model::Protocol::Ssh.is_terminal() && !crate::model::Protocol::Rdp.is_terminal());
     }
 
     /// Erweiterungsdaten an einem Ordner schreiben ihre Mindestversion vor; die höchste Angabe gilt, ungültige zählen nicht.
